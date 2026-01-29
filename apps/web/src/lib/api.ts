@@ -48,7 +48,7 @@ class ApiClient {
 
     // Handle empty responses
     const text = await response.text();
-    return text ? JSON.parse(text) : null;
+    return text ? JSON.parse(text) : (null as unknown as T);
   }
 
   async get<T>(path: string): Promise<T> {
@@ -603,3 +603,141 @@ export interface DocumentMetadata {
   created_at: string;
   url: string;
 }
+
+// Organization Theme Types
+export interface OrganizationThemeColors {
+  primary: string;
+  accent: string;
+  capture: string;
+  processing: string;
+  vendor: string;
+  reporting: string;
+}
+
+export interface OrganizationBranding {
+  logoUrl?: string;
+  logoMark?: string;
+  faviconUrl?: string;
+  brandName: string;
+  brandGradient?: string;
+  customCSS?: string;
+}
+
+export interface OrganizationTheme {
+  id: string;
+  tenant_id: string;
+  preset_id: string;
+  custom_colors?: OrganizationThemeColors;
+  branding: OrganizationBranding;
+  enabled_for_all_users: boolean;
+  allow_user_override: boolean;
+  gradient_config?: {
+    enabled: boolean;
+    type: 'linear' | 'radial';
+    angle?: number;
+    positions?: { color: string; position: number }[];
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateOrganizationThemeInput {
+  preset_id: string;
+  custom_colors?: OrganizationThemeColors;
+  branding: OrganizationBranding;
+  enabled_for_all_users?: boolean;
+  allow_user_override?: boolean;
+  gradient_config?: {
+    enabled: boolean;
+    type: 'linear' | 'radial';
+    angle?: number;
+  };
+}
+
+export interface UserThemePreference {
+  id: string;
+  user_id: string;
+  preset_id: string;
+  custom_colors?: OrganizationThemeColors;
+  mode: 'light' | 'dark' | 'system';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateUserThemeInput {
+  preset_id: string;
+  custom_colors?: OrganizationThemeColors;
+  mode: 'light' | 'dark' | 'system';
+}
+
+// Organization Theme API
+export const organizationThemeApi = {
+  // Get organization theme
+  getTheme: () =>
+    api.get<OrganizationTheme>('/api/v1/organization/theme'),
+
+  // Create or update organization theme
+  saveTheme: (data: CreateOrganizationThemeInput) =>
+    api.post<OrganizationTheme>('/api/v1/organization/theme', data),
+
+  // Update organization theme
+  updateTheme: (data: Partial<CreateOrganizationThemeInput>) =>
+    api.put<OrganizationTheme>('/api/v1/organization/theme', data),
+
+  // Delete organization theme (revert to default)
+  deleteTheme: () =>
+    api.delete('/api/v1/organization/theme'),
+
+  // Upload organization logo
+  uploadLogo: (file: File, type: 'logo' | 'logoMark' | 'favicon' = 'logo') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('type', type);
+    return api.upload<{ url: string; type: string }>('/api/v1/organization/theme/logo', formData);
+  },
+
+  // Delete logo
+  deleteLogo: (type: 'logo' | 'logoMark' | 'favicon') =>
+    api.delete(`/api/v1/organization/theme/logo/${type}`),
+
+  // Preview theme (returns CSS variables)
+  previewTheme: (data: CreateOrganizationThemeInput) =>
+    api.post<{ css_variables: Record<string, string> }>('/api/v1/organization/theme/preview', data),
+
+  // Export theme configuration
+  exportTheme: () =>
+    api.get<{ config: string; version: string; exported_at: string }>('/api/v1/organization/theme/export'),
+
+  // Import theme configuration
+  importTheme: (config: string) =>
+    api.post<OrganizationTheme>('/api/v1/organization/theme/import', { config }),
+};
+
+// User Theme Preferences API
+export const userThemeApi = {
+  // Get user's theme preferences
+  getPreferences: () =>
+    api.get<UserThemePreference>('/api/v1/user/theme'),
+
+  // Save user's theme preferences
+  savePreferences: (data: CreateUserThemeInput) =>
+    api.post<UserThemePreference>('/api/v1/user/theme', data),
+
+  // Update user's theme preferences
+  updatePreferences: (data: Partial<CreateUserThemeInput>) =>
+    api.put<UserThemePreference>('/api/v1/user/theme', data),
+
+  // Reset to organization default
+  resetToDefault: () =>
+    api.delete('/api/v1/user/theme'),
+
+  // Get effective theme (combines org + user preferences)
+  getEffectiveTheme: () =>
+    api.get<{
+      theme: OrganizationTheme | null;
+      user_preference: UserThemePreference | null;
+      effective_colors: OrganizationThemeColors;
+      effective_mode: 'light' | 'dark' | 'system';
+      can_override: boolean;
+    }>('/api/v1/user/theme/effective'),
+};

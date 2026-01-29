@@ -2,9 +2,9 @@
 
 import { useState } from 'react';
 import { useAuthStore } from '@/stores/auth';
-import { useThemeStore, themePresets, ThemeColors } from '@/stores/theme';
+import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
 import { toast } from 'sonner';
-import { ColorPicker, ColorSwatch } from '@/components/ui/color-picker';
+import { ColorPicker, ColorSwatch, GradientPicker } from '@/components/ui/color-picker';
 import {
   Palette,
   Sun,
@@ -20,6 +20,8 @@ import {
   RotateCcw,
   Upload,
   Save,
+  Download,
+  Copy,
 } from 'lucide-react';
 
 const tabs = [
@@ -31,10 +33,11 @@ const tabs = [
   { id: 'security', name: 'Security', icon: Shield },
 ];
 
-const categoryLabels = {
+const categoryLabels: Record<string, string> = {
   bright: 'Bright & Clean',
   vibrant: 'Vibrant & Bold',
   professional: 'Professional',
+  modern: 'Modern & Dynamic',
 };
 
 export default function SettingsPage() {
@@ -55,7 +58,7 @@ export default function SettingsPage() {
   } = useThemeStore();
 
   const [activeTab, setActiveTab] = useState('appearance');
-  const [orgBrandName, setOrgBrandName] = useState(organizationTheme?.brandName || tenant?.settings?.company_name || '');
+  const [orgBrandName, setOrgBrandName] = useState(organizationTheme?.branding?.brandName || tenant?.settings?.company_name || '');
   const [previewMode, setPreviewMode] = useState(false);
 
   // Organization branding state
@@ -72,7 +75,7 @@ export default function SettingsPage() {
     setOrganizationTheme({
       presetId: presetId,
       customColors: brandColors,
-      brandName: orgBrandName,
+      branding: { brandName: orgBrandName },
     });
     toast.success('Organization theme saved');
   };
@@ -183,40 +186,51 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Theme Categories */}
-                {Object.entries(groupedPresets).map(([category, presets]) => (
-                  <div key={category} className="mb-6 last:mb-0">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                      {categoryLabels[category as keyof typeof categoryLabels]}
-                    </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {presets.map((preset) => (
-                        <button
-                          key={preset.id}
-                          onClick={() => handlePresetSelect(preset)}
-                          disabled={isOrgThemeActive}
-                          className={`p-3 rounded-xl border-2 text-left transition-all ${
-                            presetId === preset.id && !customColors && !isOrgThemeActive
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:border-primary/30'
-                          } ${isOrgThemeActive ? 'opacity-60 cursor-not-allowed' : ''}`}
-                        >
-                          <div className={`w-full h-10 rounded-lg bg-gradient-to-r ${preset.preview} mb-2`} />
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="font-medium text-foreground text-sm">{preset.name}</p>
-                              <p className="text-xs text-muted-foreground truncate max-w-[120px]">
-                                {preset.description}
-                              </p>
-                            </div>
-                            {presetId === preset.id && !customColors && !isOrgThemeActive && (
-                              <Check className="w-4 h-4 text-primary flex-shrink-0" />
-                            )}
-                          </div>
-                        </button>
-                      ))}
+                {['modern', 'bright', 'vibrant', 'professional'].map((category) => {
+                  const presets = groupedPresets[category];
+                  if (!presets || presets.length === 0) return null;
+
+                  return (
+                    <div key={category} className="mb-6 last:mb-0">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                        {categoryLabels[category]}
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {presets.map((preset) => {
+                          const gradient = generateGradient(preset);
+                          return (
+                            <button
+                              key={preset.id}
+                              onClick={() => handlePresetSelect(preset)}
+                              disabled={isOrgThemeActive}
+                              className={`p-3 rounded-xl border-2 text-left transition-all ${
+                                presetId === preset.id && !customColors && !isOrgThemeActive
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border hover:border-primary/30'
+                              } ${isOrgThemeActive ? 'opacity-60 cursor-not-allowed' : ''}`}
+                            >
+                              <div
+                                className="w-full h-10 rounded-lg mb-2"
+                                style={{ background: gradient }}
+                              />
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="font-medium text-foreground text-sm">{preset.name}</p>
+                                  <p className="text-xs text-muted-foreground truncate max-w-[100px]">
+                                    {preset.description}
+                                  </p>
+                                </div>
+                                {presetId === preset.id && !customColors && !isOrgThemeActive && (
+                                  <Check className="w-4 h-4 text-primary flex-shrink-0" />
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {isOrgThemeActive && (
                   <div className="mt-4 p-4 bg-primary/5 rounded-xl border border-primary/20">

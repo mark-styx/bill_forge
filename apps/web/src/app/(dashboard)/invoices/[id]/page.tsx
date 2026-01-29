@@ -264,7 +264,7 @@ export default function InvoiceDetailPage() {
     setEditedFields({});
   };
 
-  const currentQueue = queues?.find((q: any) => q.id === invoice.current_queue_id);
+  const currentQueue = queues?.find((q: any) => q.id === (invoice as any).current_queue_id);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -368,7 +368,7 @@ export default function InvoiceDetailPage() {
             <span>Queue: {currentQueue.name}</span>
           </span>
         )}
-        {invoice.assigned_to && (
+        {(invoice as any).assigned_to && (
           <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full text-sm flex items-center space-x-1">
             <User className="w-3 h-3" />
             <span>Assigned</span>
@@ -658,13 +658,13 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.department ?? invoice.department ?? ''}
+                    value={editedFields.department ?? (invoice as any).department ?? ''}
                     onChange={(e) => handleFieldChange('department', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. Operations"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{invoice.department || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).department || 'Not set'}</p>
                 )}
               </div>
 
@@ -676,13 +676,13 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.gl_code ?? invoice.gl_code ?? ''}
+                    value={editedFields.gl_code ?? (invoice as any).gl_code ?? ''}
                     onChange={(e) => handleFieldChange('gl_code', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. 6000-100"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{invoice.gl_code || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).gl_code || 'Not set'}</p>
                 )}
               </div>
 
@@ -694,13 +694,13 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.cost_center ?? invoice.cost_center ?? ''}
+                    value={editedFields.cost_center ?? (invoice as any).cost_center ?? ''}
                     onChange={(e) => handleFieldChange('cost_center', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. CC-001"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{invoice.cost_center || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).cost_center || 'Not set'}</p>
                 )}
               </div>
             </div>
@@ -714,14 +714,14 @@ export default function InvoiceDetailPage() {
             <div className="p-6">
               {isEditing ? (
                 <textarea
-                  value={editedFields.notes ?? invoice.notes ?? ''}
+                  value={editedFields.notes ?? (invoice as any).notes ?? ''}
                   onChange={(e) => handleFieldChange('notes', e.target.value)}
                   rows={4}
                   className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   placeholder="Add notes about this invoice..."
                 />
               ) : (
-                <p className="text-slate-700 dark:text-slate-300">{invoice.notes || 'No notes'}</p>
+                <p className="text-slate-700 dark:text-slate-300">{(invoice as any).notes || 'No notes'}</p>
               )}
             </div>
           </div>
