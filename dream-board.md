@@ -274,7 +274,7 @@ Reporting
 - Utility reminders
   - exp. invoice checks etc
 - Manual invoice upload
-- Auto Vendor Statement Requests and Reviews
+- Auto Vendor Statement Requests and Reviews [NOT IMPLEMENTED - agents failed to produce code]
 - LLM integration that can answer platform and tenant specific data questions
 
 Enterprise

@@ -55,5 +55,5 @@ Cargo.lock
 
 .venv
 ollama_mcp_server.py
-complete.sh
+*complete.sh
 .claude
