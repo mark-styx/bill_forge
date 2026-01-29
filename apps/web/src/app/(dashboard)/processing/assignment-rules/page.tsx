@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { workflowsApi } from '@/lib/api';
-import { 
-  Plus, 
-  Trash2, 
-  Edit, 
-  ChevronDown, 
+import {
+  Plus,
+  Trash2,
+  Edit,
+  ChevronDown,
   ChevronUp,
   GitBranch,
   User,
@@ -15,7 +15,12 @@ import {
   Building,
   Briefcase,
   DollarSign,
-  Tag
+  Tag,
+  ArrowLeft,
+  CheckCircle,
+  Workflow,
+  Search,
+  Filter,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -23,6 +28,7 @@ import Link from 'next/link';
 export default function AssignmentRulesPage() {
   const queryClient = useQueryClient();
   const [expandedRule, setExpandedRule] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const { data: rules, isLoading: rulesLoading } = useQuery({
     queryKey: ['assignment-rules'],
@@ -88,7 +94,7 @@ export default function AssignmentRulesPage() {
     const field = fieldLabels[condition.field] || condition.field;
     const operator = operatorLabels[condition.operator] || condition.operator;
     let value = condition.value;
-    
+
     // Format amount in dollars
     if (condition.field === 'amount' && typeof value === 'number') {
       value = `$${(value / 100).toLocaleString()}`;
@@ -118,58 +124,88 @@ export default function AssignmentRulesPage() {
   }, {}) || {};
 
   return (
-    <div className="space-y-6">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-            Assignment Rules
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400">
-            Configure automatic invoice routing and assignment within queues
-          </p>
-        </div>
+    <div className="space-y-6 max-w-5xl mx-auto">
+      {/* Header */}
+      <div>
         <Link
-          href="/processing/assignment-rules/new"
-          className="px-4 py-2 bg-processing text-white rounded-lg hover:bg-processing/90 transition-colors flex items-center space-x-2"
+          href="/processing"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-3"
         >
-          <Plus className="w-4 h-4" />
-          <span>Create Rule</span>
+          <ArrowLeft className="w-4 h-4" />
+          Back to Processing
         </Link>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-foreground">Assignment Rules</h1>
+            <p className="text-muted-foreground mt-0.5">
+              Configure automatic invoice routing and assignment within queues
+            </p>
+          </div>
+          <Link href="/processing/assignment-rules/new" className="btn btn-primary btn-sm">
+            <Plus className="w-4 h-4 mr-1.5" />
+            Create Rule
+          </Link>
+        </div>
       </div>
 
       {/* Explanation Card */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 p-6">
-        <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
-          How Assignment Rules Work
-        </h3>
-        <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
-          Assignment rules automatically route invoices to the right person when they enter a queue.
-          Rules are evaluated in priority order (highest first). When an invoice matches a rule's conditions,
-          it is assigned to the specified target.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="flex items-start space-x-2">
-            <Building className="w-4 h-4 text-blue-500 mt-0.5" />
+      <div className="card overflow-hidden">
+        <div className="h-1 bg-gradient-to-r from-processing to-processing/50" />
+        <div className="p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-processing/10">
+              <Workflow className="w-5 h-5 text-processing" />
+            </div>
             <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Vendor-based</span>
-              <p className="text-blue-600 dark:text-blue-400">Route invoices from specific vendors</p>
+              <h3 className="font-semibold text-foreground">How Assignment Rules Work</h3>
+              <p className="text-sm text-muted-foreground">
+                Rules are evaluated in priority order (highest first). When an invoice matches a rule's conditions, it is assigned to the specified target.
+              </p>
             </div>
           </div>
-          <div className="flex items-start space-x-2">
-            <Briefcase className="w-4 h-4 text-blue-500 mt-0.5" />
-            <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Department-based</span>
-              <p className="text-blue-600 dark:text-blue-400">Route by department or cost center</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-3 bg-secondary/50 rounded-xl">
+              <div className="flex items-center gap-2 mb-1">
+                <Building className="w-4 h-4 text-vendor" />
+                <span className="font-medium text-foreground text-sm">Vendor-based</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Route invoices from specific vendors</p>
+            </div>
+            <div className="p-3 bg-secondary/50 rounded-xl">
+              <div className="flex items-center gap-2 mb-1">
+                <Briefcase className="w-4 h-4 text-processing" />
+                <span className="font-medium text-foreground text-sm">Department-based</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Route by department or cost center</p>
+            </div>
+            <div className="p-3 bg-secondary/50 rounded-xl">
+              <div className="flex items-center gap-2 mb-1">
+                <DollarSign className="w-4 h-4 text-accent" />
+                <span className="font-medium text-foreground text-sm">Amount-based</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Route based on invoice value</p>
             </div>
           </div>
-          <div className="flex items-start space-x-2">
-            <DollarSign className="w-4 h-4 text-blue-500 mt-0.5" />
-            <div>
-              <span className="font-medium text-blue-900 dark:text-blue-100">Amount-based</span>
-              <p className="text-blue-600 dark:text-blue-400">Route based on invoice value</p>
-            </div>
+        </div>
+      </div>
+
+      {/* Search & Filter */}
+      <div className="card p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search rules..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input pl-9"
+            />
           </div>
+          <button className="btn btn-secondary">
+            <Filter className="w-4 h-4 mr-1.5" />
+            Filters
+          </button>
         </div>
       </div>
 
@@ -177,68 +213,65 @@ export default function AssignmentRulesPage() {
       {rulesLoading ? (
         <div className="space-y-4">
           {[1, 2].map((i) => (
-            <div key={i} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 animate-pulse">
-              <div className="h-6 bg-slate-200 dark:bg-slate-700 rounded w-1/4 mb-4"></div>
-              <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-3/4"></div>
+            <div key={i} className="card p-6 animate-pulse">
+              <div className="h-6 bg-secondary rounded w-1/4 mb-4" />
+              <div className="h-4 bg-secondary rounded w-3/4" />
             </div>
           ))}
         </div>
       ) : !rules || rules.length === 0 ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center">
-          <GitBranch className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
-          <p className="text-slate-500 dark:text-slate-400 mb-4">
-            No assignment rules configured yet.
+        <div className="card p-12 text-center">
+          <div className="w-14 h-14 rounded-xl bg-processing/10 flex items-center justify-center mx-auto mb-4">
+            <GitBranch className="w-7 h-7 text-processing" />
+          </div>
+          <h3 className="text-lg font-semibold text-foreground mb-2">No Assignment Rules</h3>
+          <p className="text-muted-foreground mb-4 max-w-sm mx-auto">
+            Create your first assignment rule to start routing invoices automatically.
           </p>
-          <Link
-            href="/processing/assignment-rules/new"
-            className="px-4 py-2 bg-processing text-white rounded-lg hover:bg-processing/90 transition-colors inline-flex items-center space-x-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Create your first rule</span>
+          <Link href="/processing/assignment-rules/new" className="btn btn-primary btn-sm inline-flex">
+            <Plus className="w-4 h-4 mr-1.5" />
+            Create your first rule
           </Link>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {Object.entries(rulesByQueue).map(([queueId, queueRules]) => (
-            <div
-              key={queueId}
-              className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
-            >
-              <div className="p-4 bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  {getQueueName(queueId)}
-                </h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
+            <div key={queueId} className="card overflow-hidden">
+              <div className="p-4 bg-secondary/50 border-b border-border">
+                <h3 className="font-semibold text-foreground">{getQueueName(queueId)}</h3>
+                <p className="text-sm text-muted-foreground">
                   {(queueRules as any[]).length} rule{(queueRules as any[]).length !== 1 ? 's' : ''}
                 </p>
               </div>
-              <div className="divide-y divide-slate-200 dark:divide-slate-700">
+              <div className="divide-y divide-border">
                 {(queueRules as any[])
                   .sort((a, b) => b.priority - a.priority)
                   .map((rule) => {
                     const isExpanded = expandedRule === rule.id;
                     const assignTarget = formatAssignTarget(rule.assign_to);
-                    
+
                     return (
-                      <div key={rule.id} className="p-4">
+                      <div key={rule.id} className="p-4 hover:bg-secondary/30 transition-colors">
                         <div
                           className="flex items-center justify-between cursor-pointer"
                           onClick={() => setExpandedRule(isExpanded ? null : rule.id)}
                         >
-                          <div className="flex items-center space-x-4">
-                            <div className={`px-2 py-1 rounded text-xs font-medium ${rule.is_active ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                          <div className="flex items-center gap-4">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              rule.is_active
+                                ? 'bg-success/10 text-success'
+                                : 'bg-secondary text-muted-foreground'
+                            }`}>
                               Priority: {rule.priority}
-                            </div>
+                            </span>
                             <div>
-                              <p className="font-medium text-slate-900 dark:text-white">
-                                {rule.name}
-                              </p>
-                              <p className="text-sm text-slate-500 dark:text-slate-400">
+                              <p className="font-medium text-foreground">{rule.name}</p>
+                              <p className="text-sm text-muted-foreground">
                                 {rule.description || 'No description'}
                               </p>
                             </div>
                           </div>
-                          <div className="flex items-center space-x-3">
+                          <div className="flex items-center gap-2">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -246,54 +279,52 @@ export default function AssignmentRulesPage() {
                                   deleteRule.mutate(rule.id);
                                 }
                               }}
-                              className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                              className="p-2 text-muted-foreground hover:text-error rounded-lg hover:bg-error/10 transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
                             {isExpanded ? (
-                              <ChevronUp className="w-5 h-5 text-slate-400" />
+                              <ChevronUp className="w-5 h-5 text-muted-foreground" />
                             ) : (
-                              <ChevronDown className="w-5 h-5 text-slate-400" />
+                              <ChevronDown className="w-5 h-5 text-muted-foreground" />
                             )}
                           </div>
                         </div>
-                        
+
                         {isExpanded && (
-                          <div className="mt-4 pl-4 border-l-2 border-slate-200 dark:border-slate-600 space-y-4">
+                          <div className="mt-4 pl-4 border-l-2 border-primary/20 space-y-4 animate-scale-in">
                             {/* Conditions */}
                             <div>
-                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                                 When
                               </p>
                               <div className="space-y-2">
                                 {rule.conditions.map((condition: any, idx: number) => (
                                   <div
                                     key={idx}
-                                    className="flex items-center space-x-2 text-sm"
+                                    className="flex items-center gap-2 text-sm p-2 bg-secondary/50 rounded-lg"
                                   >
-                                    {getFieldIcon(condition.field)}
-                                    <span className="text-slate-700 dark:text-slate-300">
-                                      {formatCondition(condition)}
-                                    </span>
+                                    <span className="text-primary">{getFieldIcon(condition.field)}</span>
+                                    <span className="text-foreground">{formatCondition(condition)}</span>
                                   </div>
                                 ))}
                               </div>
                             </div>
-                            
+
                             {/* Assignment Target */}
                             <div>
-                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                                 Assign To
                               </p>
-                              <div className="flex items-center space-x-2 text-sm">
+                              <div className="flex items-center gap-2 text-sm p-2 bg-secondary/50 rounded-lg">
                                 {assignTarget.type === 'User' ? (
-                                  <User className="w-4 h-4 text-blue-500" />
+                                  <User className="w-4 h-4 text-processing" />
                                 ) : assignTarget.type === 'Role' ? (
-                                  <Users className="w-4 h-4 text-purple-500" />
+                                  <Users className="w-4 h-4 text-vendor" />
                                 ) : (
-                                  <Building className="w-4 h-4 text-green-500" />
+                                  <Building className="w-4 h-4 text-success" />
                                 )}
-                                <span className="text-slate-700 dark:text-slate-300">
+                                <span className="text-foreground">
                                   {assignTarget.type}: <span className="font-medium">{assignTarget.value}</span>
                                 </span>
                               </div>
@@ -308,6 +339,25 @@ export default function AssignmentRulesPage() {
           ))}
         </div>
       )}
+
+      {/* Help Section */}
+      <div className="p-4 bg-processing/5 border border-processing/20 rounded-xl">
+        <h3 className="font-medium text-foreground mb-2">Tips for Effective Rules</h3>
+        <ul className="text-sm text-muted-foreground space-y-1">
+          <li className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-processing mt-0.5 flex-shrink-0" />
+            Use higher priority numbers for more specific rules
+          </li>
+          <li className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-processing mt-0.5 flex-shrink-0" />
+            Combine multiple conditions for precise targeting
+          </li>
+          <li className="flex items-start gap-2">
+            <CheckCircle className="w-4 h-4 text-processing mt-0.5 flex-shrink-0" />
+            Use Round Robin to distribute work evenly across team members
+          </li>
+        </ul>
+      </div>
     </div>
   );
 }
