@@ -57,3 +57,7 @@ Cargo.lock
 ollama_mcp_server.py
 *complete.sh
 .claude
+dream-board-backup-*.md
+progress-report-*.md
+progress-*.md
+agent-logs/
