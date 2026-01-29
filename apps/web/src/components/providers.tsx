@@ -1,10 +1,11 @@
 'use client';
 
 import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ThemeProvider } from 'next-themes';
 import { toast } from 'sonner';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { Toaster } from '@/components/ui/toaster';
 import { OrganizationThemeProvider } from '@/components/organization-theme-provider';
 
 function parseError(error: unknown): string {
@@ -77,6 +78,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         >
           <OrganizationThemeProvider>
             {children}
+            <Toaster />
           </OrganizationThemeProvider>
         </ThemeProvider>
       </QueryClientProvider>

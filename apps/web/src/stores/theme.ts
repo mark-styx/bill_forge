@@ -84,6 +84,21 @@ export const themePresets: ThemePreset[] = [
       reporting: '42 90% 52%',
     },
   },
+  {
+    id: 'azure',
+    name: 'Azure',
+    description: 'Bright and modern with electric blues',
+    preview: 'from-blue-400 to-indigo-400',
+    category: 'bright',
+    colors: {
+      primary: '217 91% 60%',
+      accent: '199 89% 48%',
+      capture: '199 89% 48%',
+      processing: '162 78% 45%',
+      vendor: '262 83% 58%',
+      reporting: '43 96% 56%',
+    },
+  },
   // Vibrant Category
   {
     id: 'violet',
@@ -160,6 +175,36 @@ export const themePresets: ThemePreset[] = [
       reporting: '38 92% 50%',
     },
   },
+  {
+    id: 'rose',
+    name: 'Rose',
+    description: 'Soft pink tones with modern appeal',
+    preview: 'from-rose-500 to-pink-400',
+    category: 'vibrant',
+    colors: {
+      primary: '350 89% 60%',
+      accent: '330 81% 60%',
+      capture: '199 89% 48%',
+      processing: '162 78% 45%',
+      vendor: '280 68% 55%',
+      reporting: '43 96% 56%',
+    },
+  },
+  {
+    id: 'lime',
+    name: 'Lime',
+    description: 'Fresh and energetic with lime green accents',
+    preview: 'from-lime-500 to-green-400',
+    category: 'vibrant',
+    colors: {
+      primary: '84 85% 45%',
+      accent: '142 76% 45%',
+      capture: '199 89% 48%',
+      processing: '84 85% 45%',
+      vendor: '262 83% 58%',
+      reporting: '43 96% 56%',
+    },
+  },
   // Professional Category
   {
     id: 'slate',
@@ -204,6 +249,21 @@ export const themePresets: ThemePreset[] = [
       processing: '155 70% 42%',
       vendor: '260 55% 52%',
       reporting: '38 85% 50%',
+    },
+  },
+  {
+    id: 'graphite',
+    name: 'Graphite',
+    description: 'Modern and sleek with subtle blue tones',
+    preview: 'from-zinc-600 to-zinc-400',
+    category: 'professional',
+    colors: {
+      primary: '240 5% 34%',
+      accent: '220 14% 46%',
+      capture: '199 89% 48%',
+      processing: '162 78% 45%',
+      vendor: '262 68% 55%',
+      reporting: '43 96% 56%',
     },
   },
 ];

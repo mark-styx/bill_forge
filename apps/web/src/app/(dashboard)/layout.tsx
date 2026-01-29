@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { sandboxApi, PersonaInfo } from '@/lib/api';
 import { toast } from 'sonner';
+import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
 import {
   FileText,
   ClipboardCheck,
@@ -17,7 +18,6 @@ import {
   Home,
   ChevronDown,
   Bell,
-  Search,
   ScanLine,
   Layers,
   RefreshCw,
@@ -284,21 +284,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
+      {/* Command Palette */}
+      <CommandPalette />
+
       {/* Main content */}
       <div className={`transition-all duration-300 ${sidebarCollapsed ? 'pl-16' : 'pl-60'}`}>
         {/* Header */}
         <header className="h-14 bg-card/80 backdrop-blur-sm border-b border-border sticky top-0 z-20">
           <div className="h-full px-4 flex items-center justify-between gap-4">
-            {/* Search */}
+            {/* Command Palette Trigger */}
             <div className="flex-1 max-w-md">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search..."
-                  className="input pl-9 h-9 bg-secondary/50"
-                />
-              </div>
+              <CommandPaletteTrigger />
             </div>
 
             {/* Right actions */}
