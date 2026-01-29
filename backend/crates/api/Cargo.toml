@@ -1,0 +1,59 @@
+[package]
+name = "billforge-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "billforge-server"
+path = "src/main.rs"
+
+[dependencies]
+billforge-core = { path = "../core" }
+billforge-db = { path = "../db" }
+billforge-auth = { path = "../auth" }
+billforge-email = { path = "../email" }
+billforge-billing = { path = "../billing" }
+billforge-invoice-capture = { path = "../invoice-capture" }
+billforge-invoice-processing = { path = "../invoice-processing" }
+billforge-vendor-mgmt = { path = "../vendor-mgmt" }
+billforge-reporting = { path = "../reporting" }
+
+# Web framework
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "limit"] }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Database (for seeding)
+rusqlite = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+validator = { workspace = true }
+
+# Validation
+regex = "1.10"
+
+# OpenAPI documentation
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"

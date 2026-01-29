@@ -1,0 +1,23 @@
+[package]
+name = "billforge-invoice-capture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+billforge-core = { path = "../core" }
+billforge-db = { path = "../db" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

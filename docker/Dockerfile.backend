@@ -1,0 +1,73 @@
+# Multi-stage build for Rust backend
+# BillForge API Server
+
+# Build stage
+FROM rust:1.75-slim-bookworm AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace configuration
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/crates ./crates
+
+# Build dependencies first (for caching)
+RUN mkdir -p crates/api/src && echo "fn main() {}" > crates/api/src/main.rs
+RUN cargo build --release --bin billforge-server || true
+
+# Now build the actual application
+COPY backend/ ./
+RUN touch crates/api/src/main.rs
+RUN cargo build --release --bin billforge-server
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install runtime dependencies and curl for health checks
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN groupadd --gid 1001 billforge && \
+    useradd --uid 1001 --gid billforge --shell /bin/false billforge
+
+# Copy the binary
+COPY --from=builder /app/target/release/billforge-server /app/billforge-server
+
+# Create data directories with proper ownership
+RUN mkdir -p /app/data/tenants /app/data/files && \
+    chown -R billforge:billforge /app
+
+# Set environment variables
+ENV RUST_LOG=info
+ENV BACKEND_HOST=0.0.0.0
+ENV BACKEND_PORT=8080
+ENV DATABASE_URL=sqlite:///app/data/billforge.db
+ENV TENANT_DB_PATH=/app/data/tenants
+ENV LOCAL_STORAGE_PATH=/app/data/files
+ENV OCR_PROVIDER=tesseract
+ENV ENVIRONMENT=production
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Switch to non-root user
+USER billforge
+
+EXPOSE 8080
+
+# Use exec form for proper signal handling
+CMD ["/app/billforge-server"]

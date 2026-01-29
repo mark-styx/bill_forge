@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/api",
+    "crates/core",
+    "crates/db",
+    "crates/auth",
+    "crates/email",
+    "crates/billing",
+    "crates/invoice-capture",
+    "crates/invoice-processing",
+    "crates/vendor-mgmt",
+    "crates/reporting",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["BillForge Team"]
+license = "Proprietary"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["multipart", "macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "limit"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database - using SQLite for all storage (simpler setup)
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Authentication
+jsonwebtoken = "9.2"
+argon2 = "0.5"
+rand = "0.8"
+
+# File storage
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+dotenvy = "0.15"
+validator = { version = "0.16", features = ["derive"] }
+async-trait = "0.1"
+
+# Testing
+mockall = "0.12"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true

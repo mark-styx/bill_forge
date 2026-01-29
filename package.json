@@ -1,0 +1,32 @@
+{
+  "name": "billforge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Modular SaaS platform for Accounts Payable teams",
+  "scripts": {
+    "dev": "pnpm --filter @billforge/web dev",
+    "build": "pnpm --filter @billforge/web build",
+    "start": "pnpm --filter @billforge/web start",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:migrate": "cd backend && cargo run --bin migrate",
+    "backend:dev": "cd backend && cargo watch -x run",
+    "backend:build": "cd backend && cargo build --release",
+    "sandbox:start": "docker-compose -f docker/docker-compose.sandbox.yml up -d && pnpm sandbox:seed && pnpm dev",
+    "sandbox:seed": "cd sandbox && pnpm seed",
+    "sandbox:reset": "docker-compose -f docker/docker-compose.sandbox.yml down -v && pnpm sandbox:start",
+    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules backend/target"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "prettier": "^3.1.0",
+    "eslint": "^8.55.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.0"
+}
