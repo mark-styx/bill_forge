@@ -52,7 +52,7 @@ Cargo.lock
 .grepai/
 
 
-
+# Automation
 .venv
 ollama_mcp_server.py
 *complete.sh
@@ -61,3 +61,4 @@ dream-board-backup-*.md
 progress-report-*.md
 progress-*.md
 agent-logs/
+agent-flow.sh
