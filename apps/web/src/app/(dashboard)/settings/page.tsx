@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors } from '@/stores/theme';
 import { toast } from 'sonner';
+import { ColorPicker, ColorSwatch } from '@/components/ui/color-picker';
 import {
   Palette,
   Sun,
@@ -14,44 +15,101 @@ import {
   User,
   Bell,
   Shield,
-  Sliders,
+  Sparkles,
+  Eye,
+  RotateCcw,
+  Upload,
+  Save,
 } from 'lucide-react';
 
 const tabs = [
   { id: 'appearance', name: 'Appearance', icon: Palette },
+  { id: 'branding', name: 'Branding', icon: Sparkles },
   { id: 'organization', name: 'Organization', icon: Building2 },
   { id: 'profile', name: 'Profile', icon: User },
   { id: 'notifications', name: 'Notifications', icon: Bell },
   { id: 'security', name: 'Security', icon: Shield },
 ];
 
+const categoryLabels = {
+  bright: 'Bright & Clean',
+  vibrant: 'Vibrant & Bold',
+  professional: 'Professional',
+};
+
 export default function SettingsPage() {
   const { user, tenant } = useAuthStore();
-  const { mode, setMode, presetId, setPreset, customColors, setCustomColors, clearCustomColors } = useThemeStore();
-  const [activeTab, setActiveTab] = useState('appearance');
-  const [showCustomPicker, setShowCustomPicker] = useState(false);
-  const [tempColor, setTempColor] = useState('210');
+  const {
+    mode,
+    setMode,
+    presetId,
+    setPreset,
+    customColors,
+    setCustomColors,
+    clearCustomColors,
+    organizationTheme,
+    isOrgThemeActive,
+    setOrganizationTheme,
+    clearOrganizationTheme,
+    updateOrganizationTheme,
+  } = useThemeStore();
 
-  const handleSaveCustomColor = () => {
-    const newColors: ThemeColors = {
-      primary: `${tempColor} 100% 50%`,
-      accent: `${parseInt(tempColor) + 20} 90% 50%`,
-      capture: '195 100% 45%',
-      processing: '160 84% 39%',
-      vendor: '270 70% 55%',
-      reporting: '35 95% 55%',
-    };
-    setCustomColors(newColors);
-    setShowCustomPicker(false);
-    toast.success('Custom theme applied');
+  const [activeTab, setActiveTab] = useState('appearance');
+  const [orgBrandName, setOrgBrandName] = useState(organizationTheme?.brandName || tenant?.settings?.company_name || '');
+  const [previewMode, setPreviewMode] = useState(false);
+
+  // Organization branding state
+  const [brandColors, setBrandColors] = useState<ThemeColors>({
+    primary: organizationTheme?.customColors?.primary || '210 100% 50%',
+    accent: organizationTheme?.customColors?.accent || '190 95% 45%',
+    capture: organizationTheme?.customColors?.capture || '195 100% 45%',
+    processing: organizationTheme?.customColors?.processing || '160 84% 39%',
+    vendor: organizationTheme?.customColors?.vendor || '270 70% 55%',
+    reporting: organizationTheme?.customColors?.reporting || '35 95% 55%',
+  });
+
+  const handleSaveOrganizationTheme = () => {
+    setOrganizationTheme({
+      presetId: presetId,
+      customColors: brandColors,
+      brandName: orgBrandName,
+    });
+    toast.success('Organization theme saved');
   };
+
+  const handlePreviewTheme = (colors: ThemeColors) => {
+    if (typeof window === 'undefined') return;
+    const root = document.documentElement;
+    root.style.setProperty('--primary', colors.primary);
+    root.style.setProperty('--accent', colors.accent);
+    root.style.setProperty('--capture', colors.capture);
+    root.style.setProperty('--processing', colors.processing);
+    root.style.setProperty('--vendor', colors.vendor);
+    root.style.setProperty('--reporting', colors.reporting);
+    root.style.setProperty('--ring', colors.primary);
+  };
+
+  const handlePresetSelect = (preset: typeof themePresets[0]) => {
+    clearCustomColors();
+    setPreset(preset.id);
+    setBrandColors(preset.colors);
+    toast.success(`${preset.name} theme applied`);
+  };
+
+  // Group presets by category
+  const groupedPresets = themePresets.reduce((acc, preset) => {
+    const category = preset.category || 'bright';
+    if (!acc[category]) acc[category] = [];
+    acc[category].push(preset);
+    return acc;
+  }, {} as Record<string, typeof themePresets>);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-foreground">Settings</h1>
-        <p className="text-muted-foreground mt-1">Manage your account and preferences</p>
+        <p className="text-muted-foreground mt-1">Manage your account and organization preferences</p>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">
@@ -77,18 +135,19 @@ export default function SettingsPage() {
 
         {/* Content */}
         <div className="flex-1 space-y-6">
+          {/* Appearance Tab */}
           {activeTab === 'appearance' && (
             <>
               {/* Theme Mode */}
               <div className="card p-6">
                 <h2 className="text-lg font-semibold text-foreground mb-1">Theme Mode</h2>
                 <p className="text-sm text-muted-foreground mb-4">Choose how BillForge looks to you</p>
-                
+
                 <div className="grid grid-cols-3 gap-3">
                   {[
-                    { id: 'light', name: 'Light', icon: Sun },
-                    { id: 'dark', name: 'Dark', icon: Moon },
-                    { id: 'system', name: 'System', icon: Monitor },
+                    { id: 'light', name: 'Light', icon: Sun, desc: 'Bright and clean' },
+                    { id: 'dark', name: 'Dark', icon: Moon, desc: 'Easy on the eyes' },
+                    { id: 'system', name: 'System', icon: Monitor, desc: 'Match device' },
                   ].map((option) => (
                     <button
                       key={option.id}
@@ -103,6 +162,7 @@ export default function SettingsPage() {
                       <p className={`text-sm font-medium ${mode === option.id ? 'text-primary' : 'text-foreground'}`}>
                         {option.name}
                       </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{option.desc}</p>
                     </button>
                   ))}
                 </div>
@@ -110,123 +170,252 @@ export default function SettingsPage() {
 
               {/* Color Theme */}
               <div className="card p-6">
-                <h2 className="text-lg font-semibold text-foreground mb-1">Color Theme</h2>
-                <p className="text-sm text-muted-foreground mb-4">Select a color scheme for your organization</p>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
-                  {themePresets.map((preset) => (
-                    <button
-                      key={preset.id}
-                      onClick={() => {
-                        clearCustomColors();
-                        setPreset(preset.id);
-                        toast.success(`${preset.name} theme applied`);
-                      }}
-                      className={`p-4 rounded-xl border-2 text-left transition-all ${
-                        presetId === preset.id && !customColors
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-primary/30'
-                      }`}
-                    >
-                      <div className={`w-full h-12 rounded-lg bg-gradient-to-r ${preset.preview} mb-3`} />
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-foreground text-sm">{preset.name}</p>
-                          <p className="text-xs text-muted-foreground">{preset.description.slice(0, 30)}...</p>
-                        </div>
-                        {presetId === preset.id && !customColors && (
-                          <Check className="w-5 h-5 text-primary" />
-                        )}
-                      </div>
-                    </button>
-                  ))}
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Color Theme</h2>
+                    <p className="text-sm text-muted-foreground">Select a color scheme for your workspace</p>
+                  </div>
+                  {isOrgThemeActive && (
+                    <span className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">
+                      Organization theme active
+                    </span>
+                  )}
                 </div>
 
-                {/* Custom Color */}
-                <div className="pt-4 border-t border-border">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <p className="font-medium text-foreground">Custom Brand Color</p>
-                      <p className="text-sm text-muted-foreground">Use your organization's brand color</p>
+                {/* Theme Categories */}
+                {Object.entries(groupedPresets).map(([category, presets]) => (
+                  <div key={category} className="mb-6 last:mb-0">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                      {categoryLabels[category as keyof typeof categoryLabels]}
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {presets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          onClick={() => handlePresetSelect(preset)}
+                          disabled={isOrgThemeActive}
+                          className={`p-3 rounded-xl border-2 text-left transition-all ${
+                            presetId === preset.id && !customColors && !isOrgThemeActive
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border hover:border-primary/30'
+                          } ${isOrgThemeActive ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        >
+                          <div className={`w-full h-10 rounded-lg bg-gradient-to-r ${preset.preview} mb-2`} />
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium text-foreground text-sm">{preset.name}</p>
+                              <p className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                {preset.description}
+                              </p>
+                            </div>
+                            {presetId === preset.id && !customColors && !isOrgThemeActive && (
+                              <Check className="w-4 h-4 text-primary flex-shrink-0" />
+                            )}
+                          </div>
+                        </button>
+                      ))}
                     </div>
+                  </div>
+                ))}
+
+                {isOrgThemeActive && (
+                  <div className="mt-4 p-4 bg-primary/5 rounded-xl border border-primary/20">
+                    <p className="text-sm text-foreground font-medium">Organization theme is active</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Personal theme preferences are disabled. Contact your admin to customize the organization theme.
+                    </p>
                     <button
-                      onClick={() => setShowCustomPicker(!showCustomPicker)}
-                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        clearOrganizationTheme();
+                        toast.success('Switched to personal theme');
+                      }}
+                      className="mt-3 text-sm text-primary hover:underline"
                     >
-                      {showCustomPicker ? 'Cancel' : 'Customize'}
+                      Use personal theme instead
                     </button>
                   </div>
+                )}
+              </div>
+            </>
+          )}
 
-                  {showCustomPicker && (
-                    <div className="p-4 bg-secondary rounded-xl space-y-4 animate-scale-in">
-                      <div>
-                        <label className="block text-sm font-medium text-foreground mb-2">
-                          Primary Color Hue ({tempColor}°)
-                        </label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="360"
-                          value={tempColor}
-                          onChange={(e) => setTempColor(e.target.value)}
-                          className="w-full h-3 rounded-full appearance-none cursor-pointer"
-                          style={{
-                            background: `linear-gradient(to right, 
-                              hsl(0, 100%, 50%), 
-                              hsl(60, 100%, 50%), 
-                              hsl(120, 100%, 50%), 
-                              hsl(180, 100%, 50%), 
-                              hsl(240, 100%, 50%), 
-                              hsl(300, 100%, 50%), 
-                              hsl(360, 100%, 50%)
-                            )`,
+          {/* Branding Tab - Organization Theme Customization */}
+          {activeTab === 'branding' && (
+            <>
+              <div className="card p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Organization Branding</h2>
+                    <p className="text-sm text-muted-foreground">Customize the look and feel for your entire organization</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPreviewMode(!previewMode)}
+                      className={`btn btn-sm ${previewMode ? 'btn-primary' : 'btn-secondary'}`}
+                    >
+                      <Eye className="w-4 h-4 mr-1.5" />
+                      {previewMode ? 'Previewing' : 'Preview'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Brand Name */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Brand Name</label>
+                  <input
+                    type="text"
+                    value={orgBrandName}
+                    onChange={(e) => setOrgBrandName(e.target.value)}
+                    className="input max-w-md"
+                    placeholder="Your Company Name"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">This will appear in the sidebar and other areas</p>
+                </div>
+
+                {/* Logo Upload */}
+                <div className="mb-6 pb-6 border-b border-border">
+                  <label className="block text-sm font-medium text-foreground mb-3">Organization Logo</label>
+                  <div className="flex items-center gap-4">
+                    <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center">
+                      <Building2 className="w-10 h-10 text-white" />
+                    </div>
+                    <div>
+                      <button className="btn btn-secondary btn-sm">
+                        <Upload className="w-4 h-4 mr-1.5" />
+                        Upload Logo
+                      </button>
+                      <p className="text-xs text-muted-foreground mt-1.5">PNG, SVG or JPG. Max 2MB. Recommended: 256x256px</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Primary Brand Color */}
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Primary Brand Color</h3>
+                  <ColorPicker
+                    value={brandColors.primary}
+                    onChange={(value) => {
+                      const newColors = { ...brandColors, primary: value };
+                      setBrandColors(newColors);
+                      if (previewMode) handlePreviewTheme(newColors);
+                    }}
+                  />
+                </div>
+
+                {/* Module Colors */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-foreground">Module Colors</h3>
+                  <p className="text-xs text-muted-foreground -mt-2">
+                    Customize colors for different modules (optional)
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      { key: 'capture', label: 'Invoice Capture', icon: '📥' },
+                      { key: 'processing', label: 'Processing', icon: '⚡' },
+                      { key: 'vendor', label: 'Vendors', icon: '🏢' },
+                      { key: 'reporting', label: 'Reporting', icon: '📊' },
+                    ].map((module) => (
+                      <div key={module.key} className="p-4 bg-secondary/50 rounded-xl">
+                        <div className="flex items-center gap-2 mb-3">
+                          <span>{module.icon}</span>
+                          <span className="text-sm font-medium text-foreground">{module.label}</span>
+                        </div>
+                        <ColorSwatch
+                          value={brandColors[module.key as keyof ThemeColors]}
+                          onChange={(value) => {
+                            const newColors = { ...brandColors, [module.key]: value };
+                            setBrandColors(newColors);
+                            if (previewMode) handlePreviewTheme(newColors);
                           }}
                         />
                       </div>
-                      <div className="flex items-center gap-4">
-                        <div
-                          className="w-16 h-16 rounded-xl shadow-soft"
-                          style={{ backgroundColor: `hsl(${tempColor}, 100%, 50%)` }}
-                        />
-                        <div className="flex-1">
-                          <p className="text-sm text-foreground font-medium">Preview</p>
-                          <p className="text-xs text-muted-foreground">This will be your primary brand color</p>
-                        </div>
-                        <button
-                          onClick={handleSaveCustomColor}
-                          className="btn btn-primary btn-sm"
-                        >
-                          Apply Color
-                        </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Theme Preview */}
+                <div className="mt-6 pt-6 border-t border-border">
+                  <h3 className="text-sm font-semibold text-foreground mb-4">Live Preview</h3>
+                  <div className="p-6 bg-background border border-border rounded-xl space-y-4">
+                    {/* Preview Header */}
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold"
+                        style={{ backgroundColor: `hsl(${brandColors.primary})` }}
+                      >
+                        {orgBrandName?.[0]?.toUpperCase() || 'B'}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-foreground">{orgBrandName || 'Your Company'}</p>
+                        <p className="text-xs text-muted-foreground">Organization Dashboard</p>
                       </div>
                     </div>
-                  )}
 
-                  {customColors && (
-                    <div className="mt-4 flex items-center justify-between p-3 bg-primary/5 rounded-lg border border-primary/20">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-8 h-8 rounded-lg"
-                          style={{ backgroundColor: `hsl(${customColors.primary})` }}
-                        />
-                        <span className="text-sm font-medium text-foreground">Custom color active</span>
-                      </div>
+                    {/* Preview Buttons */}
+                    <div className="flex flex-wrap gap-2">
                       <button
-                        onClick={() => {
-                          clearCustomColors();
-                          toast.success('Reset to default theme');
-                        }}
-                        className="text-sm text-primary hover:underline"
+                        className="px-4 py-2 rounded-lg text-white text-sm font-medium"
+                        style={{ backgroundColor: `hsl(${brandColors.primary})` }}
                       >
-                        Reset
+                        Primary Button
+                      </button>
+                      <button
+                        className="px-4 py-2 rounded-lg text-white text-sm font-medium"
+                        style={{ backgroundColor: `hsl(${brandColors.accent})` }}
+                      >
+                        Accent Button
                       </button>
                     </div>
-                  )}
+
+                    {/* Preview Badges */}
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { key: 'capture', label: 'Capture' },
+                        { key: 'processing', label: 'Processing' },
+                        { key: 'vendor', label: 'Vendor' },
+                        { key: 'reporting', label: 'Reporting' },
+                      ].map((badge) => (
+                        <span
+                          key={badge.key}
+                          className="px-2.5 py-1 rounded-full text-xs font-medium"
+                          style={{
+                            backgroundColor: `hsl(${brandColors[badge.key as keyof ThemeColors]} / 0.15)`,
+                            color: `hsl(${brandColors[badge.key as keyof ThemeColors]})`,
+                          }}
+                        >
+                          {badge.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Save Actions */}
+                <div className="mt-6 pt-6 border-t border-border flex items-center justify-between">
+                  <button
+                    onClick={() => {
+                      const defaultPreset = themePresets[0];
+                      setBrandColors(defaultPreset.colors);
+                      setOrgBrandName(tenant?.settings?.company_name || '');
+                      if (previewMode) handlePreviewTheme(defaultPreset.colors);
+                      toast.info('Reset to defaults');
+                    }}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    <RotateCcw className="w-4 h-4 mr-1.5" />
+                    Reset to Defaults
+                  </button>
+                  <button onClick={handleSaveOrganizationTheme} className="btn btn-primary btn-md">
+                    <Save className="w-4 h-4 mr-1.5" />
+                    Save Organization Theme
+                  </button>
                 </div>
               </div>
             </>
           )}
 
+          {/* Organization Tab */}
           {activeTab === 'organization' && (
             <div className="card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-1">Organization Settings</h2>
@@ -248,7 +437,10 @@ export default function SettingsPage() {
                     <div className="w-16 h-16 rounded-xl bg-secondary flex items-center justify-center">
                       <Building2 className="w-8 h-8 text-muted-foreground" />
                     </div>
-                    <button className="btn btn-secondary btn-sm">Upload Logo</button>
+                    <button className="btn btn-secondary btn-sm">
+                      <Upload className="w-4 h-4 mr-1.5" />
+                      Upload Logo
+                    </button>
                   </div>
                 </div>
                 <div>
@@ -273,11 +465,15 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-6 pt-6 border-t border-border flex justify-end">
-                <button className="btn btn-primary btn-md">Save Changes</button>
+                <button className="btn btn-primary btn-md">
+                  <Save className="w-4 h-4 mr-1.5" />
+                  Save Changes
+                </button>
               </div>
             </div>
           )}
 
+          {/* Profile Tab */}
           {activeTab === 'profile' && (
             <div className="card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-1">Profile Settings</h2>
@@ -289,7 +485,10 @@ export default function SettingsPage() {
                     {user?.name?.[0]?.toUpperCase() || 'U'}
                   </div>
                   <div>
-                    <button className="btn btn-secondary btn-sm">Change Avatar</button>
+                    <button className="btn btn-secondary btn-sm">
+                      <Upload className="w-4 h-4 mr-1.5" />
+                      Change Avatar
+                    </button>
                     <p className="text-xs text-muted-foreground mt-1">JPG, PNG or GIF. Max 2MB.</p>
                   </div>
                 </div>
@@ -316,24 +515,28 @@ export default function SettingsPage() {
                   <input
                     type="email"
                     defaultValue={user?.email || ''}
-                    className="input"
+                    className="input bg-secondary/50"
                     disabled
                   />
                 </div>
               </div>
 
               <div className="mt-6 pt-6 border-t border-border flex justify-end">
-                <button className="btn btn-primary btn-md">Save Profile</button>
+                <button className="btn btn-primary btn-md">
+                  <Save className="w-4 h-4 mr-1.5" />
+                  Save Profile
+                </button>
               </div>
             </div>
           )}
 
+          {/* Notifications Tab */}
           {activeTab === 'notifications' && (
             <div className="card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-1">Notification Preferences</h2>
               <p className="text-sm text-muted-foreground mb-6">Configure how you receive notifications</p>
 
-              <div className="space-y-4">
+              <div className="space-y-1">
                 {[
                   { label: 'Invoice received', description: 'When a new invoice is uploaded', default: true },
                   { label: 'Approval required', description: 'When an invoice needs your approval', default: true },
@@ -341,7 +544,7 @@ export default function SettingsPage() {
                   { label: 'Invoice rejected', description: 'When an invoice is rejected', default: true },
                   { label: 'Weekly digest', description: 'Summary of weekly activity', default: false },
                 ].map((item) => (
-                  <div key={item.label} className="flex items-center justify-between py-3 border-b border-border last:border-0">
+                  <div key={item.label} className="flex items-center justify-between py-4 border-b border-border last:border-0">
                     <div>
                       <p className="font-medium text-foreground">{item.label}</p>
                       <p className="text-sm text-muted-foreground">{item.description}</p>
@@ -356,6 +559,7 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* Security Tab */}
           {activeTab === 'security' && (
             <div className="card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-1">Security Settings</h2>
@@ -363,13 +567,13 @@ export default function SettingsPage() {
 
               <div className="space-y-6">
                 <div>
-                  <h3 className="font-medium text-foreground mb-2">Change Password</h3>
-                  <div className="space-y-3">
+                  <h3 className="font-medium text-foreground mb-3">Change Password</h3>
+                  <div className="space-y-3 max-w-md">
                     <input type="password" placeholder="Current password" className="input" />
                     <input type="password" placeholder="New password" className="input" />
                     <input type="password" placeholder="Confirm new password" className="input" />
                   </div>
-                  <button className="btn btn-secondary btn-sm mt-3">Update Password</button>
+                  <button className="btn btn-secondary btn-sm mt-4">Update Password</button>
                 </div>
 
                 <div className="pt-6 border-t border-border">
@@ -381,19 +585,20 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="pt-6 border-t border-border">
-                  <h3 className="font-medium text-foreground mb-2">Active Sessions</h3>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Manage devices where you're logged in
-                  </p>
-                  <div className="p-3 bg-secondary rounded-lg flex items-center justify-between">
+                  <h3 className="font-medium text-foreground mb-3">Active Sessions</h3>
+                  <div className="p-4 bg-secondary/50 rounded-xl flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <Monitor className="w-5 h-5 text-muted-foreground" />
+                      <div className="w-10 h-10 rounded-lg bg-background flex items-center justify-center">
+                        <Monitor className="w-5 h-5 text-muted-foreground" />
+                      </div>
                       <div>
                         <p className="text-sm font-medium text-foreground">Current session</p>
                         <p className="text-xs text-muted-foreground">Last active: now</p>
                       </div>
                     </div>
-                    <span className="text-xs bg-success/15 text-success px-2 py-1 rounded-full">Active</span>
+                    <span className="text-xs bg-success/15 text-success px-2.5 py-1 rounded-full font-medium">
+                      Active
+                    </span>
                   </div>
                 </div>
               </div>

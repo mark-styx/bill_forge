@@ -10,6 +10,21 @@ export interface User {
   roles: string[];
 }
 
+export interface OrganizationTheme {
+  presetId: string;
+  customColors?: {
+    primary: string;      // HSL values like "220 90% 56%"
+    accent: string;
+    capture: string;
+    processing: string;
+    vendor: string;
+    reporting: string;
+  };
+  logoUrl?: string;
+  logoMark?: string;      // Small icon version
+  brandGradient?: string; // Custom gradient for brand areas
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -21,6 +36,7 @@ export interface Tenant {
     timezone?: string;
     default_currency?: string;
   };
+  theme?: OrganizationTheme;
 }
 
 interface AuthState {

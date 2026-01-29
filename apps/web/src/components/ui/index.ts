@@ -25,3 +25,6 @@ export * from './skeleton';
 // Feedback
 export * from './loading-spinner';
 export * from './error-boundary';
+
+// Theme Components
+export * from './color-picker';
