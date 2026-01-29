@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+s3 = ["aws-sdk-s3", "aws-config"]
+
 [dependencies]
 billforge-core = { path = "../core" }
 
@@ -24,6 +28,10 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+# AWS S3 (optional - for production deployments)
+aws-sdk-s3 = { version = "1.15", optional = true }
+aws-config = { version = "1.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.9"

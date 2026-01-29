@@ -87,6 +87,7 @@ impl MetadataDatabase {
                 id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL,
                 name TEXT NOT NULL,
+                key_prefix TEXT NOT NULL,
                 key_hash TEXT NOT NULL UNIQUE,
                 scopes TEXT NOT NULL DEFAULT '[]',
                 last_used_at TEXT,
@@ -95,6 +96,7 @@ impl MetadataDatabase {
                 revoked_at TEXT,
                 FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
             );
+            CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 
             -- System audit log (for admin actions)
             CREATE TABLE IF NOT EXISTS system_audit_log (
@@ -455,4 +457,155 @@ pub struct CreateUserInput {
     pub password_hash: String,
     pub name: String,
     pub roles: Vec<Role>,
+}
+
+/// API key record from database
+#[derive(Debug, Clone)]
+pub struct ApiKeyRecord {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub name: String,
+    pub key_prefix: String,
+    pub key_hash: String,
+    pub roles: Vec<Role>,
+    pub is_active: bool,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl MetadataDatabase {
+    // =========================================================================
+    // API Key Management
+    // =========================================================================
+
+    /// Create a new API key
+    pub async fn create_api_key(
+        &self,
+        id: Uuid,
+        tenant_id: &TenantId,
+        name: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        roles: &[Role],
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let roles_json = serde_json::to_string(roles)
+            .map_err(|e| Error::Database(format!("Failed to serialize roles: {}", e)))?;
+
+        conn.execute(
+            r#"INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, scopes, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+            params![
+                id.to_string(),
+                tenant_id.as_str(),
+                name,
+                key_prefix,
+                key_hash,
+                roles_json,
+                expires_at.map(|t| t.to_rfc3339()),
+            ],
+        )
+        .map_err(|e| Error::Database(format!("Failed to create API key: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get API key by prefix
+    pub async fn get_api_key_by_prefix(&self, key_prefix: &str) -> Result<Option<ApiKeyRecord>> {
+        let conn = self.conn.lock().await;
+        let result = conn
+            .query_row(
+                r#"SELECT id, tenant_id, name, key_prefix, key_hash, scopes, last_used_at, expires_at, created_at
+                   FROM api_keys WHERE key_prefix = ? AND revoked_at IS NULL"#,
+                params![key_prefix],
+                |row| {
+                    let roles_json: String = row.get(5)?;
+                    let last_used: Option<String> = row.get(6)?;
+                    let expires: Option<String> = row.get(7)?;
+                    let created: String = row.get(8)?;
+
+                    Ok(ApiKeyRecord {
+                        id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                        tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
+                        name: row.get(2)?,
+                        key_prefix: row.get(3)?,
+                        key_hash: row.get(4)?,
+                        roles: serde_json::from_str(&roles_json).unwrap_or_default(),
+                        is_active: true,
+                        last_used_at: last_used.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
+                        expires_at: expires.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
+                        created_at: DateTime::parse_from_rfc3339(&created).map(|t| t.into()).unwrap_or_else(|_| Utc::now()),
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Database(format!("Failed to get API key: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Update API key last used timestamp
+    pub async fn update_api_key_last_used(&self, key_id: Uuid) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?",
+            params![key_id.to_string()],
+        )
+        .map_err(|e| Error::Database(format!("Failed to update API key last used: {}", e)))?;
+        Ok(())
+    }
+
+    /// List API keys for a tenant
+    pub async fn list_api_keys(&self, tenant_id: &TenantId) -> Result<Vec<ApiKeyRecord>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                r#"SELECT id, tenant_id, name, key_prefix, key_hash, scopes, last_used_at, expires_at, created_at
+                   FROM api_keys WHERE tenant_id = ? AND revoked_at IS NULL
+                   ORDER BY created_at DESC"#,
+            )
+            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let rows = stmt
+            .query_map(params![tenant_id.as_str()], |row| {
+                let roles_json: String = row.get(5)?;
+                let last_used: Option<String> = row.get(6)?;
+                let expires: Option<String> = row.get(7)?;
+                let created: String = row.get(8)?;
+
+                Ok(ApiKeyRecord {
+                    id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                    tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
+                    name: row.get(2)?,
+                    key_prefix: row.get(3)?,
+                    key_hash: String::new(), // Don't expose hash in list
+                    roles: serde_json::from_str(&roles_json).unwrap_or_default(),
+                    is_active: true,
+                    last_used_at: last_used.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
+                    expires_at: expires.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
+                    created_at: DateTime::parse_from_rfc3339(&created).map(|t| t.into()).unwrap_or_else(|_| Utc::now()),
+                })
+            })
+            .map_err(|e| Error::Database(format!("Failed to list API keys: {}", e)))?;
+
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row.map_err(|e| Error::Database(e.to_string()))?);
+        }
+
+        Ok(keys)
+    }
+
+    /// Revoke an API key
+    pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: Uuid) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ? AND tenant_id = ?",
+            params![key_id.to_string(), tenant_id.as_str()],
+        )
+        .map_err(|e| Error::Database(format!("Failed to revoke API key: {}", e)))?;
+        Ok(())
+    }
 }

@@ -4,12 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Enable for AWS Textract OCR provider
+aws-textract = ["aws-sdk-textract", "aws-config"]
+
 [dependencies]
 billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
 async-trait = { workspace = true }
 
 # Serialization
@@ -21,3 +26,16 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Text processing for OCR extraction
+regex = "1.10"
+
+# Temporary files for OCR processing
+tempfile = "3.9"
+
+# PDF processing (optional, for extracting images from PDFs)
+# pdf = "0.8"
+
+# AWS Textract (optional)
+aws-sdk-textract = { version = "1.15", optional = true }
+aws-config = { version = "1.1", optional = true }

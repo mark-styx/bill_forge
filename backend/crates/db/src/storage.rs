@@ -1,7 +1,10 @@
-//! Local file storage service for documents
+//! Document storage services with local and S3 support
 //!
-//! Stores files on the local filesystem organized by tenant.
-//! Each tenant's files are stored in: {base_path}/documents/{tenant_id}/{document_id}
+//! Provides a unified storage interface that supports:
+//! - Local filesystem storage for development
+//! - AWS S3 storage for production deployments
+//!
+//! Each tenant's files are isolated by storage key prefix: {tenant_id}/{document_id}
 
 use billforge_core::{
     domain::{DocumentRef, DocumentType},
@@ -15,6 +18,111 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use chrono::Utc;
+
+// =============================================================================
+// Storage Configuration
+// =============================================================================
+
+/// Configuration for storage backends
+#[derive(Debug, Clone)]
+pub enum StorageConfig {
+    /// Local filesystem storage (for development)
+    Local {
+        base_path: PathBuf,
+    },
+    /// AWS S3 storage (for production)
+    #[cfg(feature = "s3")]
+    S3 {
+        bucket: String,
+        region: String,
+        /// Optional endpoint for S3-compatible services (MinIO, LocalStack)
+        endpoint: Option<String>,
+        /// Prefix for all keys in this bucket
+        key_prefix: Option<String>,
+    },
+}
+
+impl StorageConfig {
+    /// Create local storage config
+    pub fn local(base_path: impl Into<PathBuf>) -> Self {
+        Self::Local {
+            base_path: base_path.into(),
+        }
+    }
+
+    /// Create S3 storage config
+    #[cfg(feature = "s3")]
+    pub fn s3(bucket: String, region: String) -> Self {
+        Self::S3 {
+            bucket,
+            region,
+            endpoint: None,
+            key_prefix: None,
+        }
+    }
+
+    /// Create S3-compatible storage config (for MinIO, LocalStack, etc.)
+    #[cfg(feature = "s3")]
+    pub fn s3_compatible(bucket: String, region: String, endpoint: String) -> Self {
+        Self::S3 {
+            bucket,
+            region,
+            endpoint: Some(endpoint),
+            key_prefix: None,
+        }
+    }
+
+    /// Load storage config from environment variables
+    pub fn from_env() -> Self {
+        let provider = std::env::var("STORAGE_PROVIDER").unwrap_or_else(|_| "local".to_string());
+
+        match provider.to_lowercase().as_str() {
+            #[cfg(feature = "s3")]
+            "s3" => {
+                let bucket = std::env::var("S3_BUCKET").expect("S3_BUCKET required when STORAGE_PROVIDER=s3");
+                let region = std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+                let endpoint = std::env::var("S3_ENDPOINT").ok();
+                let key_prefix = std::env::var("S3_KEY_PREFIX").ok();
+
+                Self::S3 {
+                    bucket,
+                    region,
+                    endpoint,
+                    key_prefix,
+                }
+            }
+            _ => {
+                let base_path = std::env::var("LOCAL_STORAGE_PATH")
+                    .unwrap_or_else(|_| "./data".to_string());
+                Self::Local {
+                    base_path: PathBuf::from(base_path),
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Storage Factory
+// =============================================================================
+
+/// Create a storage service from configuration
+pub async fn create_storage_service(config: StorageConfig) -> Result<Box<dyn StorageService>> {
+    match config {
+        StorageConfig::Local { base_path } => {
+            Ok(Box::new(LocalStorageService::new(base_path)))
+        }
+        #[cfg(feature = "s3")]
+        StorageConfig::S3 { bucket, region, endpoint, key_prefix } => {
+            let service = S3StorageService::new(bucket, region, endpoint, key_prefix).await?;
+            Ok(Box::new(service))
+        }
+    }
+}
+
+// =============================================================================
+// Local Storage Service
+// =============================================================================
 
 /// Local filesystem storage service
 pub struct LocalStorageService {
@@ -361,13 +469,213 @@ impl DocumentRepositoryImpl {
         let db = self.db_manager.tenant(tenant_id).await?;
         let conn = db.connection().await;
         let conn = conn.lock().await;
-        
+
         conn.execute(
             "UPDATE documents SET invoice_id = ? WHERE id = ?",
             rusqlite::params![invoice_id.0.to_string(), document_id.to_string()],
         )
         .map_err(|e| Error::Database(format!("Failed to link document: {}", e)))?;
-        
+
         Ok(())
     }
 }
+
+// =============================================================================
+// S3 Storage Service (Production)
+// =============================================================================
+
+#[cfg(feature = "s3")]
+mod s3_storage {
+    use super::*;
+    use aws_sdk_s3::{
+        config::{Region, Builder as S3ConfigBuilder},
+        primitives::ByteStream,
+        Client as S3Client,
+        presigning::PresigningConfig,
+    };
+    use std::time::Duration;
+
+    /// AWS S3 storage service for production deployments
+    pub struct S3StorageService {
+        client: S3Client,
+        bucket: String,
+        key_prefix: Option<String>,
+    }
+
+    impl S3StorageService {
+        /// Create a new S3 storage service
+        pub async fn new(
+            bucket: String,
+            region: String,
+            endpoint: Option<String>,
+            key_prefix: Option<String>,
+        ) -> Result<Self> {
+            let region = Region::new(region);
+
+            // Load AWS config from environment
+            let mut config_loader = aws_config::from_env().region(region.clone());
+
+            // If custom endpoint specified (MinIO, LocalStack), configure it
+            let sdk_config = config_loader.load().await;
+
+            let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+
+            if let Some(ref endpoint_url) = endpoint {
+                s3_config_builder = s3_config_builder
+                    .endpoint_url(endpoint_url)
+                    .force_path_style(true); // Required for MinIO/LocalStack
+            }
+
+            let client = S3Client::from_conf(s3_config_builder.build());
+
+            tracing::info!(
+                bucket = %bucket,
+                endpoint = ?endpoint,
+                "S3 storage service initialized"
+            );
+
+            Ok(Self {
+                client,
+                bucket,
+                key_prefix,
+            })
+        }
+
+        /// Generate the S3 key for a document
+        fn object_key(&self, tenant_id: &TenantId, document_id: Uuid) -> String {
+            let base_key = format!("{}/{}", tenant_id, document_id);
+            match &self.key_prefix {
+                Some(prefix) => format!("{}/{}", prefix.trim_end_matches('/'), base_key),
+                None => base_key,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl StorageService for S3StorageService {
+        async fn upload(
+            &self,
+            tenant_id: &TenantId,
+            file_name: &str,
+            data: &[u8],
+            mime_type: &str,
+        ) -> Result<Uuid> {
+            let document_id = Uuid::new_v4();
+            let key = self.object_key(tenant_id, document_id);
+
+            self.client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .body(ByteStream::from(data.to_vec()))
+                .content_type(mime_type)
+                .metadata("original-filename", file_name)
+                .send()
+                .await
+                .map_err(|e| Error::Storage(format!("S3 upload failed: {}", e)))?;
+
+            tracing::info!(
+                tenant_id = %tenant_id,
+                document_id = %document_id,
+                key = %key,
+                file_name = %file_name,
+                mime_type = %mime_type,
+                size_bytes = data.len(),
+                "Document uploaded to S3"
+            );
+
+            Ok(document_id)
+        }
+
+        async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
+            let key = self.object_key(tenant_id, file_id);
+
+            let response = self.client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| {
+                    // Check if it's a not found error
+                    if e.to_string().contains("NoSuchKey") || e.to_string().contains("not found") {
+                        Error::NotFound {
+                            resource_type: "Document".to_string(),
+                            id: file_id.to_string(),
+                        }
+                    } else {
+                        Error::Storage(format!("S3 download failed: {}", e))
+                    }
+                })?;
+
+            let data = response
+                .body
+                .collect()
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to read S3 response body: {}", e)))?
+                .into_bytes()
+                .to_vec();
+
+            Ok(data)
+        }
+
+        async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
+            let key = self.object_key(tenant_id, file_id);
+
+            self.client
+                .delete_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| Error::Storage(format!("S3 delete failed: {}", e)))?;
+
+            tracing::info!(
+                tenant_id = %tenant_id,
+                document_id = %file_id,
+                key = %key,
+                "Document deleted from S3"
+            );
+
+            Ok(())
+        }
+
+        async fn get_url(
+            &self,
+            tenant_id: &TenantId,
+            file_id: Uuid,
+            expires_in_secs: u64,
+        ) -> Result<String> {
+            let key = self.object_key(tenant_id, file_id);
+
+            let presigning_config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
+                .map_err(|e| Error::Storage(format!("Invalid presigning duration: {}", e)))?;
+
+            let presigned_request = self.client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .presigned(presigning_config)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to generate presigned URL: {}", e)))?;
+
+            Ok(presigned_request.uri().to_string())
+        }
+
+        async fn health_check(&self) -> Result<()> {
+            // Try to list objects with max_keys=1 to verify bucket access
+            self.client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .max_keys(1)
+                .send()
+                .await
+                .map_err(|e| Error::Storage(format!("S3 health check failed: {}", e)))?;
+
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "s3")]
+pub use s3_storage::S3StorageService;

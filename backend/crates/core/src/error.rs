@@ -64,6 +64,9 @@ pub enum Error {
     #[error("OCR processing failed: {0}")]
     OcrFailed(String),
 
+    #[error("OCR error: {0}")]
+    Ocr(String),
+
     #[error("Unsupported file format: {0}")]
     UnsupportedFormat(String),
 
@@ -139,6 +142,7 @@ impl Error {
             Error::ModuleNotAvailable(_) => "MODULE_NOT_AVAILABLE",
             Error::FeatureNotEnabled(_) => "FEATURE_NOT_ENABLED",
             Error::OcrFailed(_) => "OCR_FAILED",
+            Error::Ocr(_) => "OCR_ERROR",
             Error::UnsupportedFormat(_) => "UNSUPPORTED_FORMAT",
             Error::InvalidStateTransition { .. } => "INVALID_STATE_TRANSITION",
             Error::ApprovalRequired(_) => "APPROVAL_REQUIRED",
