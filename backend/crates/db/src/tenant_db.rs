@@ -365,6 +365,99 @@ impl TenantDatabase {
             CREATE INDEX IF NOT EXISTS idx_assignment_rules_queue ON assignment_rules(queue_id);
             CREATE INDEX IF NOT EXISTS idx_vendor_approvers_vendor ON vendor_approvers(vendor_id);
             CREATE INDEX IF NOT EXISTS idx_department_approvers_dept ON department_approvers(department);
+
+            -- Vendor statement settings (auto-request configuration)
+            CREATE TABLE IF NOT EXISTS vendor_statement_settings (
+                id TEXT PRIMARY KEY,
+                vendor_id TEXT NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                request_frequency TEXT NOT NULL DEFAULT 'monthly',
+                day_of_month INTEGER DEFAULT 1,
+                day_of_week TEXT,
+                contact_email TEXT,
+                cc_emails TEXT,
+                custom_message TEXT,
+                statement_period_type TEXT NOT NULL DEFAULT 'previous_month',
+                auto_send_reminders INTEGER NOT NULL DEFAULT 1,
+                reminder_days_after INTEGER DEFAULT 7,
+                max_reminders INTEGER DEFAULT 3,
+                next_request_date TEXT,
+                last_request_date TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(vendor_id)
+            );
+
+            -- Vendor statements (individual statement records)
+            CREATE TABLE IF NOT EXISTS vendor_statements (
+                id TEXT PRIMARY KEY,
+                vendor_id TEXT NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+                settings_id TEXT REFERENCES vendor_statement_settings(id),
+                statement_period_start TEXT NOT NULL,
+                statement_period_end TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                request_sent_at TEXT,
+                request_sent_to TEXT,
+                reminder_count INTEGER NOT NULL DEFAULT 0,
+                last_reminder_at TEXT,
+                received_at TEXT,
+                received_from TEXT,
+                document_id TEXT REFERENCES documents(id),
+                review_status TEXT DEFAULT 'pending',
+                reviewer_id TEXT,
+                reviewed_at TEXT,
+                review_notes TEXT,
+                discrepancies_found INTEGER DEFAULT 0,
+                discrepancy_amount INTEGER DEFAULT 0,
+                discrepancy_currency TEXT DEFAULT 'USD',
+                discrepancy_notes TEXT,
+                resolution_status TEXT,
+                resolution_notes TEXT,
+                resolved_at TEXT,
+                resolved_by TEXT,
+                upload_token TEXT,
+                upload_token_expires_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Statement request history (audit trail for sent emails)
+            CREATE TABLE IF NOT EXISTS statement_request_log (
+                id TEXT PRIMARY KEY,
+                statement_id TEXT NOT NULL REFERENCES vendor_statements(id) ON DELETE CASCADE,
+                request_type TEXT NOT NULL,
+                sent_to TEXT NOT NULL,
+                sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                email_subject TEXT,
+                email_status TEXT DEFAULT 'sent',
+                error_message TEXT
+            );
+
+            -- Statement line items for reconciliation
+            CREATE TABLE IF NOT EXISTS statement_line_items (
+                id TEXT PRIMARY KEY,
+                statement_id TEXT NOT NULL REFERENCES vendor_statements(id) ON DELETE CASCADE,
+                invoice_number TEXT,
+                invoice_date TEXT,
+                amount INTEGER NOT NULL,
+                amount_currency TEXT NOT NULL DEFAULT 'USD',
+                description TEXT,
+                matched_invoice_id TEXT REFERENCES invoices(id),
+                match_status TEXT DEFAULT 'unmatched',
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Indexes for vendor statement tables
+            CREATE INDEX IF NOT EXISTS idx_statement_settings_vendor ON vendor_statement_settings(vendor_id);
+            CREATE INDEX IF NOT EXISTS idx_statement_settings_next_date ON vendor_statement_settings(next_request_date);
+            CREATE INDEX IF NOT EXISTS idx_statements_vendor ON vendor_statements(vendor_id);
+            CREATE INDEX IF NOT EXISTS idx_statements_status ON vendor_statements(status);
+            CREATE INDEX IF NOT EXISTS idx_statements_review_status ON vendor_statements(review_status);
+            CREATE INDEX IF NOT EXISTS idx_statements_period ON vendor_statements(statement_period_start, statement_period_end);
+            CREATE INDEX IF NOT EXISTS idx_statement_request_log_statement ON statement_request_log(statement_id);
+            CREATE INDEX IF NOT EXISTS idx_statement_line_items_statement ON statement_line_items(statement_id);
+            CREATE INDEX IF NOT EXISTS idx_statement_line_items_match ON statement_line_items(match_status);
             "#,
         )
         .map_err(|e| Error::Migration(format!("Failed to run tenant migrations: {}", e)))?;
