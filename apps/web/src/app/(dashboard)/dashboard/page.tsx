@@ -5,6 +5,9 @@ import { reportsApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
+import { AnimatedCounter } from '@/components/ui/animated-counter';
+import { GlassCard, SpotlightCard } from '@/components/ui/glass-card';
+import { GradientButton } from '@/components/ui/gradient-card';
 import {
   FileText,
   Clock,
@@ -21,6 +24,8 @@ import {
   Sparkles,
   Activity,
   Zap,
+  BarChart3,
+  Target,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -171,13 +176,15 @@ export default function DashboardPage() {
                 <ArrowUpRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div className="mt-3">
-                <p className="text-2xl font-semibold text-foreground">
+                <div className="text-2xl font-semibold text-foreground">
                   {isLoading ? (
                     <span className="inline-block w-12 h-7 bg-secondary animate-pulse rounded" />
+                  ) : typeof stat.value === 'number' ? (
+                    <AnimatedCounter value={stat.value} duration={800} />
                   ) : (
                     stat.value
                   )}
-                </p>
+                </div>
                 <p className="text-sm text-muted-foreground mt-0.5">{stat.name}</p>
               </div>
               {stat.trend && (
@@ -342,11 +349,14 @@ export default function DashboardPage() {
       {(hasModule('invoice_capture') || hasModule('invoice_processing') || hasModule('vendor_management')) && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {hasModule('invoice_capture') && (
-            <div className="card overflow-hidden group">
-              <div
-                className="h-1"
-                style={{ background: `linear-gradient(90deg, hsl(${colors.capture}), hsl(${colors.capture} / 0.5))` }}
-              />
+            <GlassCard
+              variant="subtle"
+              hover="bright"
+              padding="none"
+              accentBar="top"
+              accentColor="capture"
+              className="group"
+            >
               <div className="p-5">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="bright-icon bright-icon-capture">
@@ -359,30 +369,37 @@ export default function DashboardPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">{summary?.invoices_pending_review ?? 0}</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={summary?.invoices_pending_review ?? 0} duration={1000} />
+                    </div>
                     <p className="text-xs text-muted-foreground">Pending</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">94%</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={94} suffix="%" duration={1200} />
+                    </div>
                     <p className="text-xs text-muted-foreground">Accuracy</p>
                   </div>
                 </div>
-                <Link
-                  href="/invoices"
-                  className="btn btn-secondary btn-sm w-full group-hover:bg-capture/10 group-hover:text-capture group-hover:border-capture/20 transition-colors"
-                >
-                  View Invoices
+                <Link href="/invoices">
+                  <GradientButton gradient="capture" size="sm" className="w-full">
+                    View Invoices
+                    <ArrowRight className="w-4 h-4 ml-1.5" />
+                  </GradientButton>
                 </Link>
               </div>
-            </div>
+            </GlassCard>
           )}
 
           {hasModule('invoice_processing') && (
-            <div className="card overflow-hidden group">
-              <div
-                className="h-1"
-                style={{ background: `linear-gradient(90deg, hsl(${colors.processing}), hsl(${colors.processing} / 0.5))` }}
-              />
+            <GlassCard
+              variant="subtle"
+              hover="bright"
+              padding="none"
+              accentBar="top"
+              accentColor="processing"
+              className="group"
+            >
               <div className="p-5">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="bright-icon bright-icon-processing">
@@ -395,30 +412,37 @@ export default function DashboardPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">{summary?.invoices_pending_approval ?? 0}</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={summary?.invoices_pending_approval ?? 0} duration={1000} />
+                    </div>
                     <p className="text-xs text-muted-foreground">Awaiting</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">{summary?.invoices_ready_for_payment ?? 0}</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1000} />
+                    </div>
                     <p className="text-xs text-muted-foreground">Ready</p>
                   </div>
                 </div>
-                <Link
-                  href="/processing"
-                  className="btn btn-secondary btn-sm w-full group-hover:bg-processing/10 group-hover:text-processing group-hover:border-processing/20 transition-colors"
-                >
-                  View Processing
+                <Link href="/processing">
+                  <GradientButton gradient="processing" size="sm" className="w-full">
+                    View Processing
+                    <ArrowRight className="w-4 h-4 ml-1.5" />
+                  </GradientButton>
                 </Link>
               </div>
-            </div>
+            </GlassCard>
           )}
 
           {hasModule('vendor_management') && (
-            <div className="card overflow-hidden group">
-              <div
-                className="h-1"
-                style={{ background: `linear-gradient(90deg, hsl(${colors.vendor}), hsl(${colors.vendor} / 0.5))` }}
-              />
+            <GlassCard
+              variant="subtle"
+              hover="bright"
+              padding="none"
+              accentBar="top"
+              accentColor="vendor"
+              className="group"
+            >
               <div className="p-5">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="bright-icon bright-icon-vendor">
@@ -431,24 +455,58 @@ export default function DashboardPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">{summary?.vendors_active ?? 0}</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={summary?.vendors_active ?? 0} duration={1000} />
+                    </div>
                     <p className="text-xs text-muted-foreground">Active</p>
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold text-foreground">85%</p>
+                    <div className="text-2xl font-semibold text-foreground">
+                      <AnimatedCounter value={85} suffix="%" duration={1200} />
+                    </div>
                     <p className="text-xs text-muted-foreground">W-9 on file</p>
                   </div>
                 </div>
-                <Link
-                  href="/vendors"
-                  className="btn btn-secondary btn-sm w-full group-hover:bg-vendor/10 group-hover:text-vendor group-hover:border-vendor/20 transition-colors"
-                >
-                  View Vendors
+                <Link href="/vendors">
+                  <GradientButton gradient="vendor" size="sm" className="w-full">
+                    View Vendors
+                    <ArrowRight className="w-4 h-4 ml-1.5" />
+                  </GradientButton>
                 </Link>
               </div>
-            </div>
+            </GlassCard>
           )}
         </div>
+      )}
+
+      {/* Performance Banner */}
+      {hasModule('reporting') && (
+        <SpotlightCard
+          variant="tinted"
+          hover="glow"
+          className="overflow-hidden"
+        >
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0"
+              style={{ background: brandGradient }}
+            >
+              <BarChart3 className="w-8 h-8 text-white" />
+            </div>
+            <div className="flex-1 text-center sm:text-left">
+              <h3 className="text-lg font-semibold text-foreground">Performance Insights</h3>
+              <p className="text-muted-foreground text-sm mt-1">
+                Track your organization&apos;s invoice processing efficiency and vendor relationships
+              </p>
+            </div>
+            <Link href="/reports">
+              <GradientButton gradient="primary" size="default">
+                <Target className="w-4 h-4 mr-2" />
+                View Analytics
+              </GradientButton>
+            </Link>
+          </div>
+        </SpotlightCard>
       )}
     </div>
   );

@@ -58,3 +58,14 @@ export * from './activity-feed';
 export * from './module-nav';
 export * from './status-indicator';
 export * from './org-branding';
+export * from './notification-center';
+export * from './theme-quick-switcher';
+export * from './kpi-card';
+export * from './animated-banner';
+export * from './charts';
+
+// New Modern UI Components
+export * from './animated-counter';
+export * from './glass-card';
+export { ModernGradientButton, GradientIconButton, AnimatedBorderButton } from './gradient-button';
+export * from './theme-customizer';
