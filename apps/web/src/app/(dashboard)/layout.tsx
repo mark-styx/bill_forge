@@ -8,6 +8,8 @@ import { useThemeStore } from '@/stores/theme';
 import { sandboxApi, PersonaInfo } from '@/lib/api';
 import { toast } from 'sonner';
 import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
+import { NotificationCenter, type Notification } from '@/components/ui/notification-center';
+import { ThemeQuickSwitcher } from '@/components/ui/theme-quick-switcher';
 import {
   FileText,
   ClipboardCheck,
@@ -17,7 +19,6 @@ import {
   LogOut,
   Home,
   ChevronDown,
-  Bell,
   ScanLine,
   Layers,
   RefreshCw,
@@ -83,6 +84,41 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [showPersonaSwitcher, setShowPersonaSwitcher] = useState(false);
   const [switchingPersona, setSwitchingPersona] = useState(false);
   const [expandedSections, setExpandedSections] = useState<string[]>(['Invoice Capture', 'Processing']);
+
+  // Sample notifications - in production, these would come from an API
+  const [notifications, setNotifications] = useState<Notification[]>([
+    {
+      id: '1',
+      type: 'success',
+      title: 'Invoice approved',
+      message: 'Invoice #INV-2024-001 has been approved and is ready for payment.',
+      timestamp: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
+      read: false,
+      actionUrl: '/invoices/1',
+      actionLabel: 'View Invoice',
+      module: 'processing',
+    },
+    {
+      id: '2',
+      type: 'info',
+      title: 'New vendor registered',
+      message: 'Acme Corporation has completed their vendor registration.',
+      timestamp: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago
+      read: false,
+      actionUrl: '/vendors',
+      module: 'vendor',
+    },
+    {
+      id: '3',
+      type: 'warning',
+      title: 'Invoice needs attention',
+      message: 'Invoice #INV-2024-003 has been flagged for manual review due to OCR confidence.',
+      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
+      read: true,
+      actionUrl: '/invoices/3',
+      module: 'capture',
+    },
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -362,11 +398,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 )}
               </div>
 
+              {/* Theme Quick Switcher */}
+              <ThemeQuickSwitcher compact />
+
               {/* Notifications */}
-              <button className="relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full" />
-              </button>
+              <NotificationCenter
+                notifications={notifications}
+                onMarkAsRead={(id) => {
+                  setNotifications((prev) =>
+                    prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+                  );
+                }}
+                onMarkAllAsRead={() => {
+                  setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                }}
+                onDelete={(id) => {
+                  setNotifications((prev) => prev.filter((n) => n.id !== id));
+                }}
+                onClearAll={() => setNotifications([])}
+              />
 
               {/* Settings */}
               <Link

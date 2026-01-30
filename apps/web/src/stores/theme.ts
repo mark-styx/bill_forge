@@ -843,7 +843,7 @@ export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => ({
       mode: 'light',
-      presetId: 'ocean',
+      presetId: 'brilliant-blue',
       customColors: null,
       sidebarCollapsed: false,
       organizationTheme: null,

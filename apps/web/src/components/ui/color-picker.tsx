@@ -24,46 +24,74 @@ interface GradientPickerProps {
   className?: string;
 }
 
-// Bright, vibrant preset colors - expanded
+// Bright, vibrant preset colors - expanded with more options
 const defaultPresets = [
-  // Blues
-  { name: 'Blue', value: '210 100% 50%' },
+  // Brilliant Blues (most popular)
+  { name: 'Brilliant Blue', value: '220 95% 55%' },
+  { name: 'Azure', value: '210 100% 50%' },
   { name: 'Sky', value: '200 100% 50%' },
   { name: 'Cyan', value: '190 100% 45%' },
-  { name: 'Azure', value: '217 91% 60%' },
-  // Greens
+  { name: 'Electric Blue', value: '217 91% 60%' },
+  { name: 'Sapphire', value: '225 85% 50%' },
+  // Vibrant Greens
   { name: 'Teal', value: '170 80% 40%' },
   { name: 'Emerald', value: '160 84% 39%' },
   { name: 'Green', value: '142 76% 45%' },
   { name: 'Lime', value: '84 85% 45%' },
-  // Warm
+  { name: 'Mint', value: '168 76% 42%' },
+  { name: 'Spring', value: '150 80% 50%' },
+  // Warm & Energetic
   { name: 'Yellow', value: '50 100% 50%' },
   { name: 'Amber', value: '38 92% 50%' },
   { name: 'Orange', value: '25 95% 53%' },
   { name: 'Coral', value: '10 90% 60%' },
-  // Pinks
+  { name: 'Sunset', value: '15 95% 55%' },
+  { name: 'Gold', value: '45 95% 55%' },
+  // Bright Pinks & Reds
   { name: 'Rose', value: '350 90% 60%' },
   { name: 'Pink', value: '330 85% 60%' },
+  { name: 'Hot Pink', value: '340 95% 65%' },
   { name: 'Fuchsia', value: '300 80% 55%' },
-  // Purples
+  { name: 'Magenta', value: '310 100% 55%' },
+  { name: 'Cherry', value: '0 85% 58%' },
+  // Purples & Violets
   { name: 'Purple', value: '270 75% 55%' },
   { name: 'Violet', value: '260 70% 55%' },
   { name: 'Indigo', value: '245 75% 55%' },
-  // Neutral
+  { name: 'Lavender', value: '265 85% 65%' },
+  { name: 'Plum', value: '280 70% 50%' },
+  { name: 'Grape', value: '290 80% 55%' },
+  // Professional Neutrals
   { name: 'Slate', value: '215 28% 45%' },
   { name: 'Gray', value: '220 14% 46%' },
+  { name: 'Charcoal', value: '220 15% 35%' },
+  { name: 'Steel', value: '215 60% 50%' },
 ];
 
-// Gradient presets
+// Gradient presets - expanded with more bright, modern options
 const gradientPresets = [
+  // Blues
   { name: 'Ocean', from: '210 100% 50%', to: '190 95% 45%' },
+  { name: 'Electric', from: '220 100% 55%', to: '185 100% 50%' },
+  { name: 'Azure', from: '217 91% 60%', to: '199 89% 48%' },
+  // Warm
   { name: 'Sunset', from: '25 95% 55%', to: '340 80% 55%' },
+  { name: 'Fire', from: '0 85% 58%', to: '38 92% 50%' },
+  { name: 'Citrus', from: '35 100% 55%', to: '48 100% 55%' },
+  // Multi-color
   { name: 'Aurora', from: '150 80% 50%', to: '280 80% 55%', via: '190 100% 50%' },
   { name: 'Cosmic', from: '280 85% 50%', to: '195 100% 50%', via: '230 85% 55%' },
-  { name: 'Forest', from: '160 84% 39%', to: '84 85% 45%' },
-  { name: 'Fire', from: '0 85% 58%', to: '38 92% 50%' },
+  { name: 'Rainbow', from: '0 100% 55%', to: '240 100% 60%', via: '120 75% 45%' },
+  // Neons
   { name: 'Neon', from: '180 100% 50%', to: '300 100% 55%' },
+  { name: 'Synthwave', from: '310 100% 55%', to: '185 100% 55%', via: '280 90% 50%' },
+  { name: 'Holographic', from: '330 90% 65%', to: '50 100% 55%', via: '185 95% 55%' },
+  // Nature
+  { name: 'Forest', from: '160 84% 39%', to: '84 85% 45%' },
+  { name: 'Peacock', from: '175 95% 40%', to: '160 80% 45%' },
+  // Pinks
   { name: 'Berry', from: '300 80% 55%', to: '350 89% 60%' },
+  { name: 'Candy', from: '330 90% 65%', to: '48 100% 55%' },
 ];
 
 function parseHSL(hsl: string): { h: number; s: number; l: number } {
