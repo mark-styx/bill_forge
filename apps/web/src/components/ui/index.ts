@@ -37,3 +37,10 @@ export * from './alert';
 
 // Theme Components
 export * from './color-picker';
+export * from './theme-settings';
+export * from './theme-showcase';
+export * from './organization-theme-settings';
+
+// Gradient & Animated Components
+export * from './gradient-card';
+export * from './hero-section';
