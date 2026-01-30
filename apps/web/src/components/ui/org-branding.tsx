@@ -165,7 +165,7 @@ export function OrgBrandingBanner({
   );
 }
 
-interface ThemePreviewCardProps extends React.HTMLAttributes<HTMLDivElement> {
+interface ThemePreviewCardProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> {
   preset: {
     id: string;
     name: string;

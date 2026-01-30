@@ -393,6 +393,13 @@ export const documentsApi = {
 };
 
 // Types
+export interface InvoiceLineItem {
+  description: string;
+  quantity?: number;
+  unit_price?: { amount: number; currency: string };
+  total_price?: { amount: number; currency: string };
+}
+
 export interface Invoice {
   id: string;
   vendor_id?: string;
@@ -405,6 +412,8 @@ export interface Invoice {
   capture_status: string;
   processing_status: string;
   created_at: string;
+  description?: string;
+  line_items?: InvoiceLineItem[];
 }
 
 export interface CreateInvoiceInput {
@@ -527,9 +536,16 @@ export interface ApprovalRequest {
   invoice_id: string;
   status: string;
   created_at: string;
+  updated_at?: string;
   invoice_number?: string;
   vendor_name?: string;
   total_amount?: number;
+  amount?: number;
+  currency?: string;
+  due_date?: string;
+  requester?: string;
+  notes?: string;
+  priority?: 'low' | 'normal' | 'medium' | 'high';
 }
 
 export interface BulkOperationInput {
@@ -649,7 +665,7 @@ export interface CreateOrganizationThemeInput {
   allow_user_override?: boolean;
   gradient_config?: {
     enabled: boolean;
-    type: 'linear' | 'radial';
+    type: 'linear' | 'radial' | 'conic';
     angle?: number;
   };
 }

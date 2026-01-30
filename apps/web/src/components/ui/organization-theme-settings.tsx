@@ -103,8 +103,8 @@ export function OrganizationThemeSettings({
   const [gradientEnabled, setGradientEnabled] = useState<boolean>(
     organizationTheme?.gradientConfig?.enabled ?? true
   );
-  const [gradientType, setGradientType] = useState<'linear' | 'radial'>(
-    (organizationTheme?.gradientConfig?.type as 'linear' | 'radial') || 'linear'
+  const [gradientType, setGradientType] = useState<'linear' | 'radial' | 'conic'>(
+    (organizationTheme?.gradientConfig?.type as 'linear' | 'radial' | 'conic') || 'linear'
   );
   const [gradientAngle, setGradientAngle] = useState(
     organizationTheme?.gradientConfig?.angle || 135
