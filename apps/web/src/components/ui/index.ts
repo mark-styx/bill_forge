@@ -44,3 +44,17 @@ export * from './organization-theme-settings';
 // Gradient & Animated Components
 export * from './gradient-card';
 export * from './hero-section';
+
+// Layout Components
+export * from './data-table';
+export * from './stat-card';
+export * from './page-header';
+export * from './empty-state';
+
+// Modern Components
+export * from './metric-card';
+export * from './quick-actions';
+export * from './activity-feed';
+export * from './module-nav';
+export * from './status-indicator';
+export * from './org-branding';
