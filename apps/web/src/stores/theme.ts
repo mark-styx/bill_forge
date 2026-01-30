@@ -21,6 +21,13 @@ export interface BrandingConfig {
   customCSS?: string;
 }
 
+export interface GradientConfig {
+  enabled: boolean;
+  type: 'linear' | 'radial' | 'conic';
+  angle?: number;
+  positions?: { color: string; position: number }[];
+}
+
 export interface ThemePreset {
   id: string;
   name: string;
@@ -34,6 +41,7 @@ export interface ThemePreset {
     to: string;
     angle?: number;
   };
+  recommended?: boolean;
 }
 
 // Modern, bright theme presets with expanded options
@@ -61,14 +69,32 @@ export const themePresets: ThemePreset[] = [
     description: 'Vivid, eye-catching blue for maximum impact',
     preview: 'from-blue-600 to-sky-400',
     category: 'bright',
-    gradient: { from: '220 95% 55%', to: '195 100% 55%', angle: 135 },
+    recommended: true,
+    gradient: { from: '217 91% 60%', to: '185 100% 50%', angle: 135 },
     colors: {
-      primary: '220 95% 55%',
-      accent: '195 100% 55%',
-      capture: '200 100% 50%',
-      processing: '165 90% 42%',
-      vendor: '275 80% 58%',
-      reporting: '40 100% 55%',
+      primary: '217 91% 60%',
+      accent: '185 100% 50%',
+      capture: '199 89% 48%',
+      processing: '162 78% 42%',
+      vendor: '262 83% 58%',
+      reporting: '43 96% 56%',
+    },
+  },
+  {
+    id: 'radiant-sky',
+    name: 'Radiant Sky',
+    description: 'Fresh and uplifting with bright sky tones',
+    preview: 'from-sky-500 to-indigo-400',
+    category: 'bright',
+    recommended: true,
+    gradient: { from: '199 89% 48%', to: '234 89% 74%', angle: 135 },
+    colors: {
+      primary: '199 89% 48%',
+      accent: '234 89% 74%',
+      capture: '199 89% 48%',
+      processing: '158 64% 52%',
+      vendor: '271 91% 65%',
+      reporting: '38 92% 50%',
     },
   },
   {
@@ -739,12 +765,43 @@ export interface OrganizationThemeConfig {
   branding: BrandingConfig;
   enabledForAllUsers?: boolean;
   allowUserOverride?: boolean;
-  gradientConfig?: {
-    enabled: boolean;
-    type: 'linear' | 'radial';
-    angle?: number;
-    positions?: { color: string; position: number }[];
-  };
+  gradientConfig?: GradientConfig;
+  // Live preview support
+  isPreviewMode?: boolean;
+  previewColors?: ThemeColors;
+}
+
+// Utility to check if colors are light or dark
+export function isLightColor(hsl: string): boolean {
+  const parts = hsl.split(' ').map((p) => parseFloat(p.replace('%', '')));
+  const lightness = parts[2] || 50;
+  return lightness > 55;
+}
+
+// Generate CSS gradient string from theme config
+export function generateCSSGradient(config: GradientConfig, colors: ThemeColors): string {
+  if (!config.enabled) return `hsl(${colors.primary})`;
+
+  const { type, angle = 135 } = config;
+
+  if (type === 'linear') {
+    return `linear-gradient(${angle}deg, hsl(${colors.primary}), hsl(${colors.accent}))`;
+  }
+  if (type === 'radial') {
+    return `radial-gradient(circle at center, hsl(${colors.primary}), hsl(${colors.accent}))`;
+  }
+  if (type === 'conic') {
+    return `conic-gradient(from ${angle}deg, hsl(${colors.primary}), hsl(${colors.accent}), hsl(${colors.primary}))`;
+  }
+
+  return `linear-gradient(${angle}deg, hsl(${colors.primary}), hsl(${colors.accent}))`;
+}
+
+// Get complementary color for contrast
+export function getComplementaryHSL(hsl: string): string {
+  const parts = hsl.split(' ').map((p) => parseFloat(p.replace('%', '')));
+  const hue = (parts[0] + 180) % 360;
+  return `${hue} ${parts[1]}% ${parts[2]}%`;
 }
 
 // Utility functions for working with themes

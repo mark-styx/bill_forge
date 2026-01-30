@@ -4,113 +4,118 @@
 
 @layer base {
   :root {
-    /* Bright, clean light theme */
-    --background: 0 0% 98%;
+    /* Modern bright light theme - clean and vibrant */
+    --background: 210 20% 99%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
-    
-    /* Primary - customizable via theme */
-    --primary: 210 100% 50%;
+
+    /* Primary - vivid blue for maximum impact */
+    --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
-    
-    /* Secondary */
+
+    /* Secondary - subtle gray for contrast */
     --secondary: 220 14% 96%;
     --secondary-foreground: 222 47% 35%;
-    
-    /* Muted */
+
+    /* Muted - soft backgrounds */
     --muted: 220 14% 96%;
     --muted-foreground: 220 9% 46%;
-    
-    /* Accent */
-    --accent: 190 95% 45%;
+
+    /* Accent - bright cyan for highlights */
+    --accent: 185 100% 50%;
     --accent-foreground: 0 0% 100%;
-    
+
     /* Destructive */
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
-    
-    /* Borders & inputs */
-    --border: 220 13% 90%;
-    --input: 220 13% 90%;
-    --ring: 210 100% 50%;
+
+    /* Borders & inputs - crisp and clean */
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 217 91% 60%;
     --radius: 0.625rem;
 
-    /* Surfaces */
+    /* Surfaces for layered depth */
     --surface-1: 0 0% 100%;
-    --surface-2: 220 20% 97%;
-    --surface-3: 220 16% 94%;
+    --surface-2: 210 25% 98%;
+    --surface-3: 210 20% 96%;
 
-    /* Module colors - vibrant and distinct */
-    --capture: 195 100% 45%;
+    /* Module colors - bright and distinctive */
+    --capture: 199 89% 48%;
     --capture-foreground: 0 0% 100%;
-    --processing: 160 84% 39%;
+    --processing: 162 78% 42%;
     --processing-foreground: 0 0% 100%;
-    --vendor: 270 70% 55%;
+    --vendor: 262 83% 58%;
     --vendor-foreground: 0 0% 100%;
-    --reporting: 35 95% 55%;
+    --reporting: 43 96% 56%;
     --reporting-foreground: 0 0% 100%;
-    
-    /* Success/Warning/Error states */
-    --success: 160 84% 39%;
+
+    /* State colors - vibrant feedback */
+    --success: 162 78% 42%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
     --error: 0 84% 60%;
     --error-foreground: 0 0% 100%;
+
+    /* Organization theme variables - customizable per org */
+    --org-gradient-from: var(--primary);
+    --org-gradient-to: var(--accent);
+    --org-gradient-angle: 135deg;
   }
 
   .dark {
-    /* Dark theme - still bright accents */
-    --background: 224 50% 8%;
+    /* Dark theme with bright, vivid accents */
+    --background: 222 47% 6%;
     --foreground: 210 40% 98%;
-    --card: 224 45% 11%;
+    --card: 222 47% 9%;
     --card-foreground: 210 40% 98%;
-    --popover: 224 45% 11%;
+    --popover: 222 47% 9%;
     --popover-foreground: 210 40% 98%;
-    
-    --primary: 210 100% 55%;
+
+    --primary: 217 91% 65%;
     --primary-foreground: 0 0% 100%;
-    
-    --secondary: 224 40% 16%;
+
+    --secondary: 222 40% 14%;
     --secondary-foreground: 210 40% 90%;
-    
-    --muted: 224 40% 16%;
+
+    --muted: 222 40% 14%;
     --muted-foreground: 215 20% 65%;
-    
-    --accent: 190 95% 50%;
+
+    --accent: 185 100% 55%;
     --accent-foreground: 0 0% 100%;
-    
-    --destructive: 0 72% 51%;
+
+    --destructive: 0 72% 55%;
     --destructive-foreground: 0 0% 100%;
-    
-    --border: 224 35% 18%;
-    --input: 224 35% 18%;
-    --ring: 210 100% 55%;
 
-    /* Surfaces */
-    --surface-1: 224 45% 11%;
-    --surface-2: 224 42% 14%;
-    --surface-3: 224 40% 18%;
+    --border: 222 35% 16%;
+    --input: 222 35% 16%;
+    --ring: 217 91% 65%;
 
-    /* Module colors - brighter for dark mode */
-    --capture: 195 100% 50%;
+    /* Surfaces - subtle depth */
+    --surface-1: 222 47% 9%;
+    --surface-2: 222 45% 12%;
+    --surface-3: 222 42% 15%;
+
+    /* Module colors - brighter for dark mode visibility */
+    --capture: 199 100% 55%;
     --capture-foreground: 0 0% 100%;
-    --processing: 160 84% 45%;
+    --processing: 162 84% 48%;
     --processing-foreground: 0 0% 100%;
-    --vendor: 270 75% 60%;
+    --vendor: 262 90% 65%;
     --vendor-foreground: 0 0% 100%;
-    --reporting: 38 95% 55%;
+    --reporting: 43 100% 58%;
     --reporting-foreground: 0 0% 100%;
-    
-    /* Success/Warning/Error states */
-    --success: 160 84% 45%;
+
+    /* State colors - bright for visibility */
+    --success: 162 84% 48%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 95% 55%;
+    --warning: 38 100% 58%;
     --warning-foreground: 0 0% 100%;
-    --error: 0 72% 55%;
+    --error: 0 80% 60%;
     --error-foreground: 0 0% 100%;
   }
 }
@@ -1022,4 +1027,256 @@
   .chart-processing { fill: hsl(var(--processing)); stroke: hsl(var(--processing)); }
   .chart-vendor { fill: hsl(var(--vendor)); stroke: hsl(var(--vendor)); }
   .chart-reporting { fill: hsl(var(--reporting)); stroke: hsl(var(--reporting)); }
+
+  /* ============================================
+     ORGANIZATION THEME COMPONENTS
+     ============================================ */
+
+  /* Org theme wrapper - applies theme variables */
+  .org-theme {
+    --org-primary: var(--primary);
+    --org-accent: var(--accent);
+    transition: all 0.3s ease;
+  }
+
+  /* Org gradient banner */
+  .org-gradient-banner {
+    @apply relative overflow-hidden rounded-2xl p-6;
+    background: linear-gradient(
+      var(--org-gradient-angle, 135deg),
+      hsl(var(--org-gradient-from, var(--primary))),
+      hsl(var(--org-gradient-to, var(--accent)))
+    );
+  }
+
+  .org-gradient-banner::before {
+    content: '';
+    @apply absolute inset-0 opacity-20;
+    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  }
+
+  /* Org logo container */
+  .org-logo {
+    @apply flex items-center justify-center;
+    transition: transform 0.2s ease;
+  }
+
+  .org-logo:hover {
+    transform: scale(1.02);
+  }
+
+  /* Org brand mark */
+  .org-brand-mark {
+    @apply w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-lg;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  .org-brand-mark-lg {
+    @apply w-16 h-16 rounded-2xl text-2xl;
+  }
+
+  /* Org color swatch */
+  .org-color-swatch {
+    @apply w-8 h-8 rounded-lg border-2 border-white shadow-md cursor-pointer transition-transform;
+  }
+
+  .org-color-swatch:hover {
+    @apply scale-110;
+  }
+
+  .org-color-swatch.active {
+    @apply ring-2 ring-primary ring-offset-2;
+  }
+
+  /* Org theme preview card */
+  .org-theme-preview {
+    @apply relative rounded-2xl overflow-hidden border border-border;
+    background: hsl(var(--card));
+  }
+
+  .org-theme-preview-header {
+    @apply h-2;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  /* Bright stat card */
+  .bright-stat-card {
+    @apply relative rounded-2xl p-5 overflow-hidden;
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .bright-stat-card::before {
+    content: '';
+    @apply absolute top-0 left-0 w-1 h-full rounded-l-2xl;
+    background: linear-gradient(180deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  .bright-stat-card:hover {
+    @apply shadow-card-hover border-primary/20;
+    transform: translateY(-2px);
+    transition: all 0.2s ease;
+  }
+
+  /* Bright action button */
+  .btn-bright {
+    @apply relative inline-flex items-center justify-center px-4 py-2 rounded-xl font-medium text-white overflow-hidden transition-all;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+    box-shadow: 0 4px 15px -3px hsl(var(--primary) / 0.4);
+  }
+
+  .btn-bright:hover {
+    box-shadow: 0 6px 20px -3px hsl(var(--primary) / 0.5);
+    transform: translateY(-1px);
+  }
+
+  .btn-bright:active {
+    transform: translateY(0);
+  }
+
+  .btn-bright::after {
+    content: '';
+    @apply absolute inset-0 opacity-0 transition-opacity;
+    background: linear-gradient(135deg, transparent, rgba(255,255,255,0.2));
+  }
+
+  .btn-bright:hover::after {
+    opacity: 1;
+  }
+
+  /* Bright icon container */
+  .bright-icon {
+    @apply w-10 h-10 rounded-xl flex items-center justify-center;
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.1), hsl(var(--accent) / 0.1));
+    color: hsl(var(--primary));
+  }
+
+  .bright-icon-capture {
+    background: linear-gradient(135deg, hsl(var(--capture) / 0.1), hsl(var(--capture) / 0.15));
+    color: hsl(var(--capture));
+  }
+
+  .bright-icon-processing {
+    background: linear-gradient(135deg, hsl(var(--processing) / 0.1), hsl(var(--processing) / 0.15));
+    color: hsl(var(--processing));
+  }
+
+  .bright-icon-vendor {
+    background: linear-gradient(135deg, hsl(var(--vendor) / 0.1), hsl(var(--vendor) / 0.15));
+    color: hsl(var(--vendor));
+  }
+
+  .bright-icon-reporting {
+    background: linear-gradient(135deg, hsl(var(--reporting) / 0.1), hsl(var(--reporting) / 0.15));
+    color: hsl(var(--reporting));
+  }
+
+  /* Bright progress bar */
+  .bright-progress {
+    @apply h-2 rounded-full overflow-hidden;
+    background: hsl(var(--secondary));
+  }
+
+  .bright-progress-bar {
+    @apply h-full rounded-full transition-all duration-500;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+  }
+
+  /* Bright nav item */
+  .bright-nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .bright-nav-item:hover {
+    background: hsl(var(--secondary));
+    color: hsl(var(--foreground));
+  }
+
+  .bright-nav-item.active {
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.1), hsl(var(--accent) / 0.05));
+    color: hsl(var(--primary));
+    border: 1px solid hsl(var(--primary) / 0.2);
+  }
+
+  /* Bright module chip */
+  .bright-chip {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold;
+  }
+
+  .bright-chip-capture {
+    background: linear-gradient(135deg, hsl(var(--capture) / 0.15), hsl(var(--capture) / 0.1));
+    color: hsl(var(--capture));
+  }
+
+  .bright-chip-processing {
+    background: linear-gradient(135deg, hsl(var(--processing) / 0.15), hsl(var(--processing) / 0.1));
+    color: hsl(var(--processing));
+  }
+
+  .bright-chip-vendor {
+    background: linear-gradient(135deg, hsl(var(--vendor) / 0.15), hsl(var(--vendor) / 0.1));
+    color: hsl(var(--vendor));
+  }
+
+  .bright-chip-reporting {
+    background: linear-gradient(135deg, hsl(var(--reporting) / 0.15), hsl(var(--reporting) / 0.1));
+    color: hsl(var(--reporting));
+  }
+
+  /* Bright card header */
+  .bright-card-header {
+    @apply relative px-5 py-4 border-b border-border;
+  }
+
+  .bright-card-header::before {
+    content: '';
+    @apply absolute top-0 left-5 right-5 h-0.5 rounded-full;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), transparent);
+  }
+
+  /* Dashboard grid layout */
+  .dashboard-grid {
+    @apply grid gap-4;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+
+  /* Animated gradient border */
+  .gradient-border {
+    @apply relative rounded-2xl;
+  }
+
+  .gradient-border::before {
+    content: '';
+    @apply absolute -inset-px rounded-2xl -z-10;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--primary)));
+    background-size: 200% 200%;
+    animation: gradient-shift 4s ease infinite;
+  }
+
+  /* Color picker container */
+  .color-picker-container {
+    @apply p-4 rounded-xl border border-border bg-card;
+  }
+
+  .color-picker-swatch-grid {
+    @apply grid grid-cols-8 gap-2;
+  }
+
+  /* Theme preview mini */
+  .theme-preview-mini {
+    @apply w-full h-12 rounded-lg overflow-hidden shadow-inner;
+  }
+
+  /* Live theme indicator */
+  .live-indicator {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
+    background: hsl(var(--success) / 0.1);
+    color: hsl(var(--success));
+  }
+
+  .live-indicator::before {
+    content: '';
+    @apply w-2 h-2 rounded-full bg-success animate-pulse;
+  }
 }
