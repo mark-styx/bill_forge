@@ -55,7 +55,8 @@ async fn list_vendors(
         ..Default::default()
     };
 
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     let vendors = repo.list(&tenant.tenant_id, &filters, &pagination).await?;
 
     Ok(Json(vendors))
@@ -69,7 +70,8 @@ async fn get_vendor(
     let vendor_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
     
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     let vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Vendor".to_string(),
@@ -84,7 +86,8 @@ async fn create_vendor(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Json(input): Json<CreateVendorInput>,
 ) -> ApiResult<Json<Vendor>> {
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     let vendor = repo.create(&tenant.tenant_id, input).await?;
 
     Ok(Json(vendor))
@@ -99,7 +102,8 @@ async fn update_vendor(
     let vendor_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
     
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     let vendor = repo.update(&tenant.tenant_id, &vendor_id, input).await?;
 
     Ok(Json(vendor))
@@ -113,7 +117,8 @@ async fn delete_vendor(
     let vendor_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
     
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     repo.delete(&tenant.tenant_id, &vendor_id).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -128,7 +133,8 @@ async fn add_contact(
     let vendor_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
     
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     repo.add_contact(&tenant.tenant_id, &vendor_id, contact).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -144,7 +150,8 @@ async fn remove_contact(
     let contact_uuid = Uuid::parse_str(&contact_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid contact ID".to_string()))?;
     
-    let repo = billforge_db::repositories::VendorRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
     repo.remove_contact(&tenant.tenant_id, &vendor_id, contact_uuid).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))

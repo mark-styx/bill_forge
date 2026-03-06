@@ -112,9 +112,11 @@ async fn switch_persona(
     
     // Update tenant modules
     let modules = persona.enabled_modules();
-    state
-        .db
-        .metadata()
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|e| ApiError(billforge_core::Error::Database(format!("DATABASE_URL not set: {}", e))))?;
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url).await
+        .map_err(|e| ApiError(billforge_core::Error::Database(format!("Failed to create metadata database: {}", e))))?;
+    metadata_db
         .update_tenant_modules(&tenant.tenant_id, &modules)
         .await
         .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;

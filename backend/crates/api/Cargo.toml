@@ -34,7 +34,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Database (for seeding)
-rusqlite = { workspace = true }
+sqlx = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }

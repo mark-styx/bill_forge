@@ -79,7 +79,10 @@ pub async fn liveness() -> impl IntoResponse {
 /// Checks database connectivity before declaring ready
 pub async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
     // Check if database is accessible
-    let db_ok = state.db.metadata().health_check().await.is_ok();
+    let db_ok = sqlx::query("SELECT 1")
+        .fetch_one(&*state.db.metadata())
+        .await
+        .is_ok();
 
     if db_ok {
         (StatusCode::OK, "READY")
@@ -95,7 +98,9 @@ pub async fn detailed_health(State(state): State<AppState>) -> Json<DetailedHeal
 
     // Check database health
     let db_start = Instant::now();
-    let db_check = state.db.metadata().health_check().await;
+    let db_check = sqlx::query("SELECT 1")
+        .fetch_one(&*state.db.metadata())
+        .await;
     let db_latency = db_start.elapsed().as_millis() as u64;
 
     let database = match db_check {

@@ -9,7 +9,7 @@ billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
 
 # Database
-rusqlite = { workspace = true }
+sqlx = { workspace = true }
 
 tokio = { workspace = true }
 async-trait = { workspace = true }

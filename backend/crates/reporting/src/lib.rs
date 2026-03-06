@@ -6,3 +6,4 @@ pub mod service;
 pub mod models;
 
 pub use service::ReportingService;
+pub use models::{DashboardSummary, InvoiceVolume, VendorSpend, AgingBucket, ProcessingMetrics, StatusDistribution, CustomReportQuery, CustomReportResult};

@@ -18,6 +18,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use chrono::Utc;
+use sqlx::PgPool;
 
 // =============================================================================
 // Storage Configuration
@@ -102,166 +103,115 @@ impl StorageConfig {
     }
 }
 
-// =============================================================================
-// Storage Factory
-// =============================================================================
-
 /// Create a storage service from configuration
 pub async fn create_storage_service(config: StorageConfig) -> Result<Box<dyn StorageService>> {
     match config {
         StorageConfig::Local { base_path } => {
-            Ok(Box::new(LocalStorageService::new(base_path)))
+            let storage = LocalStorageService::new(&base_path).await?;
+            Ok(Box::new(storage))
         }
         #[cfg(feature = "s3")]
         StorageConfig::S3 { bucket, region, endpoint, key_prefix } => {
-            let service = S3StorageService::new(bucket, region, endpoint, key_prefix).await?;
-            Ok(Box::new(service))
+            let storage = S3StorageService::new(bucket, region, endpoint, key_prefix).await?;
+            Ok(Box::new(storage))
         }
     }
 }
 
 // =============================================================================
-// Local Storage Service
+// Local Storage Service (Development)
 // =============================================================================
 
-/// Local filesystem storage service
+/// Local filesystem storage service for development
 pub struct LocalStorageService {
     base_path: PathBuf,
 }
 
 impl LocalStorageService {
-    /// Create a new storage service with the given base path
-    pub fn new(base_path: impl Into<PathBuf>) -> Self {
-        Self {
-            base_path: base_path.into(),
-        }
+    /// Create a new local storage service
+    pub async fn new(base_path: impl AsRef<Path>) -> Result<Self> {
+        let base_path = base_path.as_ref().to_path_buf();
+
+        // Create base directory and documents subdirectory
+        fs::create_dir_all(&base_path)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to create storage directory: {}", e)))?;
+
+        let docs_path = base_path.join("documents");
+        fs::create_dir_all(&docs_path)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to create documents directory: {}", e)))?;
+
+        Ok(Self { base_path })
     }
 
-    /// Get the directory path for a tenant's documents
-    fn tenant_dir(&self, tenant_id: &TenantId) -> PathBuf {
-        self.base_path.join("documents").join(tenant_id.to_string())
-    }
-
-    /// Get the full file path for a document
-    fn document_path(&self, tenant_id: &TenantId, document_id: Uuid) -> PathBuf {
-        self.tenant_dir(tenant_id).join(document_id.to_string())
-    }
-
-    /// Ensure the tenant's document directory exists
-    async fn ensure_tenant_dir(&self, tenant_id: &TenantId) -> Result<()> {
-        let dir = self.tenant_dir(tenant_id);
-        if !dir.exists() {
-            fs::create_dir_all(&dir)
-                .await
-                .map_err(|e| Error::Storage(format!("Failed to create directory: {}", e)))?;
-        }
-        Ok(())
-    }
-
-    /// Detect document type from mime type
-    fn detect_doc_type(mime_type: &str) -> DocumentType {
-        match mime_type {
-            "application/pdf" => DocumentType::InvoiceOriginal,
-            "image/png" | "image/jpeg" | "image/tiff" => DocumentType::InvoiceOriginal,
-            _ => DocumentType::Other,
-        }
+    /// Get the path for a storage key
+    fn get_path(&self, storage_key: &str) -> PathBuf {
+        self.base_path.join("documents").join(storage_key)
     }
 }
 
 #[async_trait]
 impl StorageService for LocalStorageService {
-    /// Upload a file and return its document ID
     async fn upload(
         &self,
         tenant_id: &TenantId,
-        file_name: &str,
+        filename: &str,
         data: &[u8],
         mime_type: &str,
     ) -> Result<Uuid> {
-        self.ensure_tenant_dir(tenant_id).await?;
-        
         let document_id = Uuid::new_v4();
-        let file_path = self.document_path(tenant_id, document_id);
-        
-        // Write file to disk
-        let mut file = fs::File::create(&file_path)
+        let storage_key = format!("{}/{}", tenant_id.as_str(), document_id);
+        let path = self.get_path(&storage_key);
+
+        // Create parent directories
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to create directory: {}", e)))?;
+        }
+
+        // Write file
+        let mut file = fs::File::create(&path)
             .await
             .map_err(|e| Error::Storage(format!("Failed to create file: {}", e)))?;
-        
+
         file.write_all(data)
             .await
             .map_err(|e| Error::Storage(format!("Failed to write file: {}", e)))?;
-        
-        file.flush()
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to flush file: {}", e)))?;
-        
-        tracing::info!(
-            tenant_id = %tenant_id,
-            document_id = %document_id,
-            file_name = %file_name,
-            mime_type = %mime_type,
-            size_bytes = data.len(),
-            "Document uploaded"
-        );
-        
+
+        tracing::debug!("Uploaded document {} to {}", document_id, path.display());
+
         Ok(document_id)
     }
 
-    /// Download a file by its document ID
     async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
-        let file_path = self.document_path(tenant_id, file_id);
-        
-        if !file_path.exists() {
-            return Err(Error::NotFound {
-                resource_type: "Document".to_string(),
-                id: file_id.to_string(),
-            });
-        }
-        
-        let data = fs::read(&file_path)
+        let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+        let path = self.get_path(&storage_key);
+        fs::read(&path)
             .await
-            .map_err(|e| Error::Storage(format!("Failed to read file: {}", e)))?;
-        
-        Ok(data)
+            .map_err(|e| Error::Storage(format!("Failed to read file: {}", e)))
     }
 
-    /// Delete a file by its document ID
     async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
-        let file_path = self.document_path(tenant_id, file_id);
-        
-        if file_path.exists() {
-            fs::remove_file(&file_path)
-                .await
-                .map_err(|e| Error::Storage(format!("Failed to delete file: {}", e)))?;
-            
-            tracing::info!(
-                tenant_id = %tenant_id,
-                document_id = %file_id,
-                "Document deleted"
-            );
-        }
-        
+        let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+        let path = self.get_path(&storage_key);
+        fs::remove_file(&path)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to delete file: {}", e)))?;
+
+        tracing::debug!("Deleted document at {}", path.display());
         Ok(())
     }
 
-    /// Get a URL for accessing the document (for local storage, returns a relative path)
-    async fn get_url(
-        &self,
-        tenant_id: &TenantId,
-        file_id: Uuid,
-        _expires_in_secs: u64,
-    ) -> Result<String> {
-        // For local storage, we return a relative API path
-        // The actual file will be served through the API
-        Ok(format!("/api/v1/documents/{}", file_id))
+    async fn get_url(&self, _tenant_id: &TenantId, _file_id: Uuid, _expires_in_secs: u64) -> Result<String> {
+        // Local storage doesn't support presigned URLs
+        Err(Error::Storage("Presigned URLs not supported for local storage".to_string()))
     }
 
-    /// Health check - verifies the storage directory is accessible
     async fn health_check(&self) -> Result<()> {
         let base_path = &self.base_path;
 
-        // Check if base path exists and is a directory
         if !base_path.exists() {
             return Err(Error::Storage("Storage base path does not exist".to_string()));
         }
@@ -270,7 +220,6 @@ impl StorageService for LocalStorageService {
             return Err(Error::Storage("Storage base path is not a directory".to_string()));
         }
 
-        // Try to access the documents directory
         let docs_path = base_path.join("documents");
         if docs_path.exists() && !docs_path.is_dir() {
             return Err(Error::Storage("Documents path is not a directory".to_string()));
@@ -282,12 +231,12 @@ impl StorageService for LocalStorageService {
 
 /// Document repository for tracking document metadata in the database
 pub struct DocumentRepositoryImpl {
-    db_manager: std::sync::Arc<crate::DatabaseManager>,
+    pool: std::sync::Arc<PgPool>,
 }
 
 impl DocumentRepositoryImpl {
-    pub fn new(db_manager: std::sync::Arc<crate::DatabaseManager>) -> Self {
-        Self { db_manager }
+    pub fn new(pool: std::sync::Arc<PgPool>) -> Self {
+        Self { pool }
     }
 
     /// Create a new document record
@@ -302,10 +251,6 @@ impl DocumentRepositoryImpl {
         invoice_id: Option<billforge_core::domain::InvoiceId>,
         doc_type: DocumentType,
     ) -> Result<DocumentRef> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-        
         let now = Utc::now();
         let doc_type_str = match doc_type {
             DocumentType::InvoiceOriginal => "invoice_original",
@@ -314,25 +259,26 @@ impl DocumentRepositoryImpl {
             DocumentType::Contract => "contract",
             DocumentType::Other => "other",
         };
-        
-        conn.execute(
+
+        sqlx::query(
             r#"INSERT INTO documents (
-                id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            rusqlite::params![
-                document_id.to_string(),
-                filename,
-                mime_type,
-                size_bytes as i64,
-                storage_key,
-                invoice_id.as_ref().map(|id| id.0.to_string()),
-                doc_type_str,
-                "", // uploaded_by - would need to be passed in
-                now.to_rfc3339(),
-            ],
+                id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
+        .bind(document_id)
+        .bind(tenant_id.as_str())
+        .bind(&filename)
+        .bind(&mime_type)
+        .bind(size_bytes as i64)
+        .bind(&storage_key)
+        .bind(invoice_id.as_ref().map(|id| id.0))
+        .bind(doc_type_str)
+        .bind(Uuid::nil()) // uploaded_by - would need to be passed in
+        .bind(now)
+        .execute(&*self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to create document record: {}", e)))?;
-        
+
         Ok(DocumentRef {
             id: document_id,
             tenant_id: tenant_id.clone(),
@@ -348,46 +294,17 @@ impl DocumentRepositoryImpl {
 
     /// Get a document by ID
     pub async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<DocumentRef>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-        
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, created_at
-                   FROM documents WHERE id = ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-        
-        let result = stmt
-            .query_row(rusqlite::params![id.to_string()], |row| {
-                let id_str: String = row.get(0)?;
-                let invoice_id_str: Option<String> = row.get(5)?;
-                let doc_type_str: String = row.get(6)?;
-                
-                Ok(DocumentRef {
-                    id: Uuid::parse_str(&id_str).unwrap(),
-                    tenant_id: tenant_id.clone(),
-                    filename: row.get(1)?,
-                    mime_type: row.get(2)?,
-                    size_bytes: row.get::<_, i64>(3)? as u64,
-                    storage_key: row.get(4)?,
-                    invoice_id: invoice_id_str.and_then(|s| {
-                        Uuid::parse_str(&s).ok().map(billforge_core::domain::InvoiceId)
-                    }),
-                    doc_type: match doc_type_str.as_str() {
-                        "invoice_original" => DocumentType::InvoiceOriginal,
-                        "supporting" => DocumentType::Supporting,
-                        "tax_document" => DocumentType::TaxDocument,
-                        "contract" => DocumentType::Contract,
-                        _ => DocumentType::Other,
-                    },
-                    created_at: Utc::now(),
-                })
-            })
-            .ok();
-        
-        Ok(result)
+        let result = sqlx::query_as::<_, DocumentRow>(
+            r#"SELECT id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, created_at
+               FROM documents WHERE id = $1 AND tenant_id = $2"#
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get document: {}", e)))?;
+
+        Ok(result.map(|row| row.into_ref(tenant_id)))
     }
 
     /// List documents for an invoice
@@ -396,66 +313,28 @@ impl DocumentRepositoryImpl {
         tenant_id: &TenantId,
         invoice_id: &billforge_core::domain::InvoiceId,
     ) -> Result<Vec<DocumentRef>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-        
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, created_at
-                   FROM documents WHERE invoice_id = ? ORDER BY created_at DESC"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-        
-        let tenant_clone = tenant_id.clone();
-        let rows = stmt
-            .query_map(rusqlite::params![invoice_id.0.to_string()], move |row| {
-                let id_str: String = row.get(0)?;
-                let invoice_id_str: Option<String> = row.get(5)?;
-                let doc_type_str: String = row.get(6)?;
-                
-                Ok(DocumentRef {
-                    id: Uuid::parse_str(&id_str).unwrap(),
-                    tenant_id: tenant_clone.clone(),
-                    filename: row.get(1)?,
-                    mime_type: row.get(2)?,
-                    size_bytes: row.get::<_, i64>(3)? as u64,
-                    storage_key: row.get(4)?,
-                    invoice_id: invoice_id_str.and_then(|s| {
-                        Uuid::parse_str(&s).ok().map(billforge_core::domain::InvoiceId)
-                    }),
-                    doc_type: match doc_type_str.as_str() {
-                        "invoice_original" => DocumentType::InvoiceOriginal,
-                        "supporting" => DocumentType::Supporting,
-                        "tax_document" => DocumentType::TaxDocument,
-                        "contract" => DocumentType::Contract,
-                        _ => DocumentType::Other,
-                    },
-                    created_at: Utc::now(),
-                })
-            })
-            .map_err(|e| Error::Database(format!("Failed to list documents: {}", e)))?;
-        
-        let mut docs = Vec::new();
-        for row in rows {
-            docs.push(row.map_err(|e| Error::Database(e.to_string()))?);
-        }
-        
-        Ok(docs)
+        let rows = sqlx::query_as::<_, DocumentRow>(
+            r#"SELECT id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, created_at
+               FROM documents WHERE invoice_id = $1 AND tenant_id = $2 ORDER BY created_at DESC"#
+        )
+        .bind(invoice_id.0)
+        .bind(tenant_id.as_str())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list documents: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_ref(tenant_id)).collect())
     }
 
     /// Delete a document record
     pub async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-        
-        conn.execute(
-            "DELETE FROM documents WHERE id = ?",
-            rusqlite::params![id.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to delete document: {}", e)))?;
-        
+        sqlx::query("DELETE FROM documents WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete document: {}", e)))?;
+
         Ok(())
     }
 
@@ -466,17 +345,51 @@ impl DocumentRepositoryImpl {
         document_id: Uuid,
         invoice_id: &billforge_core::domain::InvoiceId,
     ) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "UPDATE documents SET invoice_id = ? WHERE id = ?",
-            rusqlite::params![invoice_id.0.to_string(), document_id.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to link document: {}", e)))?;
+        sqlx::query("UPDATE documents SET invoice_id = $1 WHERE id = $2 AND tenant_id = $3")
+            .bind(invoice_id.0)
+            .bind(document_id)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to link document: {}", e)))?;
 
         Ok(())
+    }
+}
+
+/// Helper struct for mapping database rows
+#[derive(sqlx::FromRow)]
+struct DocumentRow {
+    id: Uuid,
+    tenant_id: String,
+    filename: String,
+    mime_type: String,
+    size_bytes: i64,
+    storage_key: String,
+    invoice_id: Option<Uuid>,
+    doc_type: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+impl DocumentRow {
+    fn into_ref(self, tenant_id: &TenantId) -> DocumentRef {
+        DocumentRef {
+            id: self.id,
+            tenant_id: tenant_id.clone(),
+            filename: self.filename,
+            mime_type: self.mime_type,
+            size_bytes: self.size_bytes as u64,
+            storage_key: self.storage_key,
+            invoice_id: self.invoice_id.map(billforge_core::domain::InvoiceId),
+            doc_type: match self.doc_type.as_str() {
+                "invoice_original" => DocumentType::InvoiceOriginal,
+                "supporting" => DocumentType::Supporting,
+                "tax_document" => DocumentType::TaxDocument,
+                "contract" => DocumentType::Contract,
+                _ => DocumentType::Other,
+            },
+            created_at: self.created_at,
+        }
     }
 }
 
@@ -510,29 +423,16 @@ mod s3_storage {
             endpoint: Option<String>,
             key_prefix: Option<String>,
         ) -> Result<Self> {
-            let region = Region::new(region);
+            let mut config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                .region(Region::new(region));
 
-            // Load AWS config from environment
-            let mut config_loader = aws_config::from_env().region(region.clone());
-
-            // If custom endpoint specified (MinIO, LocalStack), configure it
-            let sdk_config = config_loader.load().await;
-
-            let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
-
-            if let Some(ref endpoint_url) = endpoint {
-                s3_config_builder = s3_config_builder
-                    .endpoint_url(endpoint_url)
-                    .force_path_style(true); // Required for MinIO/LocalStack
+            if let Some(endpoint_url) = endpoint {
+                config_builder = config_builder.endpoint_url(endpoint_url);
             }
 
-            let client = S3Client::from_conf(s3_config_builder.build());
-
-            tracing::info!(
-                bucket = %bucket,
-                endpoint = ?endpoint,
-                "S3 storage service initialized"
-            );
+            let config = config_builder.load().await;
+            let s3_config = S3ConfigBuilder::new().from(&config).build();
+            let client = S3Client::from_conf(s3_config);
 
             Ok(Self {
                 client,
@@ -541,12 +441,10 @@ mod s3_storage {
             })
         }
 
-        /// Generate the S3 key for a document
-        fn object_key(&self, tenant_id: &TenantId, document_id: Uuid) -> String {
-            let base_key = format!("{}/{}", tenant_id, document_id);
+        fn build_key(&self, storage_key: &str) -> String {
             match &self.key_prefix {
-                Some(prefix) => format!("{}/{}", prefix.trim_end_matches('/'), base_key),
-                None => base_key,
+                Some(prefix) => format!("{}/{}", prefix, storage_key),
+                None => storage_key.to_string(),
             }
         }
     }
@@ -556,12 +454,13 @@ mod s3_storage {
         async fn upload(
             &self,
             tenant_id: &TenantId,
-            file_name: &str,
+            filename: &str,
             data: &[u8],
             mime_type: &str,
         ) -> Result<Uuid> {
             let document_id = Uuid::new_v4();
-            let key = self.object_key(tenant_id, document_id);
+            let storage_key = format!("{}/{}", tenant_id.as_str(), document_id);
+            let key = self.build_key(&storage_key);
 
             self.client
                 .put_object()
@@ -569,58 +468,36 @@ mod s3_storage {
                 .key(&key)
                 .body(ByteStream::from(data.to_vec()))
                 .content_type(mime_type)
-                .metadata("original-filename", file_name)
                 .send()
                 .await
-                .map_err(|e| Error::Storage(format!("S3 upload failed: {}", e)))?;
+                .map_err(|e| Error::Storage(format!("Failed to upload to S3: {}", e)))?;
 
-            tracing::info!(
-                tenant_id = %tenant_id,
-                document_id = %document_id,
-                key = %key,
-                file_name = %file_name,
-                mime_type = %mime_type,
-                size_bytes = data.len(),
-                "Document uploaded to S3"
-            );
-
+            tracing::debug!("Uploaded document {} to S3: {}", document_id, key);
             Ok(document_id)
         }
 
-        async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
-            let key = self.object_key(tenant_id, file_id);
+        async fn download(&self, storage_key: &str) -> Result<Vec<u8>> {
+            let key = self.build_key(storage_key);
 
-            let response = self.client
+            let output = self.client
                 .get_object()
                 .bucket(&self.bucket)
                 .key(&key)
                 .send()
                 .await
-                .map_err(|e| {
-                    // Check if it's a not found error
-                    if e.to_string().contains("NoSuchKey") || e.to_string().contains("not found") {
-                        Error::NotFound {
-                            resource_type: "Document".to_string(),
-                            id: file_id.to_string(),
-                        }
-                    } else {
-                        Error::Storage(format!("S3 download failed: {}", e))
-                    }
-                })?;
+                .map_err(|e| Error::Storage(format!("Failed to download from S3: {}", e)))?;
 
-            let data = response
-                .body
+            let bytes = output.body
                 .collect()
                 .await
-                .map_err(|e| Error::Storage(format!("Failed to read S3 response body: {}", e)))?
-                .into_bytes()
-                .to_vec();
+                .map_err(|e| Error::Storage(format!("Failed to read S3 response: {}", e)))?
+                .into_bytes();
 
-            Ok(data)
+            Ok(bytes.to_vec())
         }
 
-        async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
-            let key = self.object_key(tenant_id, file_id);
+        async fn delete(&self, storage_key: &str) -> Result<()> {
+            let key = self.build_key(storage_key);
 
             self.client
                 .delete_object()
@@ -628,46 +505,16 @@ mod s3_storage {
                 .key(&key)
                 .send()
                 .await
-                .map_err(|e| Error::Storage(format!("S3 delete failed: {}", e)))?;
+                .map_err(|e| Error::Storage(format!("Failed to delete from S3: {}", e)))?;
 
-            tracing::info!(
-                tenant_id = %tenant_id,
-                document_id = %file_id,
-                key = %key,
-                "Document deleted from S3"
-            );
-
+            tracing::debug!("Deleted document from S3: {}", key);
             Ok(())
         }
 
-        async fn get_url(
-            &self,
-            tenant_id: &TenantId,
-            file_id: Uuid,
-            expires_in_secs: u64,
-        ) -> Result<String> {
-            let key = self.object_key(tenant_id, file_id);
-
-            let presigning_config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
-                .map_err(|e| Error::Storage(format!("Invalid presigning duration: {}", e)))?;
-
-            let presigned_request = self.client
-                .get_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .presigned(presigning_config)
-                .await
-                .map_err(|e| Error::Storage(format!("Failed to generate presigned URL: {}", e)))?;
-
-            Ok(presigned_request.uri().to_string())
-        }
-
         async fn health_check(&self) -> Result<()> {
-            // Try to list objects with max_keys=1 to verify bucket access
             self.client
-                .list_objects_v2()
+                .head_bucket()
                 .bucket(&self.bucket)
-                .max_keys(1)
                 .send()
                 .await
                 .map_err(|e| Error::Storage(format!("S3 health check failed: {}", e)))?;

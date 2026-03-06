@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use billforge_reporting::DashboardSummary;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -23,82 +24,19 @@ pub fn routes() -> Router<AppState> {
         .route("/custom", get(custom_report))
 }
 
-#[derive(Debug, Serialize)]
-pub struct DashboardSummary {
-    pub invoices_pending_review: u64,
-    pub invoices_pending_approval: u64,
-    pub invoices_ready_for_payment: u64,
-    pub total_amount_pending: f64,
-    pub vendors_active: u64,
-    pub invoices_this_month: u64,
-}
-
 async fn dashboard_summary(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<Json<DashboardSummary>> {
     // Get real counts from the database
-    let db = state.db.tenant(&tenant.tenant_id).await?;
-    let conn = db.connection().await;
-    let conn = conn.lock().await;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let invoices_pending_review: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE capture_status IN ('pending', 'ready_for_review')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    // Use reporting service
+    let reporting_service = billforge_reporting::ReportingService::new();
+    let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
 
-    let invoices_pending_approval: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'pending_approval'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let invoices_ready_for_payment: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'ready_for_payment'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let total_amount_pending: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE processing_status NOT IN ('paid', 'voided')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let vendors_active: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM vendors WHERE status = 'active'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let invoices_this_month: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE created_at >= date('now', 'start of month')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    Ok(Json(DashboardSummary {
-        invoices_pending_review: invoices_pending_review as u64,
-        invoices_pending_approval: invoices_pending_approval as u64,
-        invoices_ready_for_payment: invoices_ready_for_payment as u64,
-        total_amount_pending: (total_amount_pending as f64) / 100.0, // Convert cents to dollars
-        vendors_active: vendors_active as u64,
-        invoices_this_month: invoices_this_month as u64,
-    }))
+    Ok(Json(summary))
 }
 
 #[derive(Debug, Deserialize)]

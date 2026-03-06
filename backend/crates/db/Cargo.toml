@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "migrate"
+path = "src/bin/migrate.rs"
+
 [features]
 default = []
 s3 = ["aws-sdk-s3", "aws-config"]
@@ -11,8 +15,8 @@ s3 = ["aws-sdk-s3", "aws-config"]
 [dependencies]
 billforge-core = { path = "../core" }
 
-# Database - SQLite for all storage
-rusqlite = { workspace = true }
+# Database - PostgreSQL with sqlx for async, compile-time checked queries
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros", "chrono", "uuid", "migrate", "json"] }
 
 # Async
 tokio = { workspace = true }
@@ -28,6 +32,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+clap = { version = "4.4", features = ["derive"] }
 
 # AWS S3 (optional - for production deployments)
 aws-sdk-s3 = { version = "1.15", optional = true }

@@ -28,16 +28,22 @@ impl AppState {
         let db = Arc::new(db);
 
         // Initialize auth service
-        let auth = AuthService::new(config.jwt.clone(), db.metadata());
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|e| anyhow::anyhow!("DATABASE_URL not set: {}", e))?;
+        let metadata_db = Arc::new(billforge_db::MetadataDatabase::new(&database_url).await
+            .map_err(|e| anyhow::anyhow!("Failed to create metadata database: {}", e))?);
+        let auth = AuthService::new(config.jwt.clone(), metadata_db);
         let auth = Arc::new(auth);
 
         // Initialize storage service (stores files in data/documents)
         let storage_path = std::path::Path::new(&config.tenant_db_path).parent()
             .unwrap_or_else(|| std::path::Path::new("./data"));
-        let storage: Arc<dyn StorageService> = Arc::new(LocalStorageService::new(storage_path));
+        let storage: Arc<dyn StorageService> = Arc::new(LocalStorageService::new(storage_path).await
+            .map_err(|e| anyhow::anyhow!("Failed to create storage service: {}", e))?);
 
         // Initialize audit service
-        let audit = Arc::new(AuditRepositoryImpl::new(db.clone()));
+        let audit_pool = db.metadata();
+        let audit = Arc::new(AuditRepositoryImpl::new(audit_pool));
 
         // Initialize email service (real provider or mock)
         let email: Arc<dyn EmailService> = if let Some(ref email_config) = config.email {
@@ -79,8 +85,16 @@ impl AppState {
         let sandbox_tenant_id: TenantId = "11111111-1111-1111-1111-111111111111".parse()
             .map_err(|e| anyhow::anyhow!("Invalid sandbox tenant ID: {}", e))?;
 
+        // Get metadata database URL from environment
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|e| anyhow::anyhow!("DATABASE_URL not set: {}", e))?;
+
+        // Create metadata database wrapper
+        let metadata_db = billforge_db::MetadataDatabase::new(&database_url).await
+            .map_err(|e| anyhow::anyhow!("Failed to create metadata database: {}", e))?;
+
         // Check if sandbox tenant already exists
-        if db.metadata().tenant_exists(&sandbox_tenant_id).await? {
+        if metadata_db.tenant_exists(&sandbox_tenant_id).await? {
             tracing::info!("Sandbox tenant already exists");
             return Ok(());
         }
@@ -88,21 +102,35 @@ impl AppState {
         tracing::info!("Creating sandbox tenant and admin user...");
 
         // Create sandbox tenant with all modules enabled
-        db.metadata().create_tenant(&sandbox_tenant_id, "Sandbox Company").await
+        metadata_db.create_tenant(&sandbox_tenant_id, "Sandbox Company").await
             .map_err(|e| anyhow::anyhow!("Failed to create sandbox tenant: {}", e))?;
 
         // Enable all modules for sandbox
-        db.metadata().update_tenant_modules(
+        metadata_db.update_tenant_modules(
             &sandbox_tenant_id,
             &[Module::InvoiceCapture, Module::InvoiceProcessing, Module::VendorManagement, Module::Reporting],
         ).await
             .map_err(|e| anyhow::anyhow!("Failed to enable modules: {}", e))?;
 
         // Create tenant database
-        let tenant_db = db.tenant(&sandbox_tenant_id).await
+        let tenant_pool = db.tenant(&sandbox_tenant_id).await
             .map_err(|e| anyhow::anyhow!("Failed to create tenant db: {}", e))?;
-        tenant_db.run_migrations().await
+
+        // Run tenant migrations (inline for now)
+        sqlx::raw_sql(include_str!("../../../migrations/002_create_users.sql"))
+            .execute(&*tenant_pool)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to run tenant migrations: {}", e))?;
+
+        sqlx::raw_sql(include_str!("../../../migrations/003_create_vendors.sql"))
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to run vendor migrations: {}", e))?;
+
+        sqlx::raw_sql(include_str!("../../../migrations/004_create_invoices.sql"))
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to run invoice migrations: {}", e))?;
 
         // Run audit migrations
         audit.run_migrations(&sandbox_tenant_id).await
@@ -112,7 +140,7 @@ impl AppState {
         let password_hash = billforge_auth::PasswordService::new().hash("sandbox123")
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
 
-        db.metadata().create_user(&CreateUserInput {
+        metadata_db.create_user(&CreateUserInput {
             tenant_id: sandbox_tenant_id.clone(),
             email: "admin@sandbox.local".to_string(),
             password_hash,
@@ -122,7 +150,7 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Failed to create sandbox user: {}", e))?;
 
         // Seed demo data
-        Self::seed_sandbox_data(&tenant_db, &sandbox_tenant_id).await?;
+        Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
 
         tracing::info!("Sandbox initialized! Login with:");
         tracing::info!("  Tenant ID: {}", sandbox_tenant_id);
@@ -133,9 +161,7 @@ impl AppState {
     }
 
     /// Seed demo vendors, invoices, and default queues for the sandbox
-    async fn seed_sandbox_data(tenant_db: &billforge_db::TenantDatabase, _tenant_id: &TenantId) -> Result<()> {
-        let conn = tenant_db.connection().await;
-        let conn = conn.lock().await;
+    async fn seed_sandbox_data(pool: &sqlx::PgPool, _tenant_id: &TenantId) -> Result<()> {
 
         // ==========================================================
         // Seed default work queues (the standard AP workflow pipeline)
@@ -149,10 +175,20 @@ impl AppState {
         ];
 
         for (id, name, description, queue_type, is_default) in &queues {
-            conn.execute(
-                "INSERT OR IGNORE INTO work_queues (id, name, description, queue_type, is_default, is_active, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, '{}', datetime('now'), datetime('now'))",
-                rusqlite::params![id, name, description, queue_type, is_default],
-            ).ok();
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            sqlx::query(
+                "INSERT INTO work_queues (id, name, description, queue_type, is_default, is_active, settings, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, true, '{}'::jsonb, NOW(), NOW())
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(id_uuid)
+            .bind(name)
+            .bind(description)
+            .bind(queue_type)
+            .bind(*is_default as i32)
+            .execute(pool)
+            .await
+            .ok();
         }
 
         // ==========================================================
@@ -189,10 +225,23 @@ impl AppState {
         ];
 
         for (id, queue_id, name, description, priority, conditions, assign_to) in &assignment_rules {
-            conn.execute(
-                "INSERT OR IGNORE INTO assignment_rules (id, queue_id, name, description, priority, conditions, assign_to, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))",
-                rusqlite::params![id, queue_id, name, description, priority, conditions, assign_to],
-            ).ok();
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            let queue_uuid = uuid::Uuid::parse_str(queue_id)?;
+            sqlx::query(
+                "INSERT INTO assignment_rules (id, queue_id, name, description, priority, conditions, assign_to, is_active, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, true, NOW(), NOW())
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(id_uuid)
+            .bind(queue_uuid)
+            .bind(name)
+            .bind(description)
+            .bind(*priority as i32)
+            .bind(conditions)
+            .bind(assign_to)
+            .execute(pool)
+            .await
+            .ok();
         }
 
         // ==========================================================
@@ -221,10 +270,22 @@ impl AppState {
         ];
 
         for (id, name, vtype, email, phone, address, status) in &vendors {
-            conn.execute(
-                "INSERT OR IGNORE INTO vendors (id, name, vendor_type, email, phone, address_line1, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-                rusqlite::params![id, name, vtype, email, phone, address, status],
-            ).ok();
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            sqlx::query(
+                "INSERT INTO vendors (id, name, vendor_type, email, phone, address_line1, status, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(id_uuid)
+            .bind(name)
+            .bind(vtype)
+            .bind(email)
+            .bind(phone)
+            .bind(address)
+            .bind(status)
+            .execute(pool)
+            .await
+            .ok();
         }
 
         // ==========================================================
@@ -286,28 +347,60 @@ impl AppState {
         ];
 
         for (id, vendor_id, vendor_name, invoice_number, amount, invoice_date, due_date, capture_status, processing_status, queue_id, department, gl_code, po_number, notes) in &invoices {
-            let queue_id_val = if queue_id.is_empty() { None } else { Some(*queue_id) };
-            let invoice_date_val = if invoice_date.is_empty() { None } else { Some(*invoice_date) };
-            let due_date_val = if due_date.is_empty() { None } else { Some(*due_date) };
-            let vendor_id_val = if vendor_id.is_empty() { None } else { Some(*vendor_id) };
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            let vendor_id_val = if vendor_id.is_empty() { None } else { Some(uuid::Uuid::parse_str(vendor_id)?) };
+            let invoice_date_val = if invoice_date.is_empty() { None } else { Some(chrono::NaiveDate::parse_from_str(invoice_date, "%Y-%m-%d")?) };
+            let due_date_val = if due_date.is_empty() { None } else { Some(chrono::NaiveDate::parse_from_str(due_date, "%Y-%m-%d")?) };
+            let queue_id_val = if queue_id.is_empty() { None } else { Some(uuid::Uuid::parse_str(queue_id)?) };
             let dept_val = if department.is_empty() { None } else { Some(*department) };
             let gl_val = if gl_code.is_empty() { None } else { Some(*gl_code) };
             let po_val = if po_number.is_empty() { None } else { Some(*po_number) };
             let notes_val = if notes.is_empty() { None } else { Some(*notes) };
-            
-            conn.execute(
-                "INSERT OR IGNORE INTO invoices (id, vendor_id, vendor_name, invoice_number, total_amount, total_currency, invoice_date, due_date, capture_status, processing_status, current_queue_id, department, gl_code, po_number, notes, document_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
-                rusqlite::params![id, vendor_id_val, vendor_name, invoice_number, amount, invoice_date_val, due_date_val, capture_status, processing_status, queue_id_val, dept_val, gl_val, po_val, notes_val, uuid::Uuid::new_v4().to_string(), admin_id],
-            ).ok();
-            
+            let admin_uuid = uuid::Uuid::parse_str(admin_id)?;
+            let doc_uuid = uuid::Uuid::new_v4();
+
+            sqlx::query(
+                "INSERT INTO invoices (id, vendor_id, vendor_name, invoice_number, total_amount_cents, currency, invoice_date, due_date, capture_status, processing_status, current_queue_id, department, gl_code, po_number, notes, document_id, created_by, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, 'USD', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(id_uuid)
+            .bind(vendor_id_val)
+            .bind(vendor_name)
+            .bind(invoice_number)
+            .bind(*amount as i64)
+            .bind(invoice_date_val)
+            .bind(due_date_val)
+            .bind(capture_status)
+            .bind(processing_status)
+            .bind(queue_id_val)
+            .bind(dept_val)
+            .bind(gl_val)
+            .bind(po_val)
+            .bind(notes_val)
+            .bind(doc_uuid)
+            .bind(admin_uuid)
+            .execute(pool)
+            .await
+            .ok();
+
             // Create queue_items for invoices in a queue
             if !queue_id.is_empty() {
-                let item_id = uuid::Uuid::new_v4().to_string();
+                let item_id = uuid::Uuid::new_v4();
+                let queue_uuid = uuid::Uuid::parse_str(queue_id)?;
                 let priority = if *amount > 1000000 { 2 } else if *amount > 500000 { 1 } else { 0 };
-                conn.execute(
-                    "INSERT OR IGNORE INTO queue_items (id, queue_id, invoice_id, priority, entered_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                    rusqlite::params![item_id, queue_id, id, priority],
-                ).ok();
+                sqlx::query(
+                    "INSERT INTO queue_items (id, queue_id, invoice_id, priority, entered_at)
+                     VALUES ($1, $2, $3, $4, NOW())
+                     ON CONFLICT (id) DO NOTHING"
+                )
+                .bind(item_id)
+                .bind(queue_uuid)
+                .bind(id_uuid)
+                .bind(priority)
+                .execute(pool)
+                .await
+                .ok();
             }
         }
 
@@ -336,12 +429,24 @@ impl AppState {
         ];
 
         for (invoice_id, description, quantity, unit_price, notes) in &line_items {
-            let line_id = uuid::Uuid::new_v4().to_string();
+            let line_id = uuid::Uuid::new_v4();
+            let invoice_uuid = uuid::Uuid::parse_str(invoice_id)?;
             let total = quantity * unit_price;
-            conn.execute(
-                "INSERT OR IGNORE INTO invoice_line_items (id, invoice_id, description, quantity, unit_price, total_amount, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![line_id, invoice_id, description, quantity, unit_price, total, notes],
-            ).ok();
+            sqlx::query(
+                "INSERT INTO invoice_line_items (id, invoice_id, description, quantity, unit_price_cents, total_amount_cents, notes)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(line_id)
+            .bind(invoice_uuid)
+            .bind(description)
+            .bind(*quantity as i32)
+            .bind(*unit_price as i64)
+            .bind(total as i64)
+            .bind(notes)
+            .execute(pool)
+            .await
+            .ok();
         }
 
         // ==========================================================
@@ -358,11 +463,21 @@ impl AppState {
         ];
 
         for (invoice_id, requested_from, notes) in &approval_requests {
-            let request_id = uuid::Uuid::new_v4().to_string();
-            conn.execute(
-                "INSERT OR IGNORE INTO approval_requests (id, invoice_id, requested_from, status, comments, created_at) VALUES (?, ?, ?, 'pending', ?, datetime('now'))",
-                rusqlite::params![request_id, invoice_id, requested_from, notes],
-            ).ok();
+            let request_id = uuid::Uuid::new_v4();
+            let invoice_uuid = uuid::Uuid::parse_str(invoice_id)?;
+            let requested_uuid = uuid::Uuid::parse_str(requested_from)?;
+            sqlx::query(
+                "INSERT INTO approval_requests (id, invoice_id, requested_from, status, comments, created_at)
+                 VALUES ($1, $2, $3, 'pending', $4, NOW())
+                 ON CONFLICT (id) DO NOTHING"
+            )
+            .bind(request_id)
+            .bind(invoice_uuid)
+            .bind(requested_uuid)
+            .bind(notes)
+            .execute(pool)
+            .await
+            .ok();
         }
 
         tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, and {} approval requests", 

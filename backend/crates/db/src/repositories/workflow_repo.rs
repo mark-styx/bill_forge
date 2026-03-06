@@ -1,25 +1,30 @@
 //! Workflow repository implementation
 
-use crate::manager::DatabaseManager;
 use async_trait::async_trait;
 use billforge_core::{
-    domain::*,
+    domain::{
+        WorkflowRule, WorkflowRuleId, CreateWorkflowRuleInput, WorkflowRuleType, RuleCondition, RuleAction,
+        WorkQueue, WorkQueueId, CreateWorkQueueInput, QueueType, QueueItem, QueueSettings,
+        AssignmentRule, AssignmentRuleId, CreateAssignmentRuleInput, AssignmentCondition, AssignmentTarget,
+        ApprovalRequest, ApprovalStatus,
+        InvoiceId,
+    },
     traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository},
-    types::*,
-    Error, Result,
+    types::{Pagination, PaginatedResponse, PaginationMeta},
+    UserId, TenantId, Error, Result,
 };
 use chrono::Utc;
-use rusqlite::params;
+use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct WorkflowRepositoryImpl {
-    db_manager: Arc<DatabaseManager>,
+    pool: Arc<PgPool>,
 }
 
 impl WorkflowRepositoryImpl {
-    pub fn new(db_manager: Arc<DatabaseManager>) -> Self {
-        Self { db_manager }
+    pub fn new(pool: Arc<PgPool>) -> Self {
+        Self { pool }
     }
 }
 
@@ -30,36 +35,28 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         tenant_id: &TenantId,
         input: CreateWorkflowRuleInput,
     ) -> Result<WorkflowRule> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
         let id = WorkflowRuleId::new();
         let now = Utc::now();
 
-        let conditions_json = serde_json::to_string(&input.conditions)
-            .map_err(|e| Error::Database(format!("Failed to serialize conditions: {}", e)))?;
-        let actions_json = serde_json::to_string(&input.actions)
-            .map_err(|e| Error::Database(format!("Failed to serialize actions: {}", e)))?;
-
-        conn.execute(
+        sqlx::query(
             r#"INSERT INTO workflow_rules (
-                id, name, description, priority, is_active, rule_type,
+                id, tenant_id, name, description, priority, is_active, rule_type,
                 conditions, actions, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.0.to_string(),
-                input.name,
-                input.description,
-                input.priority,
-                true,
-                format!("{:?}", input.rule_type).to_lowercase(),
-                conditions_json,
-                actions_json,
-                now.to_rfc3339(),
-                now.to_rfc3339(),
-            ],
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
         )
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.priority as i32)
+        .bind(true)
+        .bind(format!("{:?}", input.rule_type).to_lowercase())
+        .bind(sqlx::types::Json(&input.conditions))
+        .bind(sqlx::types::Json(&input.actions))
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to create workflow rule: {}", e)))?;
 
         Ok(WorkflowRule {
@@ -77,334 +74,134 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_by_id(
-        &self,
-        tenant_id: &TenantId,
-        id: &WorkflowRuleId,
-    ) -> Result<Option<WorkflowRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkflowRuleId) -> Result<Option<WorkflowRule>> {
+        let result = sqlx::query_as::<_, WorkflowRuleRow>(
+            "SELECT * FROM workflow_rules WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get workflow rule: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, name, description, priority, is_active, rule_type,
-                          conditions, actions, created_at, updated_at
-                   FROM workflow_rules WHERE id = ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let result = stmt
-            .query_row(params![id.0.to_string()], |row| {
-                Ok(self.map_rule_row(row, tenant_id.clone()))
-            })
-            .ok();
-
-        match result {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        Ok(result.map(|row| row.into_rule(tenant_id)))
     }
 
-    async fn list(
-        &self,
-        tenant_id: &TenantId,
-        rule_type: Option<WorkflowRuleType>,
-    ) -> Result<Vec<WorkflowRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        let sql = if let Some(rt) = rule_type {
-            format!(
-                r#"SELECT id, name, description, priority, is_active, rule_type,
-                          conditions, actions, created_at, updated_at
-                   FROM workflow_rules WHERE rule_type = '{}'
-                   ORDER BY priority DESC"#,
-                format!("{:?}", rt).to_lowercase()
+    async fn list(&self, tenant_id: &TenantId, rule_type: Option<WorkflowRuleType>) -> Result<Vec<WorkflowRule>> {
+        let rows = if let Some(rt) = rule_type {
+            sqlx::query_as::<_, WorkflowRuleRow>(
+                "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 ORDER BY priority DESC"
             )
+            .bind(tenant_id.as_str())
+            .bind(format!("{:?}", rt).to_lowercase())
+            .fetch_all(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to list workflow rules: {}", e)))?
         } else {
-            r#"SELECT id, name, description, priority, is_active, rule_type,
-                      conditions, actions, created_at, updated_at
-               FROM workflow_rules ORDER BY priority DESC"#
-                .to_string()
+            sqlx::query_as::<_, WorkflowRuleRow>(
+                "SELECT * FROM workflow_rules WHERE tenant_id = $1 ORDER BY priority DESC"
+            )
+            .bind(tenant_id.as_str())
+            .fetch_all(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to list workflow rules: {}", e)))?
         };
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let rules = stmt
-            .query_map([], |row| Ok(self.map_rule_row(row, tenant_clone.clone())))
-            .map_err(|e| Error::Database(format!("Failed to list rules: {}", e)))?;
-
-        let mut results = Vec::new();
-        for rule in rules {
-            results.push(rule.map_err(|e| Error::Database(e.to_string()))??);
-        }
-
-        Ok(results)
+        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
     }
 
-    async fn update(
-        &self,
-        tenant_id: &TenantId,
-        id: &WorkflowRuleId,
-        input: CreateWorkflowRuleInput,
-    ) -> Result<WorkflowRule> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+    async fn update(&self, tenant_id: &TenantId, id: &WorkflowRuleId, input: CreateWorkflowRuleInput) -> Result<WorkflowRule> {
         let now = Utc::now();
-        let conditions_json = serde_json::to_string(&input.conditions)
-            .map_err(|e| Error::Database(format!("Failed to serialize conditions: {}", e)))?;
-        let actions_json = serde_json::to_string(&input.actions)
-            .map_err(|e| Error::Database(format!("Failed to serialize actions: {}", e)))?;
 
-        conn.execute(
+        sqlx::query(
             r#"UPDATE workflow_rules SET
-                name = ?, description = ?, priority = ?, rule_type = ?,
-                conditions = ?, actions = ?, updated_at = ?
-               WHERE id = ?"#,
-            params![
-                input.name,
-                input.description,
-                input.priority,
-                format!("{:?}", input.rule_type).to_lowercase(),
-                conditions_json,
-                actions_json,
-                now.to_rfc3339(),
-                id.0.to_string(),
-            ],
+                name = $1, description = $2, priority = $3, rule_type = $4,
+                conditions = $5, actions = $6, updated_at = $7
+            WHERE id = $8 AND tenant_id = $9"#
         )
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.priority as i32)
+        .bind(format!("{:?}", input.rule_type).to_lowercase())
+        .bind(sqlx::types::Json(&input.conditions))
+        .bind(sqlx::types::Json(&input.actions))
+        .bind(now)
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .execute(&*self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to update workflow rule: {}", e)))?;
 
-        self.get_by_id(tenant_id, id)
+        WorkflowRuleRepository::get_by_id(self, tenant_id, id)
             .await?
             .ok_or_else(|| Error::NotFound {
                 resource_type: "WorkflowRule".to_string(),
-                id: id.0.to_string(),
+                id: id.to_string(),
             })
     }
 
     async fn delete(&self, tenant_id: &TenantId, id: &WorkflowRuleId) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "DELETE FROM workflow_rules WHERE id = ?",
-            params![id.0.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to delete workflow rule: {}", e)))?;
+        sqlx::query("DELETE FROM workflow_rules WHERE id = $1 AND tenant_id = $2")
+            .bind(id.0)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete workflow rule: {}", e)))?;
 
         Ok(())
     }
 
-    async fn set_active(
-        &self,
-        tenant_id: &TenantId,
-        id: &WorkflowRuleId,
-        is_active: bool,
-    ) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "UPDATE workflow_rules SET is_active = ?, updated_at = ? WHERE id = ?",
-            params![is_active, Utc::now().to_rfc3339(), id.0.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to update rule status: {}", e)))?;
+    async fn set_active(&self, tenant_id: &TenantId, id: &WorkflowRuleId, is_active: bool) -> Result<()> {
+        sqlx::query("UPDATE workflow_rules SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+            .bind(is_active)
+            .bind(Utc::now())
+            .bind(id.0)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to set workflow rule active: {}", e)))?;
 
         Ok(())
     }
 
-    async fn get_active_rules(
-        &self,
-        tenant_id: &TenantId,
-        rule_type: WorkflowRuleType,
-    ) -> Result<Vec<WorkflowRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_active_rules(&self, tenant_id: &TenantId, rule_type: WorkflowRuleType) -> Result<Vec<WorkflowRule>> {
+        let rows = sqlx::query_as::<_, WorkflowRuleRow>(
+            "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 AND is_active = true ORDER BY priority DESC"
+        )
+        .bind(tenant_id.as_str())
+        .bind(format!("{:?}", rule_type).to_lowercase())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get active workflow rules: {}", e)))?;
 
-        let sql = format!(
-            r#"SELECT id, name, description, priority, is_active, rule_type,
-                      conditions, actions, created_at, updated_at
-               FROM workflow_rules
-               WHERE rule_type = '{}' AND is_active = true
-               ORDER BY priority DESC"#,
-            format!("{:?}", rule_type).to_lowercase()
-        );
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let rules = stmt
-            .query_map([], |row| Ok(self.map_rule_row(row, tenant_clone.clone())))
-            .map_err(|e| Error::Database(format!("Failed to list active rules: {}", e)))?;
-
-        let mut results = Vec::new();
-        for rule in rules {
-            results.push(rule.map_err(|e| Error::Database(e.to_string()))??);
-        }
-
-        Ok(results)
-    }
-}
-
-impl WorkflowRepositoryImpl {
-    fn map_rule_row(&self, row: &rusqlite::Row, tenant_id: TenantId) -> Result<WorkflowRule> {
-        let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
-        let conditions_json: String = row.get(6).map_err(|e| Error::Database(e.to_string()))?;
-        let actions_json: String = row.get(7).map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(WorkflowRule {
-            id: WorkflowRuleId(Uuid::parse_str(&id_str).unwrap()),
-            tenant_id,
-            name: row.get(1).map_err(|e| Error::Database(e.to_string()))?,
-            description: row.get(2).map_err(|e| Error::Database(e.to_string()))?,
-            priority: row.get(3).map_err(|e| Error::Database(e.to_string()))?,
-            is_active: row.get(4).map_err(|e| Error::Database(e.to_string()))?,
-            rule_type: WorkflowRuleType::Routing,
-            conditions: serde_json::from_str(&conditions_json).unwrap_or_default(),
-            actions: serde_json::from_str(&actions_json).unwrap_or_default(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
-    }
-}
-
-// ============================================================================
-// Work Queue Repository Implementation
-// ============================================================================
-
-pub struct WorkQueueRepositoryImpl {
-    db_manager: Arc<DatabaseManager>,
-}
-
-impl WorkQueueRepositoryImpl {
-    pub fn new(db_manager: Arc<DatabaseManager>) -> Self {
-        Self { db_manager }
-    }
-
-    fn map_queue_row(&self, row: &rusqlite::Row, tenant_id: TenantId) -> Result<WorkQueue> {
-        let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
-        let queue_type_str: String = row.get(3).map_err(|e| Error::Database(e.to_string()))?;
-        let assigned_users_json: Option<String> = row.get(4).ok();
-        let assigned_roles_json: Option<String> = row.get(5).ok();
-        let settings_json: Option<String> = row.get(8).ok();
-
-        let queue_type = match queue_type_str.as_str() {
-            "review" => QueueType::Review,
-            "approval" => QueueType::Approval,
-            "exception" => QueueType::Exception,
-            "payment" => QueueType::Payment,
-            _ => QueueType::Custom,
-        };
-
-        Ok(WorkQueue {
-            id: WorkQueueId(Uuid::parse_str(&id_str).unwrap()),
-            tenant_id,
-            name: row.get(1).map_err(|e| Error::Database(e.to_string()))?,
-            description: row.get(2).ok(),
-            queue_type,
-            assigned_users: assigned_users_json
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default(),
-            assigned_roles: assigned_roles_json
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default(),
-            is_default: row.get::<_, i32>(6).unwrap_or(0) == 1,
-            is_active: row.get::<_, i32>(7).unwrap_or(1) == 1,
-            settings: settings_json
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_else(|| QueueSettings {
-                    default_sort: "entered_at".to_string(),
-                    sla_hours: None,
-                    escalation_hours: None,
-                    escalation_user_id: None,
-                }),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
-    }
-
-    fn map_queue_item_row(&self, row: &rusqlite::Row, tenant_id: TenantId) -> Result<QueueItem> {
-        let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
-        let queue_id_str: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
-        let invoice_id_str: String = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
-        let assigned_to_str: Option<String> = row.get(3).ok();
-
-        Ok(QueueItem {
-            id: Uuid::parse_str(&id_str).unwrap(),
-            queue_id: WorkQueueId(Uuid::parse_str(&queue_id_str).unwrap()),
-            invoice_id: InvoiceId(Uuid::parse_str(&invoice_id_str).unwrap()),
-            tenant_id,
-            assigned_to: assigned_to_str.and_then(|s| Uuid::parse_str(&s).ok().map(UserId)),
-            priority: row.get(4).unwrap_or(0),
-            entered_at: Utc::now(),
-            due_at: None,
-            claimed_at: None,
-            completed_at: None,
-        })
+        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
     }
 }
 
 #[async_trait]
-impl WorkQueueRepository for WorkQueueRepositoryImpl {
-    async fn create(
-        &self,
-        tenant_id: &TenantId,
-        input: CreateWorkQueueInput,
-    ) -> Result<WorkQueue> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+impl WorkQueueRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, input: CreateWorkQueueInput) -> Result<WorkQueue> {
         let id = WorkQueueId::new();
         let now = Utc::now();
 
-        let queue_type_str = match input.queue_type {
-            QueueType::Review => "review",
-            QueueType::Approval => "approval",
-            QueueType::Exception => "exception",
-            QueueType::Payment => "payment",
-            QueueType::Custom => "custom",
-        };
-
-        let assigned_users_json = serde_json::to_string(&input.assigned_users)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let assigned_roles_json = serde_json::to_string(&input.assigned_roles)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let settings_json = serde_json::to_string(&input.settings)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-
-        conn.execute(
+        sqlx::query(
             r#"INSERT INTO work_queues (
-                id, name, description, queue_type, assigned_users, assigned_roles,
-                is_default, is_active, settings, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.0.to_string(),
-                input.name,
-                input.description,
-                queue_type_str,
-                assigned_users_json,
-                assigned_roles_json,
-                0,
-                1,
-                settings_json,
-                now.to_rfc3339(),
-                now.to_rfc3339(),
-            ],
+                id, tenant_id, name, description, queue_type, is_default, is_active, settings, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
-        .map_err(|e| Error::Database(format!("Failed to create queue: {}", e)))?;
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(format!("{:?}", input.queue_type).to_lowercase())
+        .bind(false) // is_default
+        .bind(true)
+        .bind(sqlx::types::Json(&serde_json::Value::Object(serde_json::Map::new())))
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create work queue: {}", e)))?;
 
         Ok(WorkQueue {
             id,
@@ -412,240 +209,132 @@ impl WorkQueueRepository for WorkQueueRepositoryImpl {
             name: input.name,
             description: input.description,
             queue_type: input.queue_type,
-            assigned_users: input.assigned_users,
-            assigned_roles: input.assigned_roles,
+            assigned_users: vec![],
+            assigned_roles: vec![],
             is_default: false,
             is_active: true,
-            settings: input.settings,
+            settings: QueueSettings {
+                default_sort: "priority_desc".to_string(),
+                sla_hours: None,
+                escalation_hours: None,
+                escalation_user_id: None,
+            },
             created_at: now,
             updated_at: now,
         })
     }
 
-    async fn get_by_id(
-        &self,
-        tenant_id: &TenantId,
-        id: &WorkQueueId,
-    ) -> Result<Option<WorkQueue>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkQueueId) -> Result<Option<WorkQueue>> {
+        let result = sqlx::query_as::<_, WorkQueueRow>(
+            "SELECT * FROM work_queues WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get work queue: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, name, description, queue_type, assigned_users, assigned_roles,
-                          is_default, is_active, settings, created_at, updated_at
-                   FROM work_queues WHERE id = ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let result = stmt
-            .query_row(params![id.0.to_string()], |row| {
-                Ok(self.map_queue_row(row, tenant_id.clone()))
-            })
-            .ok();
-
-        match result {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        Ok(result.map(|row| row.into_queue(tenant_id)))
     }
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<WorkQueue>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+        let rows = sqlx::query_as::<_, WorkQueueRow>(
+            "SELECT * FROM work_queues WHERE tenant_id = $1 ORDER BY created_at"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list work queues: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, name, description, queue_type, assigned_users, assigned_roles,
-                          is_default, is_active, settings, created_at, updated_at
-                   FROM work_queues WHERE is_active = 1 ORDER BY name"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let queues = stmt
-            .query_map([], |row| Ok(self.map_queue_row(row, tenant_clone.clone())))
-            .map_err(|e| Error::Database(format!("Failed to list queues: {}", e)))?;
-
-        let mut results = Vec::new();
-        for queue in queues {
-            results.push(queue.map_err(|e| Error::Database(e.to_string()))??);
-        }
-
-        Ok(results)
+        Ok(rows.into_iter().map(|row| row.into_queue(tenant_id)).collect())
     }
 
-    async fn update(
-        &self,
-        tenant_id: &TenantId,
-        id: &WorkQueueId,
-        input: CreateWorkQueueInput,
-    ) -> Result<WorkQueue> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+    async fn update(&self, tenant_id: &TenantId, id: &WorkQueueId, input: CreateWorkQueueInput) -> Result<WorkQueue> {
         let now = Utc::now();
-        let queue_type_str = match input.queue_type {
-            QueueType::Review => "review",
-            QueueType::Approval => "approval",
-            QueueType::Exception => "exception",
-            QueueType::Payment => "payment",
-            QueueType::Custom => "custom",
-        };
 
-        let assigned_users_json = serde_json::to_string(&input.assigned_users)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let assigned_roles_json = serde_json::to_string(&input.assigned_roles)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let settings_json = serde_json::to_string(&input.settings)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-
-        conn.execute(
+        sqlx::query(
             r#"UPDATE work_queues SET
-                name = ?, description = ?, queue_type = ?, assigned_users = ?,
-                assigned_roles = ?, settings = ?, updated_at = ?
-               WHERE id = ?"#,
-            params![
-                input.name,
-                input.description,
-                queue_type_str,
-                assigned_users_json,
-                assigned_roles_json,
-                settings_json,
-                now.to_rfc3339(),
-                id.0.to_string(),
-            ],
+                name = $1, description = $2, queue_type = $3, is_default = $4, updated_at = $5
+            WHERE id = $6 AND tenant_id = $7"#
         )
-        .map_err(|e| Error::Database(format!("Failed to update queue: {}", e)))?;
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(format!("{:?}", input.queue_type).to_lowercase())
+        .bind(false) // is_default
+        .bind(now)
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update work queue: {}", e)))?;
 
-        self.get_by_id(tenant_id, id)
+        WorkQueueRepository::get_by_id(self, tenant_id, id)
             .await?
             .ok_or_else(|| Error::NotFound {
                 resource_type: "WorkQueue".to_string(),
-                id: id.0.to_string(),
+                id: id.to_string(),
             })
     }
 
     async fn delete(&self, tenant_id: &TenantId, id: &WorkQueueId) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "UPDATE work_queues SET is_active = 0, updated_at = ? WHERE id = ?",
-            params![Utc::now().to_rfc3339(), id.0.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to delete queue: {}", e)))?;
+        sqlx::query("DELETE FROM work_queues WHERE id = $1 AND tenant_id = $2")
+            .bind(id.0)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete work queue: {}", e)))?;
 
         Ok(())
     }
 
     async fn get_default(&self, tenant_id: &TenantId) -> Result<Option<WorkQueue>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+        let result = sqlx::query_as::<_, WorkQueueRow>(
+            "SELECT * FROM work_queues WHERE tenant_id = $1 AND is_default = true LIMIT 1"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get default work queue: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, name, description, queue_type, assigned_users, assigned_roles,
-                          is_default, is_active, settings, created_at, updated_at
-                   FROM work_queues WHERE is_default = 1 AND is_active = 1 LIMIT 1"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let result = stmt
-            .query_row([], |row| {
-                Ok(self.map_queue_row(row, tenant_id.clone()))
-            })
-            .ok();
-
-        match result {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        Ok(result.map(|row| row.into_queue(tenant_id)))
     }
 
     async fn get_by_type(&self, tenant_id: &TenantId, queue_type: QueueType) -> Result<Option<WorkQueue>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+        let result = sqlx::query_as::<_, WorkQueueRow>(
+            "SELECT * FROM work_queues WHERE tenant_id = $1 AND queue_type = $2 LIMIT 1"
+        )
+        .bind(tenant_id.as_str())
+        .bind(format!("{:?}", queue_type).to_lowercase())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get work queue by type: {}", e)))?;
 
-        let queue_type_str = match queue_type {
-            QueueType::Review => "review",
-            QueueType::Approval => "approval",
-            QueueType::Exception => "exception",
-            QueueType::Payment => "payment",
-            QueueType::Custom => "custom",
-        };
-
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, name, description, queue_type, assigned_users, assigned_roles,
-                          is_default, is_active, settings, created_at, updated_at
-                   FROM work_queues WHERE queue_type = ? AND is_active = 1 LIMIT 1"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let result = stmt
-            .query_row(params![queue_type_str], |row| {
-                Ok(self.map_queue_row(row, tenant_id.clone()))
-            })
-            .ok();
-
-        match result {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        Ok(result.map(|row| row.into_queue(tenant_id)))
     }
 
-    async fn add_item(
-        &self,
-        tenant_id: &TenantId,
-        queue_id: &WorkQueueId,
-        invoice_id: &InvoiceId,
-        assigned_to: Option<&UserId>,
-    ) -> Result<QueueItem> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+    async fn add_item(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, invoice_id: &InvoiceId, assigned_to: Option<&UserId>) -> Result<QueueItem> {
         let id = Uuid::new_v4();
         let now = Utc::now();
 
-        conn.execute(
-            r#"INSERT INTO queue_items (id, queue_id, invoice_id, assigned_to, priority, entered_at)
-               VALUES (?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.to_string(),
-                queue_id.0.to_string(),
-                invoice_id.0.to_string(),
-                assigned_to.map(|u| u.0.to_string()),
-                0,
-                now.to_rfc3339(),
-            ],
+        sqlx::query(
+            r#"INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, assigned_to, status, entered_at)
+               VALUES ($1, $2, $3, $4, $5, 'pending', $6)"#
         )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(queue_id.0)
+        .bind(invoice_id.0)
+        .bind(assigned_to.map(|u| u.0))
+        .bind(now)
+        .execute(&*self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to add queue item: {}", e)))?;
-
-        // Also update the invoice's current_queue_id
-        conn.execute(
-            "UPDATE invoices SET current_queue_id = ?, assigned_to = ?, updated_at = ? WHERE id = ?",
-            params![
-                queue_id.0.to_string(),
-                assigned_to.map(|u| u.0.to_string()),
-                now.to_rfc3339(),
-                invoice_id.0.to_string(),
-            ],
-        )
-        .map_err(|e| Error::Database(format!("Failed to update invoice queue: {}", e)))?;
 
         Ok(QueueItem {
             id,
+            tenant_id: tenant_id.clone(),
             queue_id: queue_id.clone(),
             invoice_id: invoice_id.clone(),
-            tenant_id: tenant_id.clone(),
             assigned_to: assigned_to.cloned(),
             priority: 0,
             entered_at: now,
@@ -655,51 +344,32 @@ impl WorkQueueRepository for WorkQueueRepositoryImpl {
         })
     }
 
-    async fn get_items(
-        &self,
-        tenant_id: &TenantId,
-        queue_id: &WorkQueueId,
-        pagination: &Pagination,
-    ) -> Result<PaginatedResponse<QueueItem>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, pagination: &Pagination) -> Result<PaginatedResponse<QueueItem>> {
+        let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
-        let offset = (pagination.page - 1) * pagination.per_page;
+        let rows = sqlx::query_as::<_, QueueItemRow>(
+            "SELECT * FROM queue_items WHERE queue_id = $1 ORDER BY priority DESC, entered_at LIMIT $2 OFFSET $3"
+        )
+        .bind(queue_id.0)
+        .bind(pagination.per_page as i32)
+        .bind(offset)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get queue items: {}", e)))?;
 
-        // Get total count
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM queue_items WHERE queue_id = ? AND completed_at IS NULL",
-                params![queue_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("Failed to count items: {}", e)))?;
+        let items: Vec<QueueItem> = rows
+            .into_iter()
+            .map(|row| row.into_item())
+            .collect();
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, invoice_id, assigned_to, priority, entered_at, due_at, claimed_at, completed_at
-                   FROM queue_items
-                   WHERE queue_id = ? AND completed_at IS NULL
-                   ORDER BY priority DESC, entered_at ASC
-                   LIMIT ? OFFSET ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let items = stmt
-            .query_map(params![queue_id.0.to_string(), pagination.per_page as i64, offset as i64], |row| {
-                Ok(self.map_queue_item_row(row, tenant_clone.clone()))
-            })
-            .map_err(|e| Error::Database(format!("Failed to list items: {}", e)))?;
-
-        let mut data = Vec::new();
-        for item in items {
-            data.push(item.map_err(|e| Error::Database(e.to_string()))??);
-        }
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1")
+            .bind(queue_id.0)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
 
         Ok(PaginatedResponse {
-            data,
+            data: items,
             pagination: PaginationMeta {
                 page: pagination.page,
                 per_page: pagination.per_page,
@@ -709,274 +379,155 @@ impl WorkQueueRepository for WorkQueueRepositoryImpl {
         })
     }
 
-    async fn get_items_for_user(
-        &self,
-        tenant_id: &TenantId,
-        queue_id: &WorkQueueId,
-        user_id: &UserId,
-        pagination: &Pagination,
-    ) -> Result<PaginatedResponse<QueueItem>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId, pagination: &Pagination) -> Result<PaginatedResponse<QueueItem>> {
+        let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
-        let offset = (pagination.page - 1) * pagination.per_page;
+        let rows = sqlx::query_as::<_, QueueItemRow>(
+            "SELECT * FROM queue_items WHERE queue_id = $1 AND assigned_to = $2 ORDER BY priority DESC, entered_at LIMIT $3 OFFSET $4"
+        )
+        .bind(queue_id.0)
+        .bind(user_id.0)
+        .bind(pagination.per_page as i32)
+        .bind(offset)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get queue items for user: {}", e)))?;
 
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM queue_items WHERE queue_id = ? AND assigned_to = ? AND completed_at IS NULL",
-                params![queue_id.0.to_string(), user_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("Failed to count items: {}", e)))?;
+        let items: Vec<QueueItem> = rows
+            .into_iter()
+            .map(|row| row.into_item())
+            .collect();
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, invoice_id, assigned_to, priority, entered_at, due_at, claimed_at, completed_at
-                   FROM queue_items
-                   WHERE queue_id = ? AND assigned_to = ? AND completed_at IS NULL
-                   ORDER BY priority DESC, entered_at ASC
-                   LIMIT ? OFFSET ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let items = stmt
-            .query_map(
-                params![queue_id.0.to_string(), user_id.0.to_string(), pagination.per_page as i64, offset as i64],
-                |row| Ok(self.map_queue_item_row(row, tenant_clone.clone())),
-            )
-            .map_err(|e| Error::Database(format!("Failed to list items: {}", e)))?;
-
-        let mut data = Vec::new();
-        for item in items {
-            data.push(item.map_err(|e| Error::Database(e.to_string()))??);
-        }
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1 AND assigned_to = $2")
+            .bind(queue_id.0)
+            .bind(user_id.0)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to count queue items for user: {}", e)))?;
 
         Ok(PaginatedResponse {
-            data,
+            data: items,
             pagination: PaginationMeta {
                 page: pagination.page,
                 per_page: pagination.per_page,
                 total_items: total as u64,
                 total_pages: ((total as f64) / (pagination.per_page as f64)).ceil() as u32,
             },
+        })
+    }
+
+    async fn count_items(&self, _tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1")
+            .bind(queue_id.0)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
+
+        Ok(total)
+    }
+
+    async fn count_items_for_user(&self, _tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1 AND assigned_to = $2")
+            .bind(queue_id.0)
+            .bind(user_id.0)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to count queue items for user: {}", e)))?;
+
+        Ok(total)
+    }
+
+    async fn move_item(&self, tenant_id: &TenantId, invoice_id: &InvoiceId, queue_id: &WorkQueueId, assigned_to: Option<&UserId>) -> Result<QueueItem> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"INSERT INTO queue_items (id, queue_id, invoice_id, assigned_to, priority, entered_at)
+            VALUES ($1, $2, $3, $4, $5, $6)"#
+        )
+        .bind(id)
+        .bind(queue_id.0)
+        .bind(invoice_id.0)
+        .bind(assigned_to.map(|u| u.0))
+        .bind(0)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to move item to queue: {}", e)))?;
+
+        Ok(QueueItem {
+            id,
+            tenant_id: tenant_id.clone(),
+            queue_id: queue_id.clone(),
+            invoice_id: invoice_id.clone(),
+            assigned_to: assigned_to.cloned(),
+            priority: 0,
+            entered_at: now,
+            due_at: None,
+            claimed_at: None,
+            completed_at: None,
         })
     }
 
     async fn claim_item(&self, tenant_id: &TenantId, item_id: Uuid, user_id: &UserId) -> Result<QueueItem> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
         let now = Utc::now();
 
-        conn.execute(
-            "UPDATE queue_items SET claimed_at = ?, assigned_to = ? WHERE id = ?",
-            params![now.to_rfc3339(), user_id.0.to_string(), item_id.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to claim item: {}", e)))?;
+        sqlx::query("UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3")
+            .bind(user_id.0)
+            .bind(now)
+            .bind(item_id)
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to claim item: {}", e)))?;
 
-        // Get the updated item
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, invoice_id, assigned_to, priority, entered_at, due_at, claimed_at, completed_at
-                   FROM queue_items WHERE id = ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
+        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to get claimed item: {}", e)))?;
 
-        let item = stmt
-            .query_row(params![item_id.to_string()], |row| {
-                Ok(self.map_queue_item_row(row, tenant_id.clone()))
-            })
-            .map_err(|e| Error::Database(format!("Item not found: {}", e)))??;
-
-        Ok(item)
+        Ok(result.into_item())
     }
 
     async fn complete_item(&self, tenant_id: &TenantId, item_id: Uuid, action: &str) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
         let now = Utc::now();
 
-        conn.execute(
-            "UPDATE queue_items SET completed_at = ?, completion_action = ? WHERE id = ?",
-            params![now.to_rfc3339(), action, item_id.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to complete item: {}", e)))?;
+        sqlx::query("UPDATE queue_items SET completed_at = $1, completion_action = $2 WHERE id = $3")
+            .bind(now)
+            .bind(action)
+            .bind(item_id)
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to complete item: {}", e)))?;
 
         Ok(())
-    }
-
-    async fn move_item(
-        &self,
-        tenant_id: &TenantId,
-        invoice_id: &InvoiceId,
-        to_queue_id: &WorkQueueId,
-        assigned_to: Option<&UserId>,
-    ) -> Result<QueueItem> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        let now = Utc::now();
-
-        // Mark current queue item as completed (moved)
-        conn.execute(
-            "UPDATE queue_items SET completed_at = ?, completion_action = 'moved' WHERE invoice_id = ? AND completed_at IS NULL",
-            params![now.to_rfc3339(), invoice_id.0.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to complete old item: {}", e)))?;
-
-        // Create new queue item
-        let id = Uuid::new_v4();
-        conn.execute(
-            r#"INSERT INTO queue_items (id, queue_id, invoice_id, assigned_to, priority, entered_at)
-               VALUES (?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.to_string(),
-                to_queue_id.0.to_string(),
-                invoice_id.0.to_string(),
-                assigned_to.map(|u| u.0.to_string()),
-                0,
-                now.to_rfc3339(),
-            ],
-        )
-        .map_err(|e| Error::Database(format!("Failed to add queue item: {}", e)))?;
-
-        // Update invoice queue tracking
-        conn.execute(
-            "UPDATE invoices SET current_queue_id = ?, assigned_to = ?, updated_at = ? WHERE id = ?",
-            params![
-                to_queue_id.0.to_string(),
-                assigned_to.map(|u| u.0.to_string()),
-                now.to_rfc3339(),
-                invoice_id.0.to_string(),
-            ],
-        )
-        .map_err(|e| Error::Database(format!("Failed to update invoice queue: {}", e)))?;
-
-        Ok(QueueItem {
-            id,
-            queue_id: to_queue_id.clone(),
-            invoice_id: invoice_id.clone(),
-            tenant_id: tenant_id.clone(),
-            assigned_to: assigned_to.cloned(),
-            priority: 0,
-            entered_at: now,
-            due_at: None,
-            claimed_at: None,
-            completed_at: None,
-        })
-    }
-
-    async fn count_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM queue_items WHERE queue_id = ? AND completed_at IS NULL",
-                params![queue_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("Failed to count items: {}", e)))?;
-
-        Ok(count)
-    }
-
-    async fn count_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM queue_items WHERE queue_id = ? AND assigned_to = ? AND completed_at IS NULL",
-                params![queue_id.0.to_string(), user_id.0.to_string()],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("Failed to count items: {}", e)))?;
-
-        Ok(count)
-    }
-}
-
-// ============================================================================
-// Assignment Rule Repository Implementation
-// ============================================================================
-
-pub struct AssignmentRuleRepositoryImpl {
-    db_manager: Arc<DatabaseManager>,
-}
-
-impl AssignmentRuleRepositoryImpl {
-    pub fn new(db_manager: Arc<DatabaseManager>) -> Self {
-        Self { db_manager }
-    }
-
-    fn map_rule_row(&self, row: &rusqlite::Row, tenant_id: TenantId) -> Result<AssignmentRule> {
-        let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
-        let queue_id_str: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
-        let conditions_json: String = row.get(5).map_err(|e| Error::Database(e.to_string()))?;
-        let assign_to_json: String = row.get(6).map_err(|e| Error::Database(e.to_string()))?;
-
-        Ok(AssignmentRule {
-            id: AssignmentRuleId(Uuid::parse_str(&id_str).unwrap()),
-            tenant_id,
-            queue_id: WorkQueueId(Uuid::parse_str(&queue_id_str).unwrap()),
-            name: row.get(2).map_err(|e| Error::Database(e.to_string()))?,
-            description: row.get(3).ok(),
-            priority: row.get(4).unwrap_or(0),
-            is_active: row.get::<_, i32>(7).unwrap_or(1) == 1,
-            conditions: serde_json::from_str(&conditions_json).unwrap_or_default(),
-            assign_to: serde_json::from_str(&assign_to_json)
-                .unwrap_or(AssignmentTarget::Role("ap_user".to_string())),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
     }
 }
 
 #[async_trait]
-impl AssignmentRuleRepository for AssignmentRuleRepositoryImpl {
-    async fn create(
-        &self,
-        tenant_id: &TenantId,
-        input: CreateAssignmentRuleInput,
-    ) -> Result<AssignmentRule> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+impl AssignmentRuleRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, input: CreateAssignmentRuleInput) -> Result<AssignmentRule> {
         let id = AssignmentRuleId::new();
         let now = Utc::now();
 
-        let conditions_json = serde_json::to_string(&input.conditions)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let assign_to_json = serde_json::to_string(&input.assign_to)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-
-        conn.execute(
+        sqlx::query(
             r#"INSERT INTO assignment_rules (
-                id, queue_id, name, description, priority, conditions, assign_to, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.0.to_string(),
-                input.queue_id.0.to_string(),
-                input.name,
-                input.description,
-                input.priority,
-                conditions_json,
-                assign_to_json,
-                1,
-                now.to_rfc3339(),
-                now.to_rfc3339(),
-            ],
+                id, tenant_id, queue_id, name, description, priority, is_active, conditions, assign_to, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
         )
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .bind(input.queue_id.0)
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.priority as i32)
+        .bind(true)
+        .bind(sqlx::types::Json(&input.conditions))
+        .bind(sqlx::types::Json(&input.assign_to))
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to create assignment rule: {}", e)))?;
 
         Ok(AssignmentRule {
@@ -994,158 +545,426 @@ impl AssignmentRuleRepository for AssignmentRuleRepositoryImpl {
         })
     }
 
-    async fn get_by_id(
-        &self,
-        tenant_id: &TenantId,
-        id: &AssignmentRuleId,
-    ) -> Result<Option<AssignmentRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &AssignmentRuleId) -> Result<Option<AssignmentRule>> {
+        let result = sqlx::query_as::<_, AssignmentRuleRow>(
+            "SELECT * FROM assignment_rules WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get assignment rule: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, name, description, priority, conditions, assign_to, is_active
-                   FROM assignment_rules WHERE id = ?"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let result = stmt
-            .query_row(params![id.0.to_string()], |row| {
-                Ok(self.map_rule_row(row, tenant_id.clone()))
-            })
-            .ok();
-
-        match result {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn list_for_queue(
-        &self,
-        tenant_id: &TenantId,
-        queue_id: &WorkQueueId,
-    ) -> Result<Vec<AssignmentRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, name, description, priority, conditions, assign_to, is_active
-                   FROM assignment_rules WHERE queue_id = ? AND is_active = 1
-                   ORDER BY priority DESC"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let rules = stmt
-            .query_map(params![queue_id.0.to_string()], |row| {
-                Ok(self.map_rule_row(row, tenant_clone.clone()))
-            })
-            .map_err(|e| Error::Database(format!("Failed to list rules: {}", e)))?;
-
-        let mut results = Vec::new();
-        for rule in rules {
-            results.push(rule.map_err(|e| Error::Database(e.to_string()))??);
-        }
-
-        Ok(results)
+        Ok(result.map(|row| row.into_rule(tenant_id)))
     }
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<AssignmentRule>> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
+        let rows = sqlx::query_as::<_, AssignmentRuleRow>(
+            "SELECT * FROM assignment_rules WHERE tenant_id = $1 ORDER BY priority DESC"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list assignment rules: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, queue_id, name, description, priority, conditions, assign_to, is_active
-                   FROM assignment_rules ORDER BY queue_id, priority DESC"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let tenant_clone = tenant_id.clone();
-        let rules = stmt
-            .query_map([], |row| Ok(self.map_rule_row(row, tenant_clone.clone())))
-            .map_err(|e| Error::Database(format!("Failed to list rules: {}", e)))?;
-
-        let mut results = Vec::new();
-        for rule in rules {
-            results.push(rule.map_err(|e| Error::Database(e.to_string()))??);
-        }
-
-        Ok(results)
+        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
     }
 
-    async fn update(
-        &self,
-        tenant_id: &TenantId,
-        id: &AssignmentRuleId,
-        input: CreateAssignmentRuleInput,
-    ) -> Result<AssignmentRule> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
+    async fn update(&self, tenant_id: &TenantId, id: &AssignmentRuleId, input: CreateAssignmentRuleInput) -> Result<AssignmentRule> {
         let now = Utc::now();
-        let conditions_json = serde_json::to_string(&input.conditions)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
-        let assign_to_json = serde_json::to_string(&input.assign_to)
-            .map_err(|e| Error::Database(format!("Failed to serialize: {}", e)))?;
 
-        conn.execute(
+        sqlx::query(
             r#"UPDATE assignment_rules SET
-                queue_id = ?, name = ?, description = ?, priority = ?,
-                conditions = ?, assign_to = ?, updated_at = ?
-               WHERE id = ?"#,
-            params![
-                input.queue_id.0.to_string(),
-                input.name,
-                input.description,
-                input.priority,
-                conditions_json,
-                assign_to_json,
-                now.to_rfc3339(),
-                id.0.to_string(),
-            ],
+                queue_id = $1, name = $2, description = $3, priority = $4,
+                conditions = $5, assign_to = $6, updated_at = $7
+            WHERE id = $8 AND tenant_id = $9"#
         )
-        .map_err(|e| Error::Database(format!("Failed to update rule: {}", e)))?;
+        .bind(input.queue_id.0)
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.priority as i32)
+        .bind(sqlx::types::Json(&input.conditions))
+        .bind(sqlx::types::Json(&input.assign_to))
+        .bind(now)
+        .bind(id.0)
+        .bind(tenant_id.as_str())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update assignment rule: {}", e)))?;
 
-        self.get_by_id(tenant_id, id)
+        AssignmentRuleRepository::get_by_id(self, tenant_id, id)
             .await?
             .ok_or_else(|| Error::NotFound {
                 resource_type: "AssignmentRule".to_string(),
-                id: id.0.to_string(),
+                id: id.to_string(),
             })
     }
 
     async fn delete(&self, tenant_id: &TenantId, id: &AssignmentRuleId) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "DELETE FROM assignment_rules WHERE id = ?",
-            params![id.0.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to delete rule: {}", e)))?;
+        sqlx::query("DELETE FROM assignment_rules WHERE id = $1 AND tenant_id = $2")
+            .bind(id.0)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete assignment rule: {}", e)))?;
 
         Ok(())
     }
 
-    async fn set_active(&self, tenant_id: &TenantId, id: &AssignmentRuleId, is_active: bool) -> Result<()> {
-        let db = self.db_manager.tenant(tenant_id).await?;
-        let conn = db.connection().await;
-        let conn = conn.lock().await;
-
-        conn.execute(
-            "UPDATE assignment_rules SET is_active = ?, updated_at = ? WHERE id = ?",
-            params![if is_active { 1 } else { 0 }, Utc::now().to_rfc3339(), id.0.to_string()],
+    async fn list_for_queue(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<Vec<AssignmentRule>> {
+        let rows = sqlx::query_as::<_, AssignmentRuleRow>(
+            "SELECT * FROM assignment_rules WHERE tenant_id = $1 AND queue_id = $2 ORDER BY priority DESC"
         )
-        .map_err(|e| Error::Database(format!("Failed to update rule status: {}", e)))?;
+        .bind(tenant_id.as_str())
+        .bind(queue_id.0)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list assignment rules for queue: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
+    }
+
+    async fn set_active(&self, tenant_id: &TenantId, id: &AssignmentRuleId, is_active: bool) -> Result<()> {
+        sqlx::query("UPDATE assignment_rules SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+            .bind(is_active)
+            .bind(Utc::now())
+            .bind(id.0)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to set assignment rule active: {}", e)))?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ApprovalRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, request: ApprovalRequest) -> Result<ApprovalRequest> {
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"INSERT INTO approval_requests (
+                id, tenant_id, invoice_id, rule_id, requested_from, status,
+                expires_at, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        )
+        .bind(request.id)
+        .bind(tenant_id.as_str())
+        .bind(request.invoice_id.0)
+        .bind(request.rule_id.0)
+        .bind(sqlx::types::Json(&request.requested_from))
+        .bind(match request.status {
+            ApprovalStatus::Pending => "pending",
+            ApprovalStatus::Approved => "approved",
+            ApprovalStatus::Rejected => "rejected",
+            ApprovalStatus::Expired => "expired",
+            ApprovalStatus::Cancelled => "cancelled",
+        })
+        .bind(request.expires_at)
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create approval request: {}", e)))?;
+
+        Ok(request)
+    }
+
+    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalRequest>> {
+        let result = sqlx::query_as::<_, ApprovalRequestRow>(
+            "SELECT * FROM approval_requests WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get approval request: {}", e)))?;
+
+        Ok(result.map(|row| row.into_approval_request(tenant_id)))
+    }
+
+    async fn list_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Vec<ApprovalRequest>> {
+        let rows = sqlx::query_as::<_, ApprovalRequestRow>(
+            "SELECT * FROM approval_requests WHERE tenant_id = $1 AND invoice_id = $2 ORDER BY created_at DESC"
+        )
+        .bind(tenant_id.as_str())
+        .bind(invoice_id.0)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list approval requests: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_approval_request(tenant_id)).collect())
+    }
+
+    async fn list_pending_for_user(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Vec<ApprovalRequest>> {
+        let rows = sqlx::query_as::<_, ApprovalRequestRow>(
+            r#"SELECT * FROM approval_requests
+               WHERE tenant_id = $1
+               AND requested_from->>'User' = $2
+               AND status = 'pending'
+               ORDER BY created_at DESC"#
+        )
+        .bind(tenant_id.as_str())
+        .bind(user_id.0)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get pending approvals: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_approval_request(tenant_id)).collect())
+    }
+
+    async fn respond(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        status: ApprovalStatus,
+        comments: Option<String>,
+        user_id: &UserId,
+    ) -> Result<ApprovalRequest> {
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"UPDATE approval_requests
+               SET status = $1, comments = $2, responded_by = $3, responded_at = $4, updated_at = $5
+               WHERE id = $6 AND tenant_id = $7"#
+        )
+        .bind(match status {
+            ApprovalStatus::Pending => "pending",
+            ApprovalStatus::Approved => "approved",
+            ApprovalStatus::Rejected => "rejected",
+            ApprovalStatus::Expired => "expired",
+            ApprovalStatus::Cancelled => "cancelled",
+        })
+        .bind(comments)
+        .bind(user_id.0)
+        .bind(now)
+        .bind(now)
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to respond to approval: {}", e)))?;
+
+        ApprovalRepository::get_by_id(self, tenant_id, id)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                resource_type: "ApprovalRequest".to_string(),
+                id: id.to_string(),
+            })
+    }
+
+    async fn cancel_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<()> {
+        sqlx::query(
+            "UPDATE approval_requests SET status = 'cancelled', updated_at = NOW() WHERE tenant_id = $1 AND invoice_id = $2 AND status = 'pending'"
+        )
+        .bind(tenant_id.as_str())
+        .bind(invoice_id.0)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to cancel approval requests: {}", e)))?;
+
+        Ok(())
+    }
+}
+
+// Helper structs for mapping database rows
+
+#[derive(sqlx::FromRow)]
+struct WorkflowRuleRow {
+    id: Uuid,
+    tenant_id: String,
+    name: String,
+    description: Option<String>,
+    priority: i32,
+    is_active: bool,
+    rule_type: String,
+    conditions: sqlx::types::Json<Vec<RuleCondition>>,
+    actions: sqlx::types::Json<Vec<RuleAction>>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+impl WorkflowRuleRow {
+    fn into_rule(self, tenant_id: &TenantId) -> WorkflowRule {
+        WorkflowRule {
+            id: WorkflowRuleId(self.id),
+            tenant_id: tenant_id.clone(),
+            name: self.name,
+            description: self.description,
+            priority: self.priority,
+            is_active: self.is_active,
+            rule_type: match self.rule_type.as_str() {
+                "approval" => WorkflowRuleType::Approval,
+                "routing" => WorkflowRuleType::Routing,
+                _ => WorkflowRuleType::AutoApproval,
+            },
+            conditions: self.conditions.0,
+            actions: self.actions.0,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct WorkQueueRow {
+    id: Uuid,
+    tenant_id: String,
+    name: String,
+    description: Option<String>,
+    queue_type: String,
+    is_default: bool,
+    is_active: bool,
+    settings: sqlx::types::Json<serde_json::Value>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+impl WorkQueueRow {
+    fn into_queue(self, tenant_id: &TenantId) -> WorkQueue {
+        WorkQueue {
+            id: WorkQueueId(self.id),
+            tenant_id: tenant_id.clone(),
+            name: self.name,
+            description: self.description,
+            queue_type: match self.queue_type.as_str() {
+                "review" => QueueType::Review,
+                "approval" => QueueType::Approval,
+                "exception" => QueueType::Exception,
+                _ => QueueType::Review,
+            },
+            assigned_users: vec![],
+            assigned_roles: vec![],
+            is_default: self.is_default,
+            is_active: self.is_active,
+            settings: serde_json::from_value(self.settings.0).unwrap_or(QueueSettings {
+                default_sort: "priority_desc".to_string(),
+                sla_hours: None,
+                escalation_hours: None,
+                escalation_user_id: None,
+            }),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct QueueItemRow {
+    id: Uuid,
+    queue_id: Uuid,
+    invoice_id: Uuid,
+    assigned_to: Option<Uuid>,
+    priority: i32,
+    entered_at: chrono::DateTime<Utc>,
+    due_at: Option<chrono::DateTime<Utc>>,
+    claimed_at: Option<chrono::DateTime<Utc>>,
+    completed_at: Option<chrono::DateTime<Utc>>,
+    completion_action: Option<String>,
+    notes: Option<String>,
+}
+
+impl QueueItemRow {
+    fn into_item(self) -> QueueItem {
+        QueueItem {
+            id: self.id,
+            tenant_id: TenantId::new(), // TODO: Add tenant_id to row
+            queue_id: WorkQueueId(self.queue_id),
+            invoice_id: InvoiceId(self.invoice_id),
+            assigned_to: self.assigned_to.map(UserId),
+            priority: self.priority,
+            entered_at: self.entered_at,
+            due_at: self.due_at,
+            claimed_at: self.claimed_at,
+            completed_at: self.completed_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AssignmentRuleRow {
+    id: Uuid,
+    tenant_id: String,
+    queue_id: Uuid,
+    name: String,
+    description: Option<String>,
+    priority: i32,
+    is_active: bool,
+    conditions: sqlx::types::Json<Vec<AssignmentCondition>>,
+    assign_to: sqlx::types::Json<AssignmentTarget>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+impl AssignmentRuleRow {
+    fn into_rule(self, tenant_id: &TenantId) -> AssignmentRule {
+        AssignmentRule {
+            id: AssignmentRuleId(self.id),
+            tenant_id: tenant_id.clone(),
+            queue_id: WorkQueueId(self.queue_id),
+            name: self.name,
+            description: self.description,
+            priority: self.priority,
+            is_active: self.is_active,
+            conditions: self.conditions.0,
+            assign_to: self.assign_to.0,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ApprovalRequestRow {
+    id: Uuid,
+    invoice_id: Uuid,
+    requested_from: Uuid,
+    status: String,
+    comments: Option<String>,
+    responded_by: Option<Uuid>,
+    responded_at: Option<chrono::DateTime<Utc>>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+impl ApprovalRequestRow {
+    fn into_approval_request(self, tenant_id: &TenantId) -> ApprovalRequest {
+        ApprovalRequest {
+            id: self.id,
+            tenant_id: tenant_id.clone(),
+            invoice_id: InvoiceId(self.invoice_id),
+            rule_id: WorkflowRuleId(Uuid::nil()),
+            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
+            status: match self.status.as_str() {
+                "approved" => ApprovalStatus::Approved,
+                "rejected" => ApprovalStatus::Rejected,
+                _ => ApprovalStatus::Pending,
+            },
+            expires_at: None,
+            comments: self.comments,
+            responded_by: self.responded_by.map(UserId),
+            responded_at: self.responded_at,
+            created_at: self.created_at,
+        }
+    }
+
+    fn into_request(self) -> ApprovalRequest {
+        ApprovalRequest {
+            id: self.id,
+            tenant_id: TenantId::new(), // TODO: Get from query
+            invoice_id: InvoiceId(self.invoice_id),
+            rule_id: WorkflowRuleId(Uuid::nil()),
+            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
+            status: match self.status.as_str() {
+                "approved" => ApprovalStatus::Approved,
+                "rejected" => ApprovalStatus::Rejected,
+                _ => ApprovalStatus::Pending,
+            },
+            comments: self.comments,
+            responded_by: self.responded_by.map(UserId),
+            responded_at: self.responded_at,
+            expires_at: None,
+            created_at: self.created_at,
+        }
     }
 }

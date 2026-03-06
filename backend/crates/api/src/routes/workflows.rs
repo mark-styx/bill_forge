@@ -70,8 +70,9 @@ async fn list_rules(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Query(query): Query<ListRulesQuery>,
 ) -> ApiResult<Json<Vec<WorkflowRule>>> {
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    let rules = repo.list(&tenant.tenant_id, None).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let rules = billforge_core::traits::WorkflowRuleRepository::list(&repo, &tenant.tenant_id, None).await?;
     Ok(Json(rules))
 }
 
@@ -83,8 +84,9 @@ async fn get_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    let rule = repo.get_by_id(&tenant.tenant_id, &rule_id).await?
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let rule = billforge_core::traits::WorkflowRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "WorkflowRule".to_string(),
             id: id.clone(),
@@ -98,8 +100,9 @@ async fn create_rule(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateWorkflowRuleInput>,
 ) -> ApiResult<Json<WorkflowRule>> {
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    let rule = repo.create(&tenant.tenant_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let rule = WorkflowRuleRepository::create(&repo, &tenant.tenant_id, input).await?;
     Ok(Json(rule))
 }
 
@@ -112,8 +115,9 @@ async fn update_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    let rule = repo.update(&tenant.tenant_id, &rule_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let rule = WorkflowRuleRepository::update(&repo, &tenant.tenant_id, &rule_id, input).await?;
     Ok(Json(rule))
 }
 
@@ -125,8 +129,9 @@ async fn delete_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    repo.delete(&tenant.tenant_id, &rule_id).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowRuleRepository::delete(&repo, &tenant.tenant_id, &rule_id).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -138,8 +143,9 @@ async fn activate_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    repo.set_active(&tenant.tenant_id, &rule_id, true).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowRuleRepository::set_active(&repo, &tenant.tenant_id, &rule_id, true).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -151,8 +157,9 @@ async fn deactivate_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(state.db.clone());
-    repo.set_active(&tenant.tenant_id, &rule_id, false).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowRuleRepository::set_active(&repo, &tenant.tenant_id, &rule_id, false).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -164,8 +171,9 @@ async fn list_queues(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<WorkQueue>>> {
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
-    let queues = repo.list(&tenant.tenant_id).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
+    let queues = WorkQueueRepository::list(&repo, &tenant.tenant_id).await?;
     Ok(Json(queues))
 }
 
@@ -177,8 +185,9 @@ async fn get_queue(
     let queue_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid queue ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
-    let queue = repo.get_by_id(&tenant.tenant_id, &queue_id).await?
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
+    let queue = WorkQueueRepository::get_by_id(&repo, &tenant.tenant_id, &queue_id).await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "WorkQueue".to_string(),
             id: id.clone(),
@@ -192,8 +201,9 @@ async fn create_queue(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateWorkQueueInput>,
 ) -> ApiResult<Json<WorkQueue>> {
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
-    let queue = repo.create(&tenant.tenant_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
+    let queue = WorkQueueRepository::create(&repo, &tenant.tenant_id, input).await?;
     Ok(Json(queue))
 }
 
@@ -206,8 +216,9 @@ async fn update_queue(
     let queue_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid queue ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
-    let queue = repo.update(&tenant.tenant_id, &queue_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
+    let queue = WorkQueueRepository::update(&repo, &tenant.tenant_id, &queue_id, input).await?;
     Ok(Json(queue))
 }
 
@@ -219,8 +230,9 @@ async fn delete_queue(
     let queue_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid queue ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
-    repo.delete(&tenant.tenant_id, &queue_id).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
+    WorkQueueRepository::delete(&repo, &tenant.tenant_id, &queue_id).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -244,7 +256,8 @@ async fn list_queue_items(
         per_page: query.per_page.unwrap_or(50),
     };
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
     let result = repo.get_items(&tenant.tenant_id, &queue_id, &pagination).await?;
     Ok(Json(result.data))
 }
@@ -257,7 +270,8 @@ async fn claim_item(
     let item_uuid = uuid::Uuid::parse_str(&item_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid item ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
     let item = repo.claim_item(&tenant.tenant_id, item_uuid, &user.user_id).await?;
     Ok(Json(item))
 }
@@ -276,7 +290,8 @@ async fn complete_item(
     let item_uuid = uuid::Uuid::parse_str(&item_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid item ID".to_string()))?;
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
     repo.complete_item(&tenant.tenant_id, item_uuid, &input.action).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -289,8 +304,9 @@ async fn list_assignment_rules(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<AssignmentRule>>> {
-    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(state.db.clone());
-    let rules = repo.list(&tenant.tenant_id).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
+    let rules = AssignmentRuleRepository::list(&repo, &tenant.tenant_id).await?;
     Ok(Json(rules))
 }
 
@@ -302,8 +318,9 @@ async fn get_assignment_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(state.db.clone());
-    let rule = repo.get_by_id(&tenant.tenant_id, &rule_id).await?
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
+    let rule = AssignmentRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "AssignmentRule".to_string(),
             id: id.clone(),
@@ -317,8 +334,9 @@ async fn create_assignment_rule(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateAssignmentRuleInput>,
 ) -> ApiResult<Json<AssignmentRule>> {
-    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(state.db.clone());
-    let rule = repo.create(&tenant.tenant_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
+    let rule = AssignmentRuleRepository::create(&repo, &tenant.tenant_id, input).await?;
     Ok(Json(rule))
 }
 
@@ -331,8 +349,9 @@ async fn update_assignment_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(state.db.clone());
-    let rule = repo.update(&tenant.tenant_id, &rule_id, input).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
+    let rule = AssignmentRuleRepository::update(&repo, &tenant.tenant_id, &rule_id, input).await?;
     Ok(Json(rule))
 }
 
@@ -344,8 +363,9 @@ async fn delete_assignment_rule(
     let rule_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid rule ID".to_string()))?;
     
-    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(state.db.clone());
-    repo.delete(&tenant.tenant_id, &rule_id).await?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
+    AssignmentRuleRepository::delete(&repo, &tenant.tenant_id, &rule_id).await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -401,41 +421,51 @@ async fn approve(
         .map_err(|_| billforge_core::Error::Validation("Invalid approval ID".to_string()))?;
 
     // Get approval request and invoice details
-    let db = state.db.tenant(&tenant.tenant_id).await?;
-    let conn = db.connection().await;
-    let conn_guard = conn.lock().await;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     // Get approval request and related invoice
-    let (invoice_id, invoice_number, vendor_name, amount, submitter_email): (String, String, String, i64, Option<String>) = conn_guard
-        .query_row(
-            r#"SELECT
-                ar.invoice_id,
-                i.invoice_number,
-                COALESCE(i.vendor_name, 'Unknown'),
-                COALESCE(i.total_amount, 0),
-                (SELECT email FROM users WHERE id = i.created_by LIMIT 1)
-            FROM approval_requests ar
-            JOIN invoices i ON ar.invoice_id = i.id
-            WHERE ar.id = ?"#,
-            [approval_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        )
-        .map_err(|e| billforge_core::Error::Database(format!("Approval request not found: {}", e)))?;
+    #[derive(sqlx::FromRow)]
+    struct ApprovalInfo {
+        invoice_id: uuid::Uuid,
+        invoice_number: String,
+        vendor_name: String,
+        total_amount_cents: i64,
+        submitter_email: Option<String>,
+    }
+
+    let info = sqlx::query_as::<_, ApprovalInfo>(
+        r#"SELECT
+            ar.invoice_id,
+            i.invoice_number,
+            COALESCE(i.vendor_name, 'Unknown') as vendor_name,
+            COALESCE(i.total_amount_cents, 0) as total_amount_cents,
+            (SELECT email FROM users WHERE id = i.created_by LIMIT 1) as submitter_email
+        FROM approval_requests ar
+        JOIN invoices i ON ar.invoice_id = i.id
+        WHERE ar.id = $1"#
+    )
+    .bind(approval_id)
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Database error: {}", e)))?
+    .ok_or_else(|| billforge_core::Error::Database("Approval request not found".to_string()))?;
 
     // Update approval request status
-    conn_guard.execute(
-        "UPDATE approval_requests SET status = 'approved', responded_by = ?, responded_at = datetime('now'), comments = ? WHERE id = ?",
-        rusqlite::params![user.user_id.0.to_string(), input.comments, approval_id.to_string()],
-    ).map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    sqlx::query(
+        "UPDATE approval_requests SET status = 'approved', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3"
+    )
+    .bind(user.user_id.as_uuid())
+    .bind(&input.comments)
+    .bind(approval_id)
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     // Update invoice processing status
-    let invoice_uuid = invoice_id.parse::<uuid::Uuid>()
-        .map_err(|_| billforge_core::Error::Database("Invalid invoice ID".to_string()))?;
-    let invoice_id_typed = billforge_core::InvoiceId(invoice_uuid);
+    let invoice_id_typed = billforge_core::InvoiceId(info.invoice_id);
 
-    drop(conn_guard);
-
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     invoice_repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id_typed,
@@ -443,20 +473,20 @@ async fn approve(
     ).await?;
 
     // Send email notification to submitter
-    if let Some(submitter_email) = submitter_email {
+    if let Some(submitter_email) = info.submitter_email {
         let approver_name = user.email.clone(); // Use email as name for now
-        let amount_formatted = format!("${:.2}", amount as f64 / 100.0);
+        let amount_formatted = format!("${:.2}", info.total_amount_cents as f64 / 100.0);
 
         let (html, text) = EmailTemplates::invoice_approved(
-            &invoice_number,
-            &vendor_name,
+            &info.invoice_number,
+            &info.vendor_name,
             &amount_formatted,
             &approver_name,
         );
 
         // Send email in background (don't block the response)
         let email_service = state.email.clone();
-        let subject = format!("Invoice {} Approved", invoice_number);
+        let subject = format!("Invoice {} Approved", info.invoice_number);
         tokio::spawn(async move {
             if let Err(e) = email_service.send(&submitter_email, &subject, &html, &text).await {
                 tracing::error!("Failed to send approval notification email: {}", e);
@@ -467,7 +497,7 @@ async fn approve(
     Ok(Json(serde_json::json!({
         "message": "Approved",
         "approval_id": id,
-        "invoice_id": invoice_id,
+        "invoice_id": info.invoice_id.to_string(),
         "approved_by": user.user_id.0.to_string()
     })))
 }
@@ -484,41 +514,51 @@ async fn reject(
     let reason = input.comments.clone().unwrap_or_else(|| "No reason provided".to_string());
 
     // Get approval request and invoice details
-    let db = state.db.tenant(&tenant.tenant_id).await?;
-    let conn = db.connection().await;
-    let conn_guard = conn.lock().await;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     // Get approval request and related invoice
-    let (invoice_id, invoice_number, vendor_name, amount, submitter_email): (String, String, String, i64, Option<String>) = conn_guard
-        .query_row(
-            r#"SELECT
-                ar.invoice_id,
-                i.invoice_number,
-                COALESCE(i.vendor_name, 'Unknown'),
-                COALESCE(i.total_amount, 0),
-                (SELECT email FROM users WHERE id = i.created_by LIMIT 1)
-            FROM approval_requests ar
-            JOIN invoices i ON ar.invoice_id = i.id
-            WHERE ar.id = ?"#,
-            [approval_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        )
-        .map_err(|e| billforge_core::Error::Database(format!("Approval request not found: {}", e)))?;
+    #[derive(sqlx::FromRow)]
+    struct ApprovalInfo {
+        invoice_id: uuid::Uuid,
+        invoice_number: String,
+        vendor_name: String,
+        total_amount_cents: i64,
+        submitter_email: Option<String>,
+    }
+
+    let info = sqlx::query_as::<_, ApprovalInfo>(
+        r#"SELECT
+            ar.invoice_id,
+            i.invoice_number,
+            COALESCE(i.vendor_name, 'Unknown') as vendor_name,
+            COALESCE(i.total_amount_cents, 0) as total_amount_cents,
+            (SELECT email FROM users WHERE id = i.created_by LIMIT 1) as submitter_email
+        FROM approval_requests ar
+        JOIN invoices i ON ar.invoice_id = i.id
+        WHERE ar.id = $1"#
+    )
+    .bind(approval_id)
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Database error: {}", e)))?
+    .ok_or_else(|| billforge_core::Error::Database("Approval request not found".to_string()))?;
 
     // Update approval request status
-    conn_guard.execute(
-        "UPDATE approval_requests SET status = 'rejected', responded_by = ?, responded_at = datetime('now'), comments = ? WHERE id = ?",
-        rusqlite::params![user.user_id.0.to_string(), &reason, approval_id.to_string()],
-    ).map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    sqlx::query(
+        "UPDATE approval_requests SET status = 'rejected', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3"
+    )
+    .bind(user.user_id.as_uuid())
+    .bind(&reason)
+    .bind(approval_id)
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     // Update invoice processing status
-    let invoice_uuid = invoice_id.parse::<uuid::Uuid>()
-        .map_err(|_| billforge_core::Error::Database("Invalid invoice ID".to_string()))?;
-    let invoice_id_typed = billforge_core::InvoiceId(invoice_uuid);
+    let invoice_id_typed = billforge_core::InvoiceId(info.invoice_id);
 
-    drop(conn_guard);
-
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     invoice_repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id_typed,
@@ -526,13 +566,13 @@ async fn reject(
     ).await?;
 
     // Send email notification to submitter
-    if let Some(submitter_email) = submitter_email {
+    if let Some(submitter_email) = info.submitter_email {
         let rejecter_name = user.email.clone();
-        let amount_formatted = format!("${:.2}", amount as f64 / 100.0);
+        let amount_formatted = format!("${:.2}", info.total_amount_cents as f64 / 100.0);
 
         let (html, text) = EmailTemplates::invoice_rejected(
-            &invoice_number,
-            &vendor_name,
+            &info.invoice_number,
+            &info.vendor_name,
             &amount_formatted,
             &rejecter_name,
             &reason,
@@ -540,7 +580,7 @@ async fn reject(
 
         // Send email in background
         let email_service = state.email.clone();
-        let subject = format!("Invoice {} Rejected", invoice_number);
+        let subject = format!("Invoice {} Rejected", info.invoice_number);
         tokio::spawn(async move {
             if let Err(e) = email_service.send(&submitter_email, &subject, &html, &text).await {
                 tracing::error!("Failed to send rejection notification email: {}", e);
@@ -551,7 +591,7 @@ async fn reject(
     Ok(Json(serde_json::json!({
         "message": "Rejected",
         "approval_id": id,
-        "invoice_id": invoice_id,
+        "invoice_id": info.invoice_id.to_string(),
         "rejected_by": user.user_id.0.to_string(),
         "reason": reason
     })))
@@ -566,7 +606,8 @@ async fn bulk_operation(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Json(input): Json<BulkOperationInput>,
 ) -> ApiResult<Json<BulkOperationResult>> {
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     let mut successful = 0;
     let mut errors = Vec::new();
 
@@ -630,7 +671,8 @@ async fn put_on_hold(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
@@ -648,7 +690,8 @@ async fn release_from_hold(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
@@ -666,7 +709,8 @@ async fn void_invoice(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
@@ -684,7 +728,8 @@ async fn mark_ready_for_payment(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
@@ -720,7 +765,8 @@ async fn move_to_queue(
         None
     };
     
-    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
     let item = repo.move_item(&tenant.tenant_id, &invoice_id, &queue_id, assign_to.as_ref()).await?;
     
     Ok(Json(item))
