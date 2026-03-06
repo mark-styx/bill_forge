@@ -1,6 +1,5 @@
 //! Database migration utilities
 
-use billforge_core::{Error, Result};
 
 /// Migration version tracking
 pub struct MigrationRunner {

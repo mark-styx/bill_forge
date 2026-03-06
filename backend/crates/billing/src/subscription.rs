@@ -286,7 +286,7 @@ mod tests {
         assert!(sub.is_active());
 
         let days = sub.trial_days_remaining().unwrap();
-        assert!(days >= 13 && days <= 14);
+        assert!((13..=14).contains(&days));
     }
 
     #[test]

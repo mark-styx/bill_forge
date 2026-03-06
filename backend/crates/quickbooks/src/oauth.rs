@@ -2,12 +2,6 @@
 
 use crate::types::QBTokens;
 use anyhow::{Context, Result};
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, RefreshToken,
-    Scope, TokenUrl,
-};
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// QuickBooks OAuth configuration
 #[derive(Debug, Clone)]

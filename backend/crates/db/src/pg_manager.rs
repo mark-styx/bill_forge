@@ -4,7 +4,7 @@
 //! Each tenant gets a dedicated database with its own connection pool.
 
 use billforge_core::{Error, Result, TenantId};
-use sqlx::{PgPool, Postgres, postgres::PgPoolOptions};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -105,7 +105,7 @@ impl PgManager {
         )
         .bind(tenant_key)
         .bind(name)
-        .bind(&slugify(name))
+        .bind(slugify(name))
         .execute(&self.metadata_pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create tenant in metadata: {}", e)))?;

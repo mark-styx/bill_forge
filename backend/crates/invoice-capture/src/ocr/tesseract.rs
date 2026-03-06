@@ -62,7 +62,7 @@ impl TesseractOcr {
         };
 
         // Write image to temp file
-        let mut input_file = NamedTempFile::with_suffix(&format!(".{}", extension))
+        let mut input_file = NamedTempFile::with_suffix(format!(".{}", extension))
             .map_err(|e| Error::Ocr(format!("Failed to create temp file: {}", e)))?;
 
         input_file.write_all(image_data)

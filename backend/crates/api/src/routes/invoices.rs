@@ -10,7 +10,7 @@ use axum::{
 };
 use billforge_core::{
     domain::{CreateInvoiceInput, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus},
-    traits::{InvoiceRepository, OcrService},
+    traits::InvoiceRepository,
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;

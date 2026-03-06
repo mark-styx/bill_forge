@@ -86,11 +86,11 @@ impl InvoiceCaptureService {
             subtotal: ocr_result
                 .subtotal
                 .value
-                .map(|v| Money::usd(v)),
+                .map(Money::usd),
             tax_amount: ocr_result
                 .tax_amount
                 .value
-                .map(|v| Money::usd(v)),
+                .map(Money::usd),
             total_amount: Money::usd(ocr_result.total_amount.value.unwrap_or(0.0)),
             currency: ocr_result
                 .currency
@@ -107,7 +107,7 @@ impl InvoiceCaptureService {
                         .clone()
                         .unwrap_or_default(),
                     quantity: item.quantity.value,
-                    unit_price: item.unit_price.value.map(|v| Money::usd(v)),
+                    unit_price: item.unit_price.value.map(Money::usd),
                     amount: Money::usd(item.amount.value.unwrap_or(0.0)),
                     gl_code: None,
                     department: None,

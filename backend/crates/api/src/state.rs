@@ -185,7 +185,7 @@ impl AppState {
             .bind(name)
             .bind(description)
             .bind(queue_type)
-            .bind(*is_default as i32)
+            .bind(*is_default)
             .execute(pool)
             .await
             .ok();
@@ -236,7 +236,7 @@ impl AppState {
             .bind(queue_uuid)
             .bind(name)
             .bind(description)
-            .bind(*priority as i32)
+            .bind(*priority)
             .bind(conditions)
             .bind(assign_to)
             .execute(pool)
@@ -440,7 +440,7 @@ impl AppState {
             .bind(line_id)
             .bind(invoice_uuid)
             .bind(description)
-            .bind(*quantity as i32)
+            .bind(*quantity)
             .bind(*unit_price as i64)
             .bind(total as i64)
             .bind(notes)

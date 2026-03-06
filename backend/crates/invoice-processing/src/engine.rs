@@ -96,19 +96,19 @@ impl WorkflowEngine {
                 let amount = invoice.total_amount.as_decimal();
                 match &condition.operator {
                     ConditionOperator::GreaterThan => {
-                        condition.value.as_f64().map_or(false, |v| amount > v)
+                        condition.value.as_f64().is_some_and(|v| amount > v)
                     }
                     ConditionOperator::LessThan => {
-                        condition.value.as_f64().map_or(false, |v| amount < v)
+                        condition.value.as_f64().is_some_and(|v| amount < v)
                     }
                     ConditionOperator::GreaterThanOrEqual => {
-                        condition.value.as_f64().map_or(false, |v| amount >= v)
+                        condition.value.as_f64().is_some_and(|v| amount >= v)
                     }
                     ConditionOperator::LessThanOrEqual => {
-                        condition.value.as_f64().map_or(false, |v| amount <= v)
+                        condition.value.as_f64().is_some_and(|v| amount <= v)
                     }
                     ConditionOperator::Equals => {
-                        condition.value.as_f64().map_or(false, |v| (amount - v).abs() < 0.01)
+                        condition.value.as_f64().is_some_and(|v| (amount - v).abs() < 0.01)
                     }
                     _ => false,
                 }
@@ -117,7 +117,7 @@ impl WorkflowEngine {
                 match &condition.operator {
                     ConditionOperator::Equals => {
                         let vendor_id = invoice.vendor_id.map(|v| v.to_string());
-                        condition.value.as_str().map_or(false, |v| {
+                        condition.value.as_str().is_some_and(|v| {
                             vendor_id.as_deref() == Some(v)
                         })
                     }

@@ -7,15 +7,12 @@
 //! - Escalation management
 
 use crate::{
-    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus, WorkflowRule, RuleCondition, RuleAction},
+    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule},
     services::{EmailAction, EmailActionTokenService},
-    traits::{ApprovalRepository, InvoiceRepository},
-    types::TenantId,
-    Error, Result, UserId,
+    types::TenantId, Result, UserId,
 };
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use std::sync::Arc;
 use uuid::Uuid;
 
 /// Email service trait (abstracted to avoid circular dependency)
@@ -212,8 +209,8 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
     /// Evaluate workflow rule conditions against an invoice
     fn evaluate_rule_conditions(
         &self,
-        invoice: &Invoice,
-        conditions: &[crate::domain::RuleCondition],
+        _invoice: &Invoice,
+        _conditions: &[crate::domain::RuleCondition],
     ) -> bool {
         // TODO: Implement condition evaluation
         // For now, return true to allow all rules to execute
@@ -223,9 +220,9 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
     /// Execute a workflow action
     async fn execute_action(
         &self,
-        tenant_id: &TenantId,
-        invoice: &Invoice,
-        action: &crate::domain::RuleAction,
+        _tenant_id: &TenantId,
+        _invoice: &Invoice,
+        _action: &crate::domain::RuleAction,
     ) -> Result<()> {
         // TODO: Implement action execution
         Ok(())
@@ -234,15 +231,6 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // MockEmailService removed - would need to be implemented for testing
-    // For now, we verify service creation without actual email service
-
-    #[test]
-    fn test_workflow_service_structure() {
-        // Verify that the service structure compiles
-        // Actual instantiation would require real implementations
-        assert!(true);
-    }
+    // For now, we verify service structure compiles correctly
 }

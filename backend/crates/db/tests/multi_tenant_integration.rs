@@ -4,7 +4,6 @@
 
 use billforge_db::PgManager;
 use billforge_core::TenantId;
-use sqlx::PgPool;
 
 /// Test multi-tenant isolation
 #[tokio::test]

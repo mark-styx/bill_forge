@@ -83,7 +83,7 @@ async fn poll_and_process_job(conn: &mut redis::aio::Connection, config: &Worker
             Ok(_) => {
                 info!("Job completed successfully: {}", job.id);
                 // Mark job as completed
-                conn.lpush(format!("billforge:jobs:completed:{}", job.tenant_id), &job.id).await?;
+                conn.lpush::<_, _, ()>(format!("billforge:jobs:completed:{}", job.tenant_id), &job.id).await?;
             }
             Err(e) => {
                 error!("Job failed: {} - Error: {}", job.id, e);
@@ -97,12 +97,12 @@ async fn poll_and_process_job(conn: &mut redis::aio::Connection, config: &Worker
                     // Exponential backoff: requeue with delay
                     let delay_secs = 10 * 2_u64.pow(job.retry_count);
                     tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-                    conn.lpush("billforge:jobs:queue", retry_json).await?;
+                    conn.lpush::<_, _, ()>("billforge:jobs:queue", retry_json).await?;
 
                     warn!("Requeued job {} for retry (attempt {})", job.id, retry_job.retry_count);
                 } else {
                     // Move to dead letter queue
-                    conn.lpush(format!("billforge:jobs:failed:{}", job.tenant_id), &job.id).await?;
+                    conn.lpush::<_, _, ()>(format!("billforge:jobs:failed:{}", job.tenant_id), &job.id).await?;
                     error!("Job {} moved to dead letter queue after {} retries", job.id, job.retry_count);
                 }
             }

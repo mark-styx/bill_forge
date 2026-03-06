@@ -32,7 +32,7 @@ async fn load_test_health_endpoint() {
             let handle = tokio::spawn(async move {
                 let req_start = Instant::now();
                 let result = client
-                    .get(&format!("{}/health", BASE_URL))
+                    .get(format!("{}/health", BASE_URL))
                     .send()
                     .await;
                 let latency = req_start.elapsed();
@@ -99,7 +99,7 @@ async fn load_test_liveness_endpoint() {
     for _ in 0..TOTAL_REQUESTS {
         let req_start = Instant::now();
         let resp = client
-            .get(&format!("{}/health/live", BASE_URL))
+            .get(format!("{}/health/live", BASE_URL))
             .send()
             .await
             .expect("Request failed");
@@ -135,7 +135,7 @@ async fn load_test_dashboard_metrics() {
     for _ in 0..TOTAL_REQUESTS {
         let req_start = Instant::now();
         let resp = client
-            .get(&format!("{}/api/v1/dashboard/metrics", BASE_URL))
+            .get(format!("{}/api/v1/dashboard/metrics", BASE_URL))
             .send()
             .await;
 
@@ -184,7 +184,7 @@ async fn load_test_concurrent_requests() {
         let client = client.clone();
         let handle = tokio::spawn(async move {
             let resp = client
-                .get(&format!("{}/health", BASE_URL))
+                .get(format!("{}/health", BASE_URL))
                 .send()
                 .await
                 .expect("Request failed");

@@ -7,11 +7,11 @@ use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{delete, get, post},
     Json, Router,
 };
-use billforge_core::domain::{DocumentRef, DocumentType, InvoiceId};
+use billforge_core::domain::{DocumentType, InvoiceId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -83,13 +83,11 @@ async fn upload_document(
     }
 
     // Validate mime type
-    let allowed_types = vec![
-        "application/pdf",
+    let allowed_types = ["application/pdf",
         "image/png",
         "image/jpeg",
         "image/tiff",
-        "image/gif",
-    ];
+        "image/gif"];
     if !allowed_types.contains(&content_type.as_str()) {
         return Err(billforge_core::Error::Validation(format!(
             "File type not allowed. Allowed types: {}",

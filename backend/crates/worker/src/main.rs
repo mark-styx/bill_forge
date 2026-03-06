@@ -7,9 +7,12 @@
 //! - Metrics aggregation
 //! - Email notification batching
 
+// Allow dead code in stub implementations
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use anyhow::Result;
-use tracing::{info, error};
-use tracing_subscriber;
+use tracing::info;
 
 mod jobs;
 mod config;

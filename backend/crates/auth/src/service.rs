@@ -2,7 +2,7 @@
 
 use crate::jwt::{JwtConfig, JwtService};
 use crate::password::PasswordService;
-use billforge_core::{Error, Module, Result, Role, TenantContext, TenantId, UserContext, UserId};
+use billforge_core::{Error, Result, Role, TenantContext, TenantId, UserContext, UserId};
 use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

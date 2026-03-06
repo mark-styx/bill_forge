@@ -454,8 +454,8 @@ mod tenant_settings_tests {
         assert_eq!(deserialized.logo_url, settings.logo_url);
         assert_eq!(deserialized.primary_color, settings.primary_color);
         assert_eq!(deserialized.company_name, settings.company_name);
-        assert_eq!(deserialized.features.advanced_ocr, true);
-        assert_eq!(deserialized.features.sso_enabled, false);
+        assert!(deserialized.features.advanced_ocr);
+        assert!(!deserialized.features.sso_enabled);
     }
 }
 

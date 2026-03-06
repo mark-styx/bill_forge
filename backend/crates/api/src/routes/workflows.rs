@@ -10,7 +10,7 @@ use axum::{
 };
 use billforge_core::{
     domain::{
-        ApprovalStatus, CreateWorkQueueInput, CreateWorkflowRuleInput, WorkQueue, WorkflowRule,
+        CreateWorkQueueInput, CreateWorkflowRuleInput, WorkQueue, WorkflowRule,
         CreateAssignmentRuleInput, AssignmentRule, QueueItem, BulkOperationInput, BulkOperationResult,
         BulkOperationError, BulkOperationType,
     },

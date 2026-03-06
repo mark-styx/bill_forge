@@ -3,7 +3,7 @@
 use crate::oauth::QuickBooksEnvironment;
 use crate::types::*;
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::CONTENT_TYPE;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 

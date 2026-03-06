@@ -3,7 +3,6 @@
 //! This module provides a transitional DatabaseManager that wraps
 //! the new PgManager for backward compatibility.
 
-use crate::metadata_db::MetadataDatabase;
 use crate::pg_manager::PgManager;
 use billforge_core::{Error, Result, TenantId};
 use sqlx::PgPool;

@@ -414,7 +414,7 @@ async fn test_high_confidence_routes_to_ap_queue() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri(&format!("/api/v1/invoices/{}", invoice_id))
+                .uri(format!("/api/v1/invoices/{}", invoice_id))
                 .header(header::AUTHORIZATION, format!("Bearer {}", token))
                 .body(Body::empty())
                 .unwrap(),

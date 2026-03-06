@@ -6,14 +6,13 @@
 use crate::error::ApiResult;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     response::{Html, IntoResponse, Redirect},
-    routing::get,
-    Json, Router,
+    routing::get, Router,
 };
 use billforge_core::{
     services::{EmailAction, EmailActionTokenService},
-    traits::{ApprovalRepository, InvoiceRepository},
+    traits::InvoiceRepository,
     UserId,
 };
 use serde::Deserialize;
@@ -113,7 +112,7 @@ async fn handle_email_action(
     let tenant_pool = state.db.tenant(&tenant_id).await?;
 
     // Perform the action based on type
-    let result = match token_data.action {
+    match token_data.action {
         EmailAction::ApproveInvoice => {
             perform_approval(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?
         }

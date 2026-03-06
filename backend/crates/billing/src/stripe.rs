@@ -3,10 +3,10 @@
 //! This module provides integration with Stripe for payment processing.
 //! In production, this would make actual API calls to Stripe.
 
-use billforge_core::{Error, Result, TenantId};
+use billforge_core::{Error, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Stripe API client
 pub struct StripeClient {

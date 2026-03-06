@@ -44,7 +44,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         )
         .bind(id.0)
         .bind(tenant_id.as_str())
-        .bind(input.vendor_id.map(|v| v.to_string()).unwrap_or_else(|| "".to_string()))
+        .bind(input.vendor_id.map(|v| v.to_string()).unwrap_or_default())
         .bind(&input.vendor_name)
         .bind(&input.invoice_number)
         .bind(input.invoice_date)

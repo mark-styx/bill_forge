@@ -303,13 +303,11 @@ async fn seed_invoices(
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
-    let statuses = vec![
-        ("captured", "pending_review"),
+    let statuses = [("captured", "pending_review"),
         ("captured", "in_review"),
         ("approved", "approved"),
         ("approved", "exported"),
-        ("rejected", "rejected"),
-    ];
+        ("rejected", "rejected")];
 
     let mut invoice_count = 0;
 
