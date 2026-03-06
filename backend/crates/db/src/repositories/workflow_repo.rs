@@ -853,6 +853,7 @@ impl WorkQueueRow {
 #[derive(sqlx::FromRow)]
 struct QueueItemRow {
     id: Uuid,
+    tenant_id: String,
     queue_id: Uuid,
     invoice_id: Uuid,
     assigned_to: Option<Uuid>,
@@ -869,7 +870,7 @@ impl QueueItemRow {
     fn into_item(self) -> QueueItem {
         QueueItem {
             id: self.id,
-            tenant_id: TenantId::new(), // TODO: Add tenant_id to row
+            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| TenantId::new()),
             queue_id: WorkQueueId(self.queue_id),
             invoice_id: InvoiceId(self.invoice_id),
             assigned_to: self.assigned_to.map(UserId),
@@ -918,6 +919,7 @@ impl AssignmentRuleRow {
 #[derive(sqlx::FromRow)]
 struct ApprovalRequestRow {
     id: Uuid,
+    tenant_id: String,
     invoice_id: Uuid,
     requested_from: Uuid,
     status: String,
@@ -931,7 +933,7 @@ impl ApprovalRequestRow {
     fn into_approval_request(self, tenant_id: &TenantId) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
-            tenant_id: tenant_id.clone(),
+            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| tenant_id.clone()),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
             requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
@@ -951,7 +953,7 @@ impl ApprovalRequestRow {
     fn into_request(self) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
-            tenant_id: TenantId::new(), // TODO: Get from query
+            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| TenantId::new()),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
             requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
