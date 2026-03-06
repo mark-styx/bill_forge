@@ -138,9 +138,9 @@ impl TesseractOcr {
     /// Extract invoice number using common patterns
     fn extract_invoice_number(&self, text: &str) -> ExtractedField<String> {
         let patterns = [
+            r"(?i)invoice\s*number\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)invoice\s*#?\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)inv\s*#?\s*:?\s*([A-Z0-9\-]+)",
-            r"(?i)invoice\s+number\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)bill\s*#?\s*:?\s*([A-Z0-9\-]+)",
             r"#\s*([A-Z0-9\-]{4,})",
         ];
@@ -309,6 +309,7 @@ impl TesseractOcr {
     /// Extract PO number
     fn extract_po_number(&self, text: &str) -> ExtractedField<String> {
         let patterns = [
+            r"(?i)purchase\s+order\s+number\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)P\.?O\.?\s*#?\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)purchase\s+order\s*#?\s*:?\s*([A-Z0-9\-]+)",
             r"(?i)PO\s+number\s*:?\s*([A-Z0-9\-]+)",

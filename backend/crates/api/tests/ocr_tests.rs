@@ -142,6 +142,7 @@ fn create_test_invoice_image() -> Vec<u8> {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "Requires running PostgreSQL and seeded sandbox tenant"]
 async fn test_invoice_upload_requires_authentication() {
     let app = create_test_router().await;
 
