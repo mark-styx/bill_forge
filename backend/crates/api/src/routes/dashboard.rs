@@ -15,6 +15,8 @@ use axum::{
     routing::get,
     Router,
 };
+use billforge_core::Error;
+use billforge_db::repositories::MetricsRepositoryImpl;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -153,78 +155,61 @@ async fn get_dashboard_metrics(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = tenant.tenant_id.as_str();
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
-    // TODO: Implement actual metrics aggregation from database
-    // For now, return mock data
+    // Fetch all metrics in parallel
+    let (invoice_metrics, approval_metrics, vendor_metrics, team_metrics) = tokio::try_join!(
+        metrics_repo.get_invoice_metrics(&tenant.tenant_id),
+        metrics_repo.get_approval_metrics(&tenant.tenant_id),
+        metrics_repo.get_vendor_metrics(&tenant.tenant_id),
+        metrics_repo.get_team_metrics(&tenant.tenant_id)
+    ).map_err(|e| Error::Internal(format!("Failed to fetch metrics: {}", e)))?;
 
     let metrics = DashboardMetrics {
         invoices: InvoiceMetrics {
-            total_invoices: 1250,
-            pending_ocr: 15,
-            ready_for_review: 42,
-            submitted: 28,
-            approved: 1080,
-            rejected: 85,
-            paid: 920,
-            avg_processing_time_hours: 4.2,
-            total_value: 125000000, // $1,250,000 in cents
-            this_month: 145,
-            trend_vs_last_month: 12.5,
+            total_invoices: invoice_metrics.total_invoices as u64,
+            pending_ocr: invoice_metrics.pending_ocr as u64,
+            ready_for_review: invoice_metrics.ready_for_review as u64,
+            submitted: invoice_metrics.submitted as u64,
+            approved: invoice_metrics.approved as u64,
+            rejected: invoice_metrics.rejected as u64,
+            paid: invoice_metrics.paid as u64,
+            avg_processing_time_hours: invoice_metrics.avg_processing_time_hours,
+            total_value: invoice_metrics.total_value,
+            this_month: invoice_metrics.this_month as u64,
+            trend_vs_last_month: invoice_metrics.trend_vs_last_month,
         },
         approvals: ApprovalMetrics {
-            pending_approvals: 28,
-            approved_today: 12,
-            rejected_today: 3,
-            avg_approval_time_hours: 2.8,
-            approval_rate: 92.7,
-            escalated: 2,
-            overdue: 5,
+            pending_approvals: approval_metrics.pending_approvals as u64,
+            approved_today: approval_metrics.approved_today as u64,
+            rejected_today: approval_metrics.rejected_today as u64,
+            avg_approval_time_hours: approval_metrics.avg_approval_time_hours,
+            approval_rate: approval_metrics.approval_rate,
+            escalated: approval_metrics.escalated as u64,
+            overdue: approval_metrics.overdue as u64,
         },
         vendors: VendorMetrics {
-            total_vendors: 324,
-            new_this_month: 8,
-            top_vendors: vec![
-                TopVendor {
-                    vendor_id: "vendor-1".to_string(),
-                    vendor_name: "Acme Corporation".to_string(),
-                    invoice_count: 145,
-                    total_amount: 12500000,
-                },
-                TopVendor {
-                    vendor_id: "vendor-2".to_string(),
-                    vendor_name: "Tech Supplies Inc".to_string(),
-                    invoice_count: 98,
-                    total_amount: 8750000,
-                },
-                TopVendor {
-                    vendor_id: "vendor-3".to_string(),
-                    vendor_name: "Office Solutions".to_string(),
-                    invoice_count: 76,
-                    total_amount: 5400000,
-                },
-            ],
-            concentration_percentage: 68.5,
+            total_vendors: vendor_metrics.total_vendors as u64,
+            new_this_month: vendor_metrics.new_this_month as u64,
+            top_vendors: vendor_metrics.top_vendors.into_iter().map(|v| TopVendor {
+                vendor_id: v.vendor_id,
+                vendor_name: v.vendor_name,
+                invoice_count: v.invoice_count as u64,
+                total_amount: v.total_amount,
+            }).collect(),
+            concentration_percentage: vendor_metrics.concentration_percentage,
         },
         team: TeamMetrics {
-            members: vec![
-                TeamMemberStats {
-                    user_id: "user-1".to_string(),
-                    user_name: "John Smith".to_string(),
-                    approvals_this_month: 45,
-                    rejections_this_month: 3,
-                    avg_response_time_hours: 1.2,
-                },
-                TeamMemberStats {
-                    user_id: "user-2".to_string(),
-                    user_name: "Sarah Johnson".to_string(),
-                    approvals_this_month: 38,
-                    rejections_this_month: 5,
-                    avg_response_time_hours: 2.4,
-                },
-            ],
-            avg_approvals_per_member: 41.5,
-            total_pending_actions: 28,
+            members: team_metrics.members.into_iter().map(|m| TeamMemberStats {
+                user_id: m.user_id,
+                user_name: m.user_name,
+                approvals_this_month: m.approvals_this_month as u64,
+                rejections_this_month: m.rejections_this_month as u64,
+                avg_response_time_hours: m.avg_response_time_hours,
+            }).collect(),
+            avg_approvals_per_member: team_metrics.avg_approvals_per_member,
+            total_pending_actions: team_metrics.total_pending_actions as u64,
         },
     };
 
@@ -246,22 +231,26 @@ async fn get_invoice_metrics(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = tenant.tenant_id.as_str();
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
-    // TODO: Implement actual metrics from database
+    let db_metrics = metrics_repo
+        .get_invoice_metrics(&tenant.tenant_id)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to fetch invoice metrics: {}", e)))?;
 
     let metrics = InvoiceMetrics {
-        total_invoices: 1250,
-        pending_ocr: 15,
-        ready_for_review: 42,
-        submitted: 28,
-        approved: 1080,
-        rejected: 85,
-        paid: 920,
-        avg_processing_time_hours: 4.2,
-        total_value: 125000000,
-        this_month: 145,
-        trend_vs_last_month: 12.5,
+        total_invoices: db_metrics.total_invoices as u64,
+        pending_ocr: db_metrics.pending_ocr as u64,
+        ready_for_review: db_metrics.ready_for_review as u64,
+        submitted: db_metrics.submitted as u64,
+        approved: db_metrics.approved as u64,
+        rejected: db_metrics.rejected as u64,
+        paid: db_metrics.paid as u64,
+        avg_processing_time_hours: db_metrics.avg_processing_time_hours,
+        total_value: db_metrics.total_value,
+        this_month: db_metrics.this_month as u64,
+        trend_vs_last_month: db_metrics.trend_vs_last_month,
     };
 
     Ok(Json(metrics))
@@ -282,18 +271,22 @@ async fn get_approval_metrics(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = tenant.tenant_id.as_str();
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
-    // TODO: Implement actual metrics from database
+    let db_metrics = metrics_repo
+        .get_approval_metrics(&tenant.tenant_id)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to fetch approval metrics: {}", e)))?;
 
     let metrics = ApprovalMetrics {
-        pending_approvals: 28,
-        approved_today: 12,
-        rejected_today: 3,
-        avg_approval_time_hours: 2.8,
-        approval_rate: 92.7,
-        escalated: 2,
-        overdue: 5,
+        pending_approvals: db_metrics.pending_approvals as u64,
+        approved_today: db_metrics.approved_today as u64,
+        rejected_today: db_metrics.rejected_today as u64,
+        avg_approval_time_hours: db_metrics.avg_approval_time_hours,
+        approval_rate: db_metrics.approval_rate,
+        escalated: db_metrics.escalated as u64,
+        overdue: db_metrics.overdue as u64,
     };
 
     Ok(Json(metrics))
@@ -314,28 +307,24 @@ async fn get_vendor_metrics(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = tenant.tenant_id.as_str();
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
-    // TODO: Implement actual metrics from database
+    let db_metrics = metrics_repo
+        .get_vendor_metrics(&tenant.tenant_id)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to fetch vendor metrics: {}", e)))?;
 
     let metrics = VendorMetrics {
-        total_vendors: 324,
-        new_this_month: 8,
-        top_vendors: vec![
-            TopVendor {
-                vendor_id: "vendor-1".to_string(),
-                vendor_name: "Acme Corporation".to_string(),
-                invoice_count: 145,
-                total_amount: 12500000,
-            },
-            TopVendor {
-                vendor_id: "vendor-2".to_string(),
-                vendor_name: "Tech Supplies Inc".to_string(),
-                invoice_count: 98,
-                total_amount: 8750000,
-            },
-        ],
-        concentration_percentage: 68.5,
+        total_vendors: db_metrics.total_vendors as u64,
+        new_this_month: db_metrics.new_this_month as u64,
+        top_vendors: db_metrics.top_vendors.into_iter().map(|v| TopVendor {
+            vendor_id: v.vendor_id,
+            vendor_name: v.vendor_name,
+            invoice_count: v.invoice_count as u64,
+            total_amount: v.total_amount,
+        }).collect(),
+        concentration_percentage: db_metrics.concentration_percentage,
     };
 
     Ok(Json(metrics))
@@ -356,29 +345,24 @@ async fn get_team_metrics(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = tenant.tenant_id.as_str();
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
-    // TODO: Implement actual metrics from database
+    let db_metrics = metrics_repo
+        .get_team_metrics(&tenant.tenant_id)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to fetch team metrics: {}", e)))?;
 
     let metrics = TeamMetrics {
-        members: vec![
-            TeamMemberStats {
-                user_id: "user-1".to_string(),
-                user_name: "John Smith".to_string(),
-                approvals_this_month: 45,
-                rejections_this_month: 3,
-                avg_response_time_hours: 1.2,
-            },
-            TeamMemberStats {
-                user_id: "user-2".to_string(),
-                user_name: "Sarah Johnson".to_string(),
-                approvals_this_month: 38,
-                rejections_this_month: 5,
-                avg_response_time_hours: 2.4,
-            },
-        ],
-        avg_approvals_per_member: 41.5,
-        total_pending_actions: 28,
+        members: db_metrics.members.into_iter().map(|m| TeamMemberStats {
+            user_id: m.user_id,
+            user_name: m.user_name,
+            approvals_this_month: m.approvals_this_month as u64,
+            rejections_this_month: m.rejections_this_month as u64,
+            avg_response_time_hours: m.avg_response_time_hours,
+        }).collect(),
+        avg_approvals_per_member: db_metrics.avg_approvals_per_member,
+        total_pending_actions: db_metrics.total_pending_actions as u64,
     };
 
     Ok(Json(metrics))
