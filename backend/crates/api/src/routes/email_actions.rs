@@ -61,8 +61,9 @@ async fn handle_view(
     State(state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.metadata();
     let token_service = EmailActionTokenService::new(
-        state.db.control_plane().await?,
+        pool,
         std::env::var("TOKEN_SECRET_KEY").unwrap_or_else(|_| "secret".to_string()),
     );
 
@@ -88,9 +89,9 @@ async fn handle_email_action(
     token_str: &str,
     expected_action: EmailAction,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.control_plane().await?;
+    let pool = state.db.metadata();
     let token_service = EmailActionTokenService::new(
-        pool.clone(),
+        pool,
         std::env::var("TOKEN_SECRET_KEY").unwrap_or_else(|_| "secret".to_string()),
     );
 
@@ -98,7 +99,7 @@ async fn handle_email_action(
     let token_data = token_service.validate_token(token_str).await?;
 
     // Verify action matches
-    if token_data.action != expected_action {
+    if std::mem::discriminant(&token_data.action) != std::mem::discriminant(&expected_action) {
         return Err(billforge_core::Error::Validation(
             "Token action mismatch".to_string(),
         )
@@ -106,7 +107,9 @@ async fn handle_email_action(
     }
 
     // Get tenant database pool
-    let tenant_id = billforge_core::TenantId::new(token_data.tenant_id.clone());
+    let tenant_uuid = uuid::Uuid::parse_str(&token_data.tenant_id)
+        .map_err(|e| billforge_core::Error::Validation(format!("Invalid tenant ID: {}", e)))?;
+    let tenant_id = billforge_core::TenantId(tenant_uuid);
     let tenant_pool = state.db.tenant(&tenant_id).await?;
 
     // Perform the action based on type
@@ -152,13 +155,13 @@ async fn perform_approval(
     )
     .bind(user_id.as_uuid())
     .bind(invoice_id)
-    .execute(&**pool)
+    .execute(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     // Update invoice status
     let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
     invoice_repo.update_processing_status(
         tenant_id,
         &invoice_id_typed,
@@ -183,13 +186,13 @@ async fn perform_rejection(
     )
     .bind(user_id.as_uuid())
     .bind(invoice_id)
-    .execute(&**pool)
+    .execute(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     // Update invoice status
     let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
     invoice_repo.update_processing_status(
         tenant_id,
         &invoice_id_typed,
@@ -208,7 +211,7 @@ async fn perform_hold(
 ) -> billforge_core::Result<()> {
     // Update invoice status to on-hold
     let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
     invoice_repo.update_processing_status(
         tenant_id,
         &invoice_id_typed,

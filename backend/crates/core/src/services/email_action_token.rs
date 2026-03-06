@@ -4,7 +4,8 @@
 //! users to perform actions (approve/reject) via email links without
 //! requiring login.
 
-use billforge_core::{Error, Result, TenantId, UserId};
+use crate::{Error, Result, TenantId, UserId};
+use base64::prelude::*;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -67,7 +68,7 @@ impl EmailActionTokenService {
         let payload = EmailActionToken {
             action,
             resource_id,
-            user_id: user_id.as_uuid(),
+            user_id: *user_id.as_uuid(),
             tenant_id: tenant_id.as_str().to_string(),
             nonce,
             expires_at,
@@ -83,7 +84,7 @@ impl EmailActionTokenService {
         // Create final token (base64-encoded payload + signature)
         let token = format!(
             "{}.{}",
-            base64::encode(&payload_json),
+            BASE64_STANDARD.encode(&payload_json),
             signature
         );
 
@@ -128,7 +129,7 @@ impl EmailActionTokenService {
         let signature = parts[1];
 
         // Decode payload
-        let payload_json = base64::decode(payload_b64)
+        let payload_json = BASE64_STANDARD.decode(payload_b64)
             .map_err(|_| Error::Validation("Invalid token encoding".to_string()))?;
 
         let payload: EmailActionToken = serde_json::from_slice(&payload_json)

@@ -6,26 +6,46 @@
 //! - Routing invoices through queues
 //! - Escalation management
 
-use billforge_core::{
-    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus, WorkflowRule},
+use crate::{
+    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus, WorkflowRule, RuleCondition, RuleAction},
     services::{EmailAction, EmailActionTokenService},
     traits::{ApprovalRepository, InvoiceRepository},
     types::TenantId,
     Error, Result, UserId,
 };
-use billforge_email::{EmailService, EmailTemplates};
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Email service trait (abstracted to avoid circular dependency)
+#[async_trait]
+pub trait EmailService: Send + Sync {
+    async fn send(&self, to: &str, subject: &str, html_body: &str, text_body: &str) -> crate::Result<()>;
+}
+
+/// Email templates trait (abstracted to avoid circular dependency)
+pub trait EmailTemplates {
+    fn invoice_pending_approval_with_actions(
+        invoice_number: &str,
+        vendor_name: &str,
+        amount: &str,
+        submitted_by: &str,
+        view_url: &str,
+        approve_url: Option<&str>,
+        reject_url: Option<&str>,
+    ) -> (String, String);
+}
+
 /// Workflow orchestration service
-pub struct WorkflowService<ES: EmailService> {
+pub struct WorkflowService<ES: EmailService, ET: EmailTemplates> {
     email_service: ES,
     email_token_service: EmailActionTokenService,
     app_url: String,
+    _email_templates: std::marker::PhantomData<ET>,
 }
 
-impl<ES: EmailService> WorkflowService<ES> {
+impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
     /// Create a new workflow service
     pub fn new(
         email_service: ES,
@@ -36,6 +56,7 @@ impl<ES: EmailService> WorkflowService<ES> {
             email_service,
             email_token_service,
             app_url,
+            _email_templates: std::marker::PhantomData,
         }
     }
 
@@ -54,7 +75,7 @@ impl<ES: EmailService> WorkflowService<ES> {
             id: approval_id,
             tenant_id: tenant_id.clone(),
             invoice_id: invoice.id.clone(),
-            rule_id: rule_id.unwrap_or_else(Uuid::nil).into(),
+            rule_id: crate::domain::WorkflowRuleId(rule_id.unwrap_or_else(Uuid::nil)),
             requested_from: approver.clone(),
             status: ApprovalStatus::Pending,
             comments: None,
@@ -79,16 +100,16 @@ impl<ES: EmailService> WorkflowService<ES> {
         request: &ApprovalRequest,
     ) -> Result<()> {
         // Get approver email(s) based on target type
-        let approver_emails = match approver {
-            ApprovalTarget::User(user_id) => {
+        let approver_emails: Vec<String> = match approver {
+            ApprovalTarget::User(_user_id) => {
                 // TODO: Fetch user email from database
                 vec![] // Placeholder
             }
-            ApprovalTarget::Role(role_name) => {
+            ApprovalTarget::Role(_role_name) => {
                 // TODO: Fetch all users with this role
                 vec![]
             }
-            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
+            ApprovalTarget::AnyOf(_user_ids) | ApprovalTarget::AllOf(_user_ids) => {
                 // TODO: Fetch emails for all users
                 vec![]
             }
@@ -134,12 +155,12 @@ impl<ES: EmailService> WorkflowService<ES> {
         let view_url = format!("{}/invoices/{}", self.app_url, invoice.id);
 
         // Prepare email content
-        let invoice_number = invoice.invoice_number.as_deref().unwrap_or("N/A");
-        let vendor_name = invoice.vendor_name.as_deref().unwrap_or("Unknown Vendor");
+        let invoice_number = if invoice.invoice_number.is_empty() { "N/A" } else { &invoice.invoice_number };
+        let vendor_name = if invoice.vendor_name.is_empty() { "Unknown Vendor" } else { &invoice.vendor_name };
         let amount = format!("${:.2}", invoice.total_amount.amount as f64 / 100.0);
         let submitted_by = "AP Team"; // TODO: Get actual submitter name
 
-        let (html, text) = EmailTemplates::invoice_pending_approval_with_actions(
+        let (html, text) = ET::invoice_pending_approval_with_actions(
             invoice_number,
             vendor_name,
             &amount,
@@ -192,7 +213,7 @@ impl<ES: EmailService> WorkflowService<ES> {
     fn evaluate_rule_conditions(
         &self,
         invoice: &Invoice,
-        conditions: &[billforge_core::domain::RuleCondition],
+        conditions: &[crate::domain::RuleCondition],
     ) -> bool {
         // TODO: Implement condition evaluation
         // For now, return true to allow all rules to execute
@@ -204,7 +225,7 @@ impl<ES: EmailService> WorkflowService<ES> {
         &self,
         tenant_id: &TenantId,
         invoice: &Invoice,
-        action: &billforge_core::domain::RuleAction,
+        action: &crate::domain::RuleAction,
     ) -> Result<()> {
         // TODO: Implement action execution
         Ok(())

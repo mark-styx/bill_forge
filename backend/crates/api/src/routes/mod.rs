@@ -2,6 +2,7 @@
 
 mod audit;
 mod auth;
+mod dashboard;
 mod documents;
 mod health;
 mod invoices;
@@ -10,6 +11,8 @@ mod workflows;
 mod reports;
 mod export;
 mod sandbox;
+mod email_actions;
+mod quickbooks;
 
 use crate::state::AppState;
 use axum::{routing::get, Router};
@@ -43,6 +46,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/workflows", workflows::routes())
         // Reporting module
         .nest("/reports", reports::routes())
+        // Dashboard metrics
+        .nest("/dashboard", dashboard::routes())
         // Data export
         .nest("/export", export::routes())
         // Document storage
@@ -51,4 +56,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/audit", audit::routes())
         // Sandbox/Development persona management
         .nest("/sandbox", sandbox::routes())
+        // QuickBooks integration
+        .nest("/quickbooks", quickbooks::routes())
+        // Email actions (approve/reject via email)
+        .nest("/actions", email_actions::routes())
 }
