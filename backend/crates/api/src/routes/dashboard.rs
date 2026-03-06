@@ -7,6 +7,7 @@
 //! - Team performance metrics
 
 use crate::error::ApiResult;
+use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -150,8 +151,9 @@ pub struct TeamMemberStats {
 )]
 async fn get_dashboard_metrics(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual metrics aggregation from database
     // For now, return mock data
@@ -242,8 +244,9 @@ async fn get_dashboard_metrics(
 )]
 async fn get_invoice_metrics(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual metrics from database
 
@@ -277,8 +280,9 @@ async fn get_invoice_metrics(
 )]
 async fn get_approval_metrics(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual metrics from database
 
@@ -308,8 +312,9 @@ async fn get_approval_metrics(
 )]
 async fn get_vendor_metrics(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual metrics from database
 
@@ -349,8 +354,9 @@ async fn get_vendor_metrics(
 )]
 async fn get_team_metrics(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual metrics from database
 

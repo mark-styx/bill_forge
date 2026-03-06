@@ -8,6 +8,7 @@
 //! - Sync status tracking
 
 use crate::error::ApiResult;
+use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -111,8 +112,9 @@ pub struct ExportInvoiceResponse {
 )]
 async fn quickbooks_connect(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual OAuth flow
     // 1. Generate state token
@@ -147,8 +149,9 @@ async fn quickbooks_connect(
 )]
 async fn quickbooks_callback(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual OAuth callback
     // 1. Validate state token
@@ -173,8 +176,9 @@ async fn quickbooks_callback(
 )]
 async fn quickbooks_disconnect(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement disconnect
     // 1. Revoke tokens
@@ -196,8 +200,9 @@ async fn quickbooks_disconnect(
 )]
 async fn quickbooks_status(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual status check
 
@@ -226,9 +231,10 @@ async fn quickbooks_status(
 )]
 async fn sync_vendors(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
     Json(request): Json<SyncVendorsRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual vendor sync
     // 1. Fetch vendors from QuickBooks API
@@ -257,8 +263,9 @@ async fn sync_vendors(
 )]
 async fn sync_accounts(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual account sync
 
@@ -280,9 +287,10 @@ async fn sync_accounts(
 )]
 async fn export_invoice_to_quickbooks(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
     Json(request): Json<ExportInvoiceRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual invoice export
     // 1. Fetch invoice from BillForge
@@ -311,8 +319,9 @@ async fn export_invoice_to_quickbooks(
 )]
 async fn get_account_mappings(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual mapping retrieval
 
@@ -335,9 +344,10 @@ async fn get_account_mappings(
 )]
 async fn update_account_mappings(
     State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
     Json(mappings): Json<Vec<AccountMapping>>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = "sandbox".to_string(); // TODO: Extract from auth
+    let tenant_id = tenant.tenant_id.as_str();
 
     // TODO: Implement actual mapping update
 
