@@ -15,6 +15,7 @@ pub mod email_actions;
 pub mod quickbooks;
 
 use crate::state::AppState;
+use crate::metrics;
 use axum::{routing::get, Router};
 
 /// Create the main API router
@@ -28,9 +29,16 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
         .route("/health/detailed", get(health::detailed_health))
+        // Prometheus metrics endpoint
+        .route("/metrics", get(metrics_handler))
         // API routes
         .nest("/api/v1", api_routes())
         .with_state(state)
+}
+
+/// Prometheus metrics endpoint
+async fn metrics_handler() -> String {
+    metrics::export_metrics()
 }
 
 /// API v1 routes

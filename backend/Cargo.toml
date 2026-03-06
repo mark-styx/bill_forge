@@ -12,6 +12,7 @@ members = [
     "crates/vendor-mgmt",
     "crates/reporting",
     "crates/quickbooks",
+    "crates/worker",
 ]
 
 [workspace.package]

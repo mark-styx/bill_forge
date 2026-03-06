@@ -54,6 +54,10 @@ regex = "1.10"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.4"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tower = { version = "0.4", features = ["util"] }

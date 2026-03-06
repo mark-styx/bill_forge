@@ -1,0 +1,48 @@
+[package]
+name = "billforge-worker"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "billforge-worker"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
+
+# Redis job queue
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUIDs
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# BillForge crates
+billforge-core = { path = "../core" }
+billforge-db = { path = "../db" }
+billforge-quickbooks = { path = "../quickbooks" }
+
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.4"

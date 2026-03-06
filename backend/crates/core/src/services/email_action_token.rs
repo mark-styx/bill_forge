@@ -212,8 +212,8 @@ impl EmailActionTokenService {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_sign_and_verify() {
+    #[tokio::test]
+    async fn test_sign_and_verify() {
         let pool = Arc::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
         let service = EmailActionTokenService::new(pool, "test-secret-key".to_string());
 
@@ -224,8 +224,8 @@ mod tests {
         assert!(service.sign(payload) == signature);
     }
 
-    #[test]
-    fn test_hash_token() {
+    #[tokio::test]
+    async fn test_hash_token() {
         let pool = Arc::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
         let service = EmailActionTokenService::new(pool, "test-secret-key".to_string());
 

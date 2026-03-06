@@ -1,0 +1,35 @@
+FROM rust:1.75 as builder
+
+WORKDIR /usr/src/billforge
+
+# Copy workspace manifests
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+
+# Build the worker binary
+RUN cargo build --release --bin billforge-worker
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    libssl3 \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the binary
+COPY --from=builder /usr/src/billforge/target/release/billforge-worker /usr/local/bin/
+
+# Create directories for data
+RUN mkdir -p /var/lib/billforge/tenants /var/lib/billforge/storage
+
+# Expose metrics port
+EXPOSE 9091
+
+# Run the worker
+CMD ["billforge-worker"]
