@@ -112,6 +112,49 @@ impl EmailTemplates {
         submitted_by: &str,
         approval_url: &str,
     ) -> (String, String) {
+        Self::invoice_pending_approval_with_actions(
+            invoice_number,
+            vendor_name,
+            amount,
+            submitted_by,
+            approval_url,
+            None,
+            None,
+        )
+    }
+
+    /// Invoice pending approval email with direct action buttons
+    pub fn invoice_pending_approval_with_actions(
+        invoice_number: &str,
+        vendor_name: &str,
+        amount: &str,
+        submitted_by: &str,
+        approval_url: &str,
+        approve_url: Option<&str>,
+        reject_url: Option<&str>,
+    ) -> (String, String) {
+        let action_buttons = if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
+            format!(
+                r#"<p style="text-align: center;">
+    <a href="{approve}" class="button" style="background-color: #10b981; margin-right: 10px;">Approve</a>
+    <a href="{reject}" class="button" style="background-color: #ef4444;">Reject</a>
+</p>
+<p style="text-align: center; margin-top: 10px;">
+    <a href="{approval_url}" style="color: #2563eb; text-decoration: underline;">View Invoice Details</a>
+</p>"#,
+                approve = approve,
+                reject = reject,
+                approval_url = approval_url
+            )
+        } else {
+            format!(
+                r#"<p style="text-align: center;">
+    <a href="{approval_url}" class="button">Review Invoice</a>
+</p>"#,
+                approval_url = approval_url
+            )
+        };
+
         let html = Self::wrap_html(
             &format!(
                 r#"<h1>Invoice Pending Your Approval</h1>
@@ -134,10 +177,11 @@ impl EmailTemplates {
         <span class="info-value">{submitted_by}</span>
     </div>
 </div>
-<p style="text-align: center;">
-    <a href="{approval_url}" class="button">Review Invoice</a>
-</p>
-<p>You can also review this invoice by logging into BillForge.</p>"#
+{action_buttons}
+<p>You can also review this invoice by logging into BillForge.</p>
+<p style="font-size: 12px; color: #6b7280; margin-top: 20px;">
+    <strong>Note:</strong> Action links expire in 72 hours. If expired, please log in to BillForge.
+</p>"#
             ),
             "Invoice Pending Approval",
         );
@@ -153,9 +197,14 @@ Amount: {amount}
 Submitted By: {submitted_by}
 
 Review the invoice at: {approval_url}
-
+{}
 ---
-This email was sent by BillForge."#
+This email was sent by BillForge."#,
+            if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
+                format!("\nQuick Actions:\n- Approve: {}\n- Reject: {}\n", approve, reject)
+            } else {
+                String::new()
+            }
         );
 
         (html, text)
