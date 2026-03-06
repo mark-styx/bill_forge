@@ -30,6 +30,9 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # OAuth
 oauth2 = "4.4"
 
+# URL encoding
+urlencoding = "2.1"
+
 # BillForge crates
 billforge-core = { path = "../core" }
 

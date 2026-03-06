@@ -62,3 +62,7 @@ progress-report-*.md
 progress-*.md
 agent-logs/
 agent-flow.sh
+# Locust AI
+.locust/data/
+.locust/artifacts/
+*.locust.log

@@ -108,7 +108,7 @@ pub struct TopVendor {
     /// Invoice count
     pub invoice_count: u64,
     /// Total spend (in cents)
-    pub total_spend: i64,
+    pub total_amount: i64,
 }
 
 /// Team performance metrics
@@ -187,19 +187,19 @@ async fn get_dashboard_metrics(
                     vendor_id: "vendor-1".to_string(),
                     vendor_name: "Acme Corporation".to_string(),
                     invoice_count: 145,
-                    total_spend: 12500000,
+                    total_amount: 12500000,
                 },
                 TopVendor {
                     vendor_id: "vendor-2".to_string(),
                     vendor_name: "Tech Supplies Inc".to_string(),
                     invoice_count: 98,
-                    total_spend: 8750000,
+                    total_amount: 8750000,
                 },
                 TopVendor {
                     vendor_id: "vendor-3".to_string(),
                     vendor_name: "Office Solutions".to_string(),
                     invoice_count: 76,
-                    total_spend: 5400000,
+                    total_amount: 5400000,
                 },
             ],
             concentration_percentage: 68.5,
@@ -321,13 +321,13 @@ async fn get_vendor_metrics(
                 vendor_id: "vendor-1".to_string(),
                 vendor_name: "Acme Corporation".to_string(),
                 invoice_count: 145,
-                total_spend: 12500000,
+                total_amount: 12500000,
             },
             TopVendor {
                 vendor_id: "vendor-2".to_string(),
                 vendor_name: "Tech Supplies Inc".to_string(),
                 invoice_count: 98,
-                total_spend: 8750000,
+                total_amount: 8750000,
             },
         ],
         concentration_percentage: 68.5,

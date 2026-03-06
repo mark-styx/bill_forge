@@ -5,6 +5,7 @@ use crate::types::*;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// QuickBooks API client
 pub struct QuickBooksClient {

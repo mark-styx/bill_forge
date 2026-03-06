@@ -1,0 +1,27 @@
+# report.yml
+summary:
+  total_tests: 0
+  passed_tests: 0
+  failed_tests: 0
+  skipped_tests: 0
+results:
+  unit_tests:
+    total: 0
+    passed: 0
+    failed: 0
+    skipped: 0
+  integration_tests:
+    total: 0
+    passed: 0
+    failed: 0
+    skipped: 0
+  e2e_tests:
+    total: 0
+    passed: 0
+    failed: 0
+    skipped: 0
+  performance_tests:
+    total: 0
+    passed: 0
+    failed: 0
+    skipped: 0

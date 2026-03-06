@@ -2,7 +2,7 @@
 
 mod audit;
 mod auth;
-mod dashboard;
+pub mod dashboard;
 mod documents;
 mod health;
 mod invoices;
@@ -11,8 +11,8 @@ mod workflows;
 mod reports;
 mod export;
 mod sandbox;
-mod email_actions;
-mod quickbooks;
+pub mod email_actions;
+pub mod quickbooks;
 
 use crate::state::AppState;
 use axum::{routing::get, Router};

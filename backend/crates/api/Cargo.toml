@@ -18,6 +18,7 @@ billforge-invoice-capture = { path = "../invoice-capture" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-vendor-mgmt = { path = "../vendor-mgmt" }
 billforge-reporting = { path = "../reporting" }
+billforge-quickbooks = { path = "../quickbooks" }
 
 # Web framework
 axum = { workspace = true }

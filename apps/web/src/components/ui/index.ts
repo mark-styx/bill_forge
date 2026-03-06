@@ -69,3 +69,10 @@ export * from './animated-counter';
 export * from './glass-card';
 export { ModernGradientButton, GradientIconButton, AnimatedBorderButton } from './gradient-button';
 export * from './theme-customizer';
+
+// Advanced Components
+export * from './advanced-data-table';
+export * from './multi-select';
+export * from './file-upload';
+export * from './stepper';
+export * from './confirm-dialog';

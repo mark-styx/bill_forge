@@ -1,0 +1,35 @@
+name: Test Suite
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Install dependencies
+      run: cargo build --release
+
+    - name: Run unit tests
+      run: cargo test --release --all-features
+
+    - name: Run integration tests
+      run: cargo test --release --test integration_tests
+
+    - name: Run end-to-end tests
+      run: npx playwright install
+      run: npm run e2e-tests
+
+    - name: Run performance tests
+      run: npm run load-test

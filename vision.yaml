@@ -1,0 +1,222 @@
+# Bill Forge Vision Document
+# Auto-generated from project documentation
+
+version: "1.0"
+
+company:
+  name: "Bill Forge"
+  tagline: "Simplified invoice processing for the mid-market"
+  mission: "Empower businesses to process invoices faster, cheaper, and with less manual effort through intelligent automation"
+  vision: "Become the most trusted invoice processing platform for mid-market companies by offering a modern, modular platform with robust automation, seamless integrations, and an AI assistant that transforms AP operations"
+  values:
+    - "Customer-first design"
+    - "Automation as a first-class citizen"
+    - "Modular architecture - buy what you need"
+    - "Speed and simplicity over complexity"
+    - "Privacy and security by default"
+  company_type: "B2B SaaS"
+  stage: "early"
+
+market:
+  industry: "Accounts Payable / Invoice Processing"
+  general_target: "Mid-market companies with 10-1000 employees, shared services centers, and growing businesses frustrated with slow, expensive legacy AP tools"
+
+  market_problems:
+    - "Invoice processing is slow and heavily manual"
+    - "Existing platforms are slow, clunky, and overpriced"
+    - "Automation is bolted-on, not built-in"
+    - "Vendor management is fragmented and painful"
+    - "Reporting and analytics are afterthoughts"
+    - "OCR is often aftermarket with poor accuracy"
+    - "Forced to buy monolithic suites when only needing specific modules"
+    - "Complex approval workflows are hard to configure"
+    - "No intelligent assistance - users are on their own"
+
+  customer_hints:
+    - "Shared services centers"
+    - "Companies with 10-1000 employees"
+    - "Finance teams using SAP, NetSuite, Dynamics 365, QuickBooks, or Sage"
+    - "Companies frustrated with Coupa, Ariba complexity"
+    - "Growing companies outgrowing spreadsheets"
+
+  competitor_hints:
+    - "Palette (Rillion)"
+    - "BILL (formerly Bill.com)"
+    - "Tipalti"
+    - "AvidXchange"
+    - "Coupa (enterprise)"
+    - "SAP Concur"
+    - "Stampli"
+
+  pricing_model: "usage-based"
+  price_sensitivity: "value-focused"
+
+products:
+  - name: "Invoice Capture"
+    description: "OCR-powered invoice data extraction with multi-format support"
+    problem_statement: "Manual data entry from invoices is slow, error-prone, and expensive"
+
+    existing_codebase: "."
+    codebase_description: "Rust backend with Axum, Next.js frontend, modular crate architecture"
+
+    key_capabilities:
+      - "High-accuracy field extraction (vendor, invoice #, amount, date, line items)"
+      - "Multi-format support (PDF, images, email attachments, scanned docs)"
+      - "Confidence scoring with visual indicators"
+      - "Line-item extraction (description, quantity, unit price, tax)"
+      - "Automatic vendor matching to master list"
+      - "OCR queue system (AP queue + error queue)"
+      - "Multi-OCR provider support (Tesseract local, AWS Textract, Google Vision)"
+
+    differentiators:
+      - "Local-first OCR option for data privacy"
+      - "Confidence-based routing to minimize manual review"
+      - "Fast processing with Rust backend"
+
+    tech_preferences:
+      - "Rust (Axum) backend"
+      - "Next.js 14+ frontend"
+      - "TypeScript"
+      - "Tailwind CSS + shadcn/ui"
+      - "DuckDB for analytics"
+      - "PostgreSQL for OLTP"
+
+    tech_constraints:
+      - "Must work in local development environment"
+      - "Database-per-tenant isolation"
+      - "S3-compatible storage abstraction"
+
+    priority: 1
+    status: "development"
+
+  - name: "Invoice Processing"
+    description: "Workflow management for invoice approval with customizable routing"
+    problem_statement: "Approval bottlenecks slow down payment cycles and frustrate teams"
+
+    existing_codebase: "."
+
+    key_capabilities:
+      - "Multi-level approval routing (manager, finance lead, controller)"
+      - "Dollar-amount based rules (auto-approve <$5K, escalate >$50K)"
+      - "Department/cost-center routing"
+      - "Exception-based workflows (only mismatches need review)"
+      - "Email approvals (approve/reject without login)"
+      - "Delegation support for out-of-office"
+      - "SLA tracking with configurable escalation"
+      - "Customizable queue flow per organization"
+      - "Bulk submit capability for payment batches"
+
+    differentiators:
+      - "Email-based approvals without login required"
+      - "Fully customizable workflow rules"
+      - "Auto-approve for clean invoices"
+
+    priority: 1
+    status: "development"
+
+  - name: "Vendor Management"
+    description: "Vendor lifecycle management with tax document storage"
+    problem_statement: "Vendor information scattered across systems, hard to maintain compliance"
+
+    existing_codebase: "."
+
+    key_capabilities:
+      - "Vendor master data management"
+      - "Tax document storage (W-9, 1099)"
+      - "Vendor spend analysis"
+      - "Vendor performance tracking"
+      - "New vendor onboarding workflow"
+      - "Vendor self-service portal (future)"
+
+    priority: 2
+    status: "concept"
+
+  - name: "Reporting & Analytics"
+    description: "Cross-module insights and customizable dashboards"
+    problem_statement: "Finance teams lack visibility into AP performance and spend patterns"
+
+    existing_codebase: "."
+
+    key_capabilities:
+      - "Invoice processing metrics (volume, automation %, exception rate, cycle time)"
+      - "Approval performance (queue time, bottleneck identification)"
+      - "Cost analysis (spend by vendor, cost center, department, GL)"
+      - "Invoice aging reports"
+      - "Duplicate detection"
+      - "Audit trail (who approved what, when)"
+      - "Excel/CSV export"
+      - "Scheduled email reports"
+      - "Power BI / Tableau connectors"
+
+    priority: 2
+    status: "concept"
+
+  - name: "Winston AI Assistant"
+    description: "Conversational AI that can answer questions and perform actions across the platform"
+    problem_statement: "Users struggle to find information and perform complex queries"
+
+    existing_codebase: "."
+
+    key_capabilities:
+      - "Natural language queries ('Show me all invoices from Vendor X')"
+      - "Platform-wide search and navigation"
+      - "Anomaly detection (duplicate invoices, suspicious patterns)"
+      - "Vendor name disambiguation"
+      - "Answer questions about tenant data and platform features"
+
+    differentiators:
+      - "Full access to documentation and customer data"
+      - "Can perform actions, not just answer questions"
+
+    priority: 3
+    status: "concept"
+
+goals:
+  horizon: "3 months"
+
+  primary_goals:
+    - "Complete Invoice Capture module with OCR integration"
+    - "Complete Invoice Processing module with approval workflows"
+    - "Launch MVP to 5 pilot customers"
+    - "Achieve 90%+ OCR accuracy on standard invoices"
+    - "Implement at least one ERP integration (QuickBooks or NetSuite)"
+
+  success_metrics:
+    - "5 pilot customers actively using the platform"
+    - "90% OCR accuracy on standard invoice formats"
+    - "Average invoice processing time under 2 minutes"
+    - "50% of invoices auto-approved without manual intervention"
+    - "Zero data isolation breaches (multi-tenancy)"
+
+  budget_constraints: "Bootstrap - minimize cloud costs, leverage local-first architecture"
+  team_constraints: "Small team - prioritize automation and code quality"
+  timeline_constraints: "MVP needed within 3 months"
+
+  anti_goals:
+    - "Don't build enterprise SSO before product-market fit"
+    - "Don't support every ERP on day one"
+    - "Don't build mobile app before web is solid"
+    - "Don't over-engineer for scale before validation"
+
+additional_context: |
+  Bill Forge is built as a modular monorepo with complete tenant isolation using
+  database-per-tenant architecture. Each module (Invoice Capture, Invoice Processing,
+  Vendor Management, Reporting) can be independently subscribed to.
+
+  The backend is Rust with Axum for performance, using DuckDB for analytical workloads
+  and PostgreSQL/SQLite for transactional data. The frontend is Next.js 14+ with
+  TypeScript and Tailwind CSS.
+
+  Key architectural decisions:
+  - Database-per-tenant for complete data isolation
+  - Local-first development with cloud deployment capability
+  - S3-compatible storage abstraction
+  - Multi-OCR provider support (local Tesseract + cloud options)
+
+questions_for_team:
+  - "What are Palette/Rillion's main strengths and weaknesses? How do we differentiate?"
+  - "What's the ideal OCR accuracy threshold before routing to error queue?"
+  - "Which ERP integration should we prioritize first for mid-market?"
+  - "What approval workflow patterns are most common in mid-market companies?"
+  - "How do competitors handle multi-currency and international invoices?"
+  - "What's the pricing model that resonates with mid-market buyers?"
