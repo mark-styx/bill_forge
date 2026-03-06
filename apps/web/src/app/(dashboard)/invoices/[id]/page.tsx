@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { invoicesApi, workflowsApi, vendorsApi, documentsApi, DocumentMetadata } from '@/lib/api';
 import { toast } from 'sonner';
+import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import {
   ArrowLeft,
   FileText,
@@ -31,6 +32,7 @@ import {
   Download,
   File,
   Image,
+  AlertTriangle,
 } from 'lucide-react';
 
 export default function InvoiceDetailPage() {
@@ -362,6 +364,19 @@ export default function InvoiceDetailPage() {
         <span className={`status-badge ${getStatusColor(invoice.processing_status)}`}>
           Processing: {invoice.processing_status.replace(/_/g, ' ')}
         </span>
+        {/* OCR Confidence Badge (Sprint 3) */}
+        {invoice.ocr_confidence !== undefined && invoice.ocr_confidence !== null && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-600 dark:text-slate-400">OCR:</span>
+            <ConfidenceBadge confidence={invoice.ocr_confidence} size="sm" />
+            {invoice.ocr_confidence < 0.85 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                Review recommended
+              </span>
+            )}
+          </div>
+        )}
         {currentQueue && (
           <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full text-sm flex items-center space-x-1">
             <Layers className="w-3 h-3" />

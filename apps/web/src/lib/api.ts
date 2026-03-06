@@ -411,6 +411,7 @@ export interface Invoice {
   total_amount: { amount: number; currency: string };
   capture_status: string;
   processing_status: string;
+  ocr_confidence?: number; // 0.0-1.0 scale (Sprint 3)
   created_at: string;
   description?: string;
   line_items?: InvoiceLineItem[];

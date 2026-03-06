@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { invoicesApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import InvoicePanel from '@/components/InvoicePanel';
+import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import {
   Plus,
   Search,
@@ -191,9 +192,17 @@ export default function InvoicesPage() {
                       </span>
                     </td>
                     <td>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
-                        {invoice.processing_status.replace(/_/g, ' ')}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
+                          {invoice.processing_status.replace(/_/g, ' ')}
+                        </span>
+                        {/* Show OCR confidence if available and not high (Sprint 3) */}
+                        {invoice.ocr_confidence !== undefined &&
+                         invoice.ocr_confidence !== null &&
+                         invoice.ocr_confidence < 0.85 && (
+                          <ConfidenceBadge confidence={invoice.ocr_confidence} size="sm" showLabel={false} />
+                        )}
+                      </div>
                     </td>
                     <td className="text-muted-foreground">
                       {invoice.invoice_date || '—'}
