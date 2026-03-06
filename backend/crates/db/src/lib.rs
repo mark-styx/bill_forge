@@ -34,6 +34,7 @@ pub mod tenant_db;
 pub mod metadata_db;
 pub mod repositories;
 pub mod storage;
+pub mod seed;
 
 pub use manager::DatabaseManager;
 pub use pg_manager::PgManager;

@@ -1,0 +1,376 @@
+//! Database seeding for pilot customers
+//!
+//! Creates 5 mock pilot tenants with realistic data for testing and demos
+
+use anyhow::Result;
+use chrono::{Duration, Utc};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+/// Pilot customer profiles
+const PILOT_CUSTOMERS: &[(&str, &str)] = &[
+    ("Acme Manufacturing", "acme-mfg"),
+    ("TechFlow Solutions", "techflow"),
+    ("GreenLeaf Healthcare", "greenleaf"),
+    ("Metro Retail Group", "metro-retail"),
+    ("Pacific Trading Co", "pacific-trading"),
+];
+
+/// Seed pilot customers with realistic data
+pub async fn seed_pilot_customers(pool: &PgPool) -> Result<()> {
+    println!("🌱 Seeding pilot customers...");
+
+    for (name, slug) in PILOT_CUSTOMERS {
+        seed_tenant(pool, name, slug).await?;
+    }
+
+    println!("✅ Successfully seeded {} pilot customers", PILOT_CUSTOMERS.len());
+    Ok(())
+}
+
+async fn seed_tenant(pool: &PgPool, name: &str, slug: &str) -> Result<()> {
+    println!("  Creating tenant: {} ({})", name, slug);
+
+    // Create tenant in control plane
+    let tenant_id = Uuid::new_v4();
+    let db_name = format!("billforge_tenant_{}", slug.replace('-', "_"));
+
+    sqlx::query(
+        r#"
+        INSERT INTO tenants (id, name, slug, settings, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .bind(slug)
+    .bind(serde_json::json!({
+        "modules": ["invoice_capture", "invoice_processing", "vendor_mgmt"],
+        "privacy_mode": false,
+        "ocr_provider": "auto",
+        "timezone": "America/New_York"
+    }))
+    .bind(Utc::now())
+    .bind(Utc::now())
+    .fetch_one(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO tenant_databases (tenant_id, database_name, status, created_at)
+        VALUES ($1, $2, 'active', $3)
+        ON CONFLICT (database_name) DO NOTHING
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&db_name)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+
+    // Create tenant database and seed data
+    create_tenant_database(pool, &db_name, tenant_id, name).await?;
+
+    Ok(())
+}
+
+async fn create_tenant_database(
+    pool: &PgPool,
+    db_name: &str,
+    tenant_id: Uuid,
+    tenant_name: &str,
+) -> Result<()> {
+    // Create database
+    sqlx::query(&format!("CREATE DATABASE {}", db_name))
+        .execute(pool)
+        .await
+        .ok(); // Ignore if exists
+
+    // Connect to tenant database
+    let tenant_url = format!(
+        "postgres://billforge:billforge_dev@localhost:5432/{}",
+        db_name
+    );
+    let tenant_pool = PgPool::connect(&tenant_url).await?;
+
+    // Run migrations (simplified - just create tables)
+    create_tenant_tables(&tenant_pool).await?;
+
+    // Seed users
+    let users = seed_users(&tenant_pool, tenant_id, tenant_name).await?;
+
+    // Seed vendors
+    let vendors = seed_vendors(&tenant_pool, tenant_id, tenant_name).await?;
+
+    // Seed invoices
+    seed_invoices(&tenant_pool, tenant_id, &users, &vendors).await?;
+
+    Ok(())
+}
+
+async fn create_tenant_tables(pool: &PgPool) -> Result<()> {
+    // Users table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            roles JSONB NOT NULL DEFAULT '[]',
+            settings JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, email)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Vendors table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS vendors (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            name TEXT NOT NULL,
+            tax_id TEXT,
+            payment_terms INTEGER DEFAULT 30,
+            default_gl_code TEXT,
+            status TEXT DEFAULT 'active',
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Invoices table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS invoices (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            vendor_id UUID REFERENCES vendors(id),
+            vendor_name TEXT NOT NULL,
+            invoice_number TEXT NOT NULL,
+            invoice_date DATE,
+            due_date DATE,
+            total_amount_cents BIGINT NOT NULL,
+            currency TEXT NOT NULL DEFAULT 'USD',
+            line_items JSONB NOT NULL DEFAULT '[]',
+            capture_status TEXT NOT NULL DEFAULT 'pending',
+            processing_status TEXT NOT NULL DEFAULT 'draft',
+            current_queue_id UUID,
+            assigned_to UUID REFERENCES users(id),
+            document_id UUID NOT NULL,
+            ocr_confidence REAL,
+            created_by UUID NOT NULL REFERENCES users(id),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, invoice_number)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn seed_users(pool: &PgPool, tenant_id: Uuid, tenant_name: &str) -> Result<Vec<(Uuid, String)>> {
+    let mut users = Vec::new();
+
+    let user_templates = vec![
+        ("AP Clerk", "ap@example.com", vec!["ap_clerk"]),
+        ("AP Manager", "ap.manager@example.com", vec!["ap_manager"]),
+        ("Controller", "controller@example.com", vec!["controller", "approver_l2"]),
+        ("CFO", "cfo@example.com", vec!["cfo", "approver_l3"]),
+    ];
+
+    // Use a dummy hash for seed data (not for real auth)
+    let dummy_hash = "$argon2id$v=19$m=4096,t=3,p=1$mock$hash";
+
+    for (role_title, email, roles) in user_templates {
+        let user_id = Uuid::new_v4();
+        let full_name = format!("{} - {}", tenant_name, role_title);
+
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, tenant_id, email, password_hash, name, roles, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (tenant_id, email) DO UPDATE SET name = EXCLUDED.name
+            "#,
+        )
+        .bind(user_id)
+        .bind(tenant_id)
+        .bind(email)
+        .bind(dummy_hash)
+        .bind(&full_name)
+        .bind(serde_json::to_value(&roles)?)
+        .bind(Utc::now())
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+
+        users.push((user_id, full_name));
+    }
+
+    println!("    ✓ Created {} users", users.len());
+    Ok(users)
+}
+
+async fn seed_vendors(pool: &PgPool, tenant_id: Uuid, tenant_name: &str) -> Result<Vec<(Uuid, String)>> {
+    let mut vendors = Vec::new();
+
+    // Industry-specific vendors
+    let vendor_names = match tenant_name {
+        "Acme Manufacturing" => vec![
+            "Steel Dynamics Corp",
+            "Industrial Parts Supply",
+            "Precision Tools Inc",
+            "Safety First Equipment",
+            "Raw Materials Co",
+        ],
+        "TechFlow Solutions" => vec![
+            "AWS Services",
+            "Google Cloud Platform",
+            "Microsoft Azure",
+            "DigitalOcean",
+            "CloudFlare Inc",
+        ],
+        "GreenLeaf Healthcare" => vec![
+            "MedSupply Corp",
+            "Pharmaceuticals Direct",
+            "Medical Equipment Co",
+            "Lab Services Inc",
+            "Healthcare Tech Solutions",
+        ],
+        "Metro Retail Group" => vec![
+            "Wholesale Distributors",
+            "Marketing Services LLC",
+            "POS Systems Inc",
+            "Retail Fixtures Co",
+            "Shipping Partners",
+        ],
+        "Pacific Trading Co" => vec![
+            "Import Export Corp",
+            "Shipping Lines Intl",
+            "Customs Brokers Inc",
+            "Warehouse Services",
+            "Logistics Partners",
+        ],
+        _ => vec!["Generic Vendor", "Office Supplies", "Utilities Co"],
+    };
+
+    for vendor_name in vendor_names {
+        let vendor_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO vendors (id, tenant_id, name, payment_terms, status, created_at)
+            VALUES ($1, $2, $3, $4, 'active', $5)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(vendor_id)
+        .bind(tenant_id)
+        .bind(vendor_name)
+        .bind(30i32)
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+
+        vendors.push((vendor_id, vendor_name.to_string()));
+    }
+
+    println!("    ✓ Created {} vendors", vendors.len());
+    Ok(vendors)
+}
+
+async fn seed_invoices(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    users: &[(Uuid, String)],
+    vendors: &[(Uuid, String)],
+) -> Result<()> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    let statuses = vec![
+        ("captured", "pending_review"),
+        ("captured", "in_review"),
+        ("approved", "approved"),
+        ("approved", "exported"),
+        ("rejected", "rejected"),
+    ];
+
+    let mut invoice_count = 0;
+
+    // Create 50-100 invoices per tenant
+    let num_invoices = rng.gen_range(50..=100);
+
+    for i in 0..num_invoices {
+        let (vendor_id, vendor_name) = &vendors[rng.gen_range(0..vendors.len())];
+        let (user_id, _user_name) = &users[0]; // AP Clerk creates
+
+        let invoice_number = format!("INV-{:06}", rng.gen_range(100000..999999));
+        let invoice_date = Utc::now() - Duration::days(rng.gen_range(0..90));
+        let due_date = invoice_date + Duration::days(30);
+        let total_cents = rng.gen_range(10000..5000000) as i64; // $100 - $50,000
+        let (capture_status, processing_status) = &statuses[rng.gen_range(0..statuses.len())];
+
+        let line_items = serde_json::json!([
+            {
+                "description": format!("Line item {}", i + 1),
+                "quantity": 1,
+                "unit_price_cents": total_cents,
+                "amount_cents": total_cents
+            }
+        ]);
+
+        sqlx::query(
+            r#"
+            INSERT INTO invoices (
+                id, tenant_id, vendor_id, vendor_name, invoice_number,
+                invoice_date, due_date, total_amount_cents, currency,
+                line_items, capture_status, processing_status,
+                document_id, ocr_confidence, created_by, created_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+            )
+            ON CONFLICT (tenant_id, invoice_number) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(vendor_id)
+        .bind(vendor_name)
+        .bind(&invoice_number)
+        .bind(invoice_date.date_naive())
+        .bind(due_date.date_naive())
+        .bind(total_cents)
+        .bind("USD")
+        .bind(&line_items)
+        .bind(capture_status)
+        .bind(processing_status)
+        .bind(Uuid::new_v4())
+        .bind(rng.gen_range(0.75..0.98) as f32)
+        .bind(user_id)
+        .bind(Utc::now() - Duration::days(rng.gen_range(0..30)))
+        .execute(pool)
+        .await?;
+
+        invoice_count += 1;
+    }
+
+    println!("    ✓ Created {} invoices", invoice_count);
+    Ok(())
+}
