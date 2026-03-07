@@ -10,6 +10,7 @@ pub mod personas;
 pub mod services;
 pub mod traits;
 pub mod types;
+pub mod workflow_evaluator;
 pub mod workflow_service;
 
 #[cfg(test)]
@@ -20,4 +21,5 @@ pub use error::{Error, Result};
 pub use personas::*;
 pub use services::*;
 pub use types::*;
+pub use workflow_evaluator::*;
 pub use workflow_service::*;

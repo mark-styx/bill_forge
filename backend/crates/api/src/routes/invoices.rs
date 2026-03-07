@@ -324,22 +324,63 @@ async fn rerun_ocr(
 
 async fn submit_for_processing(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    repo.update_processing_status(
+
+    // Get the invoice
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let mut invoice = invoice_repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Update status to Submitted
+    invoice_repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
         ProcessingStatus::Submitted,
     ).await?;
+    invoice.processing_status = ProcessingStatus::Submitted;
+
+    // Get workflow rules for processing
+    let workflow_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    let rules = billforge_core::traits::WorkflowRuleRepository::list(
+        &workflow_repo,
+        &tenant.tenant_id,
+        None,
+    ).await?;
+
+    // Filter to active rules only
+    let active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
+
+    // Process invoice through workflow engine
+    use std::sync::Arc;
+    let engine = billforge_invoice_processing::WorkflowEngine::new(
+        Arc::new(invoice_repo) as Arc<dyn billforge_core::traits::InvoiceRepository>,
+        Arc::new(workflow_repo) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
+        Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
+            as Arc<dyn billforge_core::traits::ApprovalRepository>,
+    );
+
+    let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+
+    // Update invoice with final status from workflow
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    invoice_repo.update_processing_status(
+        &tenant.tenant_id,
+        &invoice_id,
+        final_status,
+    ).await?;
 
     Ok(Json(serde_json::json!({
         "message": "Invoice submitted for processing",
-        "invoice_id": id
+        "invoice_id": id,
+        "status": format!("{:?}", final_status).to_lowercase()
     })))
 }
