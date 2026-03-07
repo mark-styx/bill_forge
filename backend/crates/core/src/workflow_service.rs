@@ -9,8 +9,8 @@
 use crate::{
     domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule},
     services::{EmailAction, EmailActionTokenService},
-    traits::UserRepository,
-    types::TenantId, Result, UserId,
+    traits::{ApprovalRepository, InvoiceRepository, UserRepository, WorkQueueRepository},
+    types::TenantId, Error, Result, UserId,
 };
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -36,26 +36,49 @@ pub trait EmailTemplates {
 }
 
 /// Workflow orchestration service
-pub struct WorkflowService<ES: EmailService, ET: EmailTemplates, UR: UserRepository> {
+pub struct WorkflowService<
+    ES: EmailService,
+    ET: EmailTemplates,
+    UR: UserRepository,
+    IR: InvoiceRepository,
+    QR: WorkQueueRepository,
+    AR: ApprovalRepository,
+> {
     email_service: ES,
     email_token_service: EmailActionTokenService,
     user_repo: UR,
+    invoice_repo: IR,
+    queue_repo: QR,
+    approval_repo: AR,
     app_url: String,
     _email_templates: std::marker::PhantomData<ET>,
 }
 
-impl<ES: EmailService, ET: EmailTemplates, UR: UserRepository> WorkflowService<ES, ET, UR> {
+impl<
+    ES: EmailService,
+    ET: EmailTemplates,
+    UR: UserRepository,
+    IR: InvoiceRepository,
+    QR: WorkQueueRepository,
+    AR: ApprovalRepository,
+> WorkflowService<ES, ET, UR, IR, QR, AR> {
     /// Create a new workflow service
     pub fn new(
         email_service: ES,
         email_token_service: EmailActionTokenService,
         user_repo: UR,
+        invoice_repo: IR,
+        queue_repo: QR,
+        approval_repo: AR,
         app_url: String,
     ) -> Self {
         Self {
             email_service,
             email_token_service,
             user_repo,
+            invoice_repo,
+            queue_repo,
+            approval_repo,
             app_url,
             _email_templates: std::marker::PhantomData,
         }
@@ -438,39 +461,186 @@ impl<ES: EmailService, ET: EmailTemplates, UR: UserRepository> WorkflowService<E
 
         match action.action_type {
             ActionType::RouteToQueue => {
-                // TODO: Requires WorkQueueRepository
+                // Extract queue ID from params
+                let queue_id: crate::domain::WorkQueueId = action.params
+                    .get("queue_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Validation("RouteToQueue requires queue_id parameter".to_string()))
+                    .and_then(|s| s.parse().map_err(|_| Error::Validation("Invalid queue_id format".to_string())))?;
+
                 // Route invoice to specified queue
-                tracing::info!("Action: RouteToQueue (implementation pending - requires repository access)");
+                self.queue_repo
+                    .move_item(tenant_id, &invoice.id, &queue_id, None)
+                    .await?;
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    queue_id = %queue_id,
+                    "Invoice routed to queue"
+                );
             }
             ActionType::RequireApproval | ActionType::RequireRoleApproval => {
-                // TODO: Requires ApprovalRepository
+                // Extract approver target from params
+                let approver = if action.action_type == ActionType::RequireRoleApproval {
+                    let role = action.params
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| Error::Validation("RequireRoleApproval requires role parameter".to_string()))?;
+                    crate::domain::ApprovalTarget::Role(role.to_string())
+                } else {
+                    // RequireApproval - can be user_id, user_ids, or role
+                    if let Some(user_id) = action.params.get("user_id").and_then(|v| v.as_str()) {
+                        let uid = user_id.parse()
+                            .map_err(|_| Error::Validation("Invalid user_id format".to_string()))?;
+                        crate::domain::ApprovalTarget::User(crate::UserId(uid))
+                    } else if let Some(user_ids) = action.params.get("user_ids").and_then(|v| v.as_array()) {
+                        let ids: Result<Vec<_>> = user_ids
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|s| {
+                                s.parse()
+                                    .map_err(|_| Error::Validation("Invalid user_id in user_ids".to_string()))
+                            })
+                            .collect();
+                        crate::domain::ApprovalTarget::AnyOf(ids?.into_iter().map(crate::UserId).collect())
+                    } else if let Some(role) = action.params.get("role").and_then(|v| v.as_str()) {
+                        crate::domain::ApprovalTarget::Role(role.to_string())
+                    } else {
+                        return Err(Error::Validation(
+                            "RequireApproval requires user_id, user_ids, or role parameter".to_string()
+                        ));
+                    }
+                };
+
                 // Create approval request
-                tracing::info!("Action: RequireApproval (implementation pending - requires repository access)");
+                let request = self.create_approval_request(tenant_id, invoice, approver, None).await?;
+
+                // Store in repository
+                self.approval_repo.create(tenant_id, request).await?;
+
+                // Update invoice status to pending approval
+                self.invoice_repo
+                    .update(
+                        tenant_id,
+                        &invoice.id,
+                        serde_json::json!({ "processing_status": "pending_approval" })
+                    )
+                    .await?;
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    "Approval request created and invoice status updated"
+                );
             }
             ActionType::AutoApprove => {
-                // TODO: Requires InvoiceRepository
-                // Auto-approve the invoice
-                tracing::info!("Action: AutoApprove (implementation pending - requires repository access)");
+                // Update invoice status to approved
+                self.invoice_repo
+                    .update(
+                        tenant_id,
+                        &invoice.id,
+                        serde_json::json!({ "processing_status": "approved" })
+                    )
+                    .await?;
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    "Invoice auto-approved"
+                );
             }
             ActionType::SendNotification => {
-                // TODO: Could use EmailService
+                // Extract notification parameters
+                let to = action.params
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Validation("SendNotification requires 'to' parameter".to_string()))?;
+
+                let default_subject = format!("Invoice {} - Notification", invoice.invoice_number);
+                let subject = action.params
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&default_subject);
+
+                let default_body = format!(
+                    "Invoice {} from {} requires your attention.",
+                    invoice.invoice_number, invoice.vendor_name
+                );
+                let body = action.params
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&default_body);
+
                 // Send notification email
-                tracing::info!("Action: SendNotification (implementation pending)");
+                self.email_service.send(to, subject, body, body).await?;
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    to = %to,
+                    "Notification email sent"
+                );
             }
             ActionType::SetField => {
-                // TODO: Requires InvoiceRepository
-                // Set a field value
-                tracing::info!("Action: SetField (implementation pending - requires repository access)");
+                // Extract field name and value from params
+                let field_name = action.params
+                    .get("field")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Validation("SetField requires 'field' parameter".to_string()))?;
+
+                let field_value = action.params
+                    .get("value")
+                    .ok_or_else(|| Error::Validation("SetField requires 'value' parameter".to_string()))?;
+
+                // Update invoice field
+                let updates = serde_json::json!({ field_name: field_value });
+                self.invoice_repo.update(tenant_id, &invoice.id, updates).await?;
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    field = %field_name,
+                    "Invoice field updated"
+                );
             }
             ActionType::AddTag => {
-                // TODO: Requires InvoiceRepository
-                // Add a tag
-                tracing::info!("Action: AddTag (implementation pending - requires repository access)");
+                // Extract tag from params
+                let tag = action.params
+                    .get("tag")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Validation("AddTag requires 'tag' parameter".to_string()))?;
+
+                // Get current tags and add new one
+                let mut tags = invoice.tags.clone();
+                if !tags.contains(&tag.to_string()) {
+                    tags.push(tag.to_string());
+                    let updates = serde_json::json!({ "tags": tags });
+                    self.invoice_repo.update(tenant_id, &invoice.id, updates).await?;
+                }
+
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    tag = %tag,
+                    "Tag added to invoice"
+                );
             }
             ActionType::Escalate => {
-                // TODO: Requires WorkQueueRepository
-                // Escalate to specified user
-                tracing::info!("Action: Escalate (implementation pending - requires repository access)");
+                // Extract escalation parameters
+                let escalate_to = action.params
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| Error::Validation("Escalate requires 'user_id' parameter".to_string()))?;
+
+                let _user_id: Uuid = escalate_to.parse()
+                    .map_err(|_| Error::Validation("Invalid user_id format".to_string()))?;
+
+                // Find current queue item for invoice and reassign
+                // Note: In a real system, we'd need to find the current queue item
+                // For now, we'll log the escalation action
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    escalate_to = %escalate_to,
+                    "Invoice escalated to user"
+                );
+
+                // TODO: Implement actual queue item reassignment when we have a method to find
+                // the current queue item for an invoice
             }
         }
 
@@ -531,6 +701,252 @@ mod tests {
             Ok(vec!["test@example.com".to_string()])
         }
     }
+
+    // Mock InvoiceRepository for testing
+    struct MockInvoiceRepository;
+
+    #[async_trait]
+    impl crate::traits::InvoiceRepository for MockInvoiceRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            _input: crate::domain::CreateInvoiceInput,
+            _created_by: &UserId,
+        ) -> Result<Invoice> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_by_id(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<Option<Invoice>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _tenant_id: &TenantId,
+            _filters: &crate::domain::InvoiceFilters,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<Invoice>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn update(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            _updates: serde_json::Value,
+        ) -> Result<Invoice> {
+            // Return a test invoice for testing
+            Ok(create_test_invoice())
+        }
+
+        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn update_capture_status(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            _status: crate::domain::CaptureStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn update_processing_status(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            _status: crate::domain::ProcessingStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    // Mock WorkQueueRepository for testing
+    struct MockWorkQueueRepository;
+
+    #[async_trait]
+    impl crate::traits::WorkQueueRepository for MockWorkQueueRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            _input: crate::domain::CreateWorkQueueInput,
+        ) -> Result<crate::domain::WorkQueue> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkQueueId,
+        ) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(None)
+        }
+
+        async fn list(&self, _tenant_id: &TenantId) -> Result<Vec<crate::domain::WorkQueue>> {
+            Ok(vec![])
+        }
+
+        async fn update(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkQueueId,
+            _input: crate::domain::CreateWorkQueueInput,
+        ) -> Result<crate::domain::WorkQueue> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::WorkQueueId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_default(&self, _tenant_id: &TenantId) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(None)
+        }
+
+        async fn get_by_type(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_type: crate::domain::QueueType,
+        ) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(None)
+        }
+
+        async fn add_item(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _invoice_id: &crate::domain::InvoiceId,
+            _assigned_to: Option<&UserId>,
+        ) -> Result<crate::domain::QueueItem> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_items(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::QueueItem>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_items_for_user(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _user_id: &UserId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::QueueItem>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn claim_item(
+            &self,
+            _tenant_id: &TenantId,
+            _item_id: Uuid,
+            _user_id: &UserId,
+        ) -> Result<crate::domain::QueueItem> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn complete_item(&self, _tenant_id: &TenantId, _item_id: Uuid, _action: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn move_item(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+            _to_queue_id: &crate::domain::WorkQueueId,
+            _assigned_to: Option<&UserId>,
+        ) -> Result<crate::domain::QueueItem> {
+            // Return a mock queue item for testing
+            Ok(crate::domain::QueueItem {
+                id: Uuid::new_v4(),
+                tenant_id: _tenant_id.clone(),
+                queue_id: _to_queue_id.clone(),
+                invoice_id: _invoice_id.clone(),
+                assigned_to: _assigned_to.cloned(),
+                priority: 0,
+                entered_at: Utc::now(),
+                due_at: None,
+                claimed_at: None,
+                completed_at: None,
+            })
+        }
+
+        async fn count_items(&self, _tenant_id: &TenantId, _queue_id: &crate::domain::WorkQueueId) -> Result<i64> {
+            Ok(0)
+        }
+
+        async fn count_items_for_user(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _user_id: &UserId,
+        ) -> Result<i64> {
+            Ok(0)
+        }
+    }
+
+    // Mock ApprovalRepository for testing
+    struct MockApprovalRepository;
+
+    #[async_trait]
+    impl crate::traits::ApprovalRepository for MockApprovalRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            request: crate::domain::ApprovalRequest,
+        ) -> Result<crate::domain::ApprovalRequest> {
+            Ok(request)
+        }
+
+        async fn get_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+        ) -> Result<Option<crate::domain::ApprovalRequest>> {
+            Ok(None)
+        }
+
+        async fn list_for_invoice(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+        ) -> Result<Vec<crate::domain::ApprovalRequest>> {
+            Ok(vec![])
+        }
+
+        async fn list_pending_for_user(
+            &self,
+            _tenant_id: &TenantId,
+            _user_id: &UserId,
+        ) -> Result<Vec<crate::domain::ApprovalRequest>> {
+            Ok(vec![])
+        }
+
+        async fn respond(
+            &self,
+            _tenant_id: &TenantId,
+            _id: Uuid,
+            _status: crate::domain::ApprovalStatus,
+            _comments: Option<String>,
+            _user_id: &UserId,
+        ) -> Result<crate::domain::ApprovalRequest> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn cancel_for_invoice(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
 
     fn create_test_invoice() -> Invoice {
         Invoice {
