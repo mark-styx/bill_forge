@@ -9,6 +9,7 @@
 use crate::{
     domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule},
     services::{EmailAction, EmailActionTokenService},
+    traits::UserRepository,
     types::TenantId, Result, UserId,
 };
 use async_trait::async_trait;
@@ -35,23 +36,26 @@ pub trait EmailTemplates {
 }
 
 /// Workflow orchestration service
-pub struct WorkflowService<ES: EmailService, ET: EmailTemplates> {
+pub struct WorkflowService<ES: EmailService, ET: EmailTemplates, UR: UserRepository> {
     email_service: ES,
     email_token_service: EmailActionTokenService,
+    user_repo: UR,
     app_url: String,
     _email_templates: std::marker::PhantomData<ET>,
 }
 
-impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
+impl<ES: EmailService, ET: EmailTemplates, UR: UserRepository> WorkflowService<ES, ET, UR> {
     /// Create a new workflow service
     pub fn new(
         email_service: ES,
         email_token_service: EmailActionTokenService,
+        user_repo: UR,
         app_url: String,
     ) -> Self {
         Self {
             email_service,
             email_token_service,
+            user_repo,
             app_url,
             _email_templates: std::marker::PhantomData,
         }
@@ -98,17 +102,16 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
     ) -> Result<()> {
         // Get approver email(s) based on target type
         let approver_emails: Vec<String> = match approver {
-            ApprovalTarget::User(_user_id) => {
-                // TODO: Fetch user email from database
-                vec![] // Placeholder
+            ApprovalTarget::User(user_id) => {
+                self.user_repo.get_email_by_id(tenant_id, user_id).await?
+                    .into_iter()
+                    .collect()
             }
-            ApprovalTarget::Role(_role_name) => {
-                // TODO: Fetch all users with this role
-                vec![]
+            ApprovalTarget::Role(role_name) => {
+                self.user_repo.get_emails_by_role(tenant_id, role_name).await?
             }
-            ApprovalTarget::AnyOf(_user_ids) | ApprovalTarget::AllOf(_user_ids) => {
-                // TODO: Fetch emails for all users
-                vec![]
+            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
+                self.user_repo.get_emails_by_ids(tenant_id, user_ids).await?
             }
         };
 
@@ -117,10 +120,22 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
             return Ok(());
         }
 
+        // Get the first approver for token generation (any approver can action it)
+        let first_approver_id = match approver {
+            ApprovalTarget::User(user_id) => user_id.clone(),
+            ApprovalTarget::Role(_) => {
+                // For role-based approvals, use a nil user ID (will be set when action is taken)
+                UserId(Uuid::nil())
+            }
+            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
+                user_ids.first().cloned().unwrap_or_else(|| UserId(Uuid::nil()))
+            }
+        };
+
         // Generate email action tokens
         let approve_token = self.email_token_service.generate_token(
             tenant_id,
-            &UserId(Uuid::nil()), // Will be set when fetching approver
+            &first_approver_id,
             EmailAction::ApproveInvoice,
             invoice.id.0,
             "invoice",
@@ -129,7 +144,7 @@ impl<ES: EmailService, ET: EmailTemplates> WorkflowService<ES, ET> {
 
         let reject_token = self.email_token_service.generate_token(
             tenant_id,
-            &UserId(Uuid::nil()),
+            &first_approver_id,
             EmailAction::RejectInvoice,
             invoice.id.0,
             "invoice",

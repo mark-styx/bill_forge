@@ -152,3 +152,16 @@ pub struct AuditFilters {
     pub from_date: Option<chrono::DateTime<chrono::Utc>>,
     pub to_date: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+/// Repository for user operations
+#[async_trait]
+pub trait UserRepository: Send + Sync {
+    /// Get a user's email by user ID
+    async fn get_email_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>>;
+
+    /// Get emails for multiple users by IDs
+    async fn get_emails_by_ids(&self, tenant_id: &TenantId, user_ids: &[UserId]) -> Result<Vec<String>>;
+
+    /// Get all user emails for a specific role
+    async fn get_emails_by_role(&self, tenant_id: &TenantId, role: &str) -> Result<Vec<String>>;
+}
