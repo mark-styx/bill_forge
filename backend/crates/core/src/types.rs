@@ -17,6 +17,10 @@ impl TenantId {
         Self(uuid)
     }
 
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+
     pub fn as_str(&self) -> String {
         self.0.to_string()
     }

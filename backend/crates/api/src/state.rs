@@ -132,6 +132,16 @@ impl AppState {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to run invoice migrations: {}", e))?;
 
+        sqlx::raw_sql(include_str!("../../../migrations/005_create_workflow_tables.sql"))
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
+
+        sqlx::raw_sql(include_str!("../../../migrations/006_create_quickbooks_tables.sql"))
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to run QuickBooks migrations: {}", e))?;
+
         // Run audit migrations
         audit.run_migrations(&sandbox_tenant_id).await
             .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
