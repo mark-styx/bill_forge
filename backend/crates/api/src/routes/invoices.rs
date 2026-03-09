@@ -311,14 +311,34 @@ async fn upload_invoice(
 }
 
 async fn rerun_ocr(
-    State(_state): State<AppState>,
-    InvoiceCaptureAccess(_user, _tenant): InvoiceCaptureAccess,
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement OCR reprocessing
+    let invoice_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Create the invoice capture service
+    let invoice_repo = std::sync::Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool));
+    let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
+        "tesseract", // Use default OCR provider
+        invoice_repo,
+        state.storage.clone(),
+    );
+
+    // Run OCR reprocessing
+    let ocr_result = capture_service.reprocess_ocr(&tenant.tenant_id, &invoice_id).await?;
+
     Ok(Json(serde_json::json!({
-        "message": "OCR reprocessing queued",
-        "invoice_id": id
+        "message": "OCR reprocessing completed",
+        "invoice_id": id,
+        "vendor_name": ocr_result.vendor_name.value,
+        "invoice_number": ocr_result.invoice_number.value,
+        "total_amount": ocr_result.total_amount.value,
+        "invoice_date": ocr_result.invoice_date.value,
+        "due_date": ocr_result.due_date.value,
     })))
 }
 
