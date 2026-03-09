@@ -12,6 +12,10 @@ path = "src/bin/migrate.rs"
 name = "seed"
 path = "src/bin/seed.rs"
 
+[[bin]]
+name = "rollback"
+path = "src/bin/rollback.rs"
+
 [features]
 default = []
 s3 = ["aws-sdk-s3", "aws-config"]
