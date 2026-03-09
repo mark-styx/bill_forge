@@ -56,7 +56,7 @@ struct MigrationRecord {
     applied_at: DateTime<Utc>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MigrationFile {
     version: i32,
     name: String,
