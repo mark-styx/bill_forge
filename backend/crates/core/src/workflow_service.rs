@@ -639,20 +639,38 @@ impl<
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| Error::Validation("Escalate requires 'user_id' parameter".to_string()))?;
 
-                let _user_id: Uuid = escalate_to.parse()
+                let user_uuid: Uuid = escalate_to.parse()
                     .map_err(|_| Error::Validation("Invalid user_id format".to_string()))?;
 
-                // Find current queue item for invoice and reassign
-                // Note: In a real system, we'd need to find the current queue item
-                // For now, we'll log the escalation action
-                tracing::info!(
-                    invoice_id = %invoice.id,
-                    escalate_to = %escalate_to,
-                    "Invoice escalated to user"
-                );
+                let escalate_user_id = UserId(user_uuid);
 
-                // TODO: Implement actual queue item reassignment when we have a method to find
-                // the current queue item for an invoice
+                // Find current queue item for invoice
+                match self.queue_repo.get_current_item_for_invoice(tenant_id, &invoice.id).await? {
+                    Some(current_item) => {
+                        // Reassign the queue item to the new user
+                        let reassigned_item = self.queue_repo.reassign_item(
+                            tenant_id,
+                            current_item.id,
+                            &escalate_user_id
+                        ).await?;
+
+                        tracing::info!(
+                            invoice_id = %invoice.id,
+                            item_id = %reassigned_item.id,
+                            queue_id = %reassigned_item.queue_id,
+                            escalated_from = ?current_item.assigned_to,
+                            escalated_to = %escalate_to,
+                            "Invoice queue item escalated and reassigned"
+                        );
+                    }
+                    None => {
+                        tracing::warn!(
+                            invoice_id = %invoice.id,
+                            escalate_to = %escalate_to,
+                            "Invoice escalation requested but no active queue item found"
+                        );
+                    }
+                }
             }
         }
 
@@ -903,6 +921,47 @@ mod tests {
             _user_id: &UserId,
         ) -> Result<i64> {
             Ok(0)
+        }
+
+        async fn get_current_item_for_invoice(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+        ) -> Result<Option<crate::domain::QueueItem>> {
+            // Return a mock queue item for testing
+            Ok(Some(crate::domain::QueueItem {
+                id: Uuid::new_v4(),
+                tenant_id: _tenant_id.clone(),
+                queue_id: crate::domain::WorkQueueId::new(),
+                invoice_id: _invoice_id.clone(),
+                assigned_to: None,
+                priority: 0,
+                entered_at: Utc::now(),
+                due_at: None,
+                claimed_at: None,
+                completed_at: None,
+            }))
+        }
+
+        async fn reassign_item(
+            &self,
+            _tenant_id: &TenantId,
+            _item_id: Uuid,
+            assigned_to: &UserId,
+        ) -> Result<crate::domain::QueueItem> {
+            // Return a mock reassigned queue item for testing
+            Ok(crate::domain::QueueItem {
+                id: _item_id,
+                tenant_id: _tenant_id.clone(),
+                queue_id: crate::domain::WorkQueueId::new(),
+                invoice_id: crate::domain::InvoiceId::new(),
+                assigned_to: Some(assigned_to.clone()),
+                priority: 0,
+                entered_at: Utc::now(),
+                due_at: None,
+                claimed_at: None,
+                completed_at: None,
+            })
         }
     }
 

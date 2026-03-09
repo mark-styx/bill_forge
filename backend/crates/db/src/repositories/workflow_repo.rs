@@ -502,6 +502,43 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
         Ok(())
     }
+
+    async fn get_current_item_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Option<QueueItem>> {
+        let result = sqlx::query_as::<_, QueueItemRow>(
+            r#"SELECT * FROM queue_items
+               WHERE tenant_id = $1 AND invoice_id = $2 AND completed_at IS NULL
+               ORDER BY entered_at DESC
+               LIMIT 1"#
+        )
+        .bind(tenant_id.as_str())
+        .bind(invoice_id.0)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get current queue item: {}", e)))?;
+
+        Ok(result.map(|row| row.into_item()))
+    }
+
+    async fn reassign_item(&self, tenant_id: &TenantId, item_id: Uuid, assigned_to: &UserId) -> Result<QueueItem> {
+        let now = Utc::now();
+
+        sqlx::query("UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+            .bind(assigned_to.0)
+            .bind(now)
+            .bind(item_id)
+            .bind(tenant_id.as_str())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to reassign item: {}", e)))?;
+
+        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to get reassigned item: {}", e)))?;
+
+        Ok(result.into_item())
+    }
 }
 
 #[async_trait]

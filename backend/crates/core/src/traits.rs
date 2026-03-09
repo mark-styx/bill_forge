@@ -72,6 +72,8 @@ pub trait WorkQueueRepository: Send + Sync {
     async fn move_item(&self, tenant_id: &TenantId, invoice_id: &InvoiceId, to_queue_id: &WorkQueueId, assigned_to: Option<&UserId>) -> Result<QueueItem>;
     async fn count_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64>;
     async fn count_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64>;
+    async fn get_current_item_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Option<QueueItem>>;
+    async fn reassign_item(&self, tenant_id: &TenantId, item_id: Uuid, assigned_to: &UserId) -> Result<QueueItem>;
 }
 
 /// Repository for assignment rules
