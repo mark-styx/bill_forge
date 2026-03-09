@@ -155,25 +155,46 @@ async fn vendor_spend(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    // Parse date range (optional)
-    let start_date = query.start_date
-        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-    let end_date = query.end_date
-        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-
+    // Get all vendors with their spend data
     let vendor_spend = reporting_service.get_vendor_spend(
         &tenant.tenant_id,
         &pool,
-        start_date,
-        end_date,
+        None,
+        None,
         100, // limit
     ).await?;
 
+    // Get YTD spend for each vendor
+    let ytd_spend = reporting_service.get_vendor_spend_ytd(
+        &tenant.tenant_id,
+        &pool,
+        100,
+    ).await?;
+
+    // Get MTD spend for each vendor
+    let mtd_spend = reporting_service.get_vendor_spend_mtd(
+        &tenant.tenant_id,
+        &pool,
+        100,
+    ).await?;
+
+    // Build lookup maps for YTD and MTD
+    let ytd_map: std::collections::HashMap<String, f64> = ytd_spend
+        .iter()
+        .map(|vs| (vs.vendor_id.clone(), vs.total_spend))
+        .collect();
+
+    let mtd_map: std::collections::HashMap<String, f64> = mtd_spend
+        .iter()
+        .map(|vs| (vs.vendor_id.clone(), vs.total_spend))
+        .collect();
+
+    // Combine data
     let result: Vec<VendorSpend> = vendor_spend.into_iter().map(|vs| VendorSpend {
-        vendor_id: vs.vendor_id,
+        vendor_id: vs.vendor_id.clone(),
         vendor_name: vs.vendor_name,
-        ytd_spend: vs.total_spend, // TODO: Calculate YTD separately
-        mtd_spend: vs.total_spend, // TODO: Calculate MTD separately
+        ytd_spend: ytd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
+        mtd_spend: mtd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
         invoice_count: vs.invoice_count,
     }).collect();
 
@@ -202,13 +223,16 @@ async fn workflow_metrics(
     // Get invoices processed today from dashboard summary
     let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
 
+    // Get invoices processed this week
+    let invoices_this_week = reporting_service.get_invoices_processed_this_week(&tenant.tenant_id, &pool).await?;
+
     Ok(Json(WorkflowMetrics {
         avg_processing_time_hours: metrics.avg_total_processing_time_hours,
         avg_approval_time_hours: metrics.avg_approval_time_hours,
         auto_approval_rate: metrics.auto_approval_rate,
         rejection_rate: metrics.rejection_rate,
         invoices_processed_today: summary.invoices_processed_today,
-        invoices_processed_this_week: 0, // TODO: Add weekly calculation
+        invoices_processed_this_week: invoices_this_week,
     }))
 }
 

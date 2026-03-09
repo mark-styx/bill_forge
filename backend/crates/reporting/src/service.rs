@@ -6,7 +6,7 @@ use crate::models::*;
 use billforge_core::{types::TenantId, Result, Error};
 use sqlx::{PgPool, Row, Column};
 use std::sync::Arc;
-use chrono::{NaiveDate, Utc, Duration};
+use chrono::{NaiveDate, Utc, Duration, Datelike};
 
 /// Service for generating reports from tenant data
 pub struct ReportingService {
@@ -300,6 +300,61 @@ impl ReportingService {
                 }).collect())
             }
         }
+    }
+
+    /// Get YTD spend by vendor
+    pub async fn get_vendor_spend_ytd(
+        &self,
+        tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        limit: u32,
+    ) -> Result<Vec<VendorSpend>> {
+        let now = Utc::now().naive_utc().date();
+        let year_start = NaiveDate::from_ymd_opt(now.year(), 1, 1)
+            .ok_or_else(|| Error::Validation("Invalid year start date".to_string()))?;
+
+        self.get_vendor_spend(tenant_id, pool, Some(year_start), Some(now), limit).await
+    }
+
+    /// Get MTD spend by vendor
+    pub async fn get_vendor_spend_mtd(
+        &self,
+        tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        limit: u32,
+    ) -> Result<Vec<VendorSpend>> {
+        let now = Utc::now().naive_utc().date();
+        let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+            .ok_or_else(|| Error::Validation("Invalid month start date".to_string()))?;
+
+        self.get_vendor_spend(tenant_id, pool, Some(month_start), Some(now), limit).await
+    }
+
+    /// Get count of invoices processed this week (Monday to current day)
+    pub async fn get_invoices_processed_this_week(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+    ) -> Result<u64> {
+        // Calculate the Monday of the current week
+        let now = Utc::now().naive_utc().date();
+        let weekday = now.weekday().num_days_from_monday() as i32;
+        let week_start = now - Duration::days(weekday as i64);
+
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM invoices
+            WHERE capture_status = 'reviewed'
+            AND DATE(created_at) >= $1
+            "#
+        )
+        .bind(week_start)
+        .fetch_one(&**pool)
+        .await
+        .unwrap_or(0);
+
+        Ok(count as u64)
     }
 
     /// Get invoice aging report (buckets: 0-30, 31-60, 61-90, 90+ days)

@@ -34,6 +34,16 @@ pub struct VendorSpend {
     pub last_invoice_date: Option<NaiveDate>,
 }
 
+/// Spend by vendor with YTD/MTD breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VendorSpendWithPeriods {
+    pub vendor_id: String,
+    pub vendor_name: String,
+    pub ytd_spend: f64,
+    pub mtd_spend: f64,
+    pub invoice_count: u64,
+}
+
 /// Invoice aging bucket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgingBucket {
