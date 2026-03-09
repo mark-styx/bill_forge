@@ -8,6 +8,11 @@ use sqlx::{PgPool, Row, Column};
 use std::sync::Arc;
 use chrono::{NaiveDate, Utc, Duration, Datelike};
 
+// Re-export models used in public API
+pub use crate::models::{
+    SpendTrendPoint, CategoryBreakdown, VendorPerformanceMetrics, ApprovalAnalytics,
+};
+
 /// Service for generating reports from tenant data
 pub struct ReportingService {
     // Service is stateless - database access is passed per-method
@@ -734,6 +739,445 @@ impl ReportingService {
             rows: result_rows,
             total_rows,
             generated_at: Utc::now(),
+        })
+    }
+
+    /// Get spend trends over time with period-over-period comparison
+    pub async fn get_spend_trends(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        group_by: &str,
+    ) -> Result<Vec<SpendTrendPoint>> {
+        // Determine date format based on grouping
+        let date_expr = match group_by {
+            "day" => "to_char(invoice_date, 'YYYY-MM-DD')",
+            "week" => "to_char(invoice_date, 'YYYY-WW')",
+            "month" => "to_char(invoice_date, 'YYYY-MM')",
+            "quarter" => "to_char(invoice_date, 'YYYY-Q')",
+            "year" => "to_char(invoice_date, 'YYYY')",
+            _ => "to_char(invoice_date, 'YYYY-MM')",
+        };
+
+        let sql = format!(
+            r#"
+            WITH period_data AS (
+                SELECT
+                    {} as period,
+                    COUNT(*) as invoice_count,
+                    COALESCE(SUM(total_amount_cents), 0) / 100.0 as total_spend
+                FROM invoices
+                WHERE invoice_date >= $1 AND invoice_date <= $2
+                GROUP BY period
+            )
+            SELECT
+                period,
+                total_spend,
+                invoice_count,
+                CASE WHEN invoice_count > 0 THEN total_spend / invoice_count ELSE 0 END as avg_invoice_amount,
+                LAG(total_spend) OVER (ORDER BY period) as prior_spend
+            FROM period_data
+            ORDER BY period ASC
+            "#,
+            date_expr
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct TrendRow {
+            period: String,
+            total_spend: f64,
+            invoice_count: i64,
+            avg_invoice_amount: f64,
+            prior_spend: Option<f64>,
+        }
+
+        let rows = sqlx::query_as::<_, TrendRow>(&sql)
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_all(&**pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to query spend trends: {}", e)))?;
+
+        let results = rows
+            .into_iter()
+            .map(|row| {
+                let change_from_prior = row.prior_spend.map(|prior| row.total_spend - prior);
+                let change_percentage = row.prior_spend.and_then(|prior| {
+                    if prior > 0.0 {
+                        Some(((row.total_spend - prior) / prior) * 100.0)
+                    } else {
+                        None
+                    }
+                });
+
+                SpendTrendPoint {
+                    period: row.period,
+                    total_spend: row.total_spend,
+                    invoice_count: row.invoice_count as u64,
+                    avg_invoice_amount: row.avg_invoice_amount,
+                    change_from_prior_period: change_from_prior,
+                    change_percentage,
+                }
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get category breakdown (GL codes, departments, cost centers)
+    pub async fn get_category_breakdown(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        category_type: &str,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+    ) -> Result<Vec<CategoryBreakdown>> {
+        let column = match category_type {
+            "gl_code" => "gl_code",
+            "department" => "department",
+            "cost_center" => "cost_center",
+            _ => return Err(Error::Validation(format!("Invalid category type: {}", category_type))),
+        };
+
+        let mut sql = format!(
+            r#"
+            SELECT
+                COALESCE({}, 'Unassigned') as category_value,
+                COUNT(*) as invoice_count,
+                COALESCE(SUM(total_amount_cents), 0) / 100.0 as total_amount
+            FROM invoices
+            "#,
+            column
+        );
+
+        let mut conditions: Vec<String> = Vec::new();
+        if start_date.is_some() {
+            conditions.push("invoice_date >= $1".to_string());
+        }
+        if end_date.is_some() {
+            conditions.push(format!("invoice_date <= ${}", if start_date.is_some() { 2 } else { 1 }));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        sql.push_str(&format!(
+            " GROUP BY {} ORDER BY total_amount DESC",
+            column
+        ));
+
+        #[derive(sqlx::FromRow)]
+        struct CategoryRow {
+            category_value: String,
+            invoice_count: i64,
+            total_amount: f64,
+        }
+
+        let rows = match (start_date, end_date) {
+            (Some(start), Some(end)) => {
+                sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (Some(start), None) => {
+                sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(start)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, Some(end)) => {
+                sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, None) => {
+                sqlx::query_as::<_, CategoryRow>(&sql)
+                    .fetch_all(&**pool)
+                    .await
+            }
+        }
+        .map_err(|e| Error::Database(format!("Failed to query category breakdown: {}", e)))?;
+
+        let total_spend: f64 = rows.iter().map(|r| r.total_amount).sum();
+        let total_count: u64 = rows.len() as u64;
+
+        let results = rows
+            .into_iter()
+            .map(|row| CategoryBreakdown {
+                category_type: category_type.to_string(),
+                category_value: row.category_value,
+                invoice_count: row.invoice_count as u64,
+                total_amount: row.total_amount,
+                percentage_of_total: if total_spend > 0.0 {
+                    (row.total_amount / total_spend) * 100.0
+                } else {
+                    0.0
+                },
+                avg_amount: if row.invoice_count > 0 {
+                    row.total_amount / (row.invoice_count as f64)
+                } else {
+                    0.0
+                },
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get vendor performance metrics
+    pub async fn get_vendor_performance(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        limit: u32,
+    ) -> Result<Vec<VendorPerformanceMetrics>> {
+        let sql = r#"
+            WITH vendor_stats AS (
+                SELECT
+                    i.vendor_id::text,
+                    COALESCE(v.name, i.vendor_name) as vendor_name,
+                    COUNT(*) as total_invoices,
+                    COALESCE(SUM(i.total_amount_cents), 0) / 100.0 as total_spend,
+                    -- Calculate on-time payment rate (paid before or on due_date)
+                    AVG(
+                        CASE
+                            WHEN i.processing_status = 'paid' AND i.due_date IS NOT NULL THEN
+                                CASE
+                                    WHEN DATE(i.updated_at) <= i.due_date THEN 1.0
+                                    ELSE 0.0
+                                END
+                            ELSE NULL
+                        END
+                    ) as on_time_payment_rate,
+                    -- Calculate average payment days
+                    AVG(
+                        CASE
+                            WHEN i.processing_status = 'paid' THEN
+                                EXTRACT(EPOCH FROM (i.updated_at - i.created_at)) / 86400.0
+                            ELSE NULL
+                        END
+                    ) as avg_payment_days,
+                    -- Dispute rate (invoices with notes containing dispute keywords)
+                    COUNT(*) FILTER (WHERE i.notes ILIKE '%dispute%' OR i.notes ILIKE '%discrepancy%')::float / COUNT(*) as dispute_rate
+                FROM invoices i
+                LEFT JOIN vendors v ON i.vendor_id = v.id
+                WHERE i.vendor_id IS NOT NULL
+                GROUP BY i.vendor_id, vendor_name
+            )
+            SELECT
+                vendor_id,
+                vendor_name,
+                total_invoices,
+                total_spend,
+                COALESCE(on_time_payment_rate, 0.0) as on_time_payment_rate,
+                COALESCE(avg_payment_days, 0.0) as avg_payment_days,
+                COALESCE(dispute_rate, 0.0) as dispute_rate,
+                0.0 as credit_utilization,
+                -- Calculate reliability score (0-100)
+                GREATEST(0, LEAST(100,
+                    50.0 + -- Base score
+                    COALESCE(on_time_payment_rate, 0.0) * 30 + -- Up to 30 points for on-time payments
+                    (1 - COALESCE(dispute_rate, 0.0)) * 20 -- Up to 20 points for low dispute rate
+                )) as reliability_score
+            FROM vendor_stats
+            ORDER BY total_spend DESC
+            LIMIT $1
+        "#;
+
+        #[derive(sqlx::FromRow)]
+        struct VendorPerfRow {
+            vendor_id: String,
+            vendor_name: String,
+            total_invoices: i64,
+            total_spend: f64,
+            on_time_payment_rate: f64,
+            avg_payment_days: f64,
+            dispute_rate: f64,
+            credit_utilization: f64,
+            reliability_score: f64,
+        }
+
+        let rows = sqlx::query_as::<_, VendorPerfRow>(sql)
+            .bind(limit as i32)
+            .fetch_all(&**pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to query vendor performance: {}", e)))?;
+
+        let results = rows
+            .into_iter()
+            .map(|row| VendorPerformanceMetrics {
+                vendor_id: row.vendor_id,
+                vendor_name: row.vendor_name,
+                total_invoices: row.total_invoices as u64,
+                total_spend: row.total_spend,
+                on_time_payment_rate: row.on_time_payment_rate,
+                avg_payment_days: row.avg_payment_days,
+                dispute_rate: row.dispute_rate,
+                credit_utilization: row.credit_utilization,
+                reliability_score: row.reliability_score,
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Get approval analytics including bottlenecks and approver workloads
+    pub async fn get_approval_analytics(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+    ) -> Result<ApprovalAnalytics> {
+        // Build date filter conditions
+        let date_filter = match (start_date, end_date) {
+            (Some(start), Some(end)) => format!(
+                "WHERE ar.created_at >= '{}' AND ar.created_at <= '{}'",
+                start, end
+            ),
+            (Some(start), None) => format!("WHERE ar.created_at >= '{}'", start),
+            (None, Some(end)) => format!("WHERE ar.created_at <= '{}'", end),
+            (None, None) => String::new(),
+        };
+
+        // Get overall approval stats
+        let stats_sql = format!(
+            r#"
+            SELECT
+                COUNT(*) as total_approvals,
+                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
+                COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
+                COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
+            FROM approval_requests ar
+            {}
+            "#,
+            date_filter
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct StatsRow {
+            total_approvals: i64,
+            avg_approval_time_hours: Option<f64>,
+            approval_rate: Option<f64>,
+            rejection_rate: Option<f64>,
+        }
+
+        let stats = sqlx::query_as::<_, StatsRow>(&stats_sql)
+            .fetch_one(&**pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to query approval stats: {}", e)))?;
+
+        // Get bottleneck stages (workflow steps with longest average times)
+        let bottleneck_sql = format!(
+            r#"
+            SELECT
+                COALESCE(ar.level::text, 'Unknown') as stage_name,
+                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
+                COUNT(*) as invoice_count
+            FROM approval_requests ar
+            {}
+            GROUP BY ar.level
+            ORDER BY avg_time_hours DESC
+            LIMIT 5
+            "#,
+            date_filter
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct BottleneckRow {
+            stage_name: String,
+            avg_time_hours: Option<f64>,
+            invoice_count: i64,
+        }
+
+        let bottleneck_rows = sqlx::query_as::<_, BottleneckRow>(&bottleneck_sql)
+            .fetch_all(&**pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to query bottlenecks: {}", e)))?;
+
+        let total_time: f64 = bottleneck_rows
+            .iter()
+            .filter_map(|r| r.avg_time_hours)
+            .sum();
+
+        let bottleneck_stages = bottleneck_rows
+            .into_iter()
+            .map(|row| BottleneckStage {
+                stage_name: row.stage_name,
+                avg_time_hours: row.avg_time_hours.unwrap_or(0.0),
+                invoice_count: row.invoice_count as u64,
+                percentage_of_total_time: if total_time > 0.0 && row.avg_time_hours.is_some() {
+                    (row.avg_time_hours.unwrap() / total_time) * 100.0
+                } else {
+                    0.0
+                },
+            })
+            .collect();
+
+        // Get approver workloads
+        let workload_sql = format!(
+            r#"
+            SELECT
+                ar.approver_id::text,
+                COALESCE(u.email, 'Unknown') as approver_name,
+                COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
+                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
+                    FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
+                COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
+                COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
+                    NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
+            FROM approval_requests ar
+            LEFT JOIN users u ON ar.approver_id = u.id
+            {}
+            GROUP BY ar.approver_id, u.email
+            ORDER BY approvals_completed DESC
+            LIMIT 20
+            "#,
+            date_filter
+        );
+
+        #[derive(sqlx::FromRow)]
+        struct WorkloadRow {
+            approver_id: String,
+            approver_name: String,
+            approvals_completed: i64,
+            avg_time_to_approve_hours: Option<f64>,
+            pending_approvals: i64,
+            approval_rate: Option<f64>,
+        }
+
+        let workload_rows = sqlx::query_as::<_, WorkloadRow>(&workload_sql)
+            .fetch_all(&**pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to query approver workloads: {}", e)))?;
+
+        let approver_workloads = workload_rows
+            .into_iter()
+            .map(|row| ApproverWorkload {
+                approver_id: row.approver_id,
+                approver_name: row.approver_name,
+                approvals_completed: row.approvals_completed as u64,
+                avg_time_to_approve_hours: row.avg_time_to_approve_hours.unwrap_or(0.0),
+                pending_approvals: row.pending_approvals as u64,
+                approval_rate: row.approval_rate.unwrap_or(0.0),
+            })
+            .collect();
+
+        Ok(ApprovalAnalytics {
+            total_approvals: stats.total_approvals as u64,
+            avg_approval_time_hours: stats.avg_approval_time_hours.unwrap_or(0.0),
+            approval_rate: stats.approval_rate.unwrap_or(0.0),
+            rejection_rate: stats.rejection_rate.unwrap_or(0.0),
+            bottleneck_stages,
+            approver_workloads,
         })
     }
 }
