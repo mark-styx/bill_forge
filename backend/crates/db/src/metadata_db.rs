@@ -151,7 +151,7 @@ impl MetadataDatabase {
                VALUES ($1, $2, $3, $4, $5, $6)"#
         )
         .bind(id.0)
-        .bind(user.tenant_id.as_str())
+        .bind(user.tenant_id.as_uuid())
         .bind(&user.email)
         .bind(&user.password_hash)
         .bind(&user.name)
@@ -170,7 +170,7 @@ impl MetadataDatabase {
 
         Ok(UserRecord {
             id: id.0,
-            tenant_id: user.tenant_id.to_string(),
+            tenant_id: user.tenant_id.as_uuid().clone(),
             email: user.email.clone(),
             password_hash: user.password_hash.clone(),
             name: user.name.clone(),
@@ -399,7 +399,7 @@ fn slugify(s: &str) -> String {
 /// Tenant record from database
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TenantRecord {
-    pub id: String,
+    pub id: sqlx::types::Uuid,
     pub name: String,
     pub settings: sqlx::types::Json<serde_json::Value>,
     pub enabled_modules: sqlx::types::Json<serde_json::Value>,
@@ -410,7 +410,7 @@ pub struct TenantRecord {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRecord {
     pub id: sqlx::types::Uuid,
-    pub tenant_id: String,
+    pub tenant_id: sqlx::types::Uuid,
     pub email: String,
     pub password_hash: String,
     pub name: String,
@@ -433,7 +433,7 @@ pub struct CreateUserInput {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ApiKeyRecord {
     pub id: sqlx::types::Uuid,
-    pub tenant_id: String,
+    pub tenant_id: sqlx::types::Uuid,
     pub user_id: sqlx::types::Uuid,
     pub name: String,
     pub key_prefix: String,

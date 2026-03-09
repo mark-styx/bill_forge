@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     slug TEXT UNIQUE NOT NULL,
     settings JSONB NOT NULL DEFAULT '{}',
+    enabled_modules JSONB NOT NULL DEFAULT '[]',
+    is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
