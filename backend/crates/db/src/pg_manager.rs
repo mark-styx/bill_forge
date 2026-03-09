@@ -189,9 +189,31 @@ impl PgManager {
 
     /// Run migrations on a single tenant database
     pub async fn run_tenant_migrations(&self, pool: &PgPool) -> Result<()> {
-        // TODO: Use sqlx migrate feature to run migrations
-        // For now, this is a placeholder
         tracing::info!("Running tenant migrations...");
+
+        // Run all migrations in order
+        // These are the same migrations used by the migrate binary
+        let migrations = vec![
+            ("001_create_tenants.sql", include_str!("../../../migrations/001_create_tenants.sql")),
+            ("002_create_users.sql", include_str!("../../../migrations/002_create_users.sql")),
+            ("003_create_vendors.sql", include_str!("../../../migrations/003_create_vendors.sql")),
+            ("004_create_invoices.sql", include_str!("../../../migrations/004_create_invoices.sql")),
+            ("005_create_workflow_tables.sql", include_str!("../../../migrations/005_create_workflow_tables.sql")),
+            ("006_create_quickbooks_tables.sql", include_str!("../../../migrations/006_create_quickbooks_tables.sql")),
+            ("007_create_vendor_documents.sql", include_str!("../../../migrations/007_create_vendor_documents.sql")),
+            ("008_create_vendor_contacts.sql", include_str!("../../../migrations/008_create_vendor_contacts.sql")),
+            ("009_create_email_notifications.sql", include_str!("../../../migrations/009_create_email_notifications.sql")),
+        ];
+
+        for (name, sql) in migrations {
+            tracing::debug!("Running migration: {}", name);
+            sqlx::raw_sql(sql)
+                .execute(pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to run migration {}: {}", name, e)))?;
+        }
+
+        tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }
 
