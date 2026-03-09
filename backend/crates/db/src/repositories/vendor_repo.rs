@@ -184,6 +184,63 @@ impl VendorRepository for VendorRepositoryImpl {
         // TODO: Implement vendor contacts table
         todo!("Vendor contacts not yet implemented")
     }
+
+    async fn list_messages(&self, tenant_id: &TenantId, vendor_id: &VendorId, limit: u32) -> Result<Vec<billforge_core::domain::VendorMessage>> {
+        let rows = sqlx::query_as::<_, MessageRow>(
+            r#"
+            SELECT id, vendor_id, tenant_id, subject, body, sent_by, sent_at, status
+            FROM vendor_messages
+            WHERE tenant_id = $1 AND vendor_id = $2
+            ORDER BY sent_at DESC
+            LIMIT $3
+            "#
+        )
+        .bind(tenant_id.as_str())
+        .bind(vendor_id.0)
+        .bind(limit as i32)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list messages: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_message(tenant_id, vendor_id)).collect())
+    }
+
+    async fn send_message(&self, tenant_id: &TenantId, vendor_id: &VendorId, subject: String, body: String, sent_by: Option<Uuid>) -> Result<billforge_core::domain::VendorMessage> {
+        let id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO vendor_messages (id, tenant_id, vendor_id, subject, body, sent_by, sent_at, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(vendor_id.0)
+        .bind(&subject)
+        .bind(&body)
+        .bind(sent_by)
+        .bind(now)
+        .bind("sent")
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to send message: {}", e)))?;
+
+        Ok(billforge_core::domain::VendorMessage {
+            id,
+            vendor_id: vendor_id.clone(),
+            tenant_id: tenant_id.clone(),
+            subject,
+            body,
+            sender_type: billforge_core::domain::MessageSender::Internal,
+            sender_id: sent_by,
+            sender_name: "System".to_string(),
+            attachments: Vec::new(),
+            read_at: None,
+            created_at: now,
+        })
+    }
 }
 
 /// Helper struct for mapping database rows
@@ -235,3 +292,35 @@ impl VendorRow {
         }
     }
 }
+
+/// Helper struct for mapping message rows
+#[derive(sqlx::FromRow)]
+struct MessageRow {
+    id: Uuid,
+    vendor_id: Uuid,
+    tenant_id: String,
+    subject: String,
+    body: String,
+    sent_by: Option<Uuid>,
+    sent_at: chrono::DateTime<Utc>,
+    status: String,
+}
+
+impl MessageRow {
+    fn into_message(self, tenant_id: &TenantId, vendor_id: &VendorId) -> billforge_core::domain::VendorMessage {
+        billforge_core::domain::VendorMessage {
+            id: self.id,
+            vendor_id: vendor_id.clone(),
+            tenant_id: tenant_id.clone(),
+            subject: self.subject,
+            body: self.body,
+            sender_type: billforge_core::domain::MessageSender::Internal,
+            sender_id: self.sent_by,
+            sender_name: "System".to_string(),
+            attachments: Vec::new(),
+            read_at: None,
+            created_at: self.sent_at,
+        }
+    }
+}
+

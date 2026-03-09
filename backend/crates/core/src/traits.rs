@@ -29,12 +29,14 @@ pub trait VendorRepository: Send + Sync {
     async fn find_by_name(&self, tenant_id: &TenantId, name: &str) -> Result<Option<Vendor>>;
     async fn add_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact: VendorContact) -> Result<()>;
     async fn remove_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact_id: Uuid) -> Result<()>;
+    async fn list_messages(&self, tenant_id: &TenantId, vendor_id: &VendorId, limit: u32) -> Result<Vec<VendorMessage>>;
+    async fn send_message(&self, tenant_id: &TenantId, vendor_id: &VendorId, subject: String, body: String, sent_by: Option<Uuid>) -> Result<VendorMessage>;
 }
 
 /// Repository for tax documents
 #[async_trait]
 pub trait TaxDocumentRepository: Send + Sync {
-    async fn create(&self, tenant_id: &TenantId, doc: TaxDocument) -> Result<TaxDocument>;
+    async fn create(&self, tenant_id: &TenantId, vendor_id: &VendorId, document_type: String, file_name: String, file_path: String, file_size: i64, mime_type: String, uploaded_by: Option<Uuid>) -> Result<Uuid>;
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<TaxDocument>>;
     async fn list_for_vendor(&self, tenant_id: &TenantId, vendor_id: &VendorId) -> Result<Vec<TaxDocument>>;
     async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()>;

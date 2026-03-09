@@ -4,13 +4,13 @@ use crate::error::ApiResult;
 use crate::extractors::VendorMgmtAccess;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     routing::{delete, get, post, put},
     Json, Router,
 };
 use billforge_core::{
     domain::{CreateVendorInput, UpdateVendorInput, Vendor, VendorContact, VendorFilters},
-    traits::VendorRepository,
+    traits::{TaxDocumentRepository, VendorRepository},
     types::{PaginatedResponse, Pagination},
 };
 use serde::Deserialize;
@@ -162,17 +162,74 @@ async fn list_tax_documents(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    // TODO: Implement tax document listing
-    Ok(Json(vec![]))
+    let vendor_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::TaxDocumentRepositoryImpl::new(pool);
+    let documents = repo.list_for_vendor(&tenant.tenant_id, &vendor_id).await?;
+
+    let result: Vec<serde_json::Value> = documents.into_iter().map(|doc| {
+        serde_json::json!({
+            "id": doc.id,
+            "document_type": doc.document_type,
+            "tax_year": doc.tax_year,
+            "file_name": doc.file_name,
+            "received_date": doc.received_date,
+            "expires_date": doc.expires_date,
+            "created_at": doc.created_at,
+        })
+    }).collect();
+
+    Ok(Json(result))
 }
 
 async fn upload_tax_document(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
+    mut multipart: Multipart,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement tax document upload
-    Ok(Json(serde_json::json!({ "message": "Tax document uploaded" })))
+    let vendor_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::TaxDocumentRepositoryImpl::new(pool);
+
+    // Extract file from multipart form
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        billforge_core::Error::Validation(format!("Failed to read multipart data: {}", e))
+    })? {
+        let file_name = field.file_name().unwrap_or("document.pdf").to_string();
+        let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
+
+        if let Ok(data) = field.bytes().await {
+            let file_size = data.len() as i64;
+
+            // Generate file path (in production, this would upload to S3 or similar)
+            let file_path = format!("vendor_documents/{}/{}", vendor_id, uuid::Uuid::new_v4());
+
+            // Store metadata in database
+            let doc_id = repo.create(
+                &tenant.tenant_id,
+                &vendor_id,
+                "w9".to_string(), // Default to W9, could be configurable
+                file_name.clone(),
+                file_path,
+                file_size,
+                content_type,
+                Some(user.user_id.0),
+            ).await?;
+
+            return Ok(Json(serde_json::json!({
+                "id": doc_id,
+                "message": "Tax document uploaded successfully",
+                "file_name": file_name
+            })));
+        }
+    }
+
+    Err(billforge_core::Error::Validation("No file uploaded".to_string()).into())
 }
 
 async fn list_messages(
@@ -180,8 +237,25 @@ async fn list_messages(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    // TODO: Implement message listing
-    Ok(Json(vec![]))
+    let vendor_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
+    let messages = repo.list_messages(&tenant.tenant_id, &vendor_id, 50).await?;
+
+    let result: Vec<serde_json::Value> = messages.into_iter().map(|msg| {
+        serde_json::json!({
+            "id": msg.id,
+            "subject": msg.subject,
+            "body": msg.body,
+            "sender_type": msg.sender_type,
+            "sender_name": msg.sender_name,
+            "created_at": msg.created_at,
+        })
+    }).collect();
+
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -196,6 +270,23 @@ async fn send_message(
     Path(id): Path<String>,
     Json(input): Json<SendMessageInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement message sending
-    Ok(Json(serde_json::json!({ "message": "Message sent" })))
+    let vendor_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
+
+    let message = repo.send_message(
+        &tenant.tenant_id,
+        &vendor_id,
+        input.subject,
+        input.body,
+        Some(user.user_id.0),
+    ).await?;
+
+    Ok(Json(serde_json::json!({
+        "id": message.id,
+        "message": "Message sent successfully",
+        "created_at": message.created_at
+    })))
 }
