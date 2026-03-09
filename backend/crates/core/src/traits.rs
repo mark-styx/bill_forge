@@ -29,12 +29,14 @@ pub trait VendorRepository: Send + Sync {
     async fn find_by_name(&self, tenant_id: &TenantId, name: &str) -> Result<Option<Vendor>>;
     async fn add_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact: VendorContact) -> Result<()>;
     async fn remove_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact_id: Uuid) -> Result<()>;
+    async fn list_messages(&self, tenant_id: &TenantId, vendor_id: &VendorId, limit: u32) -> Result<Vec<VendorMessage>>;
+    async fn send_message(&self, tenant_id: &TenantId, vendor_id: &VendorId, subject: String, body: String, sent_by: Option<Uuid>) -> Result<VendorMessage>;
 }
 
 /// Repository for tax documents
 #[async_trait]
 pub trait TaxDocumentRepository: Send + Sync {
-    async fn create(&self, tenant_id: &TenantId, doc: TaxDocument) -> Result<TaxDocument>;
+    async fn create(&self, tenant_id: &TenantId, vendor_id: &VendorId, document_type: String, file_name: String, file_path: String, file_size: i64, mime_type: String, uploaded_by: Option<Uuid>) -> Result<Uuid>;
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<TaxDocument>>;
     async fn list_for_vendor(&self, tenant_id: &TenantId, vendor_id: &VendorId) -> Result<Vec<TaxDocument>>;
     async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()>;
@@ -70,6 +72,8 @@ pub trait WorkQueueRepository: Send + Sync {
     async fn move_item(&self, tenant_id: &TenantId, invoice_id: &InvoiceId, to_queue_id: &WorkQueueId, assigned_to: Option<&UserId>) -> Result<QueueItem>;
     async fn count_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64>;
     async fn count_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64>;
+    async fn get_current_item_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Option<QueueItem>>;
+    async fn reassign_item(&self, tenant_id: &TenantId, item_id: Uuid, assigned_to: &UserId) -> Result<QueueItem>;
 }
 
 /// Repository for assignment rules
@@ -151,4 +155,20 @@ pub struct AuditFilters {
     pub resource_id: Option<String>,
     pub from_date: Option<chrono::DateTime<chrono::Utc>>,
     pub to_date: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Repository for user operations
+#[async_trait]
+pub trait UserRepository: Send + Sync {
+    /// Get a user's email by user ID
+    async fn get_email_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>>;
+
+    /// Get a user's name by user ID
+    async fn get_name_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>>;
+
+    /// Get emails for multiple users by IDs
+    async fn get_emails_by_ids(&self, tenant_id: &TenantId, user_ids: &[UserId]) -> Result<Vec<String>>;
+
+    /// Get all user emails for a specific role
+    async fn get_emails_by_role(&self, tenant_id: &TenantId, role: &str) -> Result<Vec<String>>;
 }

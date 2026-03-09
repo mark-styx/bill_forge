@@ -23,6 +23,20 @@ export interface OrganizationTheme {
   logoUrl?: string;
   logoMark?: string;      // Small icon version
   brandGradient?: string; // Custom gradient for brand areas
+  gradientConfig?: {
+    enabled: boolean;
+    type: 'linear' | 'radial' | 'conic';
+    angle?: number;
+    positions?: { color: string; position: number }[];
+  };
+  branding?: {
+    brandName: string;
+    logoUrl?: string;
+    logoMark?: string;
+    faviconUrl?: string;
+  };
+  enabledForAllUsers?: boolean;
+  allowUserOverride?: boolean;
 }
 
 export interface Tenant {

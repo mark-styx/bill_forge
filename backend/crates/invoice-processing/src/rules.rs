@@ -1,7 +1,7 @@
 //! Workflow rule definitions and helpers
 
 use billforge_core::domain::{
-    ActionType, ConditionField, ConditionOperator, RuleAction, RuleCondition, WorkflowRuleType,
+    ActionType, ConditionField, ConditionOperator, RuleAction, RuleCondition,
 };
 use serde_json::json;
 

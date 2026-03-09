@@ -28,7 +28,7 @@ where
             .headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| ApiError(Error::Unauthenticated))?;
+            .ok_or(ApiError(Error::Unauthenticated))?;
 
         // Extract bearer token
         let token = auth_header

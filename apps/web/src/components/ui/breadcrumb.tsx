@@ -69,7 +69,7 @@ export function Breadcrumb({ items, showHome = true, className }: BreadcrumbProp
 }
 
 // Page header with breadcrumb
-interface PageHeaderProps {
+interface BreadcrumbPageHeaderProps {
   title: string;
   description?: string;
   breadcrumbs?: BreadcrumbItem[];
@@ -77,13 +77,13 @@ interface PageHeaderProps {
   className?: string;
 }
 
-export function PageHeader({
+export function BreadcrumbPageHeader({
   title,
   description,
   breadcrumbs,
   actions,
   className,
-}: PageHeaderProps) {
+}: BreadcrumbPageHeaderProps) {
   return (
     <div className={cn('space-y-2', className)}>
       {breadcrumbs && breadcrumbs.length > 0 && (

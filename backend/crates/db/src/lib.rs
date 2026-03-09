@@ -27,15 +27,21 @@
 //! let storage = create_storage_service(config).await?;
 //! ```
 
+// Allow unused variables and dead code in stub implementations (TODOs)
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 pub mod manager;
+pub mod pg_manager;
 pub mod migrations;
 pub mod tenant_db;
 pub mod metadata_db;
 pub mod repositories;
 pub mod storage;
+pub mod seed;
 
 pub use manager::DatabaseManager;
-pub use tenant_db::TenantDatabase;
+pub use pg_manager::PgManager;
 pub use metadata_db::MetadataDatabase;
 pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, create_storage_service};
 #[cfg(feature = "s3")]

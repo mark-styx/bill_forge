@@ -12,6 +12,13 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 validator = { workspace = true }
 async-trait = { workspace = true }
+sqlx = { workspace = true }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+tracing = { workspace = true }
 
 [dev-dependencies]
 mockall = { workspace = true }
+tokio = { workspace = true }

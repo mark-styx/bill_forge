@@ -1,0 +1,20 @@
+- name: OCR_Processing
+  namespace: OCR_Processing
+  alarms:
+    - name: High Error Rate Alarm
+      statistic: Average
+      period: 300
+      evaluation_periods: 5
+      threshold: 1
+      comparison_operator: GreaterThanThreshold
+      alarm_actions:
+        - arn:aws:sns:us-west-2:123456789012:OCR_Processing_Error_Alerts
+
+    - name: High Processing Time Alarm
+      statistic: Average
+      period: 300
+      evaluation_periods: 5
+      threshold: 30
+      comparison_operator: GreaterThanThreshold
+      alarm_actions:
+        - arn:aws:sns:us-west-2:123456789012:OCR_Processing_Error_Alerts

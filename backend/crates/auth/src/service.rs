@@ -2,8 +2,8 @@
 
 use crate::jwt::{JwtConfig, JwtService};
 use crate::password::PasswordService;
-use billforge_core::{Error, Module, Result, Role, TenantContext, TenantId, UserContext, UserId};
-use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase, ApiKeyRecord};
+use billforge_core::{Error, Result, Role, TenantContext, TenantId, UserContext, UserId};
+use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -59,43 +59,54 @@ impl AuthService {
             .await?;
 
         // Get tenant info
+        let tenant_id: TenantId = user.tenant_id.parse()
+            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
         let tenant = self
             .metadata_db
-            .get_tenant(&user.tenant_id)
+            .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.as_str()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+
+        // Convert roles from JSON
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
+            .unwrap_or_default();
 
         // Generate tokens
+        let user_id = UserId(user.id);
         let access_token = self.jwt_service.create_access_token(
-            &user.id,
-            &user.tenant_id,
+            &user_id,
+            &tenant_id,
             &user.email,
-            &user.roles,
+            &roles,
         )?;
         let refresh_token = self
             .jwt_service
-            .create_refresh_token(&user.id, &user.tenant_id)?;
+            .create_refresh_token(&user_id, &tenant_id)?;
 
         Ok(AuthResponse {
             access_token,
             refresh_token,
             user: UserInfo {
-                id: user.id,
-                tenant_id: user.tenant_id,
+                id: UserId(user.id),
+                tenant_id: user.tenant_id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
                 email: user.email,
                 name: user.name,
-                roles: user.roles,
+                roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id,
+                id: tenant.id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.iter().map(|m| m.as_str().to_string()).collect(),
+                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                }).unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.logo_url,
-                    primary_color: tenant.settings.primary_color,
-                    company_name: tenant.settings.company_name,
-                    timezone: tenant.settings.timezone,
-                    default_currency: tenant.settings.default_currency,
+                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
+                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
+                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
                 },
             },
         })
@@ -124,46 +135,58 @@ impl AuthService {
         }
 
         // Update last login
-        self.metadata_db.update_last_login(&user.id).await?;
+        let user_id = UserId(user.id);
+        self.metadata_db.update_last_login(&user_id).await?;
 
         // Get tenant info
+        let tenant_id: TenantId = user.tenant_id.parse()
+            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
         let tenant = self
             .metadata_db
-            .get_tenant(&user.tenant_id)
+            .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.as_str()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+
+        // Convert roles from JSON
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
+            .unwrap_or_default();
 
         // Generate tokens
+        let user_id = UserId(user.id);
         let access_token = self.jwt_service.create_access_token(
-            &user.id,
-            &user.tenant_id,
+            &user_id,
+            &tenant_id,
             &user.email,
-            &user.roles,
+            &roles,
         )?;
         let refresh_token = self
             .jwt_service
-            .create_refresh_token(&user.id, &user.tenant_id)?;
+            .create_refresh_token(&user_id, &tenant_id)?;
 
         Ok(AuthResponse {
             access_token,
             refresh_token,
             user: UserInfo {
-                id: user.id,
-                tenant_id: user.tenant_id,
+                id: UserId(user.id),
+                tenant_id: user.tenant_id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
                 email: user.email,
                 name: user.name,
-                roles: user.roles,
+                roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id,
+                id: tenant.id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.iter().map(|m| m.as_str().to_string()).collect(),
+                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                }).unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.logo_url,
-                    primary_color: tenant.settings.primary_color,
-                    company_name: tenant.settings.company_name,
-                    timezone: tenant.settings.timezone,
-                    default_currency: tenant.settings.default_currency,
+                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
+                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
+                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
                 },
             },
         })
@@ -188,43 +211,54 @@ impl AuthService {
         }
 
         // Get tenant info
+        let tenant_id: TenantId = user.tenant_id.parse()
+            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
         let tenant = self
             .metadata_db
-            .get_tenant(&user.tenant_id)
+            .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.as_str()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+
+        // Convert roles from JSON
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
+            .unwrap_or_default();
 
         // Generate new tokens
+        let user_id = UserId(user.id);
         let access_token = self.jwt_service.create_access_token(
-            &user.id,
-            &user.tenant_id,
+            &user_id,
+            &tenant_id,
             &user.email,
-            &user.roles,
+            &roles,
         )?;
         let new_refresh_token = self
             .jwt_service
-            .create_refresh_token(&user.id, &user.tenant_id)?;
+            .create_refresh_token(&user_id, &tenant_id)?;
 
         Ok(AuthResponse {
             access_token,
             refresh_token: new_refresh_token,
             user: UserInfo {
-                id: user.id,
-                tenant_id: user.tenant_id,
+                id: UserId(user.id),
+                tenant_id: user.tenant_id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
                 email: user.email,
                 name: user.name,
-                roles: user.roles,
+                roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id,
+                id: tenant.id.parse()
+                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.iter().map(|m| m.as_str().to_string()).collect(),
+                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                }).unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.logo_url,
-                    primary_color: tenant.settings.primary_color,
-                    company_name: tenant.settings.company_name,
-                    timezone: tenant.settings.timezone,
-                    default_currency: tenant.settings.default_currency,
+                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
+                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
+                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
                 },
             },
         })
@@ -253,10 +287,13 @@ impl AuthService {
             .ok_or_else(|| Error::TenantNotFound(tenant_id.as_str()))?;
 
         Ok(TenantContext {
-            tenant_id: tenant.id,
+            tenant_id: tenant.id.parse()
+                .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
             tenant_name: tenant.name,
-            enabled_modules: tenant.enabled_modules,
-            settings: tenant.settings,
+            enabled_modules: serde_json::from_value(tenant.enabled_modules.0.clone())
+                .unwrap_or_default(),
+            settings: serde_json::from_value(tenant.settings.0.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -447,12 +484,15 @@ impl AuthService {
             .await?;
 
         // Return a synthetic user context for API key access
+        let roles: Vec<Role> = serde_json::from_value(stored_key.roles.0.clone())
+            .unwrap_or_default();
         Ok(UserContext {
             user_id: UserId::from_uuid(stored_key.id), // Use key ID as user ID
-            tenant_id: stored_key.tenant_id,
+            tenant_id: stored_key.tenant_id.parse()
+                .map_err(|_| Error::Internal("Invalid tenant ID in API key".to_string()))?,
             email: format!("api-key:{}", stored_key.name),
             name: format!("API Key: {}", stored_key.name),
-            roles: stored_key.roles,
+            roles,
         })
     }
 
@@ -461,17 +501,22 @@ impl AuthService {
         let records = self.metadata_db.list_api_keys(tenant_id).await?;
         Ok(records
             .into_iter()
-            .map(|r| ApiKey {
-                id: r.id,
-                tenant_id: r.tenant_id,
-                name: r.name,
-                key_prefix: r.key_prefix,
-                key_hash: r.key_hash,
-                roles: r.roles,
-                is_active: r.is_active,
-                last_used_at: r.last_used_at,
-                expires_at: r.expires_at,
-                created_at: r.created_at,
+            .map(|r| {
+                let roles: Vec<Role> = serde_json::from_value(r.roles.0.clone())
+                    .unwrap_or_default();
+                ApiKey {
+                    id: r.id,
+                    tenant_id: r.tenant_id.parse()
+                        .expect("Invalid tenant ID in database"),
+                    name: r.name,
+                    key_prefix: r.key_prefix,
+                    key_hash: r.key_hash,
+                    roles,
+                    is_active: r.is_active,
+                    last_used_at: r.last_used_at,
+                    expires_at: r.expires_at,
+                    created_at: r.created_at,
+                }
             })
             .collect())
     }

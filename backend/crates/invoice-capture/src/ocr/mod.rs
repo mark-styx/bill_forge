@@ -6,8 +6,7 @@ mod tesseract;
 
 pub use self::tesseract::TesseractOcr;
 
-use async_trait::async_trait;
-use billforge_core::{domain::OcrExtractionResult, traits::OcrService, Result};
+use billforge_core::traits::OcrService;
 
 /// OCR provider factory
 pub fn create_provider(provider_name: &str) -> Box<dyn OcrService> {

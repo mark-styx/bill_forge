@@ -1,6 +1,5 @@
 //! Core types used across all BillForge modules
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,6 +15,10 @@ impl TenantId {
 
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
+    }
+
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
     }
 
     pub fn as_str(&self) -> String {
@@ -55,6 +58,10 @@ impl UserId {
 
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
+    }
+
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
     }
 }
 

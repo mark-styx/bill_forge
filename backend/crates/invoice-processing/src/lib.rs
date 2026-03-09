@@ -2,6 +2,10 @@
 //!
 //! Workflow engine for invoice approval and routing.
 
+// Allow dead code and unused variables in stub implementations
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 pub mod engine;
 pub mod rules;
 

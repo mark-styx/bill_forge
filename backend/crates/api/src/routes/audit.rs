@@ -10,7 +10,7 @@ use axum::{
 };
 use billforge_core::{
     domain::AuditEntry,
-    traits::{AuditFilters, AuditService},
+    traits::AuditFilters,
     types::{Pagination, PaginatedResponse, Role},
     Error,
 };

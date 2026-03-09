@@ -1,0 +1,289 @@
+# Kubernetes Deployment for BillForge
+#
+# Usage:
+#   kubectl apply -f k8s/namespace.yaml
+#   kubectl apply -f k8s/
+#
+# Prerequisites:
+#   - Kubernetes cluster 1.28+
+#   - kubectl configured
+#   - Helm 3.x (for Prometheus/Grafana)
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billforge
+  labels:
+    app: billforge
+    environment: production
+
+---
+# ConfigMap for API
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billforge-api-config
+  namespace: billforge
+data:
+  RUST_LOG: "info,billforge=debug"
+  APP_ENVIRONMENT: "production"
+  QUICKBOOKS_ENVIRONMENT: "production"
+
+---
+# Secret for credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: billforge-secrets
+  namespace: billforge
+type: Opaque
+stringData:
+  DATABASE_URL: "postgres://billforge:$(POSTGRES_PASSWORD)@postgres:5432/billforge_control"
+  REDIS_URL: "redis://:$(REDIS_PASSWORD)@redis:6379"
+  JWT_SECRET: "$(JWT_SECRET)"
+  QUICKBOOKS_CLIENT_ID: "$(QUICKBOOKS_CLIENT_ID)"
+  QUICKBOOKS_CLIENT_SECRET: "$(QUICKBOOKS_CLIENT_SECRET)"
+
+---
+# API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billforge-api
+  namespace: billforge
+  labels:
+    app: billforge
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: billforge
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: billforge
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: api
+          image: billforge/api:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: billforge-api-config
+            - secretRef:
+                name: billforge-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - billforge
+                topologyKey: kubernetes.io/hostname
+
+---
+# Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billforge-worker
+  namespace: billforge
+  labels:
+    app: billforge
+    component: worker
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: billforge
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: billforge
+        component: worker
+    spec:
+      containers:
+        - name: worker
+          image: billforge/worker:latest
+          envFrom:
+            - configMapRef:
+                name: billforge-api-config
+            - secretRef:
+                name: billforge-secrets
+          env:
+            - name: JOB_POLL_INTERVAL_SECS
+              value: "5"
+            - name: MAX_CONCURRENT_JOBS
+              value: "10"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+
+---
+# Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: billforge-api-hpa
+  namespace: billforge
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: billforge-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: billforge_http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "1000"
+
+---
+# Horizontal Pod Autoscaler for Worker
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: billforge-worker-hpa
+  namespace: billforge
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: billforge-worker
+  minReplicas: 4
+  maxReplicas: 30
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: redis_llen
+          selector:
+            matchLabels:
+              key: billforge:jobs:queue
+        target:
+          type: AverageValue
+          averageValue: "50"
+
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: billforge-api
+  namespace: billforge
+spec:
+  type: LoadBalancer
+  selector:
+    app: billforge
+    component: api
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: http
+
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: billforge-ingress
+  namespace: billforge
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rate-limit: "10"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1s"
+spec:
+  tls:
+    - hosts:
+        - api.billforge.io
+      secretName: billforge-tls
+  rules:
+    - host: api.billforge.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: billforge-api
+                port:
+                  number: 80
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: billforge-api-pdb
+  namespace: billforge
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: billforge
+      component: api

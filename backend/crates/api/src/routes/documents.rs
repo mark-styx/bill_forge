@@ -7,11 +7,11 @@ use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{delete, get, post},
     Json, Router,
 };
-use billforge_core::domain::{DocumentRef, DocumentType, InvoiceId};
+use billforge_core::domain::{DocumentType, InvoiceId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -83,13 +83,11 @@ async fn upload_document(
     }
 
     // Validate mime type
-    let allowed_types = vec![
-        "application/pdf",
+    let allowed_types = ["application/pdf",
         "image/png",
         "image/jpeg",
         "image/tiff",
-        "image/gif",
-    ];
+        "image/gif"];
     if !allowed_types.contains(&content_type.as_str()) {
         return Err(billforge_core::Error::Validation(format!(
             "File type not allowed. Allowed types: {}",
@@ -120,7 +118,8 @@ async fn upload_document(
         .map(InvoiceId);
 
     // Save metadata to database
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     let doc = doc_repo
         .create(
             &tenant.tenant_id,
@@ -185,7 +184,8 @@ async fn upload_invoice_document(
         .await?;
 
     // Save metadata to database
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     let doc = doc_repo
         .create(
             &tenant.tenant_id,
@@ -221,7 +221,8 @@ async fn download_document(
         .map_err(|_| billforge_core::Error::Validation("Invalid document ID".to_string()))?;
 
     // Get document metadata
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     let doc = doc_repo
         .get_by_id(&tenant.tenant_id, document_id)
         .await?
@@ -262,7 +263,8 @@ async fn get_document_metadata(
     let document_id = Uuid::parse_str(&id)
         .map_err(|_| billforge_core::Error::Validation("Invalid document ID".to_string()))?;
 
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     let doc = doc_repo
         .get_by_id(&tenant.tenant_id, document_id)
         .await?
@@ -312,7 +314,8 @@ async fn delete_document(
         .await?;
 
     // Delete from database
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     doc_repo.delete(&tenant.tenant_id, document_id).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -328,7 +331,8 @@ async fn list_invoice_documents(
     let invoice_uuid = Uuid::parse_str(&invoice_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
-    let doc_repo = billforge_db::DocumentRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
     let docs = doc_repo
         .list_for_invoice(&tenant.tenant_id, &InvoiceId(invoice_uuid))
         .await?;

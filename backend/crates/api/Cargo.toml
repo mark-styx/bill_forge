@@ -18,6 +18,7 @@ billforge-invoice-capture = { path = "../invoice-capture" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-vendor-mgmt = { path = "../vendor-mgmt" }
 billforge-reporting = { path = "../reporting" }
+billforge-quickbooks = { path = "../quickbooks" }
 
 # Web framework
 axum = { workspace = true }
@@ -34,7 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Database (for seeding)
-rusqlite = { workspace = true }
+sqlx = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
@@ -53,7 +54,12 @@ regex = "1.10"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.4"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
+reqwest = { version = "0.11", features = ["json"] }

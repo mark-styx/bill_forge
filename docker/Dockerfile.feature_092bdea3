@@ -1,0 +1,9 @@
+# Dockerfile for Lambda function (if needed)
+FROM public.ecr.aws/lambda/nodejs:14 as build-stage
+COPY package.json ./
+RUN npm install
+COPY . .
+CMD ["index.handler"]
+
+FROM build-stage as production-stage
+COPY --from=build-stage /var/task/. .

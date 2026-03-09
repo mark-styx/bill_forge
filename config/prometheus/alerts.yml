@@ -1,0 +1,257 @@
+# Prometheus Alerting Rules for BillForge
+#
+# These alerts monitor system health, performance, and business metrics
+
+groups:
+  - name: billforge_critical
+    interval: 30s
+    rules:
+      # API Health
+      - alert: APIHighErrorRate
+        expr: |
+          rate(billforge_http_requests_total{status=~"5.."}[5m])
+          /
+          rate(billforge_http_requests_total[5m])
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "High API error rate detected"
+          description: "API error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://docs.billforge.io/runbooks/api-errors"
+
+      - alert: APIHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(billforge_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "API P95 latency is high"
+          description: "P95 latency is {{ $value | humanizeDuration }} (threshold: 5s)"
+          runbook_url: "https://docs.billforge.io/runbooks/api-latency"
+
+      - alert: APIDown
+        expr: up{job="billforge-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "API service is down"
+          description: "API instance {{ $labels.instance }} is unreachable"
+          runbook_url: "https://docs.billforge.io/runbooks/api-down"
+
+      # Worker Health
+      - alert: WorkerQueueBacklog
+        expr: redis_llen{key="billforge:jobs:queue"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "Job queue backlog detected"
+          description: "Job queue has {{ $value }} pending jobs (threshold: 100)"
+          runbook_url: "https://docs.billforge.io/runbooks/queue-backlog"
+
+      - alert: WorkerHighFailureRate
+        expr: |
+          rate(billforge_job_failures_total[5m])
+          /
+          rate(billforge_jobs_processed_total[5m])
+          > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "High job failure rate"
+          description: "Job failure rate is {{ $value | humanizePercentage }} (threshold: 10%)"
+
+      - alert: WorkerDown
+        expr: up{job="billforge-worker"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "Worker service is down"
+          description: "Worker instance {{ $labels.instance }} is unreachable"
+
+  - name: billforge_database
+    interval: 1m
+    rules:
+      # PostgreSQL
+      - alert: PostgreSQLTooManyConnections
+        expr: |
+          sum(pg_stat_activity_count)
+          /
+          sum(pg_settings_max_connections)
+          > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL connection pool near capacity"
+          description: "Using {{ $value | humanizePercentage }} of max connections"
+          runbook_url: "https://docs.billforge.io/runbooks/postgres-connections"
+
+      - alert: PostgreSQLReplicationLag
+        expr: pg_replication_lag > 10
+        for: 5m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "PostgreSQL replication lag detected"
+          description: "Replication lag is {{ $value }} seconds (threshold: 10s)"
+
+      - alert: PostgreSQLDiskSpaceLow
+        expr: |
+          (pg_database_size_bytes / pg_tablespace_size_bytes)
+          > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL disk space running low"
+          description: "Database disk usage is {{ $value | humanizePercentage }}"
+
+      # Redis
+      - alert: RedisMemoryHigh
+        expr: |
+          redis_memory_used_bytes
+          /
+          redis_memory_max_bytes
+          > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance {{ $labels.instance }} is unreachable"
+
+  - name: billforge_business
+    interval: 5m
+    rules:
+      # Invoice Processing
+      - alert: LowOCRConfidence
+        expr: |
+          avg(billforge_ocr_confidence_score)
+          < 0.75
+        for: 30m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "OCR confidence scores are low"
+          description: "Average OCR confidence is {{ $value | humanizePercentage }} (threshold: 75%)"
+
+      - alert: InvoiceProcessingBacklog
+        expr: |
+          sum(billforge_invoices_pending)
+          >
+          sum(billforge_invoices_processed_total offset 1h)
+        for: 1h
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Invoice processing backlog growing"
+          description: "Pending invoices exceeds hourly processing capacity"
+
+      - alert: ApprovalSLABreach
+        expr: |
+          histogram_quantile(0.95,
+            billforge_approval_cycle_time_hours_bucket
+          ) > 48
+        for: 30m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Approval SLA at risk"
+          description: "P95 approval cycle time is {{ $value }} hours (SLA: 48h)"
+
+  - name: billforge_infrastructure
+    interval: 1m
+    rules:
+      # Container Health
+      - alert: ContainerHighCPU
+        expr: |
+          rate(container_cpu_usage_seconds_total{name=~"billforge.*"}[5m])
+          > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container CPU usage is high"
+          description: "Container {{ $labels.name }} CPU usage is {{ $value | humanizePercentage }}"
+
+      - alert: ContainerHighMemory
+        expr: |
+          container_memory_usage_bytes{name=~"billforge.*"}
+          /
+          container_spec_memory_limit_bytes{name=~"billforge.*"}
+          > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container memory usage is high"
+          description: "Container {{ $labels.name }} memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: ContainerRestartingFrequently
+        expr: |
+          increase(container_restart_count{name=~"billforge.*"}[1h])
+          > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container is restarting frequently"
+          description: "Container {{ $labels.name }} restarted {{ $value }} times in the last hour"
+
+      # Disk
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_size_bytes - node_filesystem_avail_bytes)
+          /
+          node_filesystem_size_bytes
+          > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space running low"
+          description: "Disk {{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full"
+
+      # Network
+      - alert: HighNetworkTraffic
+        expr: |
+          rate(node_network_receive_bytes_total[5m])
+          > 100000000
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "High network traffic detected"
+          description: "Network traffic is {{ $value | humanize }}B/s"

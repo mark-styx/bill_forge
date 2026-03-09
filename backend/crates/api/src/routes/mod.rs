@@ -2,6 +2,7 @@
 
 mod audit;
 mod auth;
+pub mod dashboard;
 mod documents;
 mod health;
 mod invoices;
@@ -10,8 +11,11 @@ mod workflows;
 mod reports;
 mod export;
 mod sandbox;
+pub mod email_actions;
+pub mod quickbooks;
 
 use crate::state::AppState;
+use crate::metrics;
 use axum::{routing::get, Router};
 
 /// Create the main API router
@@ -25,9 +29,16 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
         .route("/health/detailed", get(health::detailed_health))
+        // Prometheus metrics endpoint
+        .route("/metrics", get(metrics_handler))
         // API routes
         .nest("/api/v1", api_routes())
         .with_state(state)
+}
+
+/// Prometheus metrics endpoint
+async fn metrics_handler() -> String {
+    metrics::export_metrics()
 }
 
 /// API v1 routes
@@ -43,6 +54,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/workflows", workflows::routes())
         // Reporting module
         .nest("/reports", reports::routes())
+        // Dashboard metrics
+        .nest("/dashboard", dashboard::routes())
         // Data export
         .nest("/export", export::routes())
         // Document storage
@@ -51,4 +64,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/audit", audit::routes())
         // Sandbox/Development persona management
         .nest("/sandbox", sandbox::routes())
+        // QuickBooks integration
+        .nest("/quickbooks", quickbooks::routes())
+        // Email actions (approve/reject via email)
+        .nest("/actions", email_actions::routes())
 }

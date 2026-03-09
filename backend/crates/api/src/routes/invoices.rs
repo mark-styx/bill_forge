@@ -10,7 +10,7 @@ use axum::{
 };
 use billforge_core::{
     domain::{CreateInvoiceInput, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus},
-    traits::{InvoiceRepository, OcrService},
+    traits::InvoiceRepository,
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
@@ -60,7 +60,8 @@ async fn list_invoices(
         ..Default::default()
     };
 
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     let invoices = repo.list(&tenant.tenant_id, &filters, &pagination).await?;
 
     Ok(Json(invoices))
@@ -73,8 +74,9 @@ async fn get_invoice(
 ) -> ApiResult<Json<Invoice>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-    
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     let invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
@@ -89,7 +91,8 @@ async fn create_invoice(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Json(input): Json<CreateInvoiceInput>,
 ) -> ApiResult<Json<Invoice>> {
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     let invoice = repo.create(&tenant.tenant_id, input, &user.user_id).await?;
 
     Ok(Json(invoice))
@@ -104,7 +107,8 @@ async fn update_invoice(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     let invoice = repo.update(&tenant.tenant_id, &invoice_id, updates).await?;
 
     Ok(Json(invoice))
@@ -118,7 +122,8 @@ async fn delete_invoice(
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
     
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
     repo.delete(&tenant.tenant_id, &invoice_id).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -149,6 +154,7 @@ async fn upload_invoice(
                 .map_err(|e| billforge_core::Error::Validation(format!("Failed to read file: {}", e)))?;
 
             // Store the document via storage service
+            let file_name_for_msg = file_name.clone();
             let document_id = state.storage.upload(&tenant.tenant_id, &file_name, &data, &content_type).await
                 .map_err(|e| billforge_core::Error::Database(format!("Failed to store document: {}", e)))?;
 
@@ -231,7 +237,8 @@ async fn upload_invoice(
                 cost_center: None,
             };
 
-            let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
+            let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
             let invoice = repo.create(&tenant.tenant_id, invoice_input, &user.user_id).await?;
 
             // Update capture status
@@ -242,46 +249,54 @@ async fn upload_invoice(
                 let error_queue_id = Uuid::parse_str(OCR_ERROR_QUEUE_ID).ok();
                 if let Some(queue_id) = error_queue_id {
                     // Update invoice queue
-                    let db = state.db.tenant(&tenant.tenant_id).await?;
-                    let conn = db.connection().await;
-                    let conn = conn.lock().await;
+                    let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-                    conn.execute(
-                        "UPDATE invoices SET current_queue_id = ? WHERE id = ?",
-                        rusqlite::params![queue_id.to_string(), invoice.id.to_string()],
-                    ).ok();
+                    sqlx::query(
+                        "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
+                    )
+                    .bind(queue_id)
+                    .bind(invoice.id.as_uuid())
+                    .execute(&*pool)
+                    .await
+                    .ok();
 
                     // Create queue item
                     let queue_item_id = Uuid::new_v4();
-                    conn.execute(
-                        "INSERT INTO queue_items (id, queue_id, invoice_id, priority, entered_at) VALUES (?, ?, ?, 2, datetime('now'))",
-                        rusqlite::params![queue_item_id.to_string(), queue_id.to_string(), invoice.id.to_string()],
-                    ).ok();
+                    sqlx::query(
+                        "INSERT INTO queue_items (id, queue_id, invoice_id, priority, entered_at)
+                         VALUES ($1, $2, $3, 2, NOW())"
+                    )
+                    .bind(queue_item_id)
+                    .bind(queue_id)
+                    .bind(invoice.id.as_uuid())
+                    .execute(&*pool)
+                    .await
+                    .ok();
                 }
             }
 
             // Store document metadata in the tenant database
-            let db = state.db.tenant(&tenant.tenant_id).await?;
-            let conn = db.connection().await;
-            let conn = conn.lock().await;
+            let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-            conn.execute(
-                "INSERT INTO documents (id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'invoice_original', ?, datetime('now'))",
-                rusqlite::params![
-                    document_id.to_string(),
-                    file_name,
-                    content_type,
-                    data.len() as i64,
-                    storage_key,
-                    invoice.id.to_string(),
-                    user.user_id.to_string(),
-                ],
-            ).map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
+            sqlx::query(
+                "INSERT INTO documents (id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'invoice_original', $7, NOW())"
+            )
+            .bind(document_id)
+            .bind(file_name)
+            .bind(content_type)
+            .bind(data.len() as i64)
+            .bind(storage_key)
+            .bind(invoice.id.as_uuid())
+            .bind(user.user_id.as_uuid())
+            .execute(&*pool)
+            .await
+            .map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
 
             let message = if capture_status == CaptureStatus::Failed {
-                format!("File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.", file_name)
+                format!("File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.", file_name_for_msg)
             } else {
-                format!("File '{}' uploaded and processed. Invoice ready for review.", file_name)
+                format!("File '{}' uploaded and processed. Invoice ready for review.", file_name_for_msg)
             };
 
             return Ok(Json(UploadResponse {
@@ -296,34 +311,96 @@ async fn upload_invoice(
 }
 
 async fn rerun_ocr(
-    State(_state): State<AppState>,
-    InvoiceCaptureAccess(_user, _tenant): InvoiceCaptureAccess,
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement OCR reprocessing
+    let invoice_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Create the invoice capture service
+    let invoice_repo = std::sync::Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool));
+    let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
+        "tesseract", // Use default OCR provider
+        invoice_repo,
+        state.storage.clone(),
+    );
+
+    // Run OCR reprocessing
+    let ocr_result = capture_service.reprocess_ocr(&tenant.tenant_id, &invoice_id).await?;
+
     Ok(Json(serde_json::json!({
-        "message": "OCR reprocessing queued",
-        "invoice_id": id
+        "message": "OCR reprocessing completed",
+        "invoice_id": id,
+        "vendor_name": ocr_result.vendor_name.value,
+        "invoice_number": ocr_result.invoice_number.value,
+        "total_amount": ocr_result.total_amount.value,
+        "invoice_date": ocr_result.invoice_date.value,
+        "due_date": ocr_result.due_date.value,
     })))
 }
 
 async fn submit_for_processing(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-    
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(state.db.clone());
-    repo.update_processing_status(
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Get the invoice
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let mut invoice = invoice_repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Update status to Submitted
+    invoice_repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
         ProcessingStatus::Submitted,
     ).await?;
+    invoice.processing_status = ProcessingStatus::Submitted;
+
+    // Get workflow rules for processing
+    let workflow_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    let rules = billforge_core::traits::WorkflowRuleRepository::list(
+        &workflow_repo,
+        &tenant.tenant_id,
+        None,
+    ).await?;
+
+    // Filter to active rules only
+    let active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
+
+    // Process invoice through workflow engine
+    use std::sync::Arc;
+    let engine = billforge_invoice_processing::WorkflowEngine::new(
+        Arc::new(invoice_repo) as Arc<dyn billforge_core::traits::InvoiceRepository>,
+        Arc::new(workflow_repo) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
+        Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
+            as Arc<dyn billforge_core::traits::ApprovalRepository>,
+    );
+
+    let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+
+    // Update invoice with final status from workflow
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    invoice_repo.update_processing_status(
+        &tenant.tenant_id,
+        &invoice_id,
+        final_status,
+    ).await?;
 
     Ok(Json(serde_json::json!({
         "message": "Invoice submitted for processing",
-        "invoice_id": id
+        "invoice_id": id,
+        "status": format!("{:?}", final_status).to_lowercase()
     })))
 }

@@ -25,6 +25,37 @@ pub struct Config {
     pub environment: Environment,
     /// Email service configuration (None if email is disabled)
     pub email: Option<EmailConfig>,
+    /// QuickBooks integration configuration (None if QuickBooks is disabled)
+    pub quickbooks: Option<QuickBooksConfig>,
+}
+
+/// QuickBooks Online integration configuration
+#[derive(Debug, Clone)]
+pub struct QuickBooksConfig {
+    /// OAuth client ID
+    pub client_id: String,
+    /// OAuth client secret
+    pub client_secret: String,
+    /// OAuth redirect URI
+    pub redirect_uri: String,
+    /// Environment (sandbox or production)
+    pub environment: QuickBooksEnvironment,
+}
+
+/// QuickBooks environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickBooksEnvironment {
+    Sandbox,
+    Production,
+}
+
+impl QuickBooksEnvironment {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "production" | "prod" => Self::Production,
+            _ => Self::Sandbox,
+        }
+    }
 }
 
 /// Environment mode for the application
@@ -101,6 +132,22 @@ impl Config {
         // Load email configuration (optional - only if SMTP_HOST is set)
         let email = EmailConfig::from_env();
 
+        // Load QuickBooks configuration (optional - only if QUICKBOOKS_CLIENT_ID is set)
+        let quickbooks = if let Ok(client_id) = std::env::var("QUICKBOOKS_CLIENT_ID") {
+            Some(QuickBooksConfig {
+                client_id,
+                client_secret: std::env::var("QUICKBOOKS_CLIENT_SECRET")
+                    .unwrap_or_default(),
+                redirect_uri: std::env::var("QUICKBOOKS_REDIRECT_URI")
+                    .unwrap_or_else(|_| format!("{}/api/v1/quickbooks/callback", frontend_url)),
+                environment: QuickBooksEnvironment::from_str(
+                    &std::env::var("QUICKBOOKS_ENVIRONMENT").unwrap_or_default()
+                ),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             host: std::env::var("BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("BACKEND_PORT")
@@ -134,6 +181,7 @@ impl Config {
                 .unwrap_or(20),
             environment,
             email,
+            quickbooks,
         })
     }
 }

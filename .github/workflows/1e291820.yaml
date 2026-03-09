@@ -1,0 +1,48 @@
+# CloudWatch dashboards/alerts
+- name: Invoice Extraction ECS Cluster Dashboard
+  widgets:
+    - type: metrics
+      properties:
+        title: "ECS CPU Utilization"
+        view: timeSeries
+        region: us-east-1
+        stat: Average
+        period: 300
+        yAxisLeft: metric
+        seriesList:
+          - expression: "AWS/EC2:CPUUtilization{InstanceId=*,ClusterName='invoice-extraction-cluster'}"
+            name: "ECS CPU Utilization"
+
+    - type: metrics
+      properties:
+        title: "Lambda Invocation Failures"
+        view: timeSeries
+        region: us-east-1
+        stat: Sum
+        period: 300
+        yAxisLeft: metric
+        seriesList:
+          - expression: "AWS/Lambda:Invocations{FunctionName='ocr-service'}"
+            name: "Lambda Invocation Failures"
+
+# Or Prometheus rules
+groups:
+  - name: invoice-extraction-rules
+    rules:
+      - alert: HighCPUUtilization
+        expr: avg by (instance) (aws_ec2_cpu_utilization > 75)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU Utilization on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has been running at or above 75% CPU utilization for the last 1 minute."
+
+      - alert: LambdaInvocationFailures
+        expr: sum by (function_name) (aws_lambda_invocations_total{function_name="ocr-service",result="UnhandledError"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Lambda Invocation Failures on {{ $labels.function_name }}"
+          description: "{{ $labels.function_name }} has experienced unhandled errors."

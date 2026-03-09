@@ -1,207 +1,100 @@
-//! Metadata database (SQLite) for tenant registry, auth, and system data
+//! Metadata database (PostgreSQL) for tenant registry, auth, and system data
 
 use billforge_core::{Error, Module, Result, Role, TenantId, TenantSettings, UserId};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Metadata database for system-wide data
 pub struct MetadataDatabase {
-    conn: Arc<Mutex<Connection>>,
+    pool: PgPool,
 }
 
 impl MetadataDatabase {
-    pub async fn new(db_url: &str) -> Result<Self> {
-        // Parse sqlite:// URL
-        let path = db_url.strip_prefix("sqlite://").unwrap_or(db_url);
-        
-        // Create parent directory if needed
-        if let Some(parent) = Path::new(path).parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| Error::Database(format!("Failed to create db directory: {}", e)))?;
-        }
+    pub async fn new(database_url: &str) -> Result<Self> {
+        let pool = PgPool::connect(database_url)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to connect to metadata database: {}", e)))?;
 
-        let conn = Connection::open(path)
-            .map_err(|e| Error::Database(format!("Failed to open metadata db: {}", e)))?;
-        
-        let db = Self {
-            conn: Arc::new(Mutex::new(conn)),
-        };
-        
+        let db = Self { pool };
         db.run_migrations().await?;
-        
         Ok(db)
     }
 
     async fn run_migrations(&self) -> Result<()> {
-        let conn = self.conn.lock().await;
-        
-        conn.execute_batch(
-            r#"
-            -- Tenants table
-            CREATE TABLE IF NOT EXISTS tenants (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                settings TEXT NOT NULL DEFAULT '{}',
-                enabled_modules TEXT NOT NULL DEFAULT '[]',
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            -- Users table
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                tenant_id TEXT NOT NULL,
-                email TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                name TEXT NOT NULL,
-                roles TEXT NOT NULL DEFAULT '[]',
-                is_active INTEGER NOT NULL DEFAULT 1,
-                email_verified INTEGER NOT NULL DEFAULT 0,
-                last_login_at TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-                UNIQUE(tenant_id, email)
-            );
-
-            -- Refresh tokens table
-            CREATE TABLE IF NOT EXISTS refresh_tokens (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                revoked_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-
-            -- API keys table
-            CREATE TABLE IF NOT EXISTS api_keys (
-                id TEXT PRIMARY KEY,
-                tenant_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                key_prefix TEXT NOT NULL,
-                key_hash TEXT NOT NULL UNIQUE,
-                scopes TEXT NOT NULL DEFAULT '[]',
-                last_used_at TEXT,
-                expires_at TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                revoked_at TEXT,
-                FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
-
-            -- System audit log (for admin actions)
-            CREATE TABLE IF NOT EXISTS system_audit_log (
-                id TEXT PRIMARY KEY,
-                actor_type TEXT NOT NULL,
-                actor_id TEXT,
-                action TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
-                resource_id TEXT,
-                details TEXT,
-                ip_address TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            -- Indexes
-            CREATE INDEX IF NOT EXISTS idx_users_tenant_email ON users(tenant_id, email);
-            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
-            CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
-            "#,
-        )
-        .map_err(|e| Error::Migration(format!("Failed to run metadata migrations: {}", e)))?;
+        sqlx::raw_sql(include_str!("../../../migrations/001_create_tenants.sql"))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Migration(format!("Failed to run metadata migrations: {}", e)))?;
 
         Ok(())
     }
 
     /// Check if a tenant exists
     pub async fn tenant_exists(&self, tenant_id: &TenantId) -> Result<bool> {
-        let conn = self.conn.lock().await;
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = ?)",
-                params![tenant_id.as_str()],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("Failed to check tenant: {}", e)))?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to check tenant: {}", e)))?;
+
         Ok(exists)
     }
 
     /// Create a new tenant
     pub async fn create_tenant(&self, tenant_id: &TenantId, name: &str) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT INTO tenants (id, name) VALUES (?, ?)",
-            params![tenant_id.as_str(), name],
+        let slug = slugify(name);
+        sqlx::query(
+            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
         )
+        .bind(tenant_id.as_str())
+        .bind(name)
+        .bind(&slug)
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to create tenant: {}", e)))?;
+
         Ok(())
     }
 
     /// Delete a tenant
     pub async fn delete_tenant(&self, tenant_id: &TenantId) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "DELETE FROM tenants WHERE id = ?",
-            params![tenant_id.as_str()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to delete tenant: {}", e)))?;
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete tenant: {}", e)))?;
+
         Ok(())
     }
 
     /// List all tenant IDs
     pub async fn list_all_tenants(&self) -> Result<Vec<TenantId>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare("SELECT id FROM tenants WHERE is_active = 1")
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-        
-        let rows = stmt
-            .query_map([], |row| {
-                let id: String = row.get(0)?;
-                Ok(id.parse::<TenantId>().unwrap())
-            })
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM tenants")
+            .fetch_all(&self.pool)
+            .await
             .map_err(|e| Error::Database(format!("Failed to list tenants: {}", e)))?;
-        
-        let mut tenants = Vec::new();
-        for row in rows {
-            tenants.push(row.map_err(|e| Error::Database(e.to_string()))?);
-        }
-        
+
+        let tenants = rows
+            .into_iter()
+            .filter_map(|(id,)| id.parse().ok())
+            .collect();
+
         Ok(tenants)
     }
 
     /// Get tenant settings and enabled modules
     pub async fn get_tenant(&self, tenant_id: &TenantId) -> Result<Option<TenantRecord>> {
-        let conn = self.conn.lock().await;
-        let result = conn
-            .query_row(
-                "SELECT id, name, settings, enabled_modules, is_active FROM tenants WHERE id = ?",
-                params![tenant_id.as_str()],
-                |row| {
-                    let settings_json: String = row.get(2)?;
-                    let modules_json: String = row.get(3)?;
-                    Ok(TenantRecord {
-                        id: row.get::<_, String>(0)?.parse().unwrap(),
-                        name: row.get(1)?,
-                        settings: serde_json::from_str(&settings_json).unwrap_or_default(),
-                        enabled_modules: serde_json::from_str(&modules_json).unwrap_or_default(),
-                        is_active: row.get(4)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| Error::Database(format!("Failed to get tenant: {}", e)))?;
-        
+        let result = sqlx::query_as::<_, TenantRecord>(
+            "SELECT id, name, settings, enabled_modules, is_active FROM tenants WHERE id = $1"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get tenant: {}", e)))?;
+
         Ok(result)
     }
 
@@ -211,16 +104,18 @@ impl MetadataDatabase {
         tenant_id: &TenantId,
         settings: &TenantSettings,
     ) -> Result<()> {
-        let conn = self.conn.lock().await;
-        let settings_json = serde_json::to_string(settings)
+        let settings_json = serde_json::to_value(settings)
             .map_err(|e| Error::Database(format!("Failed to serialize settings: {}", e)))?;
-        
-        conn.execute(
-            "UPDATE tenants SET settings = ?, updated_at = datetime('now') WHERE id = ?",
-            params![settings_json, tenant_id.as_str()],
+
+        sqlx::query(
+            "UPDATE tenants SET settings = $1, updated_at = NOW() WHERE id = $2"
         )
+        .bind(&settings_json)
+        .bind(tenant_id.as_str())
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to update tenant settings: {}", e)))?;
-        
+
         Ok(())
     }
 
@@ -230,40 +125,41 @@ impl MetadataDatabase {
         tenant_id: &TenantId,
         modules: &[Module],
     ) -> Result<()> {
-        let conn = self.conn.lock().await;
-        let modules_json = serde_json::to_string(modules)
+        let modules_json = serde_json::to_value(modules)
             .map_err(|e| Error::Database(format!("Failed to serialize modules: {}", e)))?;
-        
-        conn.execute(
-            "UPDATE tenants SET enabled_modules = ?, updated_at = datetime('now') WHERE id = ?",
-            params![modules_json, tenant_id.as_str()],
+
+        sqlx::query(
+            "UPDATE tenants SET enabled_modules = $1, updated_at = NOW() WHERE id = $2"
         )
+        .bind(&modules_json)
+        .bind(tenant_id.as_str())
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to update tenant modules: {}", e)))?;
-        
+
         Ok(())
     }
 
     /// Create a new user
     pub async fn create_user(&self, user: &CreateUserInput) -> Result<UserRecord> {
-        let conn = self.conn.lock().await;
         let id = UserId::new();
-        let roles_json = serde_json::to_string(&user.roles)
+        let roles_json = serde_json::to_value(&user.roles)
             .map_err(|e| Error::Database(format!("Failed to serialize roles: {}", e)))?;
-        
-        conn.execute(
+
+        sqlx::query(
             r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles)
-               VALUES (?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.0.to_string(),
-                user.tenant_id.as_str(),
-                user.email,
-                user.password_hash,
-                user.name,
-                roles_json,
-            ],
+               VALUES ($1, $2, $3, $4, $5, $6)"#
         )
+        .bind(id.0)
+        .bind(user.tenant_id.as_str())
+        .bind(&user.email)
+        .bind(&user.password_hash)
+        .bind(&user.name)
+        .bind(&roles_json)
+        .execute(&self.pool)
+        .await
         .map_err(|e| {
-            if e.to_string().contains("UNIQUE constraint failed") {
+            if e.to_string().contains("duplicate key") {
                 Error::AlreadyExists {
                     resource_type: "User".to_string(),
                 }
@@ -271,14 +167,14 @@ impl MetadataDatabase {
                 Error::Database(format!("Failed to create user: {}", e))
             }
         })?;
-        
+
         Ok(UserRecord {
-            id,
-            tenant_id: user.tenant_id.clone(),
+            id: id.0,
+            tenant_id: user.tenant_id.to_string(),
             email: user.email.clone(),
             password_hash: user.password_hash.clone(),
             name: user.name.clone(),
-            roles: user.roles.clone(),
+            roles: sqlx::types::Json(roles_json),
             is_active: true,
             email_verified: false,
         })
@@ -290,68 +186,43 @@ impl MetadataDatabase {
         tenant_id: &TenantId,
         email: &str,
     ) -> Result<Option<UserRecord>> {
-        let conn = self.conn.lock().await;
-        let result = conn
-            .query_row(
-                r#"SELECT id, tenant_id, email, password_hash, name, roles, is_active, email_verified
-                   FROM users WHERE tenant_id = ? AND email = ?"#,
-                params![tenant_id.as_str(), email],
-                |row| {
-                    let roles_json: String = row.get(5)?;
-                    Ok(UserRecord {
-                        id: UserId::from_uuid(Uuid::parse_str(&row.get::<_, String>(0)?).unwrap()),
-                        tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
-                        email: row.get(2)?,
-                        password_hash: row.get(3)?,
-                        name: row.get(4)?,
-                        roles: serde_json::from_str(&roles_json).unwrap_or_default(),
-                        is_active: row.get(6)?,
-                        email_verified: row.get(7)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| Error::Database(format!("Failed to get user: {}", e)))?;
-        
+        let result = sqlx::query_as::<_, UserRecord>(
+            r#"SELECT id, tenant_id, email, password_hash, name, roles::jsonb, is_active, email_verified
+               FROM users WHERE tenant_id = $1 AND email = $2"#
+        )
+        .bind(tenant_id.as_str())
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get user: {}", e)))?;
+
         Ok(result)
     }
 
     /// Get user by ID
     pub async fn get_user_by_id(&self, user_id: &UserId) -> Result<Option<UserRecord>> {
-        let conn = self.conn.lock().await;
-        let result = conn
-            .query_row(
-                r#"SELECT id, tenant_id, email, password_hash, name, roles, is_active, email_verified
-                   FROM users WHERE id = ?"#,
-                params![user_id.0.to_string()],
-                |row| {
-                    let roles_json: String = row.get(5)?;
-                    Ok(UserRecord {
-                        id: UserId::from_uuid(Uuid::parse_str(&row.get::<_, String>(0)?).unwrap()),
-                        tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
-                        email: row.get(2)?,
-                        password_hash: row.get(3)?,
-                        name: row.get(4)?,
-                        roles: serde_json::from_str(&roles_json).unwrap_or_default(),
-                        is_active: row.get(6)?,
-                        email_verified: row.get(7)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| Error::Database(format!("Failed to get user: {}", e)))?;
-        
+        let result = sqlx::query_as::<_, UserRecord>(
+            r#"SELECT id, tenant_id, email, password_hash, name, roles::jsonb, is_active, email_verified
+               FROM users WHERE id = $1"#
+        )
+        .bind(user_id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get user: {}", e)))?;
+
         Ok(result)
     }
 
     /// Update user's last login time
     pub async fn update_last_login(&self, user_id: &UserId) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE users SET last_login_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-            params![user_id.0.to_string()],
+        sqlx::query(
+            "UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1"
         )
+        .bind(user_id.0)
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to update last login: {}", e)))?;
+
         Ok(())
     }
 
@@ -362,89 +233,188 @@ impl MetadataDatabase {
         token_hash: &str,
         expires_at: DateTime<Utc>,
     ) -> Result<String> {
-        let conn = self.conn.lock().await;
-        let id = Uuid::new_v4().to_string();
-        
-        conn.execute(
-            "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
-            params![id, user_id.0.to_string(), token_hash, expires_at.to_rfc3339()],
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)"
         )
+        .bind(id)
+        .bind(user_id.0)
+        .bind(token_hash)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to store refresh token: {}", e)))?;
-        
-        Ok(id)
+
+        Ok(id.to_string())
     }
 
     /// Validate and get user for refresh token
     pub async fn validate_refresh_token(&self, token_hash: &str) -> Result<Option<UserId>> {
-        let conn = self.conn.lock().await;
-        let result = conn
-            .query_row(
-                r#"SELECT user_id FROM refresh_tokens 
-                   WHERE token_hash = ? 
-                   AND revoked_at IS NULL 
-                   AND expires_at > datetime('now')"#,
-                params![token_hash],
-                |row| {
-                    let user_id: String = row.get(0)?;
-                    Ok(UserId::from_uuid(Uuid::parse_str(&user_id).unwrap()))
-                },
-            )
-            .optional()
-            .map_err(|e| Error::Database(format!("Failed to validate refresh token: {}", e)))?;
-        
-        Ok(result)
+        let result: Option<(String,)> = sqlx::query_as(
+            r#"SELECT user_id FROM refresh_tokens
+               WHERE token_hash = $1
+               AND revoked_at IS NULL
+               AND expires_at > NOW()"#
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to validate refresh token: {}", e)))?;
+
+        Ok(result.and_then(|(user_id,)| user_id.parse().ok()).map(UserId))
     }
 
     /// Revoke a refresh token
     pub async fn revoke_refresh_token(&self, token_hash: &str) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE token_hash = ?",
-            params![token_hash],
-        )
-        .map_err(|e| Error::Database(format!("Failed to revoke refresh token: {}", e)))?;
+        sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to revoke refresh token: {}", e)))?;
+
         Ok(())
     }
 
     /// Revoke all refresh tokens for a user
     pub async fn revoke_all_user_tokens(&self, user_id: &UserId) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE refresh_tokens SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL",
-            params![user_id.0.to_string()],
+        sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL"
         )
+        .bind(user_id.0)
+        .execute(&self.pool)
+        .await
         .map_err(|e| Error::Database(format!("Failed to revoke user tokens: {}", e)))?;
+
         Ok(())
     }
 
     /// Health check - verifies database connectivity
     pub async fn health_check(&self) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute_batch("SELECT 1")
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
             .map_err(|e| Error::Database(format!("Health check failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Create a new API key
+    pub async fn create_api_key(
+        &self,
+        id: uuid::Uuid,
+        tenant_id: &TenantId,
+        name: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        roles: &[billforge_core::Role],
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let roles_json = serde_json::to_value(roles)
+            .map_err(|e| Error::Database(format!("Failed to serialize roles: {}", e)))?;
+
+        sqlx::query(
+            r#"INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, roles, is_active, expires_at, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        )
+        .bind(id)
+        .bind(tenant_id.as_str())
+        .bind(name)
+        .bind(key_prefix)
+        .bind(key_hash)
+        .bind(sqlx::types::Json(roles_json))
+        .bind(true)
+        .bind(expires_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create API key: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get API key by prefix
+    pub async fn get_api_key_by_prefix(&self, key_prefix: &str) -> Result<Option<ApiKeyRecord>> {
+        let result = sqlx::query_as::<_, ApiKeyRecord>(
+            "SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL"
+        )
+        .bind(key_prefix)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get API key: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Update API key last used timestamp
+    pub async fn update_api_key_last_used(&self, key_id: uuid::Uuid) -> Result<()> {
+        sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
+            .bind(key_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to update API key: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// List API keys for a tenant
+    pub async fn list_api_keys(&self, tenant_id: &TenantId) -> Result<Vec<ApiKeyRecord>> {
+        let results = sqlx::query_as::<_, ApiKeyRecord>(
+            "SELECT * FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC"
+        )
+        .bind(tenant_id.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list API keys: {}", e)))?;
+
+        Ok(results)
+    }
+
+    /// Revoke an API key
+    pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: uuid::Uuid) -> Result<()> {
+        sqlx::query("UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND tenant_id = $2")
+            .bind(key_id)
+            .bind(tenant_id.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to revoke API key: {}", e)))?;
+
         Ok(())
     }
 }
 
+/// Convert a string to a URL-safe slug
+fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Tenant record from database
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TenantRecord {
-    pub id: TenantId,
+    pub id: String,
     pub name: String,
-    pub settings: TenantSettings,
-    pub enabled_modules: Vec<Module>,
+    pub settings: sqlx::types::Json<serde_json::Value>,
+    pub enabled_modules: sqlx::types::Json<serde_json::Value>,
     pub is_active: bool,
 }
 
 /// User record from database
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRecord {
-    pub id: UserId,
-    pub tenant_id: TenantId,
+    pub id: sqlx::types::Uuid,
+    pub tenant_id: String,
     pub email: String,
     pub password_hash: String,
     pub name: String,
-    pub roles: Vec<Role>,
+    pub roles: sqlx::types::Json<serde_json::Value>,
     pub is_active: bool,
     pub email_verified: bool,
 }
@@ -460,152 +430,18 @@ pub struct CreateUserInput {
 }
 
 /// API key record from database
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ApiKeyRecord {
-    pub id: Uuid,
-    pub tenant_id: TenantId,
+    pub id: sqlx::types::Uuid,
+    pub tenant_id: String,
+    pub user_id: sqlx::types::Uuid,
     pub name: String,
     pub key_prefix: String,
     pub key_hash: String,
-    pub roles: Vec<Role>,
+    pub roles: sqlx::types::Json<serde_json::Value>,
     pub is_active: bool,
-    pub last_used_at: Option<DateTime<Utc>>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-impl MetadataDatabase {
-    // =========================================================================
-    // API Key Management
-    // =========================================================================
-
-    /// Create a new API key
-    pub async fn create_api_key(
-        &self,
-        id: Uuid,
-        tenant_id: &TenantId,
-        name: &str,
-        key_prefix: &str,
-        key_hash: &str,
-        roles: &[Role],
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<()> {
-        let conn = self.conn.lock().await;
-        let roles_json = serde_json::to_string(roles)
-            .map_err(|e| Error::Database(format!("Failed to serialize roles: {}", e)))?;
-
-        conn.execute(
-            r#"INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, scopes, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)"#,
-            params![
-                id.to_string(),
-                tenant_id.as_str(),
-                name,
-                key_prefix,
-                key_hash,
-                roles_json,
-                expires_at.map(|t| t.to_rfc3339()),
-            ],
-        )
-        .map_err(|e| Error::Database(format!("Failed to create API key: {}", e)))?;
-
-        Ok(())
-    }
-
-    /// Get API key by prefix
-    pub async fn get_api_key_by_prefix(&self, key_prefix: &str) -> Result<Option<ApiKeyRecord>> {
-        let conn = self.conn.lock().await;
-        let result = conn
-            .query_row(
-                r#"SELECT id, tenant_id, name, key_prefix, key_hash, scopes, last_used_at, expires_at, created_at
-                   FROM api_keys WHERE key_prefix = ? AND revoked_at IS NULL"#,
-                params![key_prefix],
-                |row| {
-                    let roles_json: String = row.get(5)?;
-                    let last_used: Option<String> = row.get(6)?;
-                    let expires: Option<String> = row.get(7)?;
-                    let created: String = row.get(8)?;
-
-                    Ok(ApiKeyRecord {
-                        id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
-                        tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
-                        name: row.get(2)?,
-                        key_prefix: row.get(3)?,
-                        key_hash: row.get(4)?,
-                        roles: serde_json::from_str(&roles_json).unwrap_or_default(),
-                        is_active: true,
-                        last_used_at: last_used.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
-                        expires_at: expires.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
-                        created_at: DateTime::parse_from_rfc3339(&created).map(|t| t.into()).unwrap_or_else(|_| Utc::now()),
-                    })
-                },
-            )
-            .optional()
-            .map_err(|e| Error::Database(format!("Failed to get API key: {}", e)))?;
-
-        Ok(result)
-    }
-
-    /// Update API key last used timestamp
-    pub async fn update_api_key_last_used(&self, key_id: Uuid) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?",
-            params![key_id.to_string()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to update API key last used: {}", e)))?;
-        Ok(())
-    }
-
-    /// List API keys for a tenant
-    pub async fn list_api_keys(&self, tenant_id: &TenantId) -> Result<Vec<ApiKeyRecord>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                r#"SELECT id, tenant_id, name, key_prefix, key_hash, scopes, last_used_at, expires_at, created_at
-                   FROM api_keys WHERE tenant_id = ? AND revoked_at IS NULL
-                   ORDER BY created_at DESC"#,
-            )
-            .map_err(|e| Error::Database(format!("Failed to prepare query: {}", e)))?;
-
-        let rows = stmt
-            .query_map(params![tenant_id.as_str()], |row| {
-                let roles_json: String = row.get(5)?;
-                let last_used: Option<String> = row.get(6)?;
-                let expires: Option<String> = row.get(7)?;
-                let created: String = row.get(8)?;
-
-                Ok(ApiKeyRecord {
-                    id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
-                    tenant_id: row.get::<_, String>(1)?.parse().unwrap(),
-                    name: row.get(2)?,
-                    key_prefix: row.get(3)?,
-                    key_hash: String::new(), // Don't expose hash in list
-                    roles: serde_json::from_str(&roles_json).unwrap_or_default(),
-                    is_active: true,
-                    last_used_at: last_used.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
-                    expires_at: expires.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.into()),
-                    created_at: DateTime::parse_from_rfc3339(&created).map(|t| t.into()).unwrap_or_else(|_| Utc::now()),
-                })
-            })
-            .map_err(|e| Error::Database(format!("Failed to list API keys: {}", e)))?;
-
-        let mut keys = Vec::new();
-        for row in rows {
-            keys.push(row.map_err(|e| Error::Database(e.to_string()))?);
-        }
-
-        Ok(keys)
-    }
-
-    /// Revoke an API key
-    pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: Uuid) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ? AND tenant_id = ?",
-            params![key_id.to_string(), tenant_id.as_str()],
-        )
-        .map_err(|e| Error::Database(format!("Failed to revoke API key: {}", e)))?;
-        Ok(())
-    }
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }

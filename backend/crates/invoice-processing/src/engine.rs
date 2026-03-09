@@ -84,51 +84,12 @@ impl WorkflowEngine {
 
     /// Evaluate rule conditions against an invoice
     fn evaluate_conditions(&self, invoice: &Invoice, conditions: &[RuleCondition]) -> bool {
-        conditions.iter().all(|condition| self.evaluate_condition(invoice, condition))
+        billforge_core::workflow_evaluator::evaluate_conditions(invoice, conditions)
     }
 
     /// Evaluate a single condition
     fn evaluate_condition(&self, invoice: &Invoice, condition: &RuleCondition) -> bool {
-        use billforge_core::domain::{ConditionField, ConditionOperator};
-
-        match &condition.field {
-            ConditionField::Amount => {
-                let amount = invoice.total_amount.as_decimal();
-                match &condition.operator {
-                    ConditionOperator::GreaterThan => {
-                        condition.value.as_f64().map_or(false, |v| amount > v)
-                    }
-                    ConditionOperator::LessThan => {
-                        condition.value.as_f64().map_or(false, |v| amount < v)
-                    }
-                    ConditionOperator::GreaterThanOrEqual => {
-                        condition.value.as_f64().map_or(false, |v| amount >= v)
-                    }
-                    ConditionOperator::LessThanOrEqual => {
-                        condition.value.as_f64().map_or(false, |v| amount <= v)
-                    }
-                    ConditionOperator::Equals => {
-                        condition.value.as_f64().map_or(false, |v| (amount - v).abs() < 0.01)
-                    }
-                    _ => false,
-                }
-            }
-            ConditionField::VendorId => {
-                match &condition.operator {
-                    ConditionOperator::Equals => {
-                        let vendor_id = invoice.vendor_id.map(|v| v.to_string());
-                        condition.value.as_str().map_or(false, |v| {
-                            vendor_id.as_deref() == Some(v)
-                        })
-                    }
-                    _ => false,
-                }
-            }
-            _ => {
-                // TODO: Implement other conditions
-                false
-            }
-        }
+        billforge_core::workflow_evaluator::evaluate_single_condition(invoice, condition)
     }
 
     /// Create an approval request

@@ -89,10 +89,23 @@ impl VendorService {
             .await?;
 
         // Create document record with the file ID
-        let mut doc = doc;
-        doc.file_id = file_id;
+        let doc_id = self.tax_doc_repo.create(
+            tenant_id,
+            vendor_id,
+            format!("{:?}", doc.document_type).to_lowercase(),
+            doc.file_name.clone(),
+            file_id.to_string(),
+            file_bytes.len() as i64,
+            mime_type.to_string(),
+            None,
+        ).await?;
 
-        self.tax_doc_repo.create(tenant_id, doc).await
+        // Fetch and return the created document
+        self.tax_doc_repo.get_by_id(tenant_id, doc_id).await?
+            .ok_or_else(|| billforge_core::Error::NotFound {
+                resource_type: "TaxDocument".to_string(),
+                id: doc_id.to_string(),
+            })
     }
 
     /// Get tax documents for a vendor

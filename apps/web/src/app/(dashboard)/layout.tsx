@@ -5,9 +5,12 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
+import { useOrganizationTheme } from '@/components/organization-theme-provider';
 import { sandboxApi, PersonaInfo } from '@/lib/api';
 import { toast } from 'sonner';
 import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
+import { NotificationCenter, type Notification } from '@/components/ui/notification-center';
+import { ThemeQuickSwitcher } from '@/components/ui/theme-quick-switcher';
 import {
   FileText,
   ClipboardCheck,
@@ -17,7 +20,6 @@ import {
   LogOut,
   Home,
   ChevronDown,
-  Bell,
   ScanLine,
   Layers,
   RefreshCw,
@@ -28,6 +30,7 @@ import {
   FolderOpen,
   Workflow,
   ListChecks,
+  Sparkles,
 } from 'lucide-react';
 
 interface NavItem {
@@ -40,20 +43,20 @@ interface NavItem {
 
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home, module: null },
-  { 
-    name: 'Invoice Capture', 
-    href: '/invoices', 
-    icon: ScanLine, 
+  {
+    name: 'Invoice Capture',
+    href: '/invoices',
+    icon: ScanLine,
     module: 'invoice_capture',
     children: [
       { name: 'Invoices', href: '/invoices', icon: FileText, module: 'invoice_capture' },
       { name: 'Errors', href: '/processing/queues/11111111-4444-5555-6666-777777770001', icon: AlertTriangle, module: 'invoice_capture' },
     ]
   },
-  { 
-    name: 'Processing', 
-    href: '/processing', 
-    icon: ClipboardCheck, 
+  {
+    name: 'Processing',
+    href: '/processing',
+    icon: ClipboardCheck,
     module: 'invoice_processing',
     children: [
       { name: 'Work Queues', href: '/processing/queues', icon: FolderOpen, module: 'invoice_processing' },
@@ -77,12 +80,51 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const { isAuthenticated, user, tenant, currentPersona, logout, hasModule, switchPersona, refreshTenantContext } = useAuthStore();
-  const { sidebarCollapsed, toggleSidebar } = useThemeStore();
-  
+  const { sidebarCollapsed, toggleSidebar, getCurrentColors } = useThemeStore();
+  const { getBrandGradient, isOrgThemeActive } = useOrganizationTheme();
+
   const [personas, setPersonas] = useState<PersonaInfo[]>([]);
   const [showPersonaSwitcher, setShowPersonaSwitcher] = useState(false);
   const [switchingPersona, setSwitchingPersona] = useState(false);
   const [expandedSections, setExpandedSections] = useState<string[]>(['Invoice Capture', 'Processing']);
+
+  const colors = getCurrentColors();
+  const brandGradient = getBrandGradient();
+
+  // Sample notifications
+  const [notifications, setNotifications] = useState<Notification[]>([
+    {
+      id: '1',
+      type: 'success',
+      title: 'Invoice approved',
+      message: 'Invoice #INV-2024-001 has been approved.',
+      timestamp: new Date(Date.now() - 5 * 60 * 1000),
+      read: false,
+      actionUrl: '/invoices/1',
+      actionLabel: 'View',
+      module: 'processing',
+    },
+    {
+      id: '2',
+      type: 'info',
+      title: 'New vendor',
+      message: 'Acme Corporation completed registration.',
+      timestamp: new Date(Date.now() - 30 * 60 * 1000),
+      read: false,
+      actionUrl: '/vendors',
+      module: 'vendor',
+    },
+    {
+      id: '3',
+      type: 'warning',
+      title: 'Review needed',
+      message: 'Invoice #INV-2024-003 flagged for review.',
+      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      read: true,
+      actionUrl: '/invoices/3',
+      module: 'capture',
+    },
+  ]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -98,9 +140,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isAuthenticated]);
 
-  if (!isAuthenticated) {
-    return null;
-  }
+  if (!isAuthenticated) return null;
 
   const handleLogout = () => {
     logout();
@@ -116,17 +156,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       setShowPersonaSwitcher(false);
       router.refresh();
     } catch (error: any) {
-      toast.error(error.message || 'Failed to switch configuration');
+      toast.error(error.message || 'Failed to switch');
     } finally {
       setSwitchingPersona(false);
     }
   };
 
-  const toggleSection = (sectionName: string) => {
-    setExpandedSections(prev => 
-      prev.includes(sectionName) 
-        ? prev.filter(s => s !== sectionName)
-        : [...prev, sectionName]
+  const toggleSection = (name: string) => {
+    setExpandedSections(prev =>
+      prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name]
     );
   };
 
@@ -143,41 +181,44 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen bg-background">
       {/* Sidebar */}
-      <aside 
-        className={`fixed inset-y-0 left-0 bg-card border-r border-border z-30 transition-all duration-300 ${
+      <aside
+        className={`fixed inset-y-0 left-0 bg-card border-r border-border z-30 transition-all duration-300 flex flex-col ${
           sidebarCollapsed ? 'w-16' : 'w-60'
         }`}
       >
         {/* Logo */}
-        <div className="h-14 flex items-center justify-between px-3 border-b border-border">
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-sm">
+        <div className="h-14 flex items-center justify-between px-3 border-b border-border flex-shrink-0">
+          <Link href="/dashboard" className="flex items-center gap-2.5 group">
+            <div
+              className="w-8 h-8 rounded-xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-105"
+              style={{ background: brandGradient }}
+            >
               <FileText className="w-4 h-4 text-white" />
             </div>
             {!sidebarCollapsed && (
-              <span className="text-base font-semibold text-foreground">BillForge</span>
+              <span className="text-base font-semibold text-foreground">
+                {tenant?.settings?.company_name || 'BillForge'}
+              </span>
             )}
           </Link>
           <button
             onClick={toggleSidebar}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
             {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
         </div>
 
         {/* Navigation */}
-        <nav className="p-2 space-y-0.5 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
           {navigation.map((item) => {
-            // Check if module is enabled
             if (item.module && !hasModule(item.module)) return null;
-            
+
             const isActive = isNavItemActive(item);
             const hasChildren = item.children && item.children.length > 0;
             const isExpanded = expandedSections.includes(item.name);
 
-            // Filter children by module access
-            const visibleChildren = item.children?.filter(child => 
+            const visibleChildren = item.children?.filter(child =>
               !child.module || hasModule(child.module)
             ) || [];
 
@@ -187,7 +228,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   {sidebarCollapsed ? (
                     <Link
                       href={item.href}
-                      className={`nav-item justify-center px-2 ${isActive ? 'nav-item-active' : 'nav-item-inactive'}`}
+                      className={`bright-nav-item justify-center px-2 ${isActive ? 'active' : ''}`}
                       title={item.name}
                     >
                       <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -196,22 +237,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <>
                       <button
                         onClick={() => toggleSection(item.name)}
-                        className={`nav-item w-full ${isActive ? 'nav-item-active' : 'nav-item-inactive'}`}
+                        className={`bright-nav-item w-full ${isActive ? 'active' : ''}`}
                       >
                         <item.icon className="w-5 h-5 flex-shrink-0" />
                         <span className="flex-1 text-left">{item.name}</span>
                         <ChevronDown className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       </button>
-                      
+
                       {isExpanded && (
-                        <div className="ml-4 pl-3 border-l border-border space-y-0.5 mt-0.5">
+                        <div className="ml-4 pl-3 border-l border-border/50 space-y-0.5 mt-0.5">
                           {visibleChildren.map((child) => {
                             const isChildActive = pathname === child.href || pathname.startsWith(`${child.href}/`);
                             return (
                               <Link
                                 key={child.name}
                                 href={child.href}
-                                className={`nav-item text-sm py-1.5 ${isChildActive ? 'nav-item-active' : 'nav-item-inactive'}`}
+                                className={`bright-nav-item text-sm py-2 ${isChildActive ? 'active' : ''}`}
                               >
                                 <child.icon className="w-4 h-4 flex-shrink-0" />
                                 <span>{child.name}</span>
@@ -230,7 +271,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Link
                 key={item.name}
                 href={item.href}
-                className={`nav-item ${isActive ? 'nav-item-active' : 'nav-item-inactive'} ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
+                className={`bright-nav-item ${isActive ? 'active' : ''} ${sidebarCollapsed ? 'justify-center px-2' : ''}`}
                 title={sidebarCollapsed ? item.name : undefined}
               >
                 <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -241,31 +282,40 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         {/* Bottom section */}
-        <div className="absolute bottom-0 left-0 right-0 border-t border-border">
+        <div className="border-t border-border flex-shrink-0">
           {/* Module badges */}
           {!sidebarCollapsed && (
-            <div className="p-3">
-              <div className="flex flex-wrap gap-1">
-                {hasModule('invoice_capture') && <span className="module-badge module-badge-capture">OCR</span>}
-                {hasModule('invoice_processing') && <span className="module-badge module-badge-processing">Processing</span>}
-                {hasModule('vendor_management') && <span className="module-badge module-badge-vendor">Vendors</span>}
+            <div className="p-3 border-b border-border/50">
+              <div className="flex flex-wrap gap-1.5">
+                {hasModule('invoice_capture') && (
+                  <span className="bright-chip bright-chip-capture">OCR</span>
+                )}
+                {hasModule('invoice_processing') && (
+                  <span className="bright-chip bright-chip-processing">Processing</span>
+                )}
+                {hasModule('vendor_management') && (
+                  <span className="bright-chip bright-chip-vendor">Vendors</span>
+                )}
               </div>
             </div>
           )}
 
           {/* User */}
-          <div className={`p-3 border-t border-border ${sidebarCollapsed ? 'flex justify-center' : ''}`}>
+          <div className={`p-3 ${sidebarCollapsed ? 'flex justify-center' : ''}`}>
             {sidebarCollapsed ? (
               <button
                 onClick={handleLogout}
-                className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                 title="Log out"
               >
                 <LogOut className="w-5 h-5" />
               </button>
             ) : (
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/80 to-accent/80 flex items-center justify-center text-white text-sm font-medium">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-medium shadow-md"
+                  style={{ background: brandGradient }}
+                >
                   {user?.name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -274,7 +324,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -290,7 +340,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Main content */}
       <div className={`transition-all duration-300 ${sidebarCollapsed ? 'pl-16' : 'pl-60'}`}>
         {/* Header */}
-        <header className="h-14 bg-card/80 backdrop-blur-sm border-b border-border sticky top-0 z-20">
+        <header className="h-14 bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-20">
           <div className="h-full px-4 flex items-center justify-between gap-4">
             {/* Command Palette Trigger */}
             <div className="flex-1 max-w-md">
@@ -303,9 +353,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <div className="relative">
                 <button
                   onClick={() => setShowPersonaSwitcher(!showPersonaSwitcher)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-secondary hover:bg-secondary/80 transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm bg-secondary/80 hover:bg-secondary transition-colors"
                 >
-                  <CurrentPersonaIcon className="w-4 h-4 text-primary" />
+                  <CurrentPersonaIcon className="w-4 h-4" style={{ color: `hsl(${colors.primary})` }} />
                   <span className="text-foreground font-medium hidden sm:inline">
                     {currentPersona?.name || 'Full Platform'}
                   </span>
@@ -315,11 +365,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {showPersonaSwitcher && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowPersonaSwitcher(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-72 bg-card border border-border rounded-xl shadow-soft-lg z-50 animate-scale-in overflow-hidden">
-                      <div className="p-3 border-b border-border">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Product Configuration</p>
+                    <div className="absolute right-0 top-full mt-2 w-72 bg-card border border-border rounded-2xl shadow-soft-xl z-50 animate-scale-in overflow-hidden">
+                      <div className="p-3 border-b border-border bg-secondary/30">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Configuration</p>
                       </div>
-                      <div className="max-h-80 overflow-y-auto p-1">
+                      <div className="max-h-80 overflow-y-auto p-1.5">
                         {personas.map((persona) => {
                           const Icon = personaIcons[persona.id] || Layers;
                           const isSelected = persona.id === currentPersona?.id;
@@ -329,13 +379,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                               key={persona.id}
                               onClick={() => handleSwitchPersona(persona.id)}
                               disabled={switchingPersona || isSelected}
-                              className={`w-full p-2 rounded-lg text-left flex items-start gap-3 transition-colors disabled:opacity-50 ${
-                                isSelected ? 'bg-primary/10' : 'hover:bg-secondary'
+                              className={`w-full p-2.5 rounded-xl text-left flex items-start gap-3 transition-all disabled:opacity-50 ${
+                                isSelected ? 'bg-primary/10 border border-primary/20' : 'hover:bg-secondary'
                               }`}
                             >
-                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                                isSelected ? 'bg-primary text-white' : 'bg-secondary text-muted-foreground'
-                              }`}>
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                                  isSelected ? 'text-white shadow-md' : 'bg-secondary text-muted-foreground'
+                                }`}
+                                style={isSelected ? { background: brandGradient } : {}}
+                              >
                                 <Icon className="w-4 h-4" />
                               </div>
                               <div className="flex-1 min-w-0">
@@ -343,7 +396,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                                   {persona.name}
                                 </p>
                                 <p className="text-xs text-muted-foreground truncate">
-                                  {persona.modules?.filter(m => m.enabled).length || 0} modules enabled
+                                  {persona.modules?.filter(m => m.enabled).length || 0} modules
                                 </p>
                               </div>
                               {isSelected && <Check className="w-4 h-4 text-primary mt-1" />}
@@ -352,7 +405,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         })}
                       </div>
                       {switchingPersona && (
-                        <div className="p-3 border-t border-border flex items-center justify-center text-muted-foreground">
+                        <div className="p-3 border-t border-border flex items-center justify-center text-muted-foreground bg-secondary/30">
                           <RefreshCw className="w-4 h-4 animate-spin mr-2" />
                           <span className="text-sm">Switching...</span>
                         </div>
@@ -362,16 +415,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 )}
               </div>
 
+              {/* Theme Quick Switcher */}
+              <ThemeQuickSwitcher compact />
+
               {/* Notifications */}
-              <button className="relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full" />
-              </button>
+              <NotificationCenter
+                notifications={notifications}
+                onMarkAsRead={(id) => {
+                  setNotifications((prev) =>
+                    prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+                  );
+                }}
+                onMarkAllAsRead={() => {
+                  setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                }}
+                onDelete={(id) => {
+                  setNotifications((prev) => prev.filter((n) => n.id !== id));
+                }}
+                onClearAll={() => setNotifications([])}
+              />
 
               {/* Settings */}
               <Link
                 href="/settings"
-                className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 <Settings className="w-5 h-5" />
               </Link>

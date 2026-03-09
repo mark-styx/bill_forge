@@ -37,3 +37,42 @@ export * from './alert';
 
 // Theme Components
 export * from './color-picker';
+export * from './theme-settings';
+export * from './theme-showcase';
+export * from './organization-theme-settings';
+
+// Gradient & Animated Components
+export * from './gradient-card';
+export * from './hero-section';
+
+// Layout Components
+export * from './data-table';
+export * from './stat-card';
+export * from './page-header';
+export * from './empty-state';
+
+// Modern Components
+export * from './metric-card';
+export * from './quick-actions';
+export * from './activity-feed';
+export * from './module-nav';
+export * from './status-indicator';
+export * from './org-branding';
+export * from './notification-center';
+export * from './theme-quick-switcher';
+export * from './kpi-card';
+export * from './animated-banner';
+export * from './charts';
+
+// New Modern UI Components
+export * from './animated-counter';
+export * from './glass-card';
+export { ModernGradientButton, GradientIconButton, AnimatedBorderButton } from './gradient-button';
+export * from './theme-customizer';
+
+// Advanced Components
+export * from './advanced-data-table';
+export * from './multi-select';
+export * from './file-upload';
+export * from './stepper';
+export * from './confirm-dialog';

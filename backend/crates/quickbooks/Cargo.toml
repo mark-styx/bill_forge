@@ -1,0 +1,40 @@
+[package]
+name = "billforge-quickbooks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUIDs
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# OAuth
+oauth2 = "4.4"
+
+# URL encoding
+urlencoding = "2.1"
+
+# BillForge crates
+billforge-core = { path = "../core" }
+
+[dev-dependencies]
+tokio-test = "0.4"

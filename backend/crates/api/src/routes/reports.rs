@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use billforge_reporting::DashboardSummary;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -23,82 +24,19 @@ pub fn routes() -> Router<AppState> {
         .route("/custom", get(custom_report))
 }
 
-#[derive(Debug, Serialize)]
-pub struct DashboardSummary {
-    pub invoices_pending_review: u64,
-    pub invoices_pending_approval: u64,
-    pub invoices_ready_for_payment: u64,
-    pub total_amount_pending: f64,
-    pub vendors_active: u64,
-    pub invoices_this_month: u64,
-}
-
 async fn dashboard_summary(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<Json<DashboardSummary>> {
     // Get real counts from the database
-    let db = state.db.tenant(&tenant.tenant_id).await?;
-    let conn = db.connection().await;
-    let conn = conn.lock().await;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let invoices_pending_review: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE capture_status IN ('pending', 'ready_for_review')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    // Use reporting service
+    let reporting_service = billforge_reporting::ReportingService::new();
+    let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
 
-    let invoices_pending_approval: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'pending_approval'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let invoices_ready_for_payment: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'ready_for_payment'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let total_amount_pending: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE processing_status NOT IN ('paid', 'voided')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let vendors_active: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM vendors WHERE status = 'active'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let invoices_this_month: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM invoices WHERE created_at >= date('now', 'start of month')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    Ok(Json(DashboardSummary {
-        invoices_pending_review: invoices_pending_review as u64,
-        invoices_pending_approval: invoices_pending_approval as u64,
-        invoices_ready_for_payment: invoices_ready_for_payment as u64,
-        total_amount_pending: (total_amount_pending as f64) / 100.0, // Convert cents to dollars
-        vendors_active: vendors_active as u64,
-        invoices_this_month: invoices_this_month as u64,
-    }))
+    Ok(Json(summary))
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,21 +58,33 @@ async fn invoices_by_vendor(
     ReportingAccess(user, tenant): ReportingAccess,
     Query(query): Query<DateRangeQuery>,
 ) -> ApiResult<Json<Vec<InvoicesByVendor>>> {
-    // TODO: Implement actual report
-    Ok(Json(vec![
-        InvoicesByVendor {
-            vendor_id: "v1".to_string(),
-            vendor_name: "Acme Corp".to_string(),
-            invoice_count: 15,
-            total_amount: 12500.00,
-        },
-        InvoicesByVendor {
-            vendor_id: "v2".to_string(),
-            vendor_name: "TechSupplies Inc".to_string(),
-            invoice_count: 8,
-            total_amount: 8900.00,
-        },
-    ]))
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    // Parse date range (default to last 30 days if not provided)
+    let end_date = query.end_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| chrono::Utc::now().naive_utc().date());
+    let start_date = query.start_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| end_date - chrono::Duration::days(30));
+
+    let vendor_spend = reporting_service.get_vendor_spend(
+        &tenant.tenant_id,
+        &pool,
+        Some(start_date),
+        Some(end_date),
+        100, // limit
+    ).await?;
+
+    let result: Vec<InvoicesByVendor> = vendor_spend.into_iter().map(|vs| InvoicesByVendor {
+        vendor_id: vs.vendor_id,
+        vendor_name: vs.vendor_name,
+        invoice_count: vs.invoice_count,
+        total_amount: vs.total_spend,
+    }).collect();
+
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize)]
@@ -149,19 +99,18 @@ async fn invoices_by_status(
     ReportingAccess(user, tenant): ReportingAccess,
     Query(query): Query<DateRangeQuery>,
 ) -> ApiResult<Json<Vec<InvoicesByStatus>>> {
-    // TODO: Implement actual report
-    Ok(Json(vec![
-        InvoicesByStatus {
-            status: "pending_approval".to_string(),
-            count: 5,
-            total_amount: 15000.00,
-        },
-        InvoicesByStatus {
-            status: "ready_for_payment".to_string(),
-            count: 8,
-            total_amount: 23000.00,
-        },
-    ]))
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let status_dist = reporting_service.get_status_distribution(&tenant.tenant_id, &pool).await?;
+
+    let result: Vec<InvoicesByStatus> = status_dist.into_iter().map(|sd| InvoicesByStatus {
+        status: sd.status,
+        count: sd.count,
+        total_amount: sd.total_amount,
+    }).collect();
+
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize)]
@@ -175,29 +124,18 @@ async fn invoice_aging(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
 ) -> ApiResult<Json<Vec<AgingBucket>>> {
-    // TODO: Implement actual aging report
-    Ok(Json(vec![
-        AgingBucket {
-            bucket: "0-30 days".to_string(),
-            count: 25,
-            total_amount: 45000.00,
-        },
-        AgingBucket {
-            bucket: "31-60 days".to_string(),
-            count: 10,
-            total_amount: 18000.00,
-        },
-        AgingBucket {
-            bucket: "61-90 days".to_string(),
-            count: 3,
-            total_amount: 5000.00,
-        },
-        AgingBucket {
-            bucket: "90+ days".to_string(),
-            count: 1,
-            total_amount: 2000.00,
-        },
-    ]))
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let aging_data = reporting_service.get_invoice_aging(&tenant.tenant_id, &pool).await?;
+
+    let result: Vec<AgingBucket> = aging_data.into_iter().map(|ab| AgingBucket {
+        bucket: ab.bucket_name,
+        count: ab.invoice_count,
+        total_amount: ab.total_amount,
+    }).collect();
+
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize)]
@@ -214,8 +152,53 @@ async fn vendor_spend(
     ReportingAccess(user, tenant): ReportingAccess,
     Query(query): Query<DateRangeQuery>,
 ) -> ApiResult<Json<Vec<VendorSpend>>> {
-    // TODO: Implement actual vendor spend report
-    Ok(Json(vec![]))
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    // Get all vendors with their spend data
+    let vendor_spend = reporting_service.get_vendor_spend(
+        &tenant.tenant_id,
+        &pool,
+        None,
+        None,
+        100, // limit
+    ).await?;
+
+    // Get YTD spend for each vendor
+    let ytd_spend = reporting_service.get_vendor_spend_ytd(
+        &tenant.tenant_id,
+        &pool,
+        100,
+    ).await?;
+
+    // Get MTD spend for each vendor
+    let mtd_spend = reporting_service.get_vendor_spend_mtd(
+        &tenant.tenant_id,
+        &pool,
+        100,
+    ).await?;
+
+    // Build lookup maps for YTD and MTD
+    let ytd_map: std::collections::HashMap<String, f64> = ytd_spend
+        .iter()
+        .map(|vs| (vs.vendor_id.clone(), vs.total_spend))
+        .collect();
+
+    let mtd_map: std::collections::HashMap<String, f64> = mtd_spend
+        .iter()
+        .map(|vs| (vs.vendor_id.clone(), vs.total_spend))
+        .collect();
+
+    // Combine data
+    let result: Vec<VendorSpend> = vendor_spend.into_iter().map(|vs| VendorSpend {
+        vendor_id: vs.vendor_id.clone(),
+        vendor_name: vs.vendor_name,
+        ytd_spend: ytd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
+        mtd_spend: mtd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
+        invoice_count: vs.invoice_count,
+    }).collect();
+
+    Ok(Json(result))
 }
 
 #[derive(Debug, Serialize)]
@@ -232,14 +215,24 @@ async fn workflow_metrics(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
 ) -> ApiResult<Json<WorkflowMetrics>> {
-    // TODO: Implement actual workflow metrics
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let metrics = reporting_service.get_processing_metrics(&tenant.tenant_id, &pool).await?;
+
+    // Get invoices processed today from dashboard summary
+    let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
+
+    // Get invoices processed this week
+    let invoices_this_week = reporting_service.get_invoices_processed_this_week(&tenant.tenant_id, &pool).await?;
+
     Ok(Json(WorkflowMetrics {
-        avg_processing_time_hours: 4.5,
-        avg_approval_time_hours: 2.3,
-        auto_approval_rate: 0.35,
-        rejection_rate: 0.05,
-        invoices_processed_today: 12,
-        invoices_processed_this_week: 78,
+        avg_processing_time_hours: metrics.avg_total_processing_time_hours,
+        avg_approval_time_hours: metrics.avg_approval_time_hours,
+        auto_approval_rate: metrics.auto_approval_rate,
+        rejection_rate: metrics.rejection_rate,
+        invoices_processed_today: summary.invoices_processed_today,
+        invoices_processed_this_week: invoices_this_week,
     }))
 }
 
@@ -255,10 +248,63 @@ async fn custom_report(
     ReportingAccess(user, tenant): ReportingAccess,
     Query(query): Query<CustomReportQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // TODO: Implement custom report builder
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    // Parse filters JSON if provided
+    let (date_range, filters) = if let Some(filters_str) = query.filters {
+        match serde_json::from_str::<serde_json::Value>(&filters_str) {
+            Ok(json) => {
+                // Extract date_range
+                let date_range = json.get("date_range").and_then(|dr| {
+                    let start = dr.get("start")?.as_str()?;
+                    let end = dr.get("end")?.as_str()?;
+
+                    Some(billforge_reporting::DateRange {
+                        start: chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?,
+                        end: chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?,
+                    })
+                });
+
+                // Extract filters array
+                let filters = json.get("filters")
+                    .and_then(|f| f.as_array())
+                    .map(|arr| {
+                        arr.iter().filter_map(|filter| {
+                            Some(billforge_reporting::ReportFilter {
+                                field: filter.get("field")?.as_str()?.to_string(),
+                                operator: filter.get("operator")?.as_str()?.to_string(),
+                                value: filter.get("value")?.clone(),
+                            })
+                        }).collect()
+                    })
+                    .unwrap_or_default();
+
+                (date_range, filters)
+            }
+            Err(_) => (None, vec![]),
+        }
+    } else {
+        (None, vec![])
+    };
+
+    // Build CustomReportQuery from HTTP query params
+    let report_query = billforge_reporting::CustomReportQuery {
+        report_type: query.report_type,
+        date_range,
+        filters,
+        group_by: query.group_by,
+        order_by: None,
+        limit: None,
+    };
+
+    let result = reporting_service.execute_custom_report(&tenant.tenant_id, &pool, report_query).await?;
+
+    // Convert CustomReportResult to JSON
     Ok(Json(serde_json::json!({
-        "report_type": query.report_type,
-        "data": [],
-        "message": "Custom report endpoint - implementation pending"
+        "columns": result.columns,
+        "rows": result.rows,
+        "total_rows": result.total_rows,
+        "generated_at": result.generated_at,
     })))
 }
