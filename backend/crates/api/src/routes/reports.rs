@@ -251,11 +251,48 @@ async fn custom_report(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
+    // Parse filters JSON if provided
+    let (date_range, filters) = if let Some(filters_str) = query.filters {
+        match serde_json::from_str::<serde_json::Value>(&filters_str) {
+            Ok(json) => {
+                // Extract date_range
+                let date_range = json.get("date_range").and_then(|dr| {
+                    let start = dr.get("start")?.as_str()?;
+                    let end = dr.get("end")?.as_str()?;
+
+                    Some(billforge_reporting::DateRange {
+                        start: chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?,
+                        end: chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?,
+                    })
+                });
+
+                // Extract filters array
+                let filters = json.get("filters")
+                    .and_then(|f| f.as_array())
+                    .map(|arr| {
+                        arr.iter().filter_map(|filter| {
+                            Some(billforge_reporting::ReportFilter {
+                                field: filter.get("field")?.as_str()?.to_string(),
+                                operator: filter.get("operator")?.as_str()?.to_string(),
+                                value: filter.get("value")?.clone(),
+                            })
+                        }).collect()
+                    })
+                    .unwrap_or_default();
+
+                (date_range, filters)
+            }
+            Err(_) => (None, vec![]),
+        }
+    } else {
+        (None, vec![])
+    };
+
     // Build CustomReportQuery from HTTP query params
     let report_query = billforge_reporting::CustomReportQuery {
         report_type: query.report_type,
-        date_range: None, // TODO: Parse from query.filters if provided
-        filters: vec![],
+        date_range,
+        filters,
         group_by: query.group_by,
         order_by: None,
         limit: None,

@@ -2,10 +2,6 @@
 //!
 //! HTTP API for the BillForge platform.
 
-// Allow unused variables and dead code in stub implementations (TODOs)
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod config;
 pub mod error;
 pub mod extractors;
