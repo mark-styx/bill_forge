@@ -93,6 +93,38 @@ async fn run_migrations(database_url: &str) -> Result<()> {
         .execute(&pool)
         .await?;
 
+    println!("Running 005_create_workflow_tables.sql...");
+    let migration_005 = include_str!("../../../../migrations/005_create_workflow_tables.sql");
+    sqlx::raw_sql(migration_005)
+        .execute(&pool)
+        .await?;
+
+    println!("Running 006_create_quickbooks_tables.sql...");
+    let migration_006 = include_str!("../../../../migrations/006_create_quickbooks_tables.sql");
+    sqlx::raw_sql(migration_006)
+        .execute(&pool)
+        .await?;
+
+    println!("Running 007_create_vendor_documents.sql...");
+    let migration_007 = include_str!("../../../../migrations/007_create_vendor_documents.sql");
+    sqlx::raw_sql(migration_007)
+        .execute(&pool)
+        .await?;
+
+    println!("Running 008_create_vendor_contacts.sql...");
+    let migration_008 = include_str!("../../../../migrations/008_create_vendor_contacts.sql");
+    sqlx::raw_sql(migration_008)
+        .execute(&pool)
+        .await?;
+
+    println!("Running 009_create_email_notifications.sql...");
+    let migration_009 = include_str!("../../../../migrations/009_create_email_notifications.sql");
+    sqlx::raw_sql(migration_009)
+        .execute(&pool)
+        .await?;
+
+    println!("All migrations completed successfully!");
+
     pool.close().await;
     Ok(())
 }
