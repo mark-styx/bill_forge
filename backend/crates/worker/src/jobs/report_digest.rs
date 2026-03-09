@@ -3,7 +3,8 @@
 use crate::config::WorkerConfig;
 use anyhow::Result;
 use billforge_reporting::{ReportingService, DigestType};
-use chrono::{Utc, NaiveDate, Duration};
+use billforge_email::EmailService;
+use chrono::{Utc, NaiveDate, Duration, Datelike};
 use tracing::{info, warn, error};
 use uuid::Uuid;
 
@@ -76,10 +77,11 @@ async fn process_digest(
     let (period_start, period_end) = calculate_period(&digest.digest_type);
 
     let tenant_id = tenant_id_str.parse::<billforge_core::types::TenantId>()?;
+    let pool_arc = std::sync::Arc::new(pool.clone());
     let content = reporting_service
         .generate_digest_content(
             &tenant_id,
-            pool,
+            &pool_arc,
             digest.user_id,
             digest.digest_type.clone(),
             period_start,
@@ -89,7 +91,7 @@ async fn process_digest(
 
     let user_email = get_user_email(pool, digest.user_id).await?;
 
-    let (html_body, text_body) = generate_digest_email(&content, tenant_id);
+    let (html_body, text_body) = generate_digest_email(&content, tenant_id_str);
 
     let subject = match digest.digest_type {
         DigestType::DailySummary => format!("Daily Summary - {}", period_end),

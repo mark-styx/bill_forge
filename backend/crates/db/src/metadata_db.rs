@@ -35,7 +35,7 @@ impl MetadataDatabase {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
         )
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .fetch_one(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to check tenant: {}", e)))?;
@@ -49,7 +49,7 @@ impl MetadataDatabase {
         sqlx::query(
             "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
         )
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .bind(name)
         .bind(&slug)
         .execute(&self.pool)
@@ -62,7 +62,7 @@ impl MetadataDatabase {
     /// Delete a tenant
     pub async fn delete_tenant(&self, tenant_id: &TenantId) -> Result<()> {
         sqlx::query("DELETE FROM tenants WHERE id = $1")
-            .bind(tenant_id.as_str())
+            .bind(tenant_id.as_uuid())
             .execute(&self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete tenant: {}", e)))?;
@@ -90,7 +90,7 @@ impl MetadataDatabase {
         let result = sqlx::query_as::<_, TenantRecord>(
             "SELECT id, name, settings, enabled_modules, is_active FROM tenants WHERE id = $1"
         )
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get tenant: {}", e)))?;
@@ -111,7 +111,7 @@ impl MetadataDatabase {
             "UPDATE tenants SET settings = $1, updated_at = NOW() WHERE id = $2"
         )
         .bind(&settings_json)
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .execute(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update tenant settings: {}", e)))?;
@@ -132,7 +132,7 @@ impl MetadataDatabase {
             "UPDATE tenants SET enabled_modules = $1, updated_at = NOW() WHERE id = $2"
         )
         .bind(&modules_json)
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .execute(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update tenant modules: {}", e)))?;
@@ -190,7 +190,7 @@ impl MetadataDatabase {
             r#"SELECT id, tenant_id, email, password_hash, name, roles::jsonb, is_active, email_verified
                FROM users WHERE tenant_id = $1 AND email = $2"#
         )
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .bind(email)
         .fetch_optional(&self.pool)
         .await
@@ -319,7 +319,7 @@ impl MetadataDatabase {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .bind(name)
         .bind(key_prefix)
         .bind(key_hash)
@@ -363,7 +363,7 @@ impl MetadataDatabase {
         let results = sqlx::query_as::<_, ApiKeyRecord>(
             "SELECT * FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(tenant_id.as_uuid())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list API keys: {}", e)))?;
@@ -375,7 +375,7 @@ impl MetadataDatabase {
     pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: uuid::Uuid) -> Result<()> {
         sqlx::query("UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND tenant_id = $2")
             .bind(key_id)
-            .bind(tenant_id.as_str())
+            .bind(tenant_id.as_uuid())
             .execute(&self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to revoke API key: {}", e)))?;

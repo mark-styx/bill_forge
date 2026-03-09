@@ -17,6 +17,6 @@ CREATE TABLE IF NOT EXISTS tenant_databases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Indexes
-CREATE INDEX idx_tenants_slug ON tenants(slug);
-CREATE INDEX idx_tenant_databases_tenant_id ON tenant_databases(tenant_id);
+-- Indexes (use IF NOT EXISTS for idempotency)
+CREATE INDEX IF NOT EXISTS idx_tenants_slug ON tenants(slug);
+CREATE INDEX IF NOT EXISTS idx_tenant_databases_tenant_id ON tenant_databases(tenant_id);
