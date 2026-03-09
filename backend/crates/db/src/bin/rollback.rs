@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use sqlx::PgPool;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use tracing::{info, warn, Level};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -66,10 +66,8 @@ struct MigrationFile {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    // Initialize logging (simple env-filter based)
+    tracing_subscriber::fmt::init();
 
     let args = Args::parse();
 
@@ -345,11 +343,11 @@ async fn plan_rollback(
     .context("Failed to fetch applied migrations")?;
 
     // Match with migration files
-    let mut rollback_plan = Vec::new();
+    let mut rollback_plan: Vec<MigrationFile> = Vec::new();
 
     for applied_migration in applied {
         if let Some(migration_file) = migrations.iter().find(|m| m.version == applied_migration.version) {
-            rollback_plan.push(migration_file.clone());
+            rollback_plan.push((*migration_file).clone());
         } else {
             anyhow::bail!(
                 "Migration file not found for version {} ({})",
