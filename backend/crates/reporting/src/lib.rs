@@ -11,4 +11,6 @@ pub use models::{
     ProcessingMetrics, StatusDistribution, CustomReportQuery, CustomReportResult, DateRange,
     ReportFilter, SpendTrendPoint, CategoryBreakdown, VendorPerformanceMetrics, ApprovalAnalytics,
     BottleneckStage, ApproverWorkload, ExportRequest, ExportFormat, ExportResult,
+    ReportDigest, DigestType, DigestFrequency, UpsertDigestRequest, DigestContent,
+    DigestSummary, DigestHighlight, ActionableItem,
 };

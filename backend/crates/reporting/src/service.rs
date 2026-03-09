@@ -6,7 +6,7 @@ use crate::models::*;
 use billforge_core::{types::TenantId, Result, Error};
 use sqlx::{PgPool, Row, Column};
 use std::sync::Arc;
-use chrono::{NaiveDate, Utc, Duration, Datelike};
+use chrono::{NaiveDate, DateTime, Utc, Duration, Datelike, Timelike};
 
 // Re-export models used in public API
 pub use crate::models::{
@@ -1179,6 +1179,506 @@ impl ReportingService {
             bottleneck_stages,
             approver_workloads,
         })
+    }
+
+    // === Email Digest Methods ===
+
+    /// Generate digest content for a user
+    pub async fn generate_digest_content(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        user_id: uuid::Uuid,
+        digest_type: DigestType,
+        period_start: NaiveDate,
+        period_end: NaiveDate,
+    ) -> Result<DigestContent> {
+        // Get summary metrics
+        let summary = self.get_digest_summary(_tenant_id, pool, period_start, period_end).await?;
+
+        // Get highlights based on digest type
+        let highlights = self.get_digest_highlights(_tenant_id, pool, period_start, period_end, &digest_type).await?;
+
+        // Get actionable items (pending approvals for this user)
+        let actionable_items = self.get_actionable_items(_tenant_id, pool, user_id).await?;
+
+        Ok(DigestContent {
+            digest_type,
+            period_start,
+            period_end,
+            summary,
+            highlights,
+            actionable_items,
+        })
+    }
+
+    async fn get_digest_summary(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<DigestSummary> {
+        #[derive(sqlx::FromRow)]
+        struct SummaryRow {
+            total_invoices: i64,
+            total_amount_cents: i64,
+            pending_approvals: i64,
+            approved_count: i64,
+            rejected_count: i64,
+            avg_processing_time_hours: Option<f64>,
+        }
+
+        let row = sqlx::query_as::<_, SummaryRow>(
+            r#"
+            SELECT
+                COUNT(*) as total_invoices,
+                COALESCE(SUM(total_amount_cents), 0) as total_amount_cents,
+                COUNT(*) FILTER (WHERE status = 'pending_approval') as pending_approvals,
+                COUNT(*) FILTER (WHERE status = 'approved' OR status = 'ready_for_payment') as approved_count,
+                COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
+                AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600) as avg_processing_time_hours
+            FROM invoices
+            WHERE invoice_date >= $1 AND invoice_date <= $2
+            "#,
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_one(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to query digest summary: {}", e)))?;
+
+        Ok(DigestSummary {
+            total_invoices: row.total_invoices as u64,
+            total_amount: row.total_amount_cents as f64 / 100.0,
+            pending_approvals: row.pending_approvals as u64,
+            approved_count: row.approved_count as u64,
+            rejected_count: row.rejected_count as u64,
+            avg_processing_time_hours: row.avg_processing_time_hours.unwrap_or(0.0),
+        })
+    }
+
+    async fn get_digest_highlights(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        digest_type: &DigestType,
+    ) -> Result<Vec<DigestHighlight>> {
+        let mut highlights = Vec::new();
+
+        // Top vendor by spend
+        #[derive(sqlx::FromRow)]
+        struct VendorRow {
+            vendor_name: String,
+            total_spend: i64,
+        }
+
+        let top_vendor = sqlx::query_as::<_, VendorRow>(
+            r#"
+            SELECT v.name as vendor_name, COALESCE(SUM(i.total_amount_cents), 0) as total_spend
+            FROM invoices i
+            JOIN vendors v ON i.vendor_id = v.id
+            WHERE i.invoice_date >= $1 AND i.invoice_date <= $2
+            GROUP BY v.name
+            ORDER BY total_spend DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_optional(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to query top vendor: {}", e)))?;
+
+        if let Some(vendor) = top_vendor {
+            highlights.push(DigestHighlight {
+                title: "Top Vendor by Spend".to_string(),
+                description: format!("{}", vendor.vendor_name),
+                value: Some(vendor.total_spend as f64 / 100.0),
+                change_percentage: None,
+            });
+        }
+
+        // For weekly/monthly, add trend comparison
+        if matches!(digest_type, DigestType::WeeklySummary | DigestType::MonthlySummary) {
+            let prior_start = start_date - chrono::Duration::days((end_date - start_date).num_days() + 1);
+            let prior_end = start_date - chrono::Duration::days(1);
+
+            #[derive(sqlx::FromRow)]
+            struct TrendRow {
+                current_spend: i64,
+                prior_spend: i64,
+            }
+
+            let trend = sqlx::query_as::<_, TrendRow>(
+                r#"
+                SELECT
+                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE invoice_date >= $1 AND invoice_date <= $2) as current_spend,
+                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE invoice_date >= $3 AND invoice_date <= $4) as prior_spend
+                "#,
+            )
+            .bind(start_date)
+            .bind(end_date)
+            .bind(prior_start)
+            .bind(prior_end)
+            .fetch_one(pool.as_ref())
+            .await
+            .ok();
+
+            if let Some(trend) = trend {
+                let change_pct = if trend.prior_spend > 0 {
+                    Some(((trend.current_spend - trend.prior_spend) as f64 / trend.prior_spend as f64) * 100.0)
+                } else {
+                    None
+                };
+
+                highlights.push(DigestHighlight {
+                    title: "Spend vs Prior Period".to_string(),
+                    description: if change_pct.map_or(false, |p| p > 0.0) {
+                        "Increased"
+                    } else {
+                        "Decreased"
+                    }
+                    .to_string(),
+                    value: Some(trend.current_spend as f64 / 100.0),
+                    change_percentage: change_pct,
+                });
+            }
+        }
+
+        Ok(highlights)
+    }
+
+    async fn get_actionable_items(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<ActionableItem>> {
+        #[derive(sqlx::FromRow)]
+        struct PendingRow {
+            invoice_id: uuid::Uuid,
+            invoice_number: String,
+            vendor_name: String,
+            amount_cents: i64,
+            age_days: i64,
+        }
+
+        let rows = sqlx::query_as::<_, PendingRow>(
+            r#"
+            SELECT
+                i.id as invoice_id,
+                i.invoice_number,
+                v.name as vendor_name,
+                i.total_amount_cents as amount_cents,
+                EXTRACT(DAY FROM NOW() - i.created_at)::bigint as age_days
+            FROM invoices i
+            JOIN vendors v ON i.vendor_id = v.id
+            WHERE i.status = 'pending_approval'
+            ORDER BY i.created_at ASC
+            LIMIT 10
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to query actionable items: {}", e)))?;
+
+        let items = rows
+            .into_iter()
+            .map(|row| ActionableItem {
+                item_type: "pending_approval".to_string(),
+                item_id: row.invoice_id.to_string(),
+                title: format!("Invoice {} from {}", row.invoice_number, row.vendor_name),
+                description: format!("Amount: ${:.2}, Age: {} days", row.amount_cents as f64 / 100.0, row.age_days),
+                url: format!("/invoices/{}", row.invoice_id),
+                priority: if row.age_days > 7 { "high" } else { "normal" }.to_string(),
+            })
+            .collect();
+
+        Ok(items)
+    }
+
+    /// Get digests that are due for sending
+    pub async fn get_due_digests(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+    ) -> Result<Vec<ReportDigest>> {
+        #[derive(sqlx::FromRow)]
+        struct DigestRow {
+            id: uuid::Uuid,
+            tenant_id: String,
+            user_id: uuid::Uuid,
+            digest_type: String,
+            frequency: String,
+            enabled: bool,
+            filters: serde_json::Value,
+            last_sent_at: Option<DateTime<Utc>>,
+            next_send_at: DateTime<Utc>,
+            created_at: DateTime<Utc>,
+            updated_at: DateTime<Utc>,
+        }
+
+        let rows = sqlx::query_as::<_, DigestRow>(
+            r#"
+            SELECT id, tenant_id, user_id, digest_type, frequency, enabled, filters,
+                   last_sent_at, next_send_at, created_at, updated_at
+            FROM report_digests
+            WHERE enabled = true AND next_send_at <= NOW()
+            ORDER BY next_send_at ASC
+            LIMIT 100
+            "#,
+        )
+        .fetch_all(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to query due digests: {}", e)))?;
+
+        let digests = rows
+            .into_iter()
+            .filter_map(|row| {
+                let digest_type = match row.digest_type.as_str() {
+                    "daily_summary" => Some(DigestType::DailySummary),
+                    "weekly_summary" => Some(DigestType::WeeklySummary),
+                    "monthly_summary" => Some(DigestType::MonthlySummary),
+                    "approval_reminder" => Some(DigestType::ApprovalReminder),
+                    _ => None,
+                }?;
+
+                let frequency = match row.frequency.as_str() {
+                    "daily" => Some(DigestFrequency::Daily),
+                    "weekly" => Some(DigestFrequency::Weekly),
+                    "monthly" => Some(DigestFrequency::Monthly),
+                    _ => None,
+                }?;
+
+                Some(ReportDigest {
+                    id: row.id,
+                    tenant_id: row.tenant_id,
+                    user_id: row.user_id,
+                    digest_type,
+                    frequency,
+                    enabled: row.enabled,
+                    filters: row.filters,
+                    last_sent_at: row.last_sent_at,
+                    next_send_at: row.next_send_at,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                })
+            })
+            .collect();
+
+        Ok(digests)
+    }
+
+    /// Upsert a digest configuration
+    pub async fn upsert_digest(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        user_id: uuid::Uuid,
+        request: UpsertDigestRequest,
+    ) -> Result<ReportDigest> {
+        let digest_type_str = match request.digest_type {
+            DigestType::DailySummary => "daily_summary",
+            DigestType::WeeklySummary => "weekly_summary",
+            DigestType::MonthlySummary => "monthly_summary",
+            DigestType::ApprovalReminder => "approval_reminder",
+        };
+
+        let filters = request.filters.unwrap_or(serde_json::json!({}));
+
+        // Calculate next send time based on frequency
+        let now = Utc::now();
+        let next_send_at = match request.frequency {
+            DigestFrequency::Daily => now + chrono::Duration::days(1),
+            DigestFrequency::Weekly => now + chrono::Duration::weeks(1),
+            DigestFrequency::Monthly => {
+                // Next month same day
+                chrono::NaiveDate::from_ymd_opt(
+                    now.year(),
+                    now.month() + 1,
+                    now.day(),
+                )
+                .and_then(|d| d.and_hms_opt(now.hour(), now.minute(), 0))
+                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+                .unwrap_or_else(|| now + chrono::Duration::days(30))
+            }
+        };
+
+        #[derive(sqlx::FromRow)]
+        struct DigestRow {
+            id: uuid::Uuid,
+            tenant_id: String,
+            user_id: uuid::Uuid,
+            digest_type: String,
+            frequency: String,
+            enabled: bool,
+            filters: serde_json::Value,
+            last_sent_at: Option<DateTime<Utc>>,
+            next_send_at: DateTime<Utc>,
+            created_at: DateTime<Utc>,
+            updated_at: DateTime<Utc>,
+        }
+
+        let row = sqlx::query_as::<_, DigestRow>(
+            r#"
+            INSERT INTO report_digests (tenant_id, user_id, digest_type, frequency, enabled, filters, next_send_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (tenant_id, user_id, digest_type)
+            DO UPDATE SET
+                frequency = EXCLUDED.frequency,
+                enabled = EXCLUDED.enabled,
+                filters = EXCLUDED.filters,
+                next_send_at = EXCLUDED.next_send_at,
+                updated_at = NOW()
+            RETURNING id, tenant_id, user_id, digest_type, frequency, enabled, filters,
+                      last_sent_at, next_send_at, created_at, updated_at
+            "#,
+        )
+        .bind(_tenant_id.as_str())
+        .bind(user_id)
+        .bind(digest_type_str)
+        .bind(match request.frequency {
+            DigestFrequency::Daily => "daily",
+            DigestFrequency::Weekly => "weekly",
+            DigestFrequency::Monthly => "monthly",
+        })
+        .bind(request.enabled)
+        .bind(&filters)
+        .bind(next_send_at)
+        .fetch_one(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to upsert digest: {}", e)))?;
+
+        let digest_type = match row.digest_type.as_str() {
+            "daily_summary" => DigestType::DailySummary,
+            "weekly_summary" => DigestType::WeeklySummary,
+            "monthly_summary" => DigestType::MonthlySummary,
+            "approval_reminder" => DigestType::ApprovalReminder,
+            _ => unreachable!(),
+        };
+
+        let frequency = match row.frequency.as_str() {
+            "daily" => DigestFrequency::Daily,
+            "weekly" => DigestFrequency::Weekly,
+            "monthly" => DigestFrequency::Monthly,
+            _ => unreachable!(),
+        };
+
+        Ok(ReportDigest {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            user_id: row.user_id,
+            digest_type,
+            frequency,
+            enabled: row.enabled,
+            filters: row.filters,
+            last_sent_at: row.last_sent_at,
+            next_send_at: row.next_send_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+
+    /// List digests for a user
+    pub async fn list_user_digests(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<ReportDigest>> {
+        #[derive(sqlx::FromRow)]
+        struct DigestRow {
+            id: uuid::Uuid,
+            tenant_id: String,
+            user_id: uuid::Uuid,
+            digest_type: String,
+            frequency: String,
+            enabled: bool,
+            filters: serde_json::Value,
+            last_sent_at: Option<DateTime<Utc>>,
+            next_send_at: DateTime<Utc>,
+            created_at: DateTime<Utc>,
+            updated_at: DateTime<Utc>,
+        }
+
+        let rows = sqlx::query_as::<_, DigestRow>(
+            r#"
+            SELECT id, tenant_id, user_id, digest_type, frequency, enabled, filters,
+                   last_sent_at, next_send_at, created_at, updated_at
+            FROM report_digests
+            WHERE tenant_id = $1 AND user_id = $2
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(_tenant_id.as_str())
+        .bind(user_id)
+        .fetch_all(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list digests: {}", e)))?;
+
+        let digests = rows
+            .into_iter()
+            .filter_map(|row| {
+                let digest_type = match row.digest_type.as_str() {
+                    "daily_summary" => Some(DigestType::DailySummary),
+                    "weekly_summary" => Some(DigestType::WeeklySummary),
+                    "monthly_summary" => Some(DigestType::MonthlySummary),
+                    "approval_reminder" => Some(DigestType::ApprovalReminder),
+                    _ => None,
+                }?;
+
+                let frequency = match row.frequency.as_str() {
+                    "daily" => Some(DigestFrequency::Daily),
+                    "weekly" => Some(DigestFrequency::Weekly),
+                    "monthly" => Some(DigestFrequency::Monthly),
+                    _ => None,
+                }?;
+
+                Some(ReportDigest {
+                    id: row.id,
+                    tenant_id: row.tenant_id,
+                    user_id: row.user_id,
+                    digest_type,
+                    frequency,
+                    enabled: row.enabled,
+                    filters: row.filters,
+                    last_sent_at: row.last_sent_at,
+                    next_send_at: row.next_send_at,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                })
+            })
+            .collect();
+
+        Ok(digests)
+    }
+
+    /// Delete a digest
+    pub async fn delete_digest(
+        &self,
+        _tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+        user_id: uuid::Uuid,
+        digest_id: uuid::Uuid,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM report_digests
+            WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+            "#,
+        )
+        .bind(_tenant_id.as_str())
+        .bind(user_id)
+        .bind(digest_id)
+        .execute(pool.as_ref())
+        .await
+        .map_err(|e| Error::Database(format!("Failed to delete digest: {}", e)))?;
+
+        Ok(())
     }
 }
 

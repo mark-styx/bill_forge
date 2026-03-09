@@ -200,3 +200,86 @@ pub struct ExportResult {
     pub expires_at: DateTime<Utc>,
     pub row_count: u64,
 }
+
+// === Email Digest Models ===
+
+/// Report digest configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportDigest {
+    pub id: uuid::Uuid,
+    pub tenant_id: String,
+    pub user_id: uuid::Uuid,
+    pub digest_type: DigestType,
+    pub frequency: DigestFrequency,
+    pub enabled: bool,
+    pub filters: serde_json::Value,
+    pub last_sent_at: Option<DateTime<Utc>>,
+    pub next_send_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DigestType {
+    DailySummary,
+    WeeklySummary,
+    MonthlySummary,
+    ApprovalReminder,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DigestFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+/// Create/update digest request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertDigestRequest {
+    pub digest_type: DigestType,
+    pub frequency: DigestFrequency,
+    pub enabled: bool,
+    pub filters: Option<serde_json::Value>,
+}
+
+/// Digest content for email generation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestContent {
+    pub digest_type: DigestType,
+    pub period_start: NaiveDate,
+    pub period_end: NaiveDate,
+    pub summary: DigestSummary,
+    pub highlights: Vec<DigestHighlight>,
+    pub actionable_items: Vec<ActionableItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestSummary {
+    pub total_invoices: u64,
+    pub total_amount: f64,
+    pub pending_approvals: u64,
+    pub approved_count: u64,
+    pub rejected_count: u64,
+    pub avg_processing_time_hours: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestHighlight {
+    pub title: String,
+    pub description: String,
+    pub value: Option<f64>,
+    pub change_percentage: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionableItem {
+    pub item_type: String,
+    pub item_id: String,
+    pub title: String,
+    pub description: String,
+    pub url: String,
+    pub priority: String,
+}

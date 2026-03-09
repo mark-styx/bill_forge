@@ -4,12 +4,13 @@ use crate::error::ApiResult;
 use crate::extractors::{AuthUser, ReportingAccess, TenantCtx};
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State},
-    routing::get,
+    extract::{Query, State, Path},
+    routing::{get, post, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use billforge_reporting::DashboardSummary;
+use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -27,6 +28,9 @@ pub fn routes() -> Router<AppState> {
         .route("/categories/breakdown", get(category_breakdown))
         .route("/vendors/performance", get(vendor_performance))
         .route("/approvals/analytics", get(approval_analytics))
+        // Email digest management
+        .route("/digests", get(list_digests).post(create_digest))
+        .route("/digests/:id", delete(delete_digest))
 }
 
 async fn dashboard_summary(
@@ -429,4 +433,45 @@ async fn approval_analytics(
     ).await?;
 
     Ok(Json(analytics))
+}
+
+async fn list_digests(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<Vec<billforge_reporting::ReportDigest>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let digests = reporting_service.list_user_digests(&tenant.tenant_id, &pool, user.user_id.0).await?;
+
+    Ok(Json(digests))
+}
+
+async fn create_digest(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<billforge_reporting::UpsertDigestRequest>,
+) -> ApiResult<Json<billforge_reporting::ReportDigest>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let digest = reporting_service.upsert_digest(&tenant.tenant_id, &pool, user.user_id.0, request).await?;
+
+    Ok(Json(digest))
+}
+
+async fn delete_digest(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Path(digest_id): Path<Uuid>,
+) -> ApiResult<()> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    reporting_service.delete_digest(&tenant.tenant_id, &pool, user.user_id.0, digest_id).await?;
+
+    Ok(())
 }
