@@ -20,8 +20,8 @@ async fn main() -> Result<()> {
 
     info!("Starting BillForge Background Worker");
 
-    // Load configuration
-    let config = config::WorkerConfig::from_env()?;
+    // Load configuration (async to initialize database connections)
+    let config = config::WorkerConfig::from_env().await?;
 
     info!("Configuration loaded successfully");
 

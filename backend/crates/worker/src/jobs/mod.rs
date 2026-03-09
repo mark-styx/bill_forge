@@ -43,7 +43,7 @@ impl std::fmt::Display for JobType {
 }
 
 pub async fn start_worker(config: WorkerConfig) -> Result<()> {
-    info!("Starting job worker with config: {:?}", config);
+    info!("Starting job worker");
 
     // Connect to Redis
     let redis_client = redis::Client::open(config.redis_url.as_str())?;

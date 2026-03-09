@@ -4,14 +4,13 @@ use crate::config::WorkerConfig;
 use anyhow::Result;
 use billforge_email::EmailService;
 use serde_json::Value;
-use sqlx::PgPool;
 use std::collections::HashMap;
 use tracing::{info, warn, error};
 use uuid::Uuid;
 use chrono::Utc;
 
-pub async fn send_batch(tenant_id: &str, _payload: &Value, config: &WorkerConfig) -> Result<()> {
-    info!("Sending email batch for tenant: {}", tenant_id);
+pub async fn send_batch(tenant_id_str: &str, _payload: &Value, config: &WorkerConfig) -> Result<()> {
+    info!("Sending email batch for tenant: {}", tenant_id_str);
 
     // Create email service from environment
     let email_config = match billforge_email::EmailConfig::from_env() {
@@ -29,18 +28,23 @@ pub async fn send_batch(tenant_id: &str, _payload: &Value, config: &WorkerConfig
         return Ok(());
     }
 
-    // Connect to database
-    let pool = PgPool::connect(&config.database_url).await?;
+    // Parse tenant ID
+    let tenant_id = tenant_id_str.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid tenant ID: {}", e))?;
+
+    // Get tenant-specific database connection
+    let pool = config.pg_manager.tenant(&tenant_id).await
+        .map_err(|e| anyhow::anyhow!("Failed to get tenant database: {}", e))?;
 
     // Load pending email notifications
-    let pending_emails = load_pending_emails(&pool, tenant_id).await?;
+    let pending_emails = load_pending_emails(&pool, tenant_id_str).await?;
 
     if pending_emails.is_empty() {
-        info!("No pending emails for tenant: {}", tenant_id);
+        info!("No pending emails for tenant: {}", tenant_id_str);
         return Ok(());
     }
 
-    info!("Loaded {} pending emails for tenant: {}", pending_emails.len(), tenant_id);
+    info!("Loaded {} pending emails for tenant: {}", pending_emails.len(), tenant_id_str);
 
     // Group by recipient for batching
     let grouped = group_by_recipient(pending_emails);
@@ -68,11 +72,9 @@ pub async fn send_batch(tenant_id: &str, _payload: &Value, config: &WorkerConfig
         }
     }
 
-    pool.close().await;
-
     info!(
         "Email batch complete for tenant: {} - sent: {}, failed: {}",
-        tenant_id, sent_count, failed_count
+        tenant_id_str, sent_count, failed_count
     );
 
     Ok(())
@@ -88,7 +90,7 @@ struct PendingEmail {
     text_body: String,
 }
 
-async fn load_pending_emails(pool: &PgPool, tenant_id: &str) -> Result<Vec<PendingEmail>> {
+async fn load_pending_emails(pool: &sqlx::PgPool, tenant_id: &str) -> Result<Vec<PendingEmail>> {
     let rows = sqlx::query_as::<_, PendingEmail>(
         r#"
         SELECT
@@ -157,7 +159,7 @@ async fn send_email_batch(
     Ok(sent_ids)
 }
 
-async fn mark_as_sent(pool: &PgPool, ids: &[Uuid]) -> Result<()> {
+async fn mark_as_sent(pool: &sqlx::PgPool, ids: &[Uuid]) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -180,7 +182,7 @@ async fn mark_as_sent(pool: &PgPool, ids: &[Uuid]) -> Result<()> {
     Ok(())
 }
 
-async fn mark_as_failed(pool: &PgPool, ids: &[Uuid], error_message: &str) -> Result<()> {
+async fn mark_as_failed(pool: &sqlx::PgPool, ids: &[Uuid], error_message: &str) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
     }

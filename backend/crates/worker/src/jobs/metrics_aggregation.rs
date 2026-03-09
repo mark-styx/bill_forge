@@ -8,22 +8,20 @@ use anyhow::{Context, Result};
 use billforge_db::repositories::MetricsRepositoryImpl;
 use billforge_core::types::TenantId;
 use redis::AsyncCommands;
-use std::sync::Arc;
 use tracing::{info, warn};
 
 pub async fn aggregate_metrics(tenant_id: &str, config: &WorkerConfig) -> Result<()> {
     info!("Aggregating metrics for tenant: {}", tenant_id);
 
-    // Connect to database
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&config.database_url)
-        .await
-        .context("Failed to connect to database")?;
-
-    let metrics_repo = MetricsRepositoryImpl::new(Arc::new(pool));
+    // Parse tenant ID
     let tenant_id = tenant_id.parse::<TenantId>()
         .context("Invalid tenant_id format")?;
+
+    // Get tenant-specific database connection
+    let pool = config.pg_manager.tenant(&tenant_id).await
+        .context("Failed to get tenant database")?;
+
+    let metrics_repo = MetricsRepositoryImpl::new(pool);
 
     // Connect to Redis for caching
     let redis_client = redis::Client::open(config.redis_url.as_str())?;
