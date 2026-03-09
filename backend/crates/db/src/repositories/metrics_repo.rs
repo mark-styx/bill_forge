@@ -312,7 +312,7 @@ impl MetricsRepositoryImpl {
 
 // Data structures for metrics
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InvoiceMetrics {
     pub total_invoices: i64,
     pub pending_ocr: i64,
@@ -327,7 +327,7 @@ pub struct InvoiceMetrics {
     pub trend_vs_last_month: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ApprovalMetrics {
     pub pending_approvals: i64,
     pub approved_today: i64,
@@ -338,7 +338,7 @@ pub struct ApprovalMetrics {
     pub overdue: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VendorMetrics {
     pub total_vendors: i64,
     pub new_this_month: i64,
@@ -346,7 +346,7 @@ pub struct VendorMetrics {
     pub concentration_percentage: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TopVendor {
     pub vendor_id: String,
     pub vendor_name: String,
@@ -354,14 +354,14 @@ pub struct TopVendor {
     pub total_amount: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamMetrics {
     pub members: Vec<TeamMemberStats>,
     pub avg_approvals_per_member: f64,
     pub total_pending_actions: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamMemberStats {
     pub user_id: String,
     pub user_name: String,
