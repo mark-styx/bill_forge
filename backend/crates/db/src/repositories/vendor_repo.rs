@@ -175,14 +175,46 @@ impl VendorRepository for VendorRepositoryImpl {
         Ok(result.map(|row| row.into_vendor(tenant_id)))
     }
 
-    async fn add_contact(&self, _tenant_id: &TenantId, _vendor_id: &VendorId, _contact: VendorContact) -> Result<()> {
-        // TODO: Implement vendor contacts table
-        todo!("Vendor contacts not yet implemented")
+    async fn add_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact: VendorContact) -> Result<()> {
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO vendor_contacts (
+                id, tenant_id, vendor_id, name, title, email, phone, is_primary, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#
+        )
+        .bind(contact.id)
+        .bind(tenant_id.as_str())
+        .bind(vendor_id.0)
+        .bind(&contact.name)
+        .bind(&contact.title)
+        .bind(&contact.email)
+        .bind(&contact.phone)
+        .bind(contact.is_primary)
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to add vendor contact: {}", e)))?;
+
+        Ok(())
     }
 
-    async fn remove_contact(&self, _tenant_id: &TenantId, _vendor_id: &VendorId, _contact_id: Uuid) -> Result<()> {
-        // TODO: Implement vendor contacts table
-        todo!("Vendor contacts not yet implemented")
+    async fn remove_contact(&self, tenant_id: &TenantId, vendor_id: &VendorId, contact_id: Uuid) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM vendor_contacts WHERE id = $1 AND tenant_id = $2 AND vendor_id = $3"
+        )
+        .bind(contact_id)
+        .bind(tenant_id.as_str())
+        .bind(vendor_id.0)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to remove vendor contact: {}", e)))?;
+
+        Ok(())
     }
 
     async fn list_messages(&self, tenant_id: &TenantId, vendor_id: &VendorId, limit: u32) -> Result<Vec<billforge_core::domain::VendorMessage>> {
