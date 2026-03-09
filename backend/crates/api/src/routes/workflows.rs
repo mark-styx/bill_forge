@@ -389,9 +389,57 @@ async fn list_pending_approvals(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<PendingApprovalResponse>>> {
-    // For now return empty - full implementation would query approval_requests
-    // with status = 'pending' and join with invoices for details
-    Ok(Json(vec![]))
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Query pending approval requests with invoice details
+    #[derive(sqlx::FromRow)]
+    struct ApprovalRow {
+        id: uuid::Uuid,
+        invoice_id: uuid::Uuid,
+        status: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+        invoice_number: Option<String>,
+        vendor_name: Option<String>,
+        total_amount_cents: Option<i64>,
+    }
+
+    let rows = sqlx::query_as::<_, ApprovalRow>(
+        r#"
+        SELECT
+            ar.id,
+            ar.invoice_id,
+            ar.status,
+            ar.created_at,
+            i.invoice_number,
+            i.vendor_name,
+            i.total_amount_cents
+        FROM approval_requests ar
+        LEFT JOIN invoices i ON ar.invoice_id = i.id
+        WHERE ar.tenant_id = $1
+          AND ar.status = 'pending'
+          AND (ar.expires_at IS NULL OR ar.expires_at > NOW())
+        ORDER BY ar.created_at DESC
+        "#
+    )
+    .bind(tenant.tenant_id.as_str())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch pending approvals: {}", e)))?;
+
+    let approvals = rows
+        .into_iter()
+        .map(|row| PendingApprovalResponse {
+            id: row.id.to_string(),
+            invoice_id: row.invoice_id.to_string(),
+            status: row.status,
+            created_at: row.created_at.to_rfc3339(),
+            invoice_number: row.invoice_number,
+            vendor_name: row.vendor_name,
+            total_amount: row.total_amount_cents.map(|cents| cents as f64 / 100.0),
+        })
+        .collect();
+
+    Ok(Json(approvals))
 }
 
 async fn get_approval(
@@ -399,11 +447,81 @@ async fn get_approval(
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Placeholder - would fetch approval request by ID
-    Err(billforge_core::Error::NotFound {
+    let approval_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    #[derive(sqlx::FromRow)]
+    struct ApprovalDetails {
+        id: uuid::Uuid,
+        invoice_id: uuid::Uuid,
+        rule_id: Option<uuid::Uuid>,
+        status: String,
+        requested_from: serde_json::Value,
+        comments: Option<String>,
+        responded_by: Option<uuid::Uuid>,
+        responded_at: Option<chrono::DateTime<chrono::Utc>>,
+        created_at: chrono::DateTime<chrono::Utc>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+        invoice_number: Option<String>,
+        vendor_name: Option<String>,
+        total_amount_cents: Option<i64>,
+        invoice_status: Option<String>,
+    }
+
+    let details = sqlx::query_as::<_, ApprovalDetails>(
+        r#"
+        SELECT
+            ar.id,
+            ar.invoice_id,
+            ar.rule_id,
+            ar.status,
+            ar.requested_from,
+            ar.comments,
+            ar.responded_by,
+            ar.responded_at,
+            ar.created_at,
+            ar.expires_at,
+            i.invoice_number,
+            i.vendor_name,
+            i.total_amount_cents,
+            i.processing_status as invoice_status
+        FROM approval_requests ar
+        LEFT JOIN invoices i ON ar.invoice_id = i.id
+        WHERE ar.id = $1 AND ar.tenant_id = $2
+        "#
+    )
+    .bind(approval_id)
+    .bind(tenant.tenant_id.as_str())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch approval: {}", e)))?
+    .ok_or_else(|| billforge_core::Error::NotFound {
         resource_type: "ApprovalRequest".to_string(),
-        id,
-    }.into())
+        id: id.clone(),
+    })?;
+
+    let response = serde_json::json!({
+        "id": details.id.to_string(),
+        "invoice_id": details.invoice_id.to_string(),
+        "rule_id": details.rule_id.map(|id| id.to_string()),
+        "status": details.status,
+        "requested_from": details.requested_from,
+        "comments": details.comments,
+        "responded_by": details.responded_by.map(|id| id.to_string()),
+        "responded_at": details.responded_at.map(|t| t.to_rfc3339()),
+        "created_at": details.created_at.to_rfc3339(),
+        "expires_at": details.expires_at.map(|t| t.to_rfc3339()),
+        "invoice": {
+            "invoice_number": details.invoice_number,
+            "vendor_name": details.vendor_name,
+            "total_amount": details.total_amount_cents.map(|cents| cents as f64 / 100.0),
+            "status": details.invoice_status,
+        }
+    });
+
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]
