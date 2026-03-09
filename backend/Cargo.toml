@@ -13,6 +13,8 @@ members = [
     "crates/reporting",
     "crates/quickbooks",
     "crates/worker",
+    "crates/analytics",
+    "crates/feedback",
 ]
 
 [workspace.package]
