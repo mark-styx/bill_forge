@@ -31,6 +31,19 @@ impl UserRepository for UserRepositoryImpl {
         Ok(email)
     }
 
+    async fn get_name_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>> {
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM users WHERE tenant_id = $1 AND id = $2"
+        )
+        .bind(tenant_id.as_str())
+        .bind(user_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to fetch user name: {}", e)))?;
+
+        Ok(name)
+    }
+
     async fn get_emails_by_ids(&self, tenant_id: &TenantId, user_ids: &[UserId]) -> Result<Vec<String>> {
         if user_ids.is_empty() {
             return Ok(Vec::new());

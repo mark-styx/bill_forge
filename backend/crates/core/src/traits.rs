@@ -161,6 +161,9 @@ pub trait UserRepository: Send + Sync {
     /// Get a user's email by user ID
     async fn get_email_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>>;
 
+    /// Get a user's name by user ID
+    async fn get_name_by_id(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Option<String>>;
+
     /// Get emails for multiple users by IDs
     async fn get_emails_by_ids(&self, tenant_id: &TenantId, user_ids: &[UserId]) -> Result<Vec<String>>;
 

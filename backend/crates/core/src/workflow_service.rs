@@ -193,13 +193,25 @@ impl<
         let invoice_number = if invoice.invoice_number.is_empty() { "N/A" } else { &invoice.invoice_number };
         let vendor_name = if invoice.vendor_name.is_empty() { "Unknown Vendor" } else { &invoice.vendor_name };
         let amount = format!("${:.2}", invoice.total_amount.amount as f64 / 100.0);
-        let submitted_by = "AP Team"; // TODO: Get actual submitter name
+
+        // Get the actual submitter name
+        let submitted_by = match self.user_repo.get_name_by_id(tenant_id, &invoice.created_by).await {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                tracing::warn!("User {} not found for invoice {}", invoice.created_by, invoice.id);
+                "Unknown User".to_string()
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get submitter name for invoice {}: {}", invoice.id, e);
+                "AP Team".to_string()
+            }
+        };
 
         let (html, text) = ET::invoice_pending_approval_with_actions(
             invoice_number,
             vendor_name,
             &amount,
-            submitted_by,
+            &submitted_by,
             &view_url,
             Some(&approve_url),
             Some(&reject_url),
@@ -691,6 +703,10 @@ mod tests {
     impl UserRepository for MockUserRepository {
         async fn get_email_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
             Ok(Some("test@example.com".to_string()))
+        }
+
+        async fn get_name_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
+            Ok(Some("Test User".to_string()))
         }
 
         async fn get_emails_by_ids(&self, _tenant_id: &TenantId, _user_ids: &[UserId]) -> Result<Vec<String>> {
