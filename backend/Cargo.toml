@@ -12,6 +12,7 @@ members = [
     "crates/vendor-mgmt",
     "crates/reporting",
     "crates/quickbooks",
+    "crates/xero",
     "crates/worker",
     "crates/analytics",
     "crates/feedback",
