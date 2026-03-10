@@ -12,6 +12,7 @@ pub mod email_batch;
 pub mod report_digest;
 pub mod embedding_refresh;
 pub mod categorization_training;
+pub mod routing_optimization;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -34,6 +35,7 @@ pub enum JobType {
     ReportDigest,
     EmbeddingRefresh,
     CategorizationTraining,
+    RoutingOptimization,
 }
 
 impl std::fmt::Display for JobType {
@@ -47,6 +49,7 @@ impl std::fmt::Display for JobType {
             JobType::ReportDigest => write!(f, "ReportDigest"),
             JobType::EmbeddingRefresh => write!(f, "EmbeddingRefresh"),
             JobType::CategorizationTraining => write!(f, "CategorizationTraining"),
+            JobType::RoutingOptimization => write!(f, "RoutingOptimization"),
         }
     }
 }
@@ -148,6 +151,11 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::CategorizationTraining => {
             categorization_training::learn_from_feedback(config.pg_manager.clone()).await
+        }
+        JobType::RoutingOptimization => {
+            // Get connection pool
+            let pool = config.pg_manager.clone();
+            routing_optimization::run_routing_optimization(&pool).await
         }
     }
 }

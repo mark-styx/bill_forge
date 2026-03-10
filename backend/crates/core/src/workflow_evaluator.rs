@@ -218,6 +218,7 @@ mod tests {
             document_id: Uuid::new_v4(),
             supporting_documents: vec![],
             ocr_confidence: Some(0.95),
+            categorization_confidence: None,
             department: Some("Engineering".to_string()),
             gl_code: Some("5000".to_string()),
             cost_center: None,
