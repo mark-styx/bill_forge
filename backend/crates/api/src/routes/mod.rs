@@ -14,6 +14,7 @@ mod sandbox;
 pub mod email_actions;
 pub mod quickbooks;
 pub mod xero;
+pub mod notifications;
 
 use crate::state::AppState;
 use crate::metrics;
@@ -69,6 +70,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/quickbooks", quickbooks::routes())
         // Xero integration
         .nest("/xero", xero::routes())
+        // Notifications (Slack/Teams)
+        .nest("/notifications", notifications::routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
 }
