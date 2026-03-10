@@ -10,6 +10,8 @@ pub mod quickbooks_sync;
 pub mod metrics_aggregation;
 pub mod email_batch;
 pub mod report_digest;
+pub mod embedding_refresh;
+pub mod categorization_training;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -30,6 +32,8 @@ pub enum JobType {
     MetricsAggregation,
     EmailBatch,
     ReportDigest,
+    EmbeddingRefresh,
+    CategorizationTraining,
 }
 
 impl std::fmt::Display for JobType {
@@ -41,6 +45,8 @@ impl std::fmt::Display for JobType {
             JobType::MetricsAggregation => write!(f, "MetricsAggregation"),
             JobType::EmailBatch => write!(f, "EmailBatch"),
             JobType::ReportDigest => write!(f, "ReportDigest"),
+            JobType::EmbeddingRefresh => write!(f, "EmbeddingRefresh"),
+            JobType::CategorizationTraining => write!(f, "CategorizationTraining"),
         }
     }
 }
@@ -136,6 +142,12 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::ReportDigest => {
             report_digest::send_digests(&job.tenant_id, config).await
+        }
+        JobType::EmbeddingRefresh => {
+            embedding_refresh::refresh_all_embeddings(config.pg_manager.clone()).await
+        }
+        JobType::CategorizationTraining => {
+            categorization_training::learn_from_feedback(config.pg_manager.clone()).await
         }
     }
 }
