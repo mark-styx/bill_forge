@@ -6,7 +6,9 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+pub mod categorization;
 pub mod engine;
 pub mod rules;
 
+pub use categorization::{CategorizationEngine, CategorySuggestion, InvoiceCategorization};
 pub use engine::WorkflowEngine;

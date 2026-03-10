@@ -43,6 +43,7 @@ billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
 billforge-quickbooks = { path = "../quickbooks" }
 billforge-email = { path = "../email" }
+billforge-reporting = { path = "../reporting" }
 
 # Metrics
 prometheus = "0.13"

@@ -59,13 +59,12 @@ impl AuthService {
             .await?;
 
         // Get tenant info
-        let tenant_id: TenantId = user.tenant_id.parse()
-            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
+        let tenant_id: TenantId = TenantId::from_uuid(user.tenant_id);
         let tenant = self
             .metadata_db
             .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
         let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
@@ -88,15 +87,13 @@ impl AuthService {
             refresh_token,
             user: UserInfo {
                 id: UserId(user.id),
-                tenant_id: user.tenant_id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
+                tenant_id: TenantId::from_uuid(user.tenant_id),
                 email: user.email,
                 name: user.name,
                 roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
+                id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
                 enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
@@ -139,13 +136,12 @@ impl AuthService {
         self.metadata_db.update_last_login(&user_id).await?;
 
         // Get tenant info
-        let tenant_id: TenantId = user.tenant_id.parse()
-            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
+        let tenant_id: TenantId = TenantId::from_uuid(user.tenant_id);
         let tenant = self
             .metadata_db
             .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
         let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
@@ -168,15 +164,13 @@ impl AuthService {
             refresh_token,
             user: UserInfo {
                 id: UserId(user.id),
-                tenant_id: user.tenant_id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
+                tenant_id: TenantId::from_uuid(user.tenant_id),
                 email: user.email,
                 name: user.name,
                 roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
+                id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
                 enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
@@ -211,13 +205,12 @@ impl AuthService {
         }
 
         // Get tenant info
-        let tenant_id: TenantId = user.tenant_id.parse()
-            .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?;
+        let tenant_id: TenantId = TenantId::from_uuid(user.tenant_id);
         let tenant = self
             .metadata_db
             .get_tenant(&tenant_id)
             .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.clone()))?;
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
         let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
@@ -240,15 +233,13 @@ impl AuthService {
             refresh_token: new_refresh_token,
             user: UserInfo {
                 id: UserId(user.id),
-                tenant_id: user.tenant_id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID".to_string()))?,
+                tenant_id: TenantId::from_uuid(user.tenant_id),
                 email: user.email,
                 name: user.name,
                 roles: roles.clone(),
             },
             tenant: TenantInfo {
-                id: tenant.id.parse()
-                    .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
+                id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
                 enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
                     arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
@@ -287,8 +278,7 @@ impl AuthService {
             .ok_or_else(|| Error::TenantNotFound(tenant_id.as_str()))?;
 
         Ok(TenantContext {
-            tenant_id: tenant.id.parse()
-                .map_err(|_| Error::Internal("Invalid tenant ID in database".to_string()))?,
+            tenant_id: TenantId::from_uuid(tenant.id),
             tenant_name: tenant.name,
             enabled_modules: serde_json::from_value(tenant.enabled_modules.0.clone())
                 .unwrap_or_default(),
@@ -488,8 +478,7 @@ impl AuthService {
             .unwrap_or_default();
         Ok(UserContext {
             user_id: UserId::from_uuid(stored_key.id), // Use key ID as user ID
-            tenant_id: stored_key.tenant_id.parse()
-                .map_err(|_| Error::Internal("Invalid tenant ID in API key".to_string()))?,
+            tenant_id: TenantId::from_uuid(stored_key.tenant_id),
             email: format!("api-key:{}", stored_key.name),
             name: format!("API Key: {}", stored_key.name),
             roles,
@@ -506,8 +495,7 @@ impl AuthService {
                     .unwrap_or_default();
                 ApiKey {
                     id: r.id,
-                    tenant_id: r.tenant_id.parse()
-                        .expect("Invalid tenant ID in database"),
+                    tenant_id: TenantId::from_uuid(r.tenant_id),
                     name: r.name,
                     key_prefix: r.key_prefix,
                     key_hash: r.key_hash,

@@ -1,20 +1,23 @@
 [package]
-name = "billforge-invoice-processing"
+name = "billforge-health"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
-billforge-core = { path = "../core" }
-billforge-db = { path = "../db" }
-
+# Workspace dependencies
 tokio = { workspace = true }
-async-trait = { workspace = true }
+axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 anyhow = { workspace = true }
-sqlx = { workspace = true }
+tracing = { workspace = true }
+
+# Internal crates
+billforge-core = { path = "../core" }
+billforge-db = { path = "../db" }

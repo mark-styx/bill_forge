@@ -9,6 +9,7 @@ use tracing::{info, error, warn};
 pub mod quickbooks_sync;
 pub mod metrics_aggregation;
 pub mod email_batch;
+pub mod report_digest;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -28,6 +29,7 @@ pub enum JobType {
     QuickBooksInvoiceExport,
     MetricsAggregation,
     EmailBatch,
+    ReportDigest,
 }
 
 impl std::fmt::Display for JobType {
@@ -38,6 +40,7 @@ impl std::fmt::Display for JobType {
             JobType::QuickBooksInvoiceExport => write!(f, "QuickBooksInvoiceExport"),
             JobType::MetricsAggregation => write!(f, "MetricsAggregation"),
             JobType::EmailBatch => write!(f, "EmailBatch"),
+            JobType::ReportDigest => write!(f, "ReportDigest"),
         }
     }
 }
@@ -130,6 +133,9 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::EmailBatch => {
             email_batch::send_batch(&job.tenant_id, &job.payload, config).await
+        }
+        JobType::ReportDigest => {
+            report_digest::send_digests(&job.tenant_id, config).await
         }
     }
 }

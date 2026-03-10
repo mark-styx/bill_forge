@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id", delete(delete_invoice))
         .route("/:id/ocr", post(rerun_ocr))
         .route("/:id/submit", post(submit_for_processing))
+        .route("/:id/suggest-categories", post(suggest_categories))
 }
 
 #[derive(Debug, Deserialize)]
@@ -403,4 +404,37 @@ async fn submit_for_processing(
         "invoice_id": id,
         "status": format!("{:?}", final_status).to_lowercase()
     })))
+}
+
+#[derive(Deserialize)]
+pub struct SuggestCategoriesRequest {
+    pub vendor_id: Option<Uuid>,
+    pub vendor_name: String,
+    pub line_items: Vec<billforge_invoice_processing::categorization::LineItemInput>,
+    pub total_amount: f64,
+}
+
+async fn suggest_categories(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    Path(_id): Path<String>,
+    Json(req): Json<SuggestCategoriesRequest>,
+) -> ApiResult<Json<billforge_invoice_processing::InvoiceCategorization>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+
+    let tenant_id_str = tenant.tenant_id.as_str();
+    let categorization = engine
+        .suggest_categories(
+            &tenant_id_str,
+            req.vendor_id,
+            &req.vendor_name,
+            &req.line_items,
+            req.total_amount,
+        )
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Categorization failed: {}", e)))?;
+
+    Ok(Json(categorization))
 }

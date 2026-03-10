@@ -4,12 +4,13 @@ use crate::error::ApiResult;
 use crate::extractors::{AuthUser, ReportingAccess, TenantCtx};
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State},
-    routing::get,
+    extract::{Query, State, Path},
+    routing::{get, post, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use billforge_reporting::DashboardSummary;
+use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -22,6 +23,14 @@ pub fn routes() -> Router<AppState> {
         .route("/vendors/spend", get(vendor_spend))
         .route("/workflows/metrics", get(workflow_metrics))
         .route("/custom", get(custom_report))
+        // New advanced reporting endpoints
+        .route("/spend/trends", get(spend_trends))
+        .route("/categories/breakdown", get(category_breakdown))
+        .route("/vendors/performance", get(vendor_performance))
+        .route("/approvals/analytics", get(approval_analytics))
+        // Email digest management
+        .route("/digests", get(list_digests).post(create_digest))
+        .route("/digests/:id", delete(delete_digest))
 }
 
 async fn dashboard_summary(
@@ -307,4 +316,162 @@ async fn custom_report(
         "total_rows": result.total_rows,
         "generated_at": result.generated_at,
     })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpendTrendsQuery {
+    pub start_date: String,
+    pub end_date: String,
+    pub group_by: Option<String>,
+}
+
+async fn spend_trends(
+    State(state): State<AppState>,
+    ReportingAccess(user, tenant): ReportingAccess,
+    Query(query): Query<SpendTrendsQuery>,
+) -> ApiResult<Json<Vec<billforge_reporting::SpendTrendPoint>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let start_date = chrono::NaiveDate::parse_from_str(&query.start_date, "%Y-%m-%d")
+        .map_err(|_| billforge_core::Error::Validation("Invalid start_date format. Use YYYY-MM-DD".to_string()))?;
+    let end_date = chrono::NaiveDate::parse_from_str(&query.end_date, "%Y-%m-%d")
+        .map_err(|_| billforge_core::Error::Validation("Invalid end_date format. Use YYYY-MM-DD".to_string()))?;
+
+    let group_by = query.group_by.as_deref().unwrap_or("month");
+
+    let trends = reporting_service.get_spend_trends(
+        &tenant.tenant_id,
+        &pool,
+        start_date,
+        end_date,
+        group_by,
+    ).await?;
+
+    Ok(Json(trends))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CategoryBreakdownQuery {
+    pub category_type: String, // "gl_code", "department", or "cost_center"
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+async fn category_breakdown(
+    State(state): State<AppState>,
+    ReportingAccess(user, tenant): ReportingAccess,
+    Query(query): Query<CategoryBreakdownQuery>,
+) -> ApiResult<Json<Vec<billforge_reporting::CategoryBreakdown>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let start_date = query.start_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let end_date = query.end_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+
+    let breakdown = reporting_service.get_category_breakdown(
+        &tenant.tenant_id,
+        &pool,
+        &query.category_type,
+        start_date,
+        end_date,
+    ).await?;
+
+    Ok(Json(breakdown))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VendorPerformanceQuery {
+    pub limit: Option<u32>,
+}
+
+async fn vendor_performance(
+    State(state): State<AppState>,
+    ReportingAccess(user, tenant): ReportingAccess,
+    Query(query): Query<VendorPerformanceQuery>,
+) -> ApiResult<Json<Vec<billforge_reporting::VendorPerformanceMetrics>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let limit = query.limit.unwrap_or(50);
+
+    let performance = reporting_service.get_vendor_performance(
+        &tenant.tenant_id,
+        &pool,
+        limit,
+    ).await?;
+
+    Ok(Json(performance))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApprovalAnalyticsQuery {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+async fn approval_analytics(
+    State(state): State<AppState>,
+    ReportingAccess(user, tenant): ReportingAccess,
+    Query(query): Query<ApprovalAnalyticsQuery>,
+) -> ApiResult<Json<billforge_reporting::ApprovalAnalytics>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let start_date = query.start_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let end_date = query.end_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+
+    let analytics = reporting_service.get_approval_analytics(
+        &tenant.tenant_id,
+        &pool,
+        start_date,
+        end_date,
+    ).await?;
+
+    Ok(Json(analytics))
+}
+
+async fn list_digests(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<Vec<billforge_reporting::ReportDigest>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let digests = reporting_service.list_user_digests(&tenant.tenant_id, &pool, user.user_id.0).await?;
+
+    Ok(Json(digests))
+}
+
+async fn create_digest(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<billforge_reporting::UpsertDigestRequest>,
+) -> ApiResult<Json<billforge_reporting::ReportDigest>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    let digest = reporting_service.upsert_digest(&tenant.tenant_id, &pool, user.user_id.0, request).await?;
+
+    Ok(Json(digest))
+}
+
+async fn delete_digest(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Path(digest_id): Path<Uuid>,
+) -> ApiResult<()> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let reporting_service = billforge_reporting::ReportingService::new();
+
+    reporting_service.delete_digest(&tenant.tenant_id, &pool, user.user_id.0, digest_id).await?;
+
+    Ok(())
 }
