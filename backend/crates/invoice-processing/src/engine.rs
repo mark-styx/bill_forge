@@ -11,6 +11,9 @@ use billforge_core::{
 };
 use std::sync::Arc;
 
+/// Minimum confidence threshold for ML auto-approval (95%)
+const ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD: f32 = 0.95;
+
 /// Workflow engine for processing invoices
 pub struct WorkflowEngine {
     invoice_repo: Arc<dyn InvoiceRepository>,
@@ -48,6 +51,26 @@ impl WorkflowEngine {
             .rule_repo
             .get_active_rules(tenant_id, WorkflowRuleType::Approval)
             .await?;
+
+        // Check ML categorization auto-approval threshold
+        // If categorization confidence >= threshold and all required fields are present, auto-approve
+        if let Some(confidence) = invoice.categorization_confidence {
+            if confidence >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD {
+                // Check that all required categorization fields are populated
+                let has_complete_categorization = invoice.gl_code.is_some()
+                    || invoice.department.is_some()
+                    || invoice.cost_center.is_some();
+
+                if has_complete_categorization {
+                    tracing::info!(
+                        invoice_id = %invoice.id.as_uuid(),
+                        confidence = confidence,
+                        "Auto-approving invoice due to high ML categorization confidence"
+                    );
+                    return Ok(ProcessingStatus::Approved);
+                }
+            }
+        }
 
         // Check auto-approval rules first
         let auto_approval_rules = self
