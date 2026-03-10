@@ -15,6 +15,7 @@ pub mod email_actions;
 pub mod quickbooks;
 pub mod xero;
 pub mod notifications;
+pub mod predictive;
 
 use crate::state::AppState;
 use crate::metrics;
@@ -72,6 +73,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/xero", xero::routes())
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
+        // Predictive Analytics (Forecasting & Anomaly Detection)
+        .nest("/analytics/predictive", predictive::routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
 }
