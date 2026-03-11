@@ -155,7 +155,7 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         JobType::RoutingOptimization => {
             // Get connection pool
             let pool = config.pg_manager.clone();
-            routing_optimization::run_routing_optimization(&pool).await
+            routing_optimization::run_routing_optimization(pool).await
         }
     }
 }

@@ -8,15 +8,14 @@
 
 use anyhow::{Context, Result};
 use billforge_core::{
-    intelligent_routing::{ApproverExpertise, ExpertiseType, RoutingConfig},
-    workload_balancer::{RedistributionPriority, WorkloadBalancer, WorkloadBalancerConfig},
+    intelligent_routing::ExpertiseType,
+    workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig},
     types::TenantId,
     UserId,
 };
-use chrono::{Duration, Utc};
-use sqlx::PgPool;
+use num_traits::{cast::ToPrimitive, FromPrimitive};
+use sqlx::{PgPool, types::BigDecimal};
 use std::collections::HashMap;
-use std::str::FromStr;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -93,7 +92,7 @@ async fn update_workload_scores(pool: &PgPool, tenant_id: &TenantId) -> Result<(
         let score = balancer.calculate_workload_score(
             row.active_approvals,
             row.pending_approvals,
-            row.avg_approval_time_hours.map(|h| h as f64),
+            row.avg_approval_time_hours.and_then(|h| h.to_f64()),
         );
 
         sqlx::query!(
@@ -105,7 +104,7 @@ async fn update_workload_scores(pool: &PgPool, tenant_id: &TenantId) -> Result<(
             WHERE tenant_id = $1 AND user_id = $3
             "#,
             tenant_id.as_str(),
-            score,
+            BigDecimal::from_f64(score).unwrap_or_else(|| BigDecimal::from(0)),
             row.user_id,
         )
         .execute(pool)
@@ -149,25 +148,28 @@ async fn update_expertise_scores(pool: &PgPool, tenant_id: &TenantId) -> Result<
             None => continue,
         };
 
+        // Extract time_to_decision_hours once to avoid multiple moves
+        let time_hours = route.time_to_decision_hours.and_then(|h| h.to_f64());
+
         // Update vendor expertise
         if let Some(vendor_id) = route.vendor_id {
             let key = (user_id, ExpertiseType::Vendor, vendor_id);
             let stats = expertise_updates.entry(key).or_default();
-            update_stats(stats, &route.outcome, route.time_to_decision_hours.map(|h| h as f64));
+            update_stats(stats, &route.outcome, time_hours);
         }
 
         // Update department expertise
         if let Some(dept) = route.department {
             let key = (user_id, ExpertiseType::Department, dept);
             let stats = expertise_updates.entry(key).or_default();
-            update_stats(stats, &route.outcome, route.time_to_decision_hours.map(|h| h as f64));
+            update_stats(stats, &route.outcome, time_hours);
         }
 
         // Update GL code expertise
         if let Some(gl_code) = route.gl_code {
             let key = (user_id, ExpertiseType::GlCode, gl_code);
             let stats = expertise_updates.entry(key).or_default();
-            update_stats(stats, &route.outcome, route.time_to_decision_hours.map(|h| h as f64));
+            update_stats(stats, &route.outcome, time_hours);
         }
     }
 
@@ -201,8 +203,8 @@ async fn update_expertise_scores(pool: &PgPool, tenant_id: &TenantId) -> Result<
             expertise_key,
             stats.approved_count as i32,
             stats.rejected_count as i32,
-            stats.avg_time_hours,
-            expertise_score,
+            stats.avg_time_hours.map(|h| BigDecimal::from_f64(h).unwrap()),
+            BigDecimal::from_f64(expertise_score).unwrap_or_else(|| BigDecimal::from(0)),
         )
         .execute(pool)
         .await
@@ -242,8 +244,8 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
             active_approvals: row.active_approvals,
             pending_approvals: row.pending_approvals,
             completed_this_week: row.completed_this_week,
-            avg_approval_time_hours: row.avg_approval_time_hours.map(|h| h as f64),
-            workload_score: row.workload_score as f64,
+            avg_approval_time_hours: row.avg_approval_time_hours.and_then(|h| h.to_f64()),
+            workload_score: row.workload_score.to_f64().unwrap_or(0.0),
             last_assignment_at: None,
         })
         .collect();
