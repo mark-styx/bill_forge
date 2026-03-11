@@ -13,6 +13,8 @@ pub mod report_digest;
 pub mod embedding_refresh;
 pub mod categorization_training;
 pub mod routing_optimization;
+pub mod forecast_refresh;
+pub mod anomaly_detection;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -36,6 +38,8 @@ pub enum JobType {
     EmbeddingRefresh,
     CategorizationTraining,
     RoutingOptimization,
+    ForecastRefresh,
+    AnomalyDetection,
 }
 
 impl std::fmt::Display for JobType {
@@ -50,6 +54,8 @@ impl std::fmt::Display for JobType {
             JobType::EmbeddingRefresh => write!(f, "EmbeddingRefresh"),
             JobType::CategorizationTraining => write!(f, "CategorizationTraining"),
             JobType::RoutingOptimization => write!(f, "RoutingOptimization"),
+            JobType::ForecastRefresh => write!(f, "ForecastRefresh"),
+            JobType::AnomalyDetection => write!(f, "AnomalyDetection"),
         }
     }
 }
@@ -156,6 +162,12 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             // Get connection pool
             let pool = config.pg_manager.clone();
             routing_optimization::run_routing_optimization(pool).await
+        }
+        JobType::ForecastRefresh => {
+            forecast_refresh::refresh_forecasts(config.pg_manager.clone()).await
+        }
+        JobType::AnomalyDetection => {
+            anomaly_detection::detect_anomalies(config.pg_manager.clone()).await
         }
     }
 }

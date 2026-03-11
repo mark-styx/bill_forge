@@ -15,7 +15,7 @@ pub mod email_actions;
 pub mod quickbooks;
 pub mod xero;
 pub mod notifications;
-// pub mod predictive;  // TODO: Sprint 14 Feature #2 - uncomment when analytics crate is ready
+pub mod predictive;
 pub mod mobile;
 
 use crate::state::AppState;
@@ -75,8 +75,7 @@ fn api_routes() -> Router<AppState> {
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)
-        // TODO: Sprint 14 Feature #2 - uncomment when analytics crate is ready
-        // .nest("/analytics/predictive", predictive::routes())
+        .nest("/analytics/predictive", predictive::routes())
         // Mobile App Backend (Device management, dashboard, approvals)
         .nest("/mobile", mobile::routes())
         // Email actions (approve/reject via email)

@@ -9,7 +9,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::{DateTime, Utc, TimeZone};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -18,11 +20,10 @@ use billforge_analytics::{
     anomaly_detection::{DuplicateDetector, InvoiceRecord, StatisticalAnomalyDetector},
     predictive_models::*,
 };
-use billforge_core::error::Error;
-use billforge_db::Database;
+// Error type is accessed via billforge_core::Error to allow From trait conversion
 
-use crate::auth::AuthenticatedUser;
-use crate::routes::ApiResponse;
+use crate::error::ApiResult;
+use crate::extractors::AuthUser;
 use crate::state::AppState;
 
 /// Query parameters for forecast requests
@@ -75,22 +76,23 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Get forecasts for tenant
-#[utoipa::path(
-    get,
-    path = "/api/v1/analytics/predictive/forecasts",
-    responses(
-        (status = 200, description = "Forecasts retrieved", body = Vec<Forecast>),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
-    ),
-    security(("bearer_auth" = []))
-)]
+// TODO: Add utoipa documentation once ToSchema is implemented for Forecast
+// #[utoipa::path(
+//     get,
+//     path = "/api/v1/analytics/predictive/forecasts",
+//     responses(
+//         (status = 200, description = "Forecasts retrieved", body = Vec<Forecast>),
+//         (status = 401, description = "Unauthorized"),
+//         (status = 500, description = "Internal server error")
+//     ),
+//     security(("bearer_auth" = []))
+// )]
 async fn get_forecasts(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Query(query): Query<ForecastQuery>,
-) -> Result<Json<ApiResponse<Vec<Forecast>>>, Error> {
-    let tenant_id = user.tenant_id();
+) -> ApiResult<Json<Vec<Forecast>>> {
+    let tenant_id = &user.0.tenant_id;
     let pool = state.db.tenant(&tenant_id).await?;
 
     // Parse horizon
@@ -98,18 +100,18 @@ async fn get_forecasts(
         "30" | "days_30" => ForecastHorizon::Days30,
         "60" | "days_60" => ForecastHorizon::Days60,
         "90" | "days_90" => ForecastHorizon::Days90,
-        _ => return Err(Error::Validation("Invalid horizon. Use 30, 60, or 90".to_string())),
+        _ => return Err(billforge_core::Error::Validation("Invalid horizon. Use 30, 60, or 90".to_string()).into()),
     };
 
     // Fetch forecasts from database
-    let forecasts = sqlx::query_as!(
-        Forecast,
+    let horizon_str = serde_json::to_string(&horizon).map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+    let row = sqlx::query(
         r#"
         SELECT
             entity_id,
-            entity_type as "entity_type: EntityType",
+            entity_type,
             metric_name,
-            horizon as "horizon: ForecastHorizon",
+            horizon,
             predicted_value,
             confidence_lower,
             confidence_upper,
@@ -126,37 +128,53 @@ async fn get_forecasts(
         ORDER BY generated_at DESC
         LIMIT 1
         "#,
-        tenant_id,
-        query.entity_id,
-        query.entity_type,
-        serde_json::to_string(&horizon).map_err(|e| Error::Internal(e.to_string()))?,
     )
+    .bind(tenant_id.0)
+    .bind(&query.entity_id)
+    .bind(&query.entity_type)
+    .bind(&horizon_str)
     .fetch_optional(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    let forecasts = forecasts.map(|f| vec![f]).unwrap_or_default();
+    let forecasts = match row {
+        Some(row) => {
+            let entity_type: String = row.try_get("entity_type").map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+            let entity_type: EntityType = serde_json::from_str(&format!("\"{}\"", entity_type))
+                .map_err(|e| billforge_core::Error::Internal(format!("Invalid entity_type: {}", e)))?;
 
-    Ok(Json(ApiResponse::success(forecasts)))
+            let horizon_str: String = row.try_get("horizon").map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+            let horizon: ForecastHorizon = serde_json::from_str(&horizon_str)
+                .map_err(|e| billforge_core::Error::Internal(format!("Invalid horizon: {}", e)))?;
+
+            vec![Forecast {
+                entity_id: row.try_get("entity_id").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                entity_type,
+                metric_name: row.try_get("metric_name").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                horizon,
+                predicted_value: row.try_get("predicted_value").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                confidence_lower: row.try_get("confidence_lower").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                confidence_upper: row.try_get("confidence_upper").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                confidence_level: row.try_get("confidence_level").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                generated_at: row.try_get("generated_at").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                model_version: row.try_get("model_version").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+                seasonality_detected: row.try_get("seasonality_detected").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+            }]
+        }
+        None => vec![],
+    };
+
+    Ok(Json(forecasts))
 }
 
 /// Generate a new forecast
-#[utoipa::path(
-    post,
-    path = "/api/v1/analytics/predictive/forecasts/generate",
-    responses(
-        (status = 200, description = "Forecast generated", body = Forecast),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
-    ),
-    security(("bearer_auth" = []))
-)]
+// TODO: Add utoipa documentation once ToSchema is implemented
 async fn generate_forecast(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Json(payload): Json<ForecastQuery>,
-) -> Result<Json<ApiResponse<Forecast>>, Error> {
-    let tenant_id = user.tenant_id();
+) -> ApiResult<Json<Forecast>> {
+    let tenant_id = &user.0.tenant_id;
 
     // Fetch historical data for the entity
     let entity_type = match payload.entity_type.as_str() {
@@ -165,24 +183,24 @@ async fn generate_forecast(
         "gl_code" => EntityType::GlCode,
         "tenant" => EntityType::Tenant,
         "approver" => EntityType::Approver,
-        _ => return Err(Error::Validation("Invalid entity_type".to_string())),
+        _ => return Err(billforge_core::Error::Validation("Invalid entity_type".to_string()).into()),
     };
 
     let horizon = match payload.horizon.as_str() {
         "30" | "days_30" => ForecastHorizon::Days30,
         "60" | "days_60" => ForecastHorizon::Days60,
         "90" | "days_90" => ForecastHorizon::Days90,
-        _ => return Err(Error::Validation("Invalid horizon".to_string())),
+        _ => return Err(billforge_core::Error::Validation("Invalid horizon".to_string()).into()),
     };
 
     // Fetch historical spend data
-    let historical_data = fetch_historical_spend(&state.db, tenant_id, &payload.entity_id, entity_type)
+    let historical_data = fetch_historical_spend(&state.db, tenant_id.0, &payload.entity_id, entity_type)
         .await?;
 
     if historical_data.points.len() < 30 {
-        return Err(Error::Validation(
+        return Err(billforge_core::Error::Validation(
             "Insufficient historical data. Need at least 30 days of data.".to_string(),
-        ));
+        ).into());
     }
 
     // Generate forecast using ARIMA model
@@ -190,35 +208,35 @@ async fn generate_forecast(
     forecaster
         .fit(&historical_data)
         .await
-        .map_err(|e| Error::Internal(e.to_string()))?;
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
 
     let forecast = forecaster
         .forecast(horizon)
         .await
-        .map_err(|e| Error::Internal(e.to_string()))?;
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
 
     // Store forecast in database
-    store_forecast(&state.db, tenant_id, &forecast).await?;
+    store_forecast(&state.db, tenant_id.0, &forecast).await?;
 
-    Ok(Json(ApiResponse::success(forecast)))
+    Ok(Json(forecast))
 }
 
 /// Get forecast by ID
 async fn get_forecast_by_id(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Path(forecast_id): Path<Uuid>,
-) -> Result<Json<ApiResponse<Forecast>>, Error> {
-    let tenant_id = user.tenant_id();
+) -> ApiResult<Json<Forecast>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let forecast = sqlx::query_as!(
-        Forecast,
+    let row = sqlx::query(
         r#"
         SELECT
             entity_id,
-            entity_type as "entity_type: EntityType",
+            entity_type,
             metric_name,
-            horizon as "horizon: ForecastHorizon",
+            horizon,
             predicted_value,
             confidence_lower,
             confidence_upper,
@@ -229,47 +247,60 @@ async fn get_forecast_by_id(
         FROM spend_forecasts
         WHERE id = $1 AND tenant_id = $2
         "#,
-        forecast_id,
-        tenant_id,
     )
-    .fetch_optional(&*state.db.pool)
+    .bind(forecast_id)
+    .bind(tenant_id.0)
+    .fetch_optional(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?
-    .ok_or_else(|| Error::NotFound {
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?
+    .ok_or_else(|| billforge_core::Error::NotFound {
         resource_type: "Forecast".to_string(),
         id: forecast_id.to_string(),
     })?;
 
-    Ok(Json(ApiResponse::success(forecast)))
+    let entity_type: String = row.try_get("entity_type").map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let entity_type: EntityType = serde_json::from_str(&format!("\"{}\"", entity_type))
+        .map_err(|e| billforge_core::Error::Internal(format!("Invalid entity_type: {}", e)))?;
+
+    let horizon_str: String = row.try_get("horizon").map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let horizon: ForecastHorizon = serde_json::from_str(&horizon_str)
+        .map_err(|e| billforge_core::Error::Internal(format!("Invalid horizon: {}", e)))?;
+
+    let forecast = Forecast {
+        entity_id: row.try_get("entity_id").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        entity_type,
+        metric_name: row.try_get("metric_name").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        horizon,
+        predicted_value: row.try_get("predicted_value").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        confidence_lower: row.try_get("confidence_lower").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        confidence_upper: row.try_get("confidence_upper").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        confidence_level: row.try_get("confidence_level").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        generated_at: row.try_get("generated_at").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        model_version: row.try_get("model_version").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        seasonality_detected: row.try_get("seasonality_detected").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+    };
+
+    Ok(Json(forecast))
 }
 
 /// Get anomalies for tenant
-#[utoipa::path(
-    get,
-    path = "/api/v1/analytics/predictive/anomalies",
-    responses(
-        (status = 200, description = "Anomalies retrieved", body = Vec<Anomaly>),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
-    ),
-    security(("bearer_auth" = []))
-)]
+// TODO: Add utoipa documentation once ToSchema is implemented
 async fn get_anomalies(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<ApiResponse<Vec<Anomaly>>>, Error> {
-    let tenant_id = user.tenant_id();
+    user: AuthUser,
+) -> ApiResult<Json<Vec<Anomaly>>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let anomalies = sqlx::query_as!(
-        Anomaly,
+    let rows = sqlx::query(
         r#"
         SELECT
             id,
             tenant_id,
-            anomaly_type as "anomaly_type: AnomalyType",
+            anomaly_type,
             entity_id,
-            entity_type as "entity_type: EntityType",
-            severity as "severity: AnomalySeverity",
+            entity_type,
+            severity,
             detected_value,
             expected_range_min,
             expected_range_max,
@@ -284,35 +315,62 @@ async fn get_anomalies(
         ORDER BY detected_at DESC
         LIMIT 100
         "#,
-        tenant_id,
     )
-    .fetch_all(&*state.db.pool)
+    .bind(tenant_id.0)
+    .fetch_all(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     // Transform to expected format
-    let anomalies = anomalies
+    let anomalies = rows
         .into_iter()
-        .map(|a| Anomaly {
-            expected_range: (a.expected_range_min, a.expected_range_max),
-            ..a
+        .filter_map(|row| {
+            let anomaly_type_str: String = row.try_get("anomaly_type").ok()?;
+            let anomaly_type: AnomalyType = serde_json::from_str(&format!("\"{}\"", anomaly_type_str)).ok()?;
+
+            let entity_type_str: String = row.try_get("entity_type").ok()?;
+            let entity_type: EntityType = serde_json::from_str(&format!("\"{}\"", entity_type_str)).ok()?;
+
+            let severity_str: String = row.try_get("severity").ok()?;
+            let severity: AnomalySeverity = serde_json::from_str(&format!("\"{}\"", severity_str)).ok()?;
+
+            Some(Anomaly {
+                id: row.try_get("id").ok()?,
+                tenant_id: row.try_get("tenant_id").ok()?,
+                anomaly_type,
+                entity_id: row.try_get("entity_id").ok()?,
+                entity_type,
+                severity,
+                detected_value: row.try_get("detected_value").ok()?,
+                expected_range: (
+                    row.try_get("expected_range_min").ok()?,
+                    row.try_get("expected_range_max").ok()?,
+                ),
+                deviation_score: row.try_get("deviation_score").ok()?,
+                detected_at: row.try_get("detected_at").ok()?,
+                metadata: row.try_get("metadata").ok()?,
+                acknowledged: row.try_get("acknowledged").ok()?,
+                acknowledged_at: row.try_get("acknowledged_at").ok()?,
+                acknowledged_by: row.try_get("acknowledged_by").ok()?,
+            })
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(anomalies)))
+    Ok(Json(anomalies))
 }
 
 /// Acknowledge an anomaly
 async fn acknowledge_anomaly(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Path(anomaly_id): Path<Uuid>,
-    Json(payload): Json<AcknowledgeAnomalyRequest>,
-) -> Result<Json<ApiResponse<()>>, Error> {
-    let tenant_id = user.tenant_id();
-    let user_id = user.user_id();
+    Json(_payload): Json<AcknowledgeAnomalyRequest>,
+) -> ApiResult<Json<()>> {
+    let tenant_id = &user.0.tenant_id;
+    let user_id = &user.0.user_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         UPDATE invoice_anomalies
         SET
@@ -322,57 +380,57 @@ async fn acknowledge_anomaly(
             updated_at = NOW()
         WHERE id = $2 AND tenant_id = $3
         "#,
-        user_id,
-        anomaly_id,
-        tenant_id,
     )
-    .execute(&*state.db.pool)
+    .bind(user_id.0)
+    .bind(anomaly_id)
+    .bind(tenant_id.0)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(Error::NotFound {
+        return Err(billforge_core::Error::NotFound {
             resource_type: "Anomaly".to_string(),
             id: anomaly_id.to_string(),
-        });
+        }.into());
     }
 
-    Ok(Json(ApiResponse::success(())))
+    Ok(Json(()))
 }
 
 /// Detect anomalies (manual trigger)
 async fn detect_anomalies(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<ApiResponse<Vec<Anomaly>>>, Error> {
-    let tenant_id = user.tenant_id();
+    user: AuthUser,
+) -> ApiResult<Json<Vec<Anomaly>>> {
+    let tenant_id = &user.0.tenant_id;
 
     // Fetch recent invoices for anomaly detection
-    let invoices = fetch_recent_invoices(&state.db, tenant_id).await?;
+    let invoices = fetch_recent_invoices(&state.db, tenant_id.0).await?;
 
     // Run duplicate detection
-    let duplicate_detector = DuplicateDetector::new(tenant_id);
+    let duplicate_detector = DuplicateDetector::new(tenant_id.0);
     let duplicate_anomalies = duplicate_detector
         .detect_duplicates(&invoices)
-        .await
-        .map_err(|e| Error::Internal(e.to_string()))?;
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
 
     // Store anomalies in database
     for anomaly in &duplicate_anomalies {
         store_anomaly(&state.db, anomaly).await?;
     }
 
-    Ok(Json(ApiResponse::success(duplicate_anomalies)))
+    Ok(Json(duplicate_anomalies))
 }
 
 /// Get budget alerts
 async fn get_budget_alerts(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<ApiResponse<serde_json::Value>>, Error> {
-    let tenant_id = user.tenant_id();
+    user: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let alerts = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT id, alert_type, severity, entity_id, entity_type,
                title, message, threshold_value, current_value,
@@ -383,56 +441,79 @@ async fn get_budget_alerts(
         ORDER BY triggered_at DESC
         LIMIT 50
         "#,
-        tenant_id,
     )
-    .fetch_all(&*state.db.pool)
+    .bind(tenant_id.0)
+    .fetch_all(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    Ok(Json(ApiResponse::success(serde_json::to_value(alerts).map_err(|e| Error::Internal(e.to_string()))?)))
+    let alerts: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.try_get::<Uuid, _>("id").ok(),
+                "alert_type": row.try_get::<String, _>("alert_type").ok(),
+                "severity": row.try_get::<String, _>("severity").ok(),
+                "entity_id": row.try_get::<String, _>("entity_id").ok(),
+                "entity_type": row.try_get::<String, _>("entity_type").ok(),
+                "title": row.try_get::<String, _>("title").ok(),
+                "message": row.try_get::<String, _>("message").ok(),
+                "threshold_value": row.try_get::<f64, _>("threshold_value").ok(),
+                "current_value": row.try_get::<f64, _>("current_value").ok(),
+                "threshold_percentage": row.try_get::<f64, _>("threshold_percentage").ok(),
+                "recommended_action": row.try_get::<Option<String>, _>("recommended_action").ok(),
+                "triggered_at": row.try_get::<DateTime<Utc>, _>("triggered_at").ok(),
+                "dismissed": row.try_get::<bool, _>("dismissed").ok(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::to_value(alerts).map_err(|e| billforge_core::Error::Internal(e.to_string()))?))
 }
 
 /// Dismiss a budget alert
 async fn dismiss_alert(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Path(alert_id): Path<Uuid>,
-) -> Result<Json<ApiResponse<()>>, Error> {
-    let tenant_id = user.tenant_id();
-    let user_id = user.user_id();
+) -> ApiResult<Json<()>> {
+    let tenant_id = &user.0.tenant_id;
+    let user_id = &user.0.user_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         UPDATE budget_alerts
         SET dismissed = TRUE, dismissed_at = NOW(), dismissed_by = $1, updated_at = NOW()
         WHERE id = $2 AND tenant_id = $3
         "#,
-        user_id,
-        alert_id,
-        tenant_id,
     )
-    .execute(&*state.db.pool)
+    .bind(user_id.0)
+    .bind(alert_id)
+    .bind(tenant_id.0)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(Error::NotFound {
+        return Err(billforge_core::Error::NotFound {
             resource_type: "Alert".to_string(),
             id: alert_id.to_string(),
-        });
+        }.into());
     }
 
-    Ok(Json(ApiResponse::success(())))
+    Ok(Json(()))
 }
 
 /// Get anomaly rules
 async fn get_anomaly_rules(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<ApiResponse<serde_json::Value>>, Error> {
-    let tenant_id = user.tenant_id();
+    user: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let rules = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT id, entity_type, entity_id, anomaly_type,
                zscore_threshold, iqr_multiplier, volume_spike_threshold,
@@ -441,26 +522,50 @@ async fn get_anomaly_rules(
         WHERE tenant_id = $1
         ORDER BY created_at DESC
         "#,
-        tenant_id,
     )
-    .fetch_all(&*state.db.pool)
+    .bind(tenant_id.0)
+    .fetch_all(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    Ok(Json(ApiResponse::success(serde_json::to_value(rules).map_err(|e| Error::Internal(e.to_string()))?)))
+    let rules: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.try_get::<Uuid, _>("id").ok(),
+                "entity_type": row.try_get::<Option<String>, _>("entity_type").ok(),
+                "entity_id": row.try_get::<Option<String>, _>("entity_id").ok(),
+                "anomaly_type": row.try_get::<String, _>("anomaly_type").ok(),
+                "zscore_threshold": row.try_get::<Option<f64>, _>("zscore_threshold").ok(),
+                "iqr_multiplier": row.try_get::<Option<f64>, _>("iqr_multiplier").ok(),
+                "volume_spike_threshold": row.try_get::<Option<f64>, _>("volume_spike_threshold").ok(),
+                "notification_channels": row.try_get::<Option<serde_json::Value>, _>("notification_channels").ok(),
+                "notify_on_severity": row.try_get::<Option<serde_json::Value>, _>("notify_on_severity").ok(),
+                "enabled": row.try_get::<bool, _>("enabled").ok(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::to_value(rules).map_err(|e| billforge_core::Error::Internal(e.to_string()))?))
 }
 
 /// Configure anomaly rule
 async fn configure_anomaly_rule(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Json(payload): Json<ConfigureAnomalyRuleRequest>,
-) -> Result<Json<ApiResponse<Uuid>>, Error> {
-    let tenant_id = user.tenant_id();
-    let user_id = user.user_id();
+) -> ApiResult<Json<Uuid>> {
+    let tenant_id = &user.0.tenant_id;
+    let user_id = &user.0.user_id;
     let rule_id = Uuid::new_v4();
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    sqlx::query!(
+    let notification_channels = serde_json::to_value(payload.notification_channels.unwrap_or_default())
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+    let notify_on_severity = serde_json::to_value(payload.notify_on_severity.unwrap_or_default())
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+
+    sqlx::query(
         r#"
         INSERT INTO anomaly_rules (
             id, tenant_id, entity_type, entity_id, anomaly_type,
@@ -477,35 +582,36 @@ async fn configure_anomaly_rule(
             enabled = EXCLUDED.enabled,
             updated_at = NOW()
         "#,
-        rule_id,
-        tenant_id,
-        payload.entity_type,
-        payload.entity_id,
-        payload.anomaly_type,
-        payload.zscore_threshold,
-        payload.iqr_multiplier,
-        payload.volume_spike_threshold,
-        &payload.notification_channels.unwrap_or_default(),
-        &payload.notify_on_severity.unwrap_or_default(),
-        payload.enabled.unwrap_or(true),
-        user_id,
     )
-    .execute(&*state.db.pool)
+    .bind(rule_id)
+    .bind(tenant_id.0)
+    .bind(&payload.entity_type)
+    .bind(&payload.entity_id)
+    .bind(&payload.anomaly_type)
+    .bind(payload.zscore_threshold)
+    .bind(payload.iqr_multiplier)
+    .bind(payload.volume_spike_threshold)
+    .bind(&notification_channels)
+    .bind(&notify_on_severity)
+    .bind(payload.enabled.unwrap_or(true))
+    .bind(user_id.0)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    Ok(Json(ApiResponse::success(rule_id)))
+    Ok(Json(rule_id))
 }
 
 /// Get anomaly rule by ID
 async fn get_anomaly_rule(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Path(rule_id): Path<Uuid>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, Error> {
-    let tenant_id = user.tenant_id();
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let rule = sqlx::query!(
+    let row = sqlx::query(
         r#"
         SELECT id, entity_type, entity_id, anomaly_type,
                zscore_threshold, iqr_multiplier, volume_spike_threshold,
@@ -513,30 +619,51 @@ async fn get_anomaly_rule(
         FROM anomaly_rules
         WHERE id = $1 AND tenant_id = $2
         "#,
-        rule_id,
-        tenant_id,
     )
-    .fetch_optional(&*state.db.pool)
+    .bind(rule_id)
+    .bind(tenant_id.0)
+    .fetch_optional(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?
-    .ok_or_else(|| Error::NotFound {
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?
+    .ok_or_else(|| billforge_core::Error::NotFound {
         resource_type: "AnomalyRule".to_string(),
         id: rule_id.to_string(),
     })?;
 
-    Ok(Json(ApiResponse::success(serde_json::to_value(rule).map_err(|e| Error::Internal(e.to_string()))?)))
+    let rule = serde_json::json!({
+        "id": row.try_get::<Uuid, _>("id").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "entity_type": row.try_get::<Option<String>, _>("entity_type").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "entity_id": row.try_get::<Option<String>, _>("entity_id").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "anomaly_type": row.try_get::<String, _>("anomaly_type").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "zscore_threshold": row.try_get::<Option<f64>, _>("zscore_threshold").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "iqr_multiplier": row.try_get::<Option<f64>, _>("iqr_multiplier").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "volume_spike_threshold": row.try_get::<Option<f64>, _>("volume_spike_threshold").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "notification_channels": row.try_get::<Option<serde_json::Value>, _>("notification_channels").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "notify_on_severity": row.try_get::<Option<serde_json::Value>, _>("notify_on_severity").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+        "enabled": row.try_get::<bool, _>("enabled").map_err(|e| billforge_core::Error::Database(e.to_string()))?,
+    });
+
+    Ok(Json(rule))
 }
 
 /// Update anomaly rule
 async fn update_anomaly_rule(
     State(state): State<AppState>,
-    user: AuthenticatedUser,
+    user: AuthUser,
     Path(rule_id): Path<Uuid>,
     Json(payload): Json<ConfigureAnomalyRuleRequest>,
-) -> Result<Json<ApiResponse<()>>, Error> {
-    let tenant_id = user.tenant_id();
+) -> ApiResult<Json<()>> {
+    let tenant_id = &user.0.tenant_id;
+    let pool = state.db.tenant(&tenant_id).await?;
 
-    let result = sqlx::query!(
+    let notification_channels = payload.notification_channels
+        .map(|c| serde_json::to_value(c).map_err(|e| billforge_core::Error::Internal(e.to_string())))
+        .transpose()?;
+    let notify_on_severity = payload.notify_on_severity
+        .map(|s| serde_json::to_value(s).map_err(|e| billforge_core::Error::Internal(e.to_string())))
+        .transpose()?;
+
+    let result = sqlx::query(
         r#"
         UPDATE anomaly_rules
         SET
@@ -549,39 +676,42 @@ async fn update_anomaly_rule(
             updated_at = NOW()
         WHERE id = $7 AND tenant_id = $8
         "#,
-        payload.zscore_threshold,
-        payload.iqr_multiplier,
-        payload.volume_spike_threshold,
-        &payload.notification_channels.unwrap_or_default(),
-        &payload.notify_on_severity.unwrap_or_default(),
-        payload.enabled,
-        rule_id,
-        tenant_id,
     )
-    .execute(&*state.db.pool)
+    .bind(payload.zscore_threshold)
+    .bind(payload.iqr_multiplier)
+    .bind(payload.volume_spike_threshold)
+    .bind(&notification_channels)
+    .bind(&notify_on_severity)
+    .bind(payload.enabled)
+    .bind(rule_id)
+    .bind(tenant_id.0)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     if result.rows_affected() == 0 {
-        return Err(Error::NotFound {
+        return Err(billforge_core::Error::NotFound {
             resource_type: "AnomalyRule".to_string(),
             id: rule_id.to_string(),
-        });
+        }.into());
     }
 
-    Ok(Json(ApiResponse::success(())))
+    Ok(Json(()))
 }
 
 // Helper functions
 
 async fn fetch_historical_spend(
-    db: &Database,
+    db: &billforge_db::DatabaseManager,
     tenant_id: Uuid,
     entity_id: &str,
     entity_type: EntityType,
-) -> Result<TimeSeries, Error> {
+) -> Result<TimeSeries, billforge_core::Error> {
     // Fetch last 90 days of spend data
-    let rows = sqlx::query!(
+    let tenant_id_str = tenant_id.to_string();
+    let pool = db.tenant(&tenant_id_str.parse().map_err(|e| billforge_core::Error::Internal(format!("Invalid tenant ID: {}", e)))?).await?;
+
+    let rows = sqlx::query(
         r#"
         SELECT
             DATE(created_at) as date,
@@ -594,19 +724,26 @@ async fn fetch_historical_spend(
         GROUP BY DATE(created_at)
         ORDER BY date
         "#,
-        tenant_id,
-        entity_id,
     )
-    .fetch_all(&*db.pool)
+    .bind(tenant_id)
+    .bind(entity_id)
+    .fetch_all(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     let points: Vec<TimeSeriesPoint> = rows
         .into_iter()
         .filter_map(|row| {
+            let date: chrono::NaiveDate = row.try_get("date").ok()?;
+            let amount_str: String = row.try_get("amount").ok()?;
+            let amount: f64 = amount_str.parse().ok()?;
+
+            // Convert NaiveDate to DateTime<Utc>
+            let timestamp: DateTime<Utc> = Utc.from_utc_date(&date).and_hms_opt(0, 0, 0)?;
+
             Some(TimeSeriesPoint {
-                timestamp: row.date?.and_utc(),
-                value: row.amount?.try_into().ok()?,
+                timestamp,
+                value: amount,
             })
         })
         .collect();
@@ -619,10 +756,17 @@ async fn fetch_historical_spend(
     })
 }
 
-async fn store_forecast(db: &Database, tenant_id: Uuid, forecast: &Forecast) -> Result<(), Error> {
+async fn store_forecast(db: &billforge_db::DatabaseManager, tenant_id: Uuid, forecast: &Forecast) -> Result<(), billforge_core::Error> {
     let valid_until = forecast.generated_at + chrono::Duration::days(forecast.horizon.days() as i64);
+    let tenant_id_str = tenant_id.to_string();
+    let pool = db.tenant(&tenant_id_str.parse().map_err(|e| billforge_core::Error::Internal(format!("Invalid tenant ID: {}", e)))?).await?;
 
-    sqlx::query!(
+    let entity_type_str = serde_json::to_string(&forecast.entity_type)
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+    let horizon_str = serde_json::to_string(&forecast.horizon)
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+
+    sqlx::query(
         r#"
         INSERT INTO spend_forecasts (
             tenant_id, entity_id, entity_type, metric_name, horizon,
@@ -630,28 +774,31 @@ async fn store_forecast(db: &Database, tenant_id: Uuid, forecast: &Forecast) -> 
             model_version, seasonality_detected, valid_until
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         "#,
-        tenant_id,
-        forecast.entity_id,
-        serde_json::to_string(&forecast.entity_type).map_err(|e| Error::Internal(e.to_string()))?,
-        forecast.metric_name,
-        serde_json::to_string(&forecast.horizon).map_err(|e| Error::Internal(e.to_string()))?,
-        forecast.predicted_value,
-        forecast.confidence_lower,
-        forecast.confidence_upper,
-        forecast.confidence_level,
-        forecast.model_version,
-        forecast.seasonality_detected,
-        valid_until,
     )
-    .execute(&*db.pool)
+    .bind(tenant_id)
+    .bind(&forecast.entity_id)
+    .bind(&entity_type_str)
+    .bind(&forecast.metric_name)
+    .bind(&horizon_str)
+    .bind(forecast.predicted_value)
+    .bind(forecast.confidence_lower)
+    .bind(forecast.confidence_upper)
+    .bind(forecast.confidence_level)
+    .bind(&forecast.model_version)
+    .bind(forecast.seasonality_detected)
+    .bind(valid_until)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     Ok(())
 }
 
-async fn fetch_recent_invoices(db: &Database, tenant_id: Uuid) -> Result<Vec<InvoiceRecord>, Error> {
-    let rows = sqlx::query!(
+async fn fetch_recent_invoices(db: &billforge_db::DatabaseManager, tenant_id: Uuid) -> Result<Vec<InvoiceRecord>, billforge_core::Error> {
+    let tenant_id_str = tenant_id.to_string();
+    let pool = db.tenant(&tenant_id_str.parse().map_err(|e| billforge_core::Error::Internal(format!("Invalid tenant ID: {}", e)))?).await?;
+
+    let rows = sqlx::query(
         r#"
         SELECT
             i.id::text as invoice_id,
@@ -665,20 +812,23 @@ async fn fetch_recent_invoices(db: &Database, tenant_id: Uuid) -> Result<Vec<Inv
         ORDER BY i.created_at DESC
         LIMIT 1000
         "#,
-        tenant_id,
     )
-    .fetch_all(&*db.pool)
+    .bind(tenant_id)
+    .fetch_all(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     let invoices = rows
         .into_iter()
         .filter_map(|row| {
+            let amount_str: String = row.try_get("total_amount").ok()?;
+            let amount: f64 = amount_str.parse().ok()?;
+
             Some(InvoiceRecord {
-                invoice_id: row.invoice_id?,
-                vendor_name: row.vendor_name?,
-                amount: row.total_amount?.try_into().ok()?,
-                invoice_date: row.invoice_date?,
+                invoice_id: row.try_get("invoice_id").ok()?,
+                vendor_name: row.try_get("vendor_name").ok()?,
+                amount,
+                invoice_date: row.try_get("invoice_date").ok()?,
             })
         })
         .collect();
@@ -686,8 +836,18 @@ async fn fetch_recent_invoices(db: &Database, tenant_id: Uuid) -> Result<Vec<Inv
     Ok(invoices)
 }
 
-async fn store_anomaly(db: &Database, anomaly: &Anomaly) -> Result<(), Error> {
-    sqlx::query!(
+async fn store_anomaly(db: &billforge_db::DatabaseManager, anomaly: &Anomaly) -> Result<(), billforge_core::Error> {
+    let tenant_id_str = anomaly.tenant_id.to_string();
+    let pool = db.tenant(&tenant_id_str.parse().map_err(|e| billforge_core::Error::Internal(format!("Invalid tenant ID: {}", e)))?).await?;
+
+    let anomaly_type_str = serde_json::to_string(&anomaly.anomaly_type)
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+    let entity_type_str = serde_json::to_string(&anomaly.entity_type)
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+    let severity_str = serde_json::to_string(&anomaly.severity)
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+
+    sqlx::query(
         r#"
         INSERT INTO invoice_anomalies (
             id, tenant_id, anomaly_type, entity_id, entity_type, severity,
@@ -695,23 +855,23 @@ async fn store_anomaly(db: &Database, anomaly: &Anomaly) -> Result<(), Error> {
             metadata, detected_at, acknowledged
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
-        anomaly.id,
-        anomaly.tenant_id,
-        serde_json::to_string(&anomaly.anomaly_type).map_err(|e| Error::Internal(e.to_string()))?,
-        anomaly.entity_id,
-        serde_json::to_string(&anomaly.entity_type).map_err(|e| Error::Internal(e.to_string()))?,
-        serde_json::to_string(&anomaly.severity).map_err(|e| Error::Internal(e.to_string()))?,
-        anomaly.detected_value,
-        anomaly.expected_range.0,
-        anomaly.expected_range.1,
-        anomaly.deviation_score,
-        anomaly.metadata,
-        anomaly.detected_at,
-        anomaly.acknowledged,
     )
-    .execute(&*db.pool)
+    .bind(anomaly.id)
+    .bind(anomaly.tenant_id)
+    .bind(&anomaly_type_str)
+    .bind(&anomaly.entity_id)
+    .bind(&entity_type_str)
+    .bind(&severity_str)
+    .bind(anomaly.detected_value)
+    .bind(anomaly.expected_range.0)
+    .bind(anomaly.expected_range.1)
+    .bind(anomaly.deviation_score)
+    .bind(&anomaly.metadata)
+    .bind(anomaly.detected_at)
+    .bind(anomaly.acknowledged)
+    .execute(&*pool)
     .await
-    .map_err(|e| Error::Database(e.to_string()))?;
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     Ok(())
 }

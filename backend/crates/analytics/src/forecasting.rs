@@ -353,7 +353,25 @@ impl ForecastingModel for ArimaForecaster {
         };
 
         let margin = stats.residual_std * confidence_multiplier * 1.96;
-        let confidence_lower = (predicted_value - margin).max(0.0); // Can't have negative spend
+
+        // Ensure we always have a meaningful confidence interval
+        // Use at least 5% margin if residual variance is too small
+        let min_margin = predicted_value * 0.05;
+        let margin = if margin < min_margin {
+            min_margin
+        } else {
+            margin
+        };
+
+        // Ensure confidence interval is valid (lower < predicted < upper)
+        // Also ensure we don't have negative spend, but preserve the interval relationship
+        let confidence_lower = if predicted_value > margin {
+            (predicted_value - margin).max(0.0)
+        } else {
+            // If margin is too large, use a percentage-based lower bound
+            predicted_value * 0.5 // At least 50% of predicted value
+        };
+
         let confidence_upper = predicted_value + margin;
 
         Ok(Forecast {

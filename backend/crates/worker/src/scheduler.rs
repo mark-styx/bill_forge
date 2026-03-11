@@ -33,6 +33,22 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    let redis_client3 = redis_client.clone();
+    let pg_manager3 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_forecast_refresh_task(redis_client3, pg_manager3).await {
+            error!("Forecast refresh scheduler failed: {}", e);
+        }
+    });
+
+    let redis_client4 = redis_client.clone();
+    let pg_manager4 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_anomaly_detection_task(redis_client4, pg_manager4).await {
+            error!("Anomaly detection scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -132,6 +148,88 @@ async fn enqueue_training_job(conn: &mut redis::aio::Connection) -> Result<()> {
     conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
         .await
         .context("Failed to enqueue categorization training job")?;
+
+    Ok(())
+}
+
+/// Schedule forecast refresh jobs weekly
+async fn schedule_forecast_refresh_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    // Run every 7 days (weekly)
+    let mut interval = interval(Duration::from_secs(7 * 24 * 60 * 60));
+
+    info!("Forecast refresh scheduler started (weekly)");
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_forecast_refresh_job(&mut conn).await {
+            Ok(_) => info!("Enqueued weekly forecast refresh job"),
+            Err(e) => error!("Failed to enqueue forecast refresh job: {}", e),
+        }
+    }
+}
+
+/// Schedule anomaly detection jobs daily
+async fn schedule_anomaly_detection_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    // Run every 24 hours (daily)
+    let mut interval = interval(Duration::from_secs(24 * 60 * 60));
+
+    info!("Anomaly detection scheduler started (daily)");
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_anomaly_detection_job(&mut conn).await {
+            Ok(_) => info!("Enqueued daily anomaly detection job"),
+            Err(e) => error!("Failed to enqueue anomaly detection job: {}", e),
+        }
+    }
+}
+
+/// Enqueue a forecast refresh job
+async fn enqueue_forecast_refresh_job(conn: &mut redis::aio::Connection) -> Result<()> {
+    // System-wide job that processes all tenants
+    let job = Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        job_type: JobType::ForecastRefresh,
+        tenant_id: "system".to_string(),
+        payload: serde_json::json!({}),
+        created_at: chrono::Utc::now(),
+        retry_count: 0,
+    };
+
+    let job_json = serde_json::to_string(&job)?;
+    conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+        .await
+        .context("Failed to enqueue forecast refresh job")?;
+
+    Ok(())
+}
+
+/// Enqueue an anomaly detection job
+async fn enqueue_anomaly_detection_job(conn: &mut redis::aio::Connection) -> Result<()> {
+    // System-wide job that processes all tenants
+    let job = Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        job_type: JobType::AnomalyDetection,
+        tenant_id: "system".to_string(),
+        payload: serde_json::json!({}),
+        created_at: chrono::Utc::now(),
+        retry_count: 0,
+    };
+
+    let job_json = serde_json::to_string(&job)?;
+    conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+        .await
+        .context("Failed to enqueue anomaly detection job")?;
 
     Ok(())
 }

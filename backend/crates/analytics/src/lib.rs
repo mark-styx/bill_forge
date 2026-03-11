@@ -11,6 +11,8 @@ pub mod jobs;
 pub mod predictive_models;
 pub mod forecasting;
 pub mod anomaly_detection;
+pub mod predictive_repository;
+pub mod predictive_service;
 
 pub use models::*;
 pub use repository::AnalyticsRepository;
@@ -19,3 +21,5 @@ pub use handlers::create_router;
 pub use predictive_models::*;
 pub use forecasting::*;
 pub use anomaly_detection::*;
+pub use predictive_repository::{PredictiveRepository, ForecastAccuracySummary};
+pub use predictive_service::PredictiveService;

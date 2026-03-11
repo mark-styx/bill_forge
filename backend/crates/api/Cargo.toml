@@ -22,6 +22,7 @@ billforge-quickbooks = { path = "../quickbooks" }
 billforge-xero = { path = "../xero" }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
+billforge-analytics = { path = "../analytics" }
 
 # Web framework
 axum = { workspace = true }
