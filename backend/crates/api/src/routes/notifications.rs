@@ -60,12 +60,12 @@ async fn install_slack(
         INSERT INTO slack_oauth_states (tenant_id, user_id, state_nonce, redirect_url, expires_at)
         VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')
         "#,
-        auth_user.tenant_id.as_str(),
-        auth_user.user_id.as_str(),
+        &auth_user.0.tenant_id.0,
+        &auth_user.0.user_id.0,
         state_nonce,
         query.redirect_url,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -117,7 +117,7 @@ async fn slack_callback(
         "#,
         query.state,
     )
-    .fetch_optional(state.db.metadata())
+    .fetch_optional(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?
     .ok_or_else(|| ApiError(billforge_core::Error::Validation("Invalid or expired OAuth state".to_string())))?;
@@ -131,7 +131,7 @@ async fn slack_callback(
         "#,
         state_row.id,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -212,7 +212,7 @@ async fn slack_callback(
         bot_access_token,
         scope,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -260,12 +260,12 @@ async fn configure_teams(
             is_active = true
         "#,
         webhook_id,
-        auth_user.tenant_id.as_str(),
-        auth_user.user_id.as_str(),
+        &auth_user.0.tenant_id.0,
+        &auth_user.0.user_id.0,
         json.webhook_url,
         json.channel_name,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -287,9 +287,9 @@ async fn get_notification_preferences(
         FROM user_notification_preferences
         WHERE user_id = $1
         "#,
-        auth_user.user_id.as_str(),
+        &auth_user.0.user_id.0,
     )
-    .fetch_all(state.db.metadata())
+    .fetch_all(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -344,17 +344,17 @@ async fn update_notification_preferences(
             quiet_hours_timezone = $9,
             updated_at = NOW()
         "#,
-        auth_user.tenant_id.as_str(),
-        auth_user.user_id.as_str(),
+        &auth_user.0.tenant_id.0,
+        &auth_user.0.user_id.0,
         json.channel,
         json.enabled,
-        json.notification_types.as_ref().map(|v| v.join(",")),
+        json.notification_types.as_deref().unwrap_or(&[]),
         json.priority_filter,
-        json.quiet_hours_start,
-        json.quiet_hours_end,
+        json.quiet_hours_start.and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
+        json.quiet_hours_end.and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
         json.quiet_hours_timezone,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -373,9 +373,9 @@ async fn get_slack_status(
         WHERE tenant_id = $1 AND is_active = true
         LIMIT 1
         "#,
-        auth_user.tenant_id.as_str(),
+        &auth_user.0.tenant_id.0,
     )
-    .fetch_optional(state.db.metadata())
+    .fetch_optional(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -403,9 +403,9 @@ async fn get_teams_status(
         WHERE user_id = $1 AND is_active = true
         LIMIT 1
         "#,
-        auth_user.user_id.as_str(),
+        &auth_user.0.user_id.0,
     )
-    .fetch_optional(state.db.metadata())
+    .fetch_optional(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -432,9 +432,9 @@ async fn disconnect_slack(
         SET is_active = false, updated_at = NOW()
         WHERE tenant_id = $1
         "#,
-        auth_user.tenant_id.as_str(),
+        &auth_user.0.tenant_id.0,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
@@ -452,9 +452,9 @@ async fn disconnect_teams(
         SET is_active = false, updated_at = NOW()
         WHERE user_id = $1
         "#,
-        auth_user.user_id.as_str(),
+        &auth_user.0.user_id.0,
     )
-    .execute(state.db.metadata())
+    .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 

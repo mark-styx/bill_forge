@@ -14,6 +14,7 @@ async-trait = { workspace = true }
 reqwest = { version = "0.11", features = ["json"] }
 tracing = { workspace = true }
 billforge-core = { path = "../core" }
+billforge-mobile-push = { path = "../mobile-push" }
 urlencoding = "2.1"
 
 [dev-dependencies]
