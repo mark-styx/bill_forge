@@ -3,6 +3,7 @@
 use anyhow::Result;
 use billforge_auth::JwtConfig;
 use billforge_email::EmailConfig;
+use billforge_mobile_push::{FcmConfig, ApnsConfig, ApnsEnvironment};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -29,6 +30,10 @@ pub struct Config {
     pub quickbooks: Option<QuickBooksConfig>,
     /// Xero integration configuration (None if Xero is disabled)
     pub xero: Option<XeroConfig>,
+    /// FCM (Firebase Cloud Messaging) configuration (None if push notifications are disabled)
+    pub fcm: Option<FcmConfig>,
+    /// APNS (Apple Push Notification Service) configuration (None if push notifications are disabled)
+    pub apns: Option<ApnsConfig>,
 }
 
 /// QuickBooks Online integration configuration
@@ -195,6 +200,34 @@ impl Config {
             None
         };
 
+        // Load FCM configuration (optional - only if FCM_API_KEY is set)
+        let fcm = if let Ok(api_key) = std::env::var("FCM_API_KEY") {
+            Some(FcmConfig {
+                api_key,
+            })
+        } else {
+            None
+        };
+
+        // Load APNS configuration (optional - only if APNS_KEY_ID is set)
+        let apns = if let Ok(key_id) = std::env::var("APNS_KEY_ID") {
+            Some(ApnsConfig {
+                environment: match std::env::var("APNS_ENVIRONMENT").unwrap_or_default().as_str() {
+                    "production" => ApnsEnvironment::Production,
+                    _ => ApnsEnvironment::Sandbox,
+                },
+                private_key_path: std::env::var("APNS_PRIVATE_KEY_PATH")
+                    .unwrap_or_else(|_| "./AuthKey.p8".to_string()),
+                key_id,
+                team_id: std::env::var("APNS_TEAM_ID")
+                    .unwrap_or_default(),
+                bundle_id: std::env::var("APNS_BUNDLE_ID")
+                    .unwrap_or_else(|_| "com.billforge.mobile".to_string()),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             host: std::env::var("BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("BACKEND_PORT")
@@ -230,6 +263,8 @@ impl Config {
             email,
             quickbooks,
             xero,
+            fcm,
+            apns,
         })
     }
 }

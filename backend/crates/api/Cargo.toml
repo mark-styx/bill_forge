@@ -20,6 +20,8 @@ billforge-vendor-mgmt = { path = "../vendor-mgmt" }
 billforge-reporting = { path = "../reporting" }
 billforge-quickbooks = { path = "../quickbooks" }
 billforge-xero = { path = "../xero" }
+billforge-notifications = { path = "../notifications" }
+billforge-mobile-push = { path = "../mobile-push" }
 
 # Web framework
 axum = { workspace = true }

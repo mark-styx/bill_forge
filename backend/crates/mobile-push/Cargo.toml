@@ -1,0 +1,33 @@
+[package]
+name = "billforge-mobile-push"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# JWT for APNS authentication
+jsonwebtoken = "9"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+regex = "1"
+tracing = { workspace = true }
+billforge-core = { path = "../core" }
+
+[dev-dependencies]
+tokio-test = "0.4"
