@@ -368,8 +368,8 @@ pub struct CacheStats {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_infer_gl_code_description() {
+    #[tokio::test]
+    async fn test_infer_gl_code_description() {
         let cache = EmbeddingCache::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
         );

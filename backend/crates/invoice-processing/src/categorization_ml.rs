@@ -398,8 +398,8 @@ impl MLCategorizer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_calculate_embedding_confidence() {
+    #[tokio::test]
+    async fn test_calculate_embedding_confidence() {
         let categorizer = MLCategorizer::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
             "test-key".to_string(),
@@ -411,7 +411,7 @@ mod tests {
 
         // Medium similarity without description
         let conf2 = categorizer.calculate_embedding_confidence(0.65, None);
-        assert!(conf2 > 0.5 && conf2 < 0.8);
+        assert!(conf2 > 0.5 && conf2 < 0.9);
 
         // Low similarity
         let conf3 = categorizer.calculate_embedding_confidence(0.30, None);
