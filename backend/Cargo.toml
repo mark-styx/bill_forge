@@ -12,9 +12,13 @@ members = [
     "crates/vendor-mgmt",
     "crates/reporting",
     "crates/quickbooks",
+    "crates/xero",
     "crates/worker",
     "crates/analytics",
     "crates/feedback",
+    "crates/ai-agent",
+    "crates/health",
+    "crates/notifications",
 ]
 
 [workspace.package]

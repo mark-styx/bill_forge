@@ -9,6 +9,10 @@ use tracing::{info, error, warn};
 pub mod quickbooks_sync;
 pub mod metrics_aggregation;
 pub mod email_batch;
+pub mod report_digest;
+pub mod embedding_refresh;
+pub mod categorization_training;
+pub mod routing_optimization;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -28,6 +32,10 @@ pub enum JobType {
     QuickBooksInvoiceExport,
     MetricsAggregation,
     EmailBatch,
+    ReportDigest,
+    EmbeddingRefresh,
+    CategorizationTraining,
+    RoutingOptimization,
 }
 
 impl std::fmt::Display for JobType {
@@ -38,6 +46,10 @@ impl std::fmt::Display for JobType {
             JobType::QuickBooksInvoiceExport => write!(f, "QuickBooksInvoiceExport"),
             JobType::MetricsAggregation => write!(f, "MetricsAggregation"),
             JobType::EmailBatch => write!(f, "EmailBatch"),
+            JobType::ReportDigest => write!(f, "ReportDigest"),
+            JobType::EmbeddingRefresh => write!(f, "EmbeddingRefresh"),
+            JobType::CategorizationTraining => write!(f, "CategorizationTraining"),
+            JobType::RoutingOptimization => write!(f, "RoutingOptimization"),
         }
     }
 }
@@ -130,6 +142,20 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::EmailBatch => {
             email_batch::send_batch(&job.tenant_id, &job.payload, config).await
+        }
+        JobType::ReportDigest => {
+            report_digest::send_digests(&job.tenant_id, config).await
+        }
+        JobType::EmbeddingRefresh => {
+            embedding_refresh::refresh_all_embeddings(config.pg_manager.clone()).await
+        }
+        JobType::CategorizationTraining => {
+            categorization_training::learn_from_feedback(config.pg_manager.clone()).await
+        }
+        JobType::RoutingOptimization => {
+            // Get connection pool
+            let pool = config.pg_manager.clone();
+            routing_optimization::run_routing_optimization(pool).await
         }
     }
 }

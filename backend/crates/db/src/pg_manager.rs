@@ -63,7 +63,7 @@ impl PgManager {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
         )
-        .bind(tenant_key.clone())
+        .bind(tenant_id.as_uuid())
         .fetch_one(&self.metadata_pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to check tenant existence: {}", e)))?;

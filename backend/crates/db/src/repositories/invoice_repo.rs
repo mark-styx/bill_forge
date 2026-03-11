@@ -104,6 +104,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             document_id: input.document_id,
             supporting_documents: vec![],
             ocr_confidence: input.ocr_confidence,
+            categorization_confidence: None, // Will be set when ML categorization runs
             department: input.department,
             gl_code: input.gl_code,
             cost_center: input.cost_center,
@@ -323,6 +324,7 @@ struct InvoiceRow {
     document_id: Uuid,
     supporting_documents: sqlx::types::Json<Vec<Uuid>>,
     ocr_confidence: Option<f32>,
+    categorization_confidence: Option<f32>,
     department: Option<String>,
     gl_code: Option<String>,
     cost_center: Option<String>,
@@ -357,6 +359,7 @@ impl InvoiceRow {
             document_id: self.document_id,
             supporting_documents: self.supporting_documents.0,
             ocr_confidence: self.ocr_confidence,
+            categorization_confidence: self.categorization_confidence,
             department: self.department,
             gl_code: self.gl_code,
             cost_center: self.cost_center,

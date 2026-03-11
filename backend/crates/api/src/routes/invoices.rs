@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id", delete(delete_invoice))
         .route("/:id/ocr", post(rerun_ocr))
         .route("/:id/submit", post(submit_for_processing))
+        .route("/:id/suggest-categories", post(suggest_categories))
 }
 
 #[derive(Debug, Deserialize)]
@@ -403,4 +404,90 @@ async fn submit_for_processing(
         "invoice_id": id,
         "status": format!("{:?}", final_status).to_lowercase()
     })))
+}
+
+#[derive(Deserialize)]
+pub struct SuggestCategoriesRequest {
+    pub vendor_id: Option<Uuid>,
+    pub vendor_name: String,
+    pub line_items: Vec<billforge_invoice_processing::categorization::LineItemInput>,
+    pub total_amount: f64,
+}
+
+async fn suggest_categories(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    Path(_id): Path<String>,
+    Json(req): Json<SuggestCategoriesRequest>,
+) -> ApiResult<Json<billforge_invoice_processing::InvoiceCategorization>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let tenant_id_str = tenant.tenant_id.to_string();
+
+    // Try ML-based categorization first if OpenAI API key is available
+    let categorization = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
+        // Use ML categorizer with fallback to rule-based engine
+        let ml_categorizer = billforge_invoice_processing::MLCategorizer::new(
+            (*pool).clone(),
+            openai_api_key,
+        );
+
+        match ml_categorizer
+            .suggest_categories_ml(
+                &tenant_id_str,
+                req.vendor_id,
+                &req.vendor_name,
+                &req.line_items,
+                req.total_amount,
+            )
+            .await
+        {
+            Ok(ml_result) => {
+                tracing::info!(
+                    tenant_id = %tenant_id_str,
+                    confidence = ml_result.overall_confidence,
+                    source = ?ml_result.gl_code.as_ref().map(|g| &g.source),
+                    "ML categorization succeeded"
+                );
+                ml_result
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id_str,
+                    error = %e,
+                    "ML categorization failed, falling back to rule-based engine"
+                );
+                // Fallback to rule-based categorization
+                let engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+                engine
+                    .suggest_categories(
+                        &tenant_id_str,
+                        req.vendor_id,
+                        &req.vendor_name,
+                        &req.line_items,
+                        req.total_amount,
+                    )
+                    .await
+                    .map_err(|e| billforge_core::Error::Database(format!("Categorization failed: {}", e)))?
+            }
+        }
+    } else {
+        // No OpenAI API key - use rule-based engine only
+        tracing::info!(
+            tenant_id = %tenant_id_str,
+            "OpenAI API key not configured, using rule-based categorization"
+        );
+        let engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+        engine
+            .suggest_categories(
+                &tenant_id_str,
+                req.vendor_id,
+                &req.vendor_name,
+                &req.line_items,
+                req.total_amount,
+            )
+            .await
+            .map_err(|e| billforge_core::Error::Database(format!("Categorization failed: {}", e)))?
+    };
+
+    Ok(Json(categorization))
 }

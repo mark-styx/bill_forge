@@ -27,6 +27,8 @@ pub struct Config {
     pub email: Option<EmailConfig>,
     /// QuickBooks integration configuration (None if QuickBooks is disabled)
     pub quickbooks: Option<QuickBooksConfig>,
+    /// Xero integration configuration (None if Xero is disabled)
+    pub xero: Option<XeroConfig>,
 }
 
 /// QuickBooks Online integration configuration
@@ -50,6 +52,35 @@ pub enum QuickBooksEnvironment {
 }
 
 impl QuickBooksEnvironment {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "production" | "prod" => Self::Production,
+            _ => Self::Sandbox,
+        }
+    }
+}
+
+/// Xero accounting integration configuration
+#[derive(Debug, Clone)]
+pub struct XeroConfig {
+    /// OAuth client ID
+    pub client_id: String,
+    /// OAuth client secret
+    pub client_secret: String,
+    /// OAuth redirect URI
+    pub redirect_uri: String,
+    /// Environment (sandbox or production)
+    pub environment: XeroEnvironment,
+}
+
+/// Xero environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XeroEnvironment {
+    Sandbox,
+    Production,
+}
+
+impl XeroEnvironment {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "production" | "prod" => Self::Production,
@@ -148,6 +179,22 @@ impl Config {
             None
         };
 
+        // Load Xero configuration (optional - only if XERO_CLIENT_ID is set)
+        let xero = if let Ok(client_id) = std::env::var("XERO_CLIENT_ID") {
+            Some(XeroConfig {
+                client_id,
+                client_secret: std::env::var("XERO_CLIENT_SECRET")
+                    .unwrap_or_default(),
+                redirect_uri: std::env::var("XERO_REDIRECT_URI")
+                    .unwrap_or_else(|_| format!("{}/api/v1/xero/callback", frontend_url)),
+                environment: XeroEnvironment::from_str(
+                    &std::env::var("XERO_ENVIRONMENT").unwrap_or_default()
+                ),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             host: std::env::var("BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("BACKEND_PORT")
@@ -182,6 +229,7 @@ impl Config {
             environment,
             email,
             quickbooks,
+            xero,
         })
     }
 }

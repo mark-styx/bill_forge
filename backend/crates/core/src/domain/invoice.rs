@@ -187,7 +187,9 @@ pub struct Invoice {
     /// Additional supporting documents
     pub supporting_documents: Vec<Uuid>,
     pub ocr_confidence: Option<f32>,
-    
+    /// ML categorization confidence (0.0 to 1.0)
+    pub categorization_confidence: Option<f32>,
+
     // Department/GL coding
     pub department: Option<String>,
     pub gl_code: Option<String>,

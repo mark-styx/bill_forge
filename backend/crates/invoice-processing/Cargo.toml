@@ -16,3 +16,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+
+# ML Categorization dependencies (Sprint 13)
+async-openai = "0.20"
