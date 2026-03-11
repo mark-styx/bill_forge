@@ -290,7 +290,7 @@ impl Default for WorkingHoursConfig {
 impl WorkingHoursConfig {
     /// Check if a timestamp falls within working hours
     pub fn is_working_time(&self, timestamp: DateTime<Utc>) -> bool {
-        use chrono::{Datelike, Timelike};
+        use chrono::Datelike;
 
         // Convert to configured timezone
         let tz: chrono_tz::Tz = self.timezone.parse().unwrap_or(chrono_tz::UTC);
@@ -315,7 +315,7 @@ impl WorkingHoursConfig {
 
     /// Get next working time after a timestamp
     pub fn next_working_time(&self, timestamp: DateTime<Utc>) -> DateTime<Utc> {
-        use chrono::{Datelike, Timelike};
+        use chrono::Timelike;
 
         let mut current = timestamp;
 

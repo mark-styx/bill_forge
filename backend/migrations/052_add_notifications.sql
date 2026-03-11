@@ -3,7 +3,7 @@
 
 -- User notification preferences
 CREATE TABLE user_notification_preferences (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     channel VARCHAR(50) NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE user_notification_preferences (
 
 -- Slack connections (OAuth tokens per tenant)
 CREATE TABLE slack_connections (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     slack_team_id VARCHAR(50) NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE slack_connections (
 
 -- Slack OAuth states (for OAuth flow)
 CREATE TABLE slack_oauth_states (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     state_nonce VARCHAR(100) NOT NULL UNIQUE,
@@ -61,7 +61,7 @@ CREATE TABLE slack_oauth_states (
 
 -- Teams webhook configurations
 CREATE TABLE teams_webhooks (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     webhook_url TEXT NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE teams_webhooks (
 
 -- Notification templates (customizable message formats)
 CREATE TABLE notification_templates (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     notification_type VARCHAR(50) NOT NULL,
     channel VARCHAR(50) NOT NULL,
@@ -95,7 +95,7 @@ CREATE TABLE notification_templates (
 
 -- Notification delivery log
 CREATE TABLE notification_deliveries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     notification_id UUID NOT NULL,

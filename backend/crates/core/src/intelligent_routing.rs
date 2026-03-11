@@ -412,7 +412,7 @@ impl IntelligentRoutingEngine {
 
     /// Check if a timestamp is within working hours
     fn is_within_working_hours(&self, timestamp: DateTime<Utc>) -> bool {
-        use chrono::{Datelike, Timelike};
+        use chrono::Datelike;
 
         // Check day of week (1 = Monday, 7 = Sunday)
         let weekday = timestamp.weekday().number_from_monday() as i32;
