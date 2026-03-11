@@ -340,8 +340,8 @@ pub struct LineItemInput {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_line_item_analysis_software() {
+    #[tokio::test]
+    async fn test_line_item_analysis_software() {
         let items = vec![
             LineItemInput {
                 description: "Annual software license".to_string(),
