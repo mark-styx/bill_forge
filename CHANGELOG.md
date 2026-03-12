@@ -1,4 +1,30 @@
 # CHANGELOG
+
+## 2026-03-12 - Code Review Fixes
+
+### Fixed Issues
+**Critical bugs resolved:**
+- **Race condition in token refresh** - Added locking mechanism (`isRefreshing` flag, `refreshPromise`) to prevent multiple concurrent token refresh requests when multiple 401 responses occur simultaneously
+- **Duplicated callback setup** - Extracted `setupApiCallbacks()` helper function to eliminate code duplication between login() and initialization
+- **Silent error swallowing** - Added `console.error()` logging in token refresh failure paths for better debugging
+- **Fetch request duplication** - Created `executeRequest()` helper method to eliminate duplicate fetch logic in retry scenarios
+- **Naming confusion** - Changed `_hasHydrated` to `hasHydrated` (removed misleading underscore prefix)
+
+### Files Modified
+- `apps/web/src/lib/api.ts` - Added concurrency control, error logging, extracted helper methods
+- `apps/web/src/stores/auth.ts` - Extracted callback setup, fixed naming convention
+- `apps/web/src/app/page.tsx` - Updated to use correct property name
+
+### Build Status
+- ✅ Frontend (Next.js) build successful
+- ✅ Backend (Rust) release build successful
+
+### Commits
+1. `6b05b200` - fix: Resolve code review issues in auth and API client
+2. `a902006e` - fix: Remove duplicate closing braces in auth store
+
+---
+
 Reset on Fri Jan 30 08:38:09 EST 2026
 ## Cycle #20260130-0838
 🎯 Feature: Frontend: Next.js / Tailwind CSS
