@@ -254,9 +254,6 @@ if (typeof window !== 'undefined') {
     }
   }
 }
-    }
-  )
-);
 
 // Initialize API token on store hydration
 if (typeof window !== 'undefined') {
