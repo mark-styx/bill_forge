@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## 2026-03-12 - Fix tenant_id UUID type mismatches across backend
+
+### Problem
+All `tenant_id` database columns are `UUID`, but Rust code was binding them as strings (`.as_str()`) and deserializing row results into `String` fields. This causes runtime type mismatch errors when PostgreSQL strict type checking is enabled.
+
+### Fixed
+- **17 source files** updated to bind `tenant_id` as `Uuid` via `*tenant_id.as_uuid()` instead of `.as_str()`
+- **Row struct types** changed from `tenant_id: String` to `tenant_id: Uuid` in: `AuditRow`, `InvoiceRow`, `VendorRow`, `TaxDocumentRow`, `DocumentRow`, `WorkflowRuleRow`, `WorkQueueRow`, `QueueItemRow`, `AssignmentRuleRow`, `ApprovalRequestRow`, `DigestRow`
+- **Column name fix**: `total_amount` -> `total_amount_cents` in predictive analytics queries (4 occurrences)
+- **Mobile routes**: `tenant_id.to_string()` -> `tenant_id.0` for correct UUID binding
+- **Migration 056**: Added `report_digests` table to the VARCHAR->UUID type migration
+
+### Files Modified
+- `crates/analytics/src/predictive_repository.rs` - column name fix
+- `crates/analytics/src/predictive_service.rs` - column name fix
+- `crates/api/src/routes/mobile.rs` - UUID binding fix
+- `crates/api/src/routes/mobile/sync.rs` - UUID binding fix
+- `crates/api/src/routes/mod.rs` - landing page route added
+- `crates/api/src/routes/predictive.rs` - column name + UUID binding fix
+- `crates/api/src/routes/workflows.rs` - UUID binding fix
+- `crates/core/src/services/email_action_token.rs` - UUID binding fix
+- `crates/db/src/repositories/audit_repo.rs` - UUID binding + row struct fix
+- `crates/db/src/repositories/invoice_repo.rs` - UUID binding + row struct fix
+- `crates/db/src/repositories/metrics_repo.rs` - UUID binding fix
+- `crates/db/src/repositories/tax_document_repo.rs` - UUID binding + row struct fix
+- `crates/db/src/repositories/user_repo.rs` - UUID binding fix
+- `crates/db/src/repositories/vendor_repo.rs` - UUID binding + row struct fix
+- `crates/db/src/repositories/workflow_repo.rs` - UUID binding + row struct fix
+- `crates/db/src/storage.rs` - UUID binding + row struct fix
+- `crates/reporting/src/service.rs` - UUID binding + row struct fix
+- `migrations/056_fix_tenant_id_types.sql` - added report_digests ALTER
+
+### Build Status
+- Release build successful (billforge-server 23MB, billforge-worker 5.2MB)
+
+### Commit
+- `4fb7e299` - fix: Correct tenant_id UUID type bindings across all repositories and routes
+
+---
+
 ## 2026-03-12 - Code Review Fixes
 
 ### Fixed Issues
