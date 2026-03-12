@@ -61,6 +61,7 @@ interface AuthState {
   refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  hasHydrated: boolean;
 
   // Actions
   login: (tenantId: string, email: string, password: string) => Promise<void>;
@@ -70,6 +71,19 @@ interface AuthState {
   hasModule: (module: string) => boolean;
   switchPersona: (personaId: string) => Promise<void>;
   refreshTenantContext: () => Promise<void>;
+  setHasHydrated: (state: boolean) => void;
+}
+
+// Helper function to set up API callbacks (avoids duplication)
+function setupApiCallbacks() {
+  api.setTokenRefreshCallback((access, refresh) => {
+    const store = useAuthStore.getState();
+    store.setTokens(access, refresh);
+  });
+  api.setLogoutCallback(() => {
+    const store = useAuthStore.getState();
+    store.logout();
+  });
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -82,6 +96,11 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       isAuthenticated: false,
       isLoading: false,
+      hasHydrated: false,
+
+      setHasHydrated: (state: boolean) => {
+        set({ hasHydrated: state });
+      },
 
       login: async (tenantId: string, email: string, password: string) => {
         set({ isLoading: true });
@@ -93,6 +112,8 @@ export const useAuthStore = create<AuthState>()(
           });
 
           api.setToken(response.access_token);
+          api.setRefreshToken(response.refresh_token);
+          setupApiCallbacks();
 
           set({
             user: response.user,
@@ -135,6 +156,7 @@ export const useAuthStore = create<AuthState>()(
 
       setTokens: (access: string, refresh: string) => {
         api.setToken(access);
+        api.setRefreshToken(refresh);
         set({
           accessToken: access,
           refreshToken: refresh,
@@ -206,6 +228,32 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.refreshToken,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+    }
+  )
+);
+
+// Initialize API token and callbacks on store hydration
+if (typeof window !== 'undefined') {
+  const stored = localStorage.getItem('billforge-auth');
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      if (parsed.state?.accessToken) {
+        api.setToken(parsed.state.accessToken);
+      }
+      if (parsed.state?.refreshToken) {
+        api.setRefreshToken(parsed.state.refreshToken);
+      }
+      // Set up refresh/logout callbacks
+      setupApiCallbacks();
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+}
     }
   )
 );
@@ -219,6 +267,18 @@ if (typeof window !== 'undefined') {
       if (parsed.state?.accessToken) {
         api.setToken(parsed.state.accessToken);
       }
+      if (parsed.state?.refreshToken) {
+        api.setRefreshToken(parsed.state.refreshToken);
+      }
+      // Set up refresh/logout callbacks
+      api.setTokenRefreshCallback((access, refresh) => {
+        const store = useAuthStore.getState();
+        store.setTokens(access, refresh);
+      });
+      api.setLogoutCallback(() => {
+        const store = useAuthStore.getState();
+        store.logout();
+      });
     } catch (e) {
       // Ignore parse errors
     }

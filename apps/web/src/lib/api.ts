@@ -12,6 +12,11 @@ interface ApiResponse<T> {
 class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
+  private refreshToken: string | null = null;
+  private onTokenRefresh?: (accessToken: string, refreshToken: string) => void;
+  private onLogout?: () => void;
+  private isRefreshing = false;
+  private refreshPromise: Promise<boolean> | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -19,6 +24,80 @@ class ApiClient {
 
   setToken(token: string | null) {
     this.token = token;
+  }
+
+  setRefreshToken(token: string | null) {
+    this.refreshToken = token;
+  }
+
+  setTokenRefreshCallback(callback: (accessToken: string, refreshToken: string) => void) {
+    this.onTokenRefresh = callback;
+  }
+
+  setLogoutCallback(callback: () => void) {
+    this.onLogout = callback;
+  }
+
+  private async refreshAccessToken(): Promise<boolean> {
+    // Prevent multiple concurrent refresh requests
+    if (this.isRefreshing && this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    if (!this.refreshToken) return false;
+
+    this.isRefreshing = true;
+    this.refreshPromise = this.doRefresh();
+
+    try {
+      return await this.refreshPromise;
+    } finally {
+      this.isRefreshing = false;
+      this.refreshPromise = null;
+    }
+  }
+
+  private async doRefresh(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: this.refreshToken }),
+      });
+
+      if (!response.ok) {
+        console.error('Token refresh failed:', response.status, response.statusText);
+        return false;
+      }
+
+      const data = await response.json();
+      this.token = data.access_token;
+      this.refreshToken = data.refresh_token;
+
+      if (this.onTokenRefresh) {
+        this.onTokenRefresh(data.access_token, data.refresh_token);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      return false;
+    }
+  }
+
+  private async executeRequest(
+    path: string,
+    method: string,
+    headers: HeadersInit,
+    body?: unknown,
+    options?: RequestInit
+  ): Promise<Response> {
+    return fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      ...options,
+    });
   }
 
   private async request<T>(
@@ -32,12 +111,26 @@ class ApiClient {
       ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
     };
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      ...options,
-    });
+    let response = await this.executeRequest(path, method, headers, body, options);
+
+    // Try to refresh token on 401
+    if (response.status === 401 && this.refreshToken) {
+      const refreshed = await this.refreshAccessToken();
+      if (refreshed) {
+        // Retry with new token
+        const newHeaders: HeadersInit = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        };
+        response = await this.executeRequest(path, method, newHeaders, body, options);
+      } else {
+        // Refresh failed, logout
+        if (this.onLogout) {
+          this.onLogout();
+        }
+        throw new Error('Session expired. Please login again.');
+      }
+    }
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({
