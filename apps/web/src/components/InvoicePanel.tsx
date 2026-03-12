@@ -297,20 +297,29 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground flex items-center gap-1.5">
                     <DollarSign className="w-3.5 h-3.5" />
-                    Amount (in cents)
+                    Amount
                   </label>
-                  <input
-                    type="number"
-                    value={formData.total_amount?.amount || 0}
-                    onChange={(e) => setFormData({ 
-                      ...formData, 
-                      total_amount: { 
-                        amount: parseInt(e.target.value) || 0, 
-                        currency: formData.total_amount?.currency || 'USD' 
-                      } 
-                    })}
-                    className="input"
-                  />
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={((formData.total_amount?.amount || 0) / 100).toFixed(2)}
+                      onChange={(e) => {
+                        const dollars = parseFloat(e.target.value) || 0;
+                        const cents = Math.round(dollars * 100);
+                        setFormData({
+                          ...formData,
+                          total_amount: {
+                            amount: cents,
+                            currency: formData.total_amount?.currency || 'USD'
+                          }
+                        });
+                      }}
+                      className="input pl-7"
+                    />
+                  </div>
                 </div>
               )}
 

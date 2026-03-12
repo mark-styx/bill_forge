@@ -95,7 +95,12 @@ impl AppState {
 
         // Check if sandbox tenant already exists
         if metadata_db.tenant_exists(&sandbox_tenant_id).await? {
-            tracing::info!("Sandbox tenant already exists");
+            tracing::info!("Sandbox tenant already exists, ensuring migrations are up to date...");
+            // Re-run migrations to pick up any new tables (uses CREATE TABLE IF NOT EXISTS)
+            let tenant_pool = db.tenant(&sandbox_tenant_id).await
+                .map_err(|e| anyhow::anyhow!("Failed to get tenant db: {}", e))?;
+            billforge_db::tenant_db::run_tenant_migrations(&tenant_pool, &sandbox_tenant_id).await
+                .map_err(|e| anyhow::anyhow!("Failed to re-run tenant migrations: {}", e))?;
             return Ok(());
         }
 

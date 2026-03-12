@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { ColorPicker, ColorSwatch, GradientPicker } from '@/components/ui/color-picker';
 import {
@@ -58,6 +60,24 @@ export default function SettingsPage() {
   } = useThemeStore();
 
   const [activeTab, setActiveTab] = useState('appearance');
+  const { refreshTenantContext } = useAuthStore();
+
+  // Organization settings form state
+  const [orgCompanyName, setOrgCompanyName] = useState(tenant?.settings?.company_name || '');
+  const [orgTimezone, setOrgTimezone] = useState(tenant?.settings?.timezone || 'UTC');
+  const [orgCurrency, setOrgCurrency] = useState(tenant?.settings?.default_currency || 'USD');
+
+  const saveSettingsMutation = useMutation({
+    mutationFn: (data: { company_name?: string; timezone?: string; default_currency?: string }) =>
+      api.put('/api/v1/settings', data),
+    onSuccess: () => {
+      refreshTenantContext();
+      toast.success('Organization settings saved');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to save settings');
+    },
+  });
   const [orgBrandName, setOrgBrandName] = useState(organizationTheme?.branding?.brandName || tenant?.settings?.company_name || '');
   const [previewMode, setPreviewMode] = useState(false);
 
@@ -440,7 +460,8 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-foreground mb-1.5">Company Name</label>
                   <input
                     type="text"
-                    defaultValue={tenant?.settings?.company_name || ''}
+                    value={orgCompanyName}
+                    onChange={(e) => setOrgCompanyName(e.target.value)}
                     className="input"
                     placeholder="Acme Corporation"
                   />
@@ -459,7 +480,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Timezone</label>
-                  <select className="input" defaultValue={tenant?.settings?.timezone || 'UTC'}>
+                  <select className="input" value={orgTimezone} onChange={(e) => setOrgTimezone(e.target.value)}>
                     <option value="UTC">UTC</option>
                     <option value="America/New_York">Eastern Time</option>
                     <option value="America/Chicago">Central Time</option>
@@ -469,7 +490,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Default Currency</label>
-                  <select className="input" defaultValue={tenant?.settings?.default_currency || 'USD'}>
+                  <select className="input" value={orgCurrency} onChange={(e) => setOrgCurrency(e.target.value)}>
                     <option value="USD">USD - US Dollar</option>
                     <option value="EUR">EUR - Euro</option>
                     <option value="GBP">GBP - British Pound</option>
@@ -479,9 +500,17 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-6 pt-6 border-t border-border flex justify-end">
-                <button className="btn btn-primary btn-md">
+                <button
+                  onClick={() => saveSettingsMutation.mutate({
+                    company_name: orgCompanyName,
+                    timezone: orgTimezone,
+                    default_currency: orgCurrency,
+                  })}
+                  disabled={saveSettingsMutation.isPending}
+                  className="btn btn-primary btn-md"
+                >
                   <Save className="w-4 h-4 mr-1.5" />
-                  Save Changes
+                  {saveSettingsMutation.isPending ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </div>

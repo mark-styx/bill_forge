@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useMutation } from '@tanstack/react-query';
-import { invoicesApi } from '@/lib/api';
+import { api, invoicesApi } from '@/lib/api';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
@@ -80,10 +80,37 @@ export default function ExportPage() {
   const exportMutation = useMutation({
     mutationFn: async () => {
       setIsExporting(true);
-      // Simulate export delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      // In real implementation, call the appropriate API
-      // if (exportType === 'invoices') return invoicesApi.exportCsv();
+
+      // Build the export endpoint path based on type and format
+      let path = '';
+      let filename = '';
+      if (exportType === 'invoices' && format === 'csv') {
+        path = '/api/v1/export/invoices/csv';
+        filename = 'invoices.csv';
+      } else if (exportType === 'invoices' && format === 'json') {
+        path = '/api/v1/export/invoices/json';
+        filename = 'invoices.json';
+      } else if (exportType === 'vendors') {
+        path = '/api/v1/export/vendors/csv';
+        filename = 'vendors.csv';
+      } else {
+        // Unsupported export combo - fall back to invoices CSV
+        path = '/api/v1/export/invoices/csv';
+        filename = `${exportType}.csv`;
+      }
+
+      const blob = await api.downloadBlob(path);
+
+      // Trigger browser download
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
       return { success: true };
     },
     onSuccess: () => {

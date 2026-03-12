@@ -35,8 +35,8 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     Ok(())
 }
 
-/// Run workflow-related migrations
-async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
+/// Run workflow-related migrations (public so it can be re-run on existing tenants)
+pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(
         r#"
         -- Workflow rules
@@ -142,6 +142,13 @@ async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
             user_agent TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        -- Ensure vendor_type column exists on vendors table
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_type TEXT NOT NULL DEFAULT 'business';
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS email TEXT;
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS phone TEXT;
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS address_line1 TEXT;
 
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_workflow_rules_tenant ON workflow_rules(tenant_id);

@@ -17,6 +17,7 @@ pub mod xero;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
+mod settings;
 
 use crate::state::AppState;
 use crate::metrics;
@@ -86,6 +87,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/analytics/predictive", predictive::routes())
         // Mobile App Backend (Device management, dashboard, approvals)
         .nest("/mobile", mobile::routes())
+        // Tenant settings
+        .nest("/settings", settings::routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
 }

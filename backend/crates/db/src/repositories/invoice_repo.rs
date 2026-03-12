@@ -228,17 +228,124 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         id: &InvoiceId,
         updates: serde_json::Value,
     ) -> Result<Invoice> {
-        let now = Utc::now();
-
-        // Simple update implementation - update common fields
         if let Some(obj) = updates.as_object() {
-            if let Some(vendor_name) = obj.get("vendor_name").and_then(|v| v.as_str()) {
-                sqlx::query("UPDATE invoices SET vendor_name = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
-                    .bind(vendor_name)
-                    .bind(now)
-                    .bind(id.0)
-                    .bind(*tenant_id.as_uuid())
-                    .execute(&*self.pool)
+            // Extract all possible field values upfront
+            let vendor_name = obj.get("vendor_name").and_then(|v| v.as_str()).map(String::from);
+            let invoice_number = obj.get("invoice_number").and_then(|v| v.as_str()).map(String::from);
+            let invoice_date = obj.get("invoice_date").and_then(|v| v.as_str())
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+            let has_invoice_date = obj.contains_key("invoice_date");
+            let due_date = obj.get("due_date").and_then(|v| v.as_str())
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+            let has_due_date = obj.contains_key("due_date");
+            let po_number = obj.get("po_number").and_then(|v| v.as_str()).map(String::from);
+            let has_po_number = obj.contains_key("po_number");
+            let department = obj.get("department").and_then(|v| v.as_str()).map(String::from);
+            let has_department = obj.contains_key("department");
+            let gl_code = obj.get("gl_code").and_then(|v| v.as_str()).map(String::from);
+            let has_gl_code = obj.contains_key("gl_code");
+            let cost_center = obj.get("cost_center").and_then(|v| v.as_str()).map(String::from);
+            let has_cost_center = obj.contains_key("cost_center");
+            let notes = obj.get("notes").and_then(|v| v.as_str()).map(String::from);
+            let has_notes = obj.contains_key("notes");
+            let total_amount_cents = obj.get("total_amount")
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get("amount"))
+                .and_then(|a| a.as_i64());
+            let currency = obj.get("total_amount")
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get("currency"))
+                .and_then(|c| c.as_str())
+                .map(String::from);
+
+            // Build SET clauses and track parameter positions
+            let mut set_parts: Vec<String> = Vec::new();
+            let mut param_idx = 1u32;
+
+            // We use an enum to track bind order and types
+            enum BindVal {
+                Str(String),
+                OptStr(Option<String>),
+                OptDate(Option<NaiveDate>),
+                I64(i64),
+            }
+            let mut bind_vals: Vec<BindVal> = Vec::new();
+
+            if let Some(ref v) = vendor_name {
+                set_parts.push(format!("vendor_name = ${}", param_idx));
+                bind_vals.push(BindVal::Str(v.clone()));
+                param_idx += 1;
+            }
+            if let Some(ref v) = invoice_number {
+                set_parts.push(format!("invoice_number = ${}", param_idx));
+                bind_vals.push(BindVal::Str(v.clone()));
+                param_idx += 1;
+            }
+            if has_invoice_date {
+                set_parts.push(format!("invoice_date = ${}", param_idx));
+                bind_vals.push(BindVal::OptDate(invoice_date));
+                param_idx += 1;
+            }
+            if has_due_date {
+                set_parts.push(format!("due_date = ${}", param_idx));
+                bind_vals.push(BindVal::OptDate(due_date));
+                param_idx += 1;
+            }
+            if has_po_number {
+                set_parts.push(format!("po_number = ${}", param_idx));
+                bind_vals.push(BindVal::OptStr(po_number));
+                param_idx += 1;
+            }
+            if has_department {
+                set_parts.push(format!("department = ${}", param_idx));
+                bind_vals.push(BindVal::OptStr(department));
+                param_idx += 1;
+            }
+            if has_gl_code {
+                set_parts.push(format!("gl_code = ${}", param_idx));
+                bind_vals.push(BindVal::OptStr(gl_code));
+                param_idx += 1;
+            }
+            if has_cost_center {
+                set_parts.push(format!("cost_center = ${}", param_idx));
+                bind_vals.push(BindVal::OptStr(cost_center));
+                param_idx += 1;
+            }
+            if has_notes {
+                set_parts.push(format!("notes = ${}", param_idx));
+                bind_vals.push(BindVal::OptStr(notes));
+                param_idx += 1;
+            }
+            if let Some(amount) = total_amount_cents {
+                set_parts.push(format!("total_amount_cents = ${}", param_idx));
+                bind_vals.push(BindVal::I64(amount));
+                param_idx += 1;
+            }
+            if let Some(ref cur) = currency {
+                set_parts.push(format!("currency = ${}", param_idx));
+                bind_vals.push(BindVal::Str(cur.clone()));
+                param_idx += 1;
+            }
+
+            if !set_parts.is_empty() {
+                let set_clause = set_parts.join(", ");
+                let sql = format!(
+                    "UPDATE invoices SET {}, updated_at = NOW() WHERE id = ${} AND tenant_id = ${}",
+                    set_clause, param_idx, param_idx + 1
+                );
+
+                let mut query = sqlx::query(&sql);
+                for val in bind_vals {
+                    match val {
+                        BindVal::Str(s) => query = query.bind(s),
+                        BindVal::OptStr(s) => query = query.bind(s),
+                        BindVal::OptDate(d) => query = query.bind(d),
+                        BindVal::I64(n) => query = query.bind(n),
+                    }
+                }
+                query = query.bind(id.0).bind(*tenant_id.as_uuid());
+
+                query.execute(&*self.pool)
                     .await
                     .map_err(|e| Error::Database(format!("Failed to update invoice: {}", e)))?;
             }

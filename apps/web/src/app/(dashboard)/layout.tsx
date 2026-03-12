@@ -126,6 +126,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     },
   ]);
 
+  // Close sidebar on Escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !sidebarCollapsed) {
+        toggleSidebar();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [sidebarCollapsed, toggleSidebar]);
+
   useEffect(() => {
     if (!isAuthenticated) {
       router.push('/login');

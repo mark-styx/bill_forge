@@ -30,13 +30,14 @@ impl VendorRepository for VendorRepositoryImpl {
 
         sqlx::query(
             r#"INSERT INTO vendors (
-                id, tenant_id, name, tax_id, address, contact_email, contact_phone,
+                id, tenant_id, name, vendor_type, tax_id, address, contact_email, contact_phone,
                 payment_terms, is_active, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
         .bind(&input.name)
+        .bind(serde_json::to_value(&input.vendor_type).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "business".to_string()))
         .bind(&input.tax_id)
         .bind(sqlx::types::Json(&input.address))
         .bind(&input.email)
@@ -281,6 +282,7 @@ struct VendorRow {
     id: Uuid,
     tenant_id: Uuid,
     name: String,
+    vendor_type: Option<String>,
     tax_id: Option<String>,
     address: Option<sqlx::types::Json<VendorAddress>>,
     contact_email: Option<String>,
@@ -298,7 +300,9 @@ impl VendorRow {
             tenant_id: tenant_id.clone(),
             name: self.name,
             legal_name: None,
-            vendor_type: VendorType::Business,
+            vendor_type: self.vendor_type.as_deref()
+                .and_then(|vt| serde_json::from_value(serde_json::Value::String(vt.to_string())).ok())
+                .unwrap_or(VendorType::Business),
             status: if self.is_active { VendorStatus::Active } else { VendorStatus::Inactive },
             email: self.contact_email,
             phone: self.contact_phone,
