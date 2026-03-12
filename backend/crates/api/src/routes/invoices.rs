@@ -280,10 +280,11 @@ async fn upload_invoice(
             let pool = state.db.tenant(&tenant.tenant_id).await?;
 
             sqlx::query(
-                "INSERT INTO documents (id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, 'invoice_original', $7, NOW())"
+                "INSERT INTO documents (id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'invoice_original', $8, NOW())"
             )
             .bind(document_id)
+            .bind(*tenant.tenant_id.as_uuid())
             .bind(file_name)
             .bind(content_type)
             .bind(data.len() as i64)
