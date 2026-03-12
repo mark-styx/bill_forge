@@ -15,6 +15,6 @@ CREATE TABLE IF NOT EXISTS vendors (
 );
 
 -- Indexes
-CREATE INDEX idx_vendors_tenant_id ON vendors(tenant_id);
-CREATE INDEX idx_vendors_name ON vendors(name);
-CREATE INDEX idx_vendors_active ON vendors(is_active);
+CREATE INDEX IF NOT EXISTS idx_vendors_tenant_id ON vendors(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_vendors_name ON vendors(name);
+CREATE INDEX IF NOT EXISTS idx_vendors_active ON vendors(is_active);

@@ -54,10 +54,10 @@ CREATE TABLE IF NOT EXISTS invoices (
 );
 
 -- Indexes
-CREATE INDEX idx_invoices_tenant_id ON invoices(tenant_id);
-CREATE INDEX idx_invoices_vendor_id ON invoices(vendor_id);
-CREATE INDEX idx_invoices_status ON invoices(capture_status, processing_status);
-CREATE INDEX idx_invoices_date ON invoices(invoice_date);
-CREATE INDEX idx_invoices_created_at ON invoices(created_at);
-CREATE INDEX idx_invoices_queue ON invoices(current_queue_id);
-CREATE INDEX idx_invoices_assigned ON invoices(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_invoices_tenant_id ON invoices(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_vendor_id ON invoices(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(capture_status, processing_status);
+CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(invoice_date);
+CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoices(created_at);
+CREATE INDEX IF NOT EXISTS idx_invoices_queue ON invoices(current_queue_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_assigned ON invoices(assigned_to);
