@@ -715,7 +715,7 @@ async fn fetch_historical_spend(
         r#"
         SELECT
             DATE(created_at) as date,
-            SUM(total_amount) as amount
+            SUM(total_amount_cents) as amount
         FROM invoices
         WHERE tenant_id = $1
             AND vendor_id = $2
@@ -803,7 +803,7 @@ async fn fetch_recent_invoices(db: &billforge_db::DatabaseManager, tenant_id: Uu
         SELECT
             i.id::text as invoice_id,
             v.name as vendor_name,
-            i.total_amount,
+            i.total_amount_cents,
             i.invoice_date
         FROM invoices i
         JOIN vendors v ON i.vendor_id = v.id
@@ -821,7 +821,7 @@ async fn fetch_recent_invoices(db: &billforge_db::DatabaseManager, tenant_id: Uu
     let invoices = rows
         .into_iter()
         .filter_map(|row| {
-            let amount_str: String = row.try_get("total_amount").ok()?;
+            let amount_str: String = row.try_get("total_amount_cents").ok()?;
             let amount: f64 = amount_str.parse().ok()?;
 
             Some(InvoiceRecord {

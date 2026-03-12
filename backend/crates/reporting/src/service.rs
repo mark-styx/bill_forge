@@ -1410,7 +1410,7 @@ impl ReportingService {
         #[derive(sqlx::FromRow)]
         struct DigestRow {
             id: uuid::Uuid,
-            tenant_id: String,
+            tenant_id: uuid::Uuid,
             user_id: uuid::Uuid,
             digest_type: String,
             frequency: String,
@@ -1456,7 +1456,7 @@ impl ReportingService {
 
                 Some(ReportDigest {
                     id: row.id,
-                    tenant_id: row.tenant_id,
+                    tenant_id: row.tenant_id.to_string(),
                     user_id: row.user_id,
                     digest_type,
                     frequency,
@@ -1511,7 +1511,7 @@ impl ReportingService {
         #[derive(sqlx::FromRow)]
         struct DigestRow {
             id: uuid::Uuid,
-            tenant_id: String,
+            tenant_id: uuid::Uuid,
             user_id: uuid::Uuid,
             digest_type: String,
             frequency: String,
@@ -1538,7 +1538,7 @@ impl ReportingService {
                       last_sent_at, next_send_at, created_at, updated_at
             "#,
         )
-        .bind(_tenant_id.as_str())
+        .bind(*_tenant_id.as_uuid())
         .bind(user_id)
         .bind(digest_type_str)
         .bind(match request.frequency {
@@ -1570,7 +1570,7 @@ impl ReportingService {
 
         Ok(ReportDigest {
             id: row.id,
-            tenant_id: row.tenant_id,
+            tenant_id: row.tenant_id.to_string(),
             user_id: row.user_id,
             digest_type,
             frequency,
@@ -1593,7 +1593,7 @@ impl ReportingService {
         #[derive(sqlx::FromRow)]
         struct DigestRow {
             id: uuid::Uuid,
-            tenant_id: String,
+            tenant_id: uuid::Uuid,
             user_id: uuid::Uuid,
             digest_type: String,
             frequency: String,
@@ -1614,7 +1614,7 @@ impl ReportingService {
             ORDER BY created_at DESC
             "#,
         )
-        .bind(_tenant_id.as_str())
+        .bind(*_tenant_id.as_uuid())
         .bind(user_id)
         .fetch_all(pool.as_ref())
         .await
@@ -1640,7 +1640,7 @@ impl ReportingService {
 
                 Some(ReportDigest {
                     id: row.id,
-                    tenant_id: row.tenant_id,
+                    tenant_id: row.tenant_id.to_string(),
                     user_id: row.user_id,
                     digest_type,
                     frequency,
@@ -1671,7 +1671,7 @@ impl ReportingService {
             WHERE tenant_id = $1 AND user_id = $2 AND id = $3
             "#,
         )
-        .bind(_tenant_id.as_str())
+        .bind(*_tenant_id.as_uuid())
         .bind(user_id)
         .bind(digest_id)
         .execute(pool.as_ref())

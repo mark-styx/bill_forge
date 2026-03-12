@@ -22,7 +22,7 @@ impl UserRepository for UserRepositoryImpl {
         let email: Option<String> = sqlx::query_scalar(
             "SELECT email FROM users WHERE tenant_id = $1 AND id = $2"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
@@ -35,7 +35,7 @@ impl UserRepository for UserRepositoryImpl {
         let name: Option<String> = sqlx::query_scalar(
             "SELECT name FROM users WHERE tenant_id = $1 AND id = $2"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
@@ -54,7 +54,7 @@ impl UserRepository for UserRepositoryImpl {
         let emails: Vec<String> = sqlx::query_scalar(
             "SELECT email FROM users WHERE tenant_id = $1 AND id = ANY($2)"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&ids)
         .fetch_all(&*self.pool)
         .await
@@ -69,7 +69,7 @@ impl UserRepository for UserRepositoryImpl {
                WHERE tenant_id = $1
                AND roles::jsonb @> $2::jsonb"#
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(serde_json::to_string(&serde_json::json!([role]))
             .map_err(|e| Error::Internal(format!("Failed to serialize role: {}", e)))?)
         .fetch_all(&*self.pool)

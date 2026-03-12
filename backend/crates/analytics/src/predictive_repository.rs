@@ -525,7 +525,7 @@ impl PredictiveRepository {
             r#"
             SELECT
                 DATE(created_at) as date,
-                SUM(total_amount) as amount
+                SUM(total_amount_cents) as amount
             FROM invoices
             WHERE tenant_id = $1
                 AND vendor_id = $2
@@ -571,7 +571,7 @@ impl PredictiveRepository {
             r#"
             SELECT
                 DATE(created_at) as date,
-                SUM(total_amount) as amount
+                SUM(total_amount_cents) as amount
             FROM invoices
             WHERE tenant_id = $1
                 AND department = $2

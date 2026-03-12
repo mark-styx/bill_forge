@@ -421,7 +421,7 @@ async fn list_pending_approvals(
         ORDER BY ar.created_at DESC
         "#
     )
-    .bind(tenant.tenant_id.as_str())
+    .bind(*tenant.tenant_id.as_uuid())
     .fetch_all(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch pending approvals: {}", e)))?;
@@ -493,7 +493,7 @@ async fn get_approval(
         "#
     )
     .bind(approval_id)
-    .bind(tenant.tenant_id.as_str())
+    .bind(*tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch approval: {}", e)))?

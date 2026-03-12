@@ -241,7 +241,7 @@ pub async fn sync_bulk(
             ORDER BY ar.modified_at DESC
             LIMIT 100
             "#,
-            tenant.tenant_id.as_str(),
+            tenant.tenant_id.0,
             user.user_id.0.to_string(),
         )
         .fetch_all(&*pool)

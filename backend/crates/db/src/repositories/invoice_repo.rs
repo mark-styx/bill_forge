@@ -43,8 +43,8 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)"#
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
-        .bind(input.vendor_id.map(|v| v.to_string()).unwrap_or_default())
+        .bind(*tenant_id.as_uuid())
+        .bind(input.vendor_id)
         .bind(&input.vendor_name)
         .bind(&input.invoice_number)
         .bind(input.invoice_date)
@@ -124,7 +124,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             "SELECT * FROM invoices WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get invoice: {}", e)))?;
@@ -165,7 +165,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
 
         // Build query
         let mut query = sqlx::query_as::<_, InvoiceRow>(&query_str)
-            .bind(tenant_id.as_str());
+            .bind(*tenant_id.as_uuid());
 
         if let Some(ref vendor_id) = filters.vendor_id {
             query = query.bind(vendor_id.to_string());
@@ -194,7 +194,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         let count_str = count_query_str.split(" ORDER BY").next().unwrap();
 
         let mut count_query = sqlx::query_scalar::<_, i64>(count_str)
-            .bind(tenant_id.as_str());
+            .bind(*tenant_id.as_uuid());
 
         if let Some(ref vendor_id) = filters.vendor_id {
             count_query = count_query.bind(vendor_id.to_string());
@@ -237,7 +237,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                     .bind(vendor_name)
                     .bind(now)
                     .bind(id.0)
-                    .bind(tenant_id.as_str())
+                    .bind(*tenant_id.as_uuid())
                     .execute(&*self.pool)
                     .await
                     .map_err(|e| Error::Database(format!("Failed to update invoice: {}", e)))?;
@@ -256,7 +256,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: &InvoiceId) -> Result<()> {
         sqlx::query("DELETE FROM invoices WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete invoice: {}", e)))?;
@@ -274,7 +274,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             .bind(status.as_str())
             .bind(Utc::now())
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to update capture status: {}", e)))?;
@@ -292,7 +292,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             .bind(status.as_str())
             .bind(Utc::now())
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to update processing status: {}", e)))?;
@@ -305,7 +305,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct InvoiceRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     vendor_id: Option<Uuid>,
     vendor_name: String,
     invoice_number: String,

@@ -45,7 +45,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&input.name)
         .bind(&input.description)
         .bind(input.priority)
@@ -79,7 +79,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             "SELECT * FROM workflow_rules WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get workflow rule: {}", e)))?;
@@ -92,7 +92,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             sqlx::query_as::<_, WorkflowRuleRow>(
                 "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 ORDER BY priority DESC"
             )
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .bind(format!("{:?}", rt).to_lowercase())
             .fetch_all(&*self.pool)
             .await
@@ -101,7 +101,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             sqlx::query_as::<_, WorkflowRuleRow>(
                 "SELECT * FROM workflow_rules WHERE tenant_id = $1 ORDER BY priority DESC"
             )
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .fetch_all(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to list workflow rules: {}", e)))?
@@ -127,7 +127,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         .bind(sqlx::types::Json(&input.actions))
         .bind(now)
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update workflow rule: {}", e)))?;
@@ -143,7 +143,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: &WorkflowRuleId) -> Result<()> {
         sqlx::query("DELETE FROM workflow_rules WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete workflow rule: {}", e)))?;
@@ -156,7 +156,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             .bind(is_active)
             .bind(Utc::now())
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to set workflow rule active: {}", e)))?;
@@ -168,7 +168,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         let rows = sqlx::query_as::<_, WorkflowRuleRow>(
             "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 AND is_active = true ORDER BY priority DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(format!("{:?}", rule_type).to_lowercase())
         .fetch_all(&*self.pool)
         .await
@@ -190,7 +190,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&input.name)
         .bind(&input.description)
         .bind(format!("{:?}", input.queue_type).to_lowercase())
@@ -229,7 +229,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             "SELECT * FROM work_queues WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get work queue: {}", e)))?;
@@ -241,7 +241,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let rows = sqlx::query_as::<_, WorkQueueRow>(
             "SELECT * FROM work_queues WHERE tenant_id = $1 ORDER BY created_at"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list work queues: {}", e)))?;
@@ -263,7 +263,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         .bind(false) // is_default
         .bind(now)
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update work queue: {}", e)))?;
@@ -279,7 +279,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: &WorkQueueId) -> Result<()> {
         sqlx::query("DELETE FROM work_queues WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete work queue: {}", e)))?;
@@ -291,7 +291,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let result = sqlx::query_as::<_, WorkQueueRow>(
             "SELECT * FROM work_queues WHERE tenant_id = $1 AND is_default = true LIMIT 1"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get default work queue: {}", e)))?;
@@ -303,7 +303,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let result = sqlx::query_as::<_, WorkQueueRow>(
             "SELECT * FROM work_queues WHERE tenant_id = $1 AND queue_type = $2 LIMIT 1"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(format!("{:?}", queue_type).to_lowercase())
         .fetch_optional(&*self.pool)
         .await
@@ -321,7 +321,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
                VALUES ($1, $2, $3, $4, $5, 'pending', $6)"#
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(queue_id.0)
         .bind(invoice_id.0)
         .bind(assigned_to.map(|u| u.0))
@@ -510,7 +510,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
                ORDER BY entered_at DESC
                LIMIT 1"#
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(invoice_id.0)
         .fetch_optional(&*self.pool)
         .await
@@ -526,7 +526,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             .bind(assigned_to.0)
             .bind(now)
             .bind(item_id)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to reassign item: {}", e)))?;
@@ -553,7 +553,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(input.queue_id.0)
         .bind(&input.name)
         .bind(&input.description)
@@ -587,7 +587,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
             "SELECT * FROM assignment_rules WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get assignment rule: {}", e)))?;
@@ -599,7 +599,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         let rows = sqlx::query_as::<_, AssignmentRuleRow>(
             "SELECT * FROM assignment_rules WHERE tenant_id = $1 ORDER BY priority DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list assignment rules: {}", e)))?;
@@ -624,7 +624,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         .bind(sqlx::types::Json(&input.assign_to))
         .bind(now)
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update assignment rule: {}", e)))?;
@@ -640,7 +640,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: &AssignmentRuleId) -> Result<()> {
         sqlx::query("DELETE FROM assignment_rules WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete assignment rule: {}", e)))?;
@@ -652,7 +652,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         let rows = sqlx::query_as::<_, AssignmentRuleRow>(
             "SELECT * FROM assignment_rules WHERE tenant_id = $1 AND queue_id = $2 ORDER BY priority DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(queue_id.0)
         .fetch_all(&*self.pool)
         .await
@@ -666,7 +666,7 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
             .bind(is_active)
             .bind(Utc::now())
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to set assignment rule active: {}", e)))?;
@@ -687,7 +687,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
         )
         .bind(request.id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(request.invoice_id.0)
         .bind(request.rule_id.0)
         .bind(sqlx::types::Json(&request.requested_from))
@@ -713,7 +713,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
             "SELECT * FROM approval_requests WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get approval request: {}", e)))?;
@@ -725,7 +725,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         let rows = sqlx::query_as::<_, ApprovalRequestRow>(
             "SELECT * FROM approval_requests WHERE tenant_id = $1 AND invoice_id = $2 ORDER BY created_at DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(invoice_id.0)
         .fetch_all(&*self.pool)
         .await
@@ -742,7 +742,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
                AND status = 'pending'
                ORDER BY created_at DESC"#
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id.0)
         .fetch_all(&*self.pool)
         .await
@@ -778,7 +778,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         .bind(now)
         .bind(now)
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to respond to approval: {}", e)))?;
@@ -795,7 +795,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         sqlx::query(
             "UPDATE approval_requests SET status = 'cancelled', updated_at = NOW() WHERE tenant_id = $1 AND invoice_id = $2 AND status = 'pending'"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(invoice_id.0)
         .execute(&*self.pool)
         .await
@@ -810,7 +810,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct WorkflowRuleRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     name: String,
     description: Option<String>,
     priority: i32,
@@ -847,7 +847,7 @@ impl WorkflowRuleRow {
 #[derive(sqlx::FromRow)]
 struct WorkQueueRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     name: String,
     description: Option<String>,
     queue_type: String,
@@ -890,7 +890,7 @@ impl WorkQueueRow {
 #[derive(sqlx::FromRow)]
 struct QueueItemRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     queue_id: Uuid,
     invoice_id: Uuid,
     assigned_to: Option<Uuid>,
@@ -907,7 +907,7 @@ impl QueueItemRow {
     fn into_item(self) -> QueueItem {
         QueueItem {
             id: self.id,
-            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| TenantId::new()),
+            tenant_id: TenantId(self.tenant_id),
             queue_id: WorkQueueId(self.queue_id),
             invoice_id: InvoiceId(self.invoice_id),
             assigned_to: self.assigned_to.map(UserId),
@@ -923,7 +923,7 @@ impl QueueItemRow {
 #[derive(sqlx::FromRow)]
 struct AssignmentRuleRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     queue_id: Uuid,
     name: String,
     description: Option<String>,
@@ -956,7 +956,7 @@ impl AssignmentRuleRow {
 #[derive(sqlx::FromRow)]
 struct ApprovalRequestRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     invoice_id: Uuid,
     requested_from: Uuid,
     status: String,
@@ -970,7 +970,7 @@ impl ApprovalRequestRow {
     fn into_approval_request(self, tenant_id: &TenantId) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
-            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| tenant_id.clone()),
+            tenant_id: TenantId(self.tenant_id),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
             requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
@@ -990,7 +990,7 @@ impl ApprovalRequestRow {
     fn into_request(self) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
-            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| TenantId::new()),
+            tenant_id: TenantId(self.tenant_id),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
             requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),

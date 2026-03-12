@@ -35,7 +35,7 @@ impl VendorRepository for VendorRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&input.name)
         .bind(&input.tax_id)
         .bind(sqlx::types::Json(&input.address))
@@ -85,7 +85,7 @@ impl VendorRepository for VendorRepositoryImpl {
             "SELECT * FROM vendors WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get vendor: {}", e)))?;
@@ -99,7 +99,7 @@ impl VendorRepository for VendorRepositoryImpl {
         let rows = sqlx::query_as::<_, VendorRow>(
             "SELECT * FROM vendors WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(pagination.per_page as i32)
         .bind(offset)
         .fetch_all(&*self.pool)
@@ -112,7 +112,7 @@ impl VendorRepository for VendorRepositoryImpl {
             .collect();
 
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vendors WHERE tenant_id = $1")
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .fetch_one(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to count vendors: {}", e)))?;
@@ -137,7 +137,7 @@ impl VendorRepository for VendorRepositoryImpl {
                 .bind(name)
                 .bind(now)
                 .bind(id.0)
-                .bind(tenant_id.as_str())
+                .bind(*tenant_id.as_uuid())
                 .execute(&*self.pool)
                 .await
                 .map_err(|e| Error::Database(format!("Failed to update vendor: {}", e)))?;
@@ -154,7 +154,7 @@ impl VendorRepository for VendorRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: &VendorId) -> Result<()> {
         sqlx::query("DELETE FROM vendors WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete vendor: {}", e)))?;
@@ -166,7 +166,7 @@ impl VendorRepository for VendorRepositoryImpl {
         let result = sqlx::query_as::<_, VendorRow>(
             "SELECT * FROM vendors WHERE tenant_id = $1 AND name = $2"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(name)
         .fetch_optional(&*self.pool)
         .await
@@ -187,7 +187,7 @@ impl VendorRepository for VendorRepositoryImpl {
             "#
         )
         .bind(contact.id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .bind(&contact.name)
         .bind(&contact.title)
@@ -208,7 +208,7 @@ impl VendorRepository for VendorRepositoryImpl {
             "DELETE FROM vendor_contacts WHERE id = $1 AND tenant_id = $2 AND vendor_id = $3"
         )
         .bind(contact_id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .execute(&*self.pool)
         .await
@@ -227,7 +227,7 @@ impl VendorRepository for VendorRepositoryImpl {
             LIMIT $3
             "#
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .bind(limit as i32)
         .fetch_all(&*self.pool)
@@ -248,7 +248,7 @@ impl VendorRepository for VendorRepositoryImpl {
             "#
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .bind(&subject)
         .bind(&body)
@@ -279,7 +279,7 @@ impl VendorRepository for VendorRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct VendorRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     name: String,
     tax_id: Option<String>,
     address: Option<sqlx::types::Json<VendorAddress>>,

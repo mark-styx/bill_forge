@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BillForge API</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }}
+        .container {{
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #2563eb;
+            margin-bottom: 10px;
+        }}
+        .version {{
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }}
+        .endpoint-group {{
+            margin: 25px 0;
+            padding: 20px;
+            background: #f9fafb;
+            border-left: 4px solid #2563eb;
+            border-radius: 4px;
+        }}
+        .endpoint-group h3 {{
+            margin-top: 0;
+            color: #1f2937;
+        }}
+        .endpoint {{
+            margin: 10px 0;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+        }}
+        .method {{
+            display: inline-block;
+            width: 60px;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 3px;
+            margin-right: 10px;
+        }}
+        .get {{ background: #dbeafe; color: #1e40af; }}
+        .post {{ background: #d1fae5; color: #065f46; }}
+        a {{
+            color: #2563eb;
+            text-decoration: none;
+        }}
+        a:hover {{
+            text-decoration: underline;
+        }}
+        .status {{
+            margin-top: 30px;
+            padding: 15px;
+            background: #ecfdf5;
+            border: 1px solid #10b981;
+            border-radius: 5px;
+        }}
+        .new {{
+            background: #fef3c7;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            color: #92400e;
+            margin-left: 10px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BillForge API</h1>
+        <p class="version">Invoice Processing and Predictive Analytics Platform v{}</p>
+
+        <div class="status">
+            API is running | <a href="/health/detailed">View Health Status</a> | <a href="/metrics">View Metrics</a>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Predictive Analytics <span class="new">NEW</span></h3>
+            <div class="endpoint"><span class="method get">GET</span><a href="/api/v1/analytics/predictive/forecasts">/api/v1/analytics/predictive/forecasts</a></div>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/analytics/predictive/forecasts/generate</div>
+            <div class="endpoint"><span class="method get">GET</span><a href="/api/v1/analytics/predictive/anomalies">/api/v1/analytics/predictive/anomalies</a></div>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/analytics/predictive/anomalies/detect</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/analytics/predictive/alerts</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Authentication</h3>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/auth/login</div>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/auth/register</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/auth/me</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Invoices</h3>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/invoices</div>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/invoices</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/invoices/:id</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Vendors</h3>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/vendors</div>
+            <div class="endpoint"><span class="method post">POST</span>/api/v1/vendors</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/vendors/:id</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Dashboard and Reports</h3>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/dashboard/metrics</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/reports</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/audit</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Integrations</h3>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/quickbooks</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/xero</div>
+            <div class="endpoint"><span class="method get">GET</span>/api/v1/notifications</div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Health and Monitoring</h3>
+            <div class="endpoint"><span class="method get">GET</span><a href="/health">/health</a></div>
+            <div class="endpoint"><span class="method get">GET</span><a href="/health/detailed">/health/detailed</a></div>
+            <div class="endpoint"><span class="method get">GET</span><a href="/metrics">/metrics</a></div>
+        </div>
+
+        <p style="margin-top: 30px; color: #666; font-size: 14px;">
+            Most endpoints require authentication. Use <code>Authorization: Bearer &lt;token&gt;</code> header.
+        </p>
+    </div>
+</body>
+</html>

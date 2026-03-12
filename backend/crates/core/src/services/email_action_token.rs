@@ -98,7 +98,7 @@ impl EmailActionTokenService {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&token_hash)
         .bind(format!("{:?}", payload.action).to_lowercase())
         .bind(resource_type)

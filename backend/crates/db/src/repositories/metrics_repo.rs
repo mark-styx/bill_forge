@@ -30,13 +30,13 @@ impl MetricsRepositoryImpl {
                 COUNT(*) FILTER (WHERE processing_status = 'approved') as approved,
                 COUNT(*) FILTER (WHERE processing_status = 'rejected') as rejected,
                 COUNT(*) FILTER (WHERE processing_status = 'paid') as paid,
-                COALESCE(SUM(total_amount_cents), 0) as total_value,
+                COALESCE(SUM(total_amount_cents)::BIGINT, 0) as total_value,
                 COUNT(*) FILTER (WHERE created_at >= $2) as this_month,
                 COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $2) as last_month
             FROM invoices
             WHERE tenant_id = $1
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(start_of_month)
         .bind(start_of_last_month)
         .fetch_one(&*self.pool)
@@ -50,7 +50,7 @@ impl MetricsRepositoryImpl {
             AND processing_status IN ('approved', 'paid')
             AND updated_at IS NOT NULL
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -92,7 +92,7 @@ impl MetricsRepositoryImpl {
             FROM approval_requests
             WHERE tenant_id = $1
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(start_of_today)
         .fetch_one(&*self.pool)
         .await?;
@@ -105,7 +105,7 @@ impl MetricsRepositoryImpl {
             AND status IN ('approved', 'rejected')
             AND responded_at IS NOT NULL
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -125,7 +125,7 @@ impl MetricsRepositoryImpl {
             AND status = 'pending'
             AND created_at < NOW() - INTERVAL '48 hours'
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -136,7 +136,7 @@ impl MetricsRepositoryImpl {
             AND status = 'pending'
             AND expires_at < NOW()
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -164,7 +164,7 @@ impl MetricsRepositoryImpl {
             WHERE tenant_id = $1
             AND is_active = true
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(start_of_month)
         .fetch_one(&*self.pool)
         .await?;
@@ -175,7 +175,7 @@ impl MetricsRepositoryImpl {
                 v.id as vendor_id,
                 v.name as vendor_name,
                 COUNT(i.id) as invoice_count,
-                COALESCE(SUM(i.total_amount_cents), 0) as total_amount
+                COALESCE(SUM(i.total_amount_cents)::BIGINT, 0) as total_amount
             FROM vendors v
             LEFT JOIN invoices i ON v.id = i.vendor_id AND i.tenant_id = $1
             WHERE v.tenant_id = $1
@@ -184,7 +184,7 @@ impl MetricsRepositoryImpl {
             ORDER BY invoice_count DESC
             LIMIT 5
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await?;
 
@@ -216,7 +216,7 @@ impl MetricsRepositoryImpl {
                     ELSE (SELECT top_spend FROM top_vendors) / (SELECT total FROM total) * 100
                 END
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -252,7 +252,7 @@ impl MetricsRepositoryImpl {
             GROUP BY u.id, u.name
             ORDER BY approvals_this_month DESC
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(start_of_month)
         .fetch_all(&*self.pool)
         .await?;
@@ -268,7 +268,7 @@ impl MetricsRepositoryImpl {
                 AND status IN ('approved', 'rejected')
                 AND responded_at IS NOT NULL
             "#)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .bind(member.user_id)
             .fetch_one(&*self.pool)
             .await?;
@@ -298,7 +298,7 @@ impl MetricsRepositoryImpl {
             WHERE tenant_id = $1
             AND status = 'pending'
         "#)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 

@@ -49,7 +49,7 @@ impl AuditService for AuditRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
         .bind(entry.id)
-        .bind(entry.tenant_id.as_str())
+        .bind(*entry.tenant_id.as_uuid())
         .bind(entry.user_id.map(|u| u.0))
         .bind(&action_str)
         .bind(&resource_type_str)
@@ -120,7 +120,7 @@ impl AuditService for AuditRepositoryImpl {
 
         // Build the query
         let mut query = sqlx::query_as::<_, AuditRow>(&query_str)
-            .bind(tenant_id.as_str());
+            .bind(*tenant_id.as_uuid());
 
         if let Some(ref user_id) = filters.user_id {
             query = query.bind(user_id.0);
@@ -165,7 +165,7 @@ impl AuditService for AuditRepositoryImpl {
         let count_str = count_query_str.split(" ORDER BY").next().unwrap();
 
         let mut count_query = sqlx::query_scalar::<_, i64>(count_str)
-            .bind(tenant_id.as_str());
+            .bind(*tenant_id.as_uuid());
 
         if let Some(ref user_id) = filters.user_id {
             count_query = count_query.bind(user_id.0);
@@ -209,7 +209,7 @@ impl AuditService for AuditRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct AuditRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     user_id: Option<Uuid>,
     action: String,
     resource_type: String,
@@ -224,7 +224,7 @@ impl AuditRow {
     fn into_entry(self) -> AuditEntry {
         AuditEntry {
             id: self.id,
-            tenant_id: self.tenant_id.parse().unwrap(),
+            tenant_id: TenantId(self.tenant_id),
             user_id: self.user_id.map(billforge_core::UserId),
             user_email: None,
             action: serde_json::from_str(&format!("\"{}\"", self.action)).unwrap_or(AuditAction::Read),

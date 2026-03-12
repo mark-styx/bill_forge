@@ -28,6 +28,8 @@ pub fn create_router(state: AppState) -> Router {
     health::init_start_time();
 
     Router::new()
+        // Root landing page
+        .route("/", get(landing_page))
         // Health check endpoints
         .route("/health", get(health::health_check))
         .route("/health/live", get(health::liveness))
@@ -43,6 +45,12 @@ pub fn create_router(state: AppState) -> Router {
 /// Prometheus metrics endpoint
 async fn metrics_handler() -> String {
     metrics::export_metrics()
+}
+
+/// Landing page with API info
+async fn landing_page() -> axum::response::Html<String> {
+    let version = env!("CARGO_PKG_VERSION");
+    axum::response::Html(format!(include_str!("../../../../landing.html"), version))
 }
 
 /// API v1 routes

@@ -48,7 +48,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
             "#
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .bind(&document_type)
         .bind(&file_name)
@@ -69,7 +69,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
             "SELECT * FROM vendor_documents WHERE id = $1 AND tenant_id = $2"
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get tax document: {}", e)))?;
@@ -81,7 +81,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
         let rows = sqlx::query_as::<_, TaxDocumentRow>(
             "SELECT * FROM vendor_documents WHERE tenant_id = $1 AND vendor_id = $2 ORDER BY uploaded_at DESC"
         )
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
         .fetch_all(&*self.pool)
         .await
@@ -93,7 +93,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
     async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM vendor_documents WHERE id = $1 AND tenant_id = $2")
             .bind(id)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete tax document: {}", e)))?;
@@ -106,7 +106,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct TaxDocumentRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     vendor_id: Uuid,
     document_type: String,
     file_name: String,
@@ -130,7 +130,7 @@ impl TaxDocumentRow {
         TaxDocument {
             id: self.id,
             vendor_id: VendorId(self.vendor_id),
-            tenant_id: self.tenant_id.parse().unwrap_or_else(|_| billforge_core::types::TenantId::new()),
+            tenant_id: TenantId(self.tenant_id),
             document_type: match self.document_type.as_str() {
                 "w9" => TaxDocumentType::W9,
                 "w8_ben" => TaxDocumentType::W8Ben,

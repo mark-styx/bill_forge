@@ -260,7 +260,7 @@ impl PredictiveService {
             WITH vendor_spend AS (
                 SELECT
                     vendor_id::text,
-                    SUM(total_amount) as total_spend
+                    SUM(total_amount_cents) as total_spend
                 FROM invoices
                 WHERE tenant_id = $1
                     AND created_at > NOW() - INTERVAL '30 days'
@@ -413,7 +413,7 @@ impl PredictiveService {
             SELECT
                 i.id::text as invoice_id,
                 v.name as vendor_name,
-                i.total_amount,
+                i.total_amount_cents,
                 i.invoice_date
             FROM invoices i
             JOIN vendors v ON i.vendor_id = v.id
@@ -433,7 +433,7 @@ impl PredictiveService {
             .into_iter()
             .filter_map(|row| {
                 // Get BigDecimal from database and convert to f64
-                let amount_str: String = row.try_get("total_amount").ok()?;
+                let amount_str: String = row.try_get("total_amount_cents").ok()?;
                 let amount = amount_str.parse::<f64>().ok()?;
 
                 Some(InvoiceRecord {
@@ -459,7 +459,7 @@ impl PredictiveService {
         // Calculate 30 days of actual spend from forecast date
         let row = sqlx::query(
             r#"
-            SELECT COALESCE(SUM(total_amount), 0)::float as actual_spend
+            SELECT COALESCE(SUM(total_amount_cents), 0)::float as actual_spend
             FROM invoices
             WHERE tenant_id = $1
                 AND vendor_id = $2

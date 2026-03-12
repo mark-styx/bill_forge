@@ -259,7 +259,7 @@ async fn get_dashboard(
           AND requested_from->>'user_id' = $2
           AND status = 'pending'
         "#,
-        tenant.tenant_id.to_string(),
+        tenant.tenant_id.0,
         user.user_id.0.to_string(),
     )
     .fetch_one(&*pool)
@@ -484,7 +484,7 @@ async fn list_approvals(
         ORDER BY ar.created_at DESC
         LIMIT 50
         "#,
-        tenant.tenant_id.to_string(),
+        tenant.tenant_id.0,
         user.user_id.0.to_string(),
     )
     .fetch_all(&*pool)
@@ -540,7 +540,7 @@ async fn approve_invoice(
         SET status = 'approved', responded_at = NOW(), comments = $3
         WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4
         "#,
-        tenant.tenant_id.to_string(),
+        tenant.tenant_id.0,
         id,
         payload.comment,
         user.user_id.0.to_string(),
@@ -577,7 +577,7 @@ async fn reject_invoice(
         SET status = 'rejected', responded_at = NOW(), comments = $3
         WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4
         "#,
-        tenant.tenant_id.to_string(),
+        tenant.tenant_id.0,
         id,
         payload.reason,
         user.user_id.0.to_string(),

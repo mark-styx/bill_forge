@@ -266,7 +266,7 @@ impl DocumentRepositoryImpl {
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
         )
         .bind(document_id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .bind(&filename)
         .bind(&mime_type)
         .bind(size_bytes as i64)
@@ -299,7 +299,7 @@ impl DocumentRepositoryImpl {
                FROM documents WHERE id = $1 AND tenant_id = $2"#
         )
         .bind(id)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get document: {}", e)))?;
@@ -318,7 +318,7 @@ impl DocumentRepositoryImpl {
                FROM documents WHERE invoice_id = $1 AND tenant_id = $2 ORDER BY created_at DESC"#
         )
         .bind(invoice_id.0)
-        .bind(tenant_id.as_str())
+        .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list documents: {}", e)))?;
@@ -330,7 +330,7 @@ impl DocumentRepositoryImpl {
     pub async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM documents WHERE id = $1 AND tenant_id = $2")
             .bind(id)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete document: {}", e)))?;
@@ -348,7 +348,7 @@ impl DocumentRepositoryImpl {
         sqlx::query("UPDATE documents SET invoice_id = $1 WHERE id = $2 AND tenant_id = $3")
             .bind(invoice_id.0)
             .bind(document_id)
-            .bind(tenant_id.as_str())
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to link document: {}", e)))?;
@@ -361,7 +361,7 @@ impl DocumentRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct DocumentRow {
     id: Uuid,
-    tenant_id: String,
+    tenant_id: Uuid,
     filename: String,
     mime_type: String,
     size_bytes: i64,
