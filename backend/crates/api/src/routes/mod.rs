@@ -18,6 +18,7 @@ pub mod notifications;
 pub mod predictive;
 pub mod mobile;
 mod settings;
+mod feedback;
 
 use crate::state::AppState;
 use crate::metrics;
@@ -36,6 +37,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
         .route("/health/detailed", get(health::detailed_health))
+        .route("/health/ocr", get(health::ocr_health))
         // Prometheus metrics endpoint
         .route("/metrics", get(metrics_handler))
         // API routes
@@ -89,6 +91,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/mobile", mobile::routes())
         // Tenant settings
         .nest("/settings", settings::routes())
+        // User feedback
+        .nest("/feedback", feedback::routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
 }

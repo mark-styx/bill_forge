@@ -34,7 +34,7 @@ export default function NewQueuePage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => workflowsApi.createQueue(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queues'] });
+      queryClient.invalidateQueries({ queryKey: ['work-queues'] });
       toast.success('Queue created successfully');
       router.push('/processing/queues');
     },

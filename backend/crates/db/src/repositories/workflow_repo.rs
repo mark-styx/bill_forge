@@ -348,8 +348,9 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
         let rows = sqlx::query_as::<_, QueueItemRow>(
-            "SELECT * FROM queue_items WHERE queue_id = $1 ORDER BY priority DESC, entered_at LIMIT $2 OFFSET $3"
+            "SELECT * FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 ORDER BY priority DESC, entered_at LIMIT $3 OFFSET $4"
         )
+        .bind(*tenant_id.as_uuid())
         .bind(queue_id.0)
         .bind(pagination.per_page as i32)
         .bind(offset)
@@ -362,7 +363,8 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             .map(|row| row.into_item())
             .collect();
 
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1")
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2")
+            .bind(*tenant_id.as_uuid())
             .bind(queue_id.0)
             .fetch_one(&*self.pool)
             .await
@@ -383,8 +385,9 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
         let rows = sqlx::query_as::<_, QueueItemRow>(
-            "SELECT * FROM queue_items WHERE queue_id = $1 AND assigned_to = $2 ORDER BY priority DESC, entered_at LIMIT $3 OFFSET $4"
+            "SELECT * FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 AND assigned_to = $3 ORDER BY priority DESC, entered_at LIMIT $4 OFFSET $5"
         )
+        .bind(*tenant_id.as_uuid())
         .bind(queue_id.0)
         .bind(user_id.0)
         .bind(pagination.per_page as i32)
@@ -398,7 +401,8 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             .map(|row| row.into_item())
             .collect();
 
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1 AND assigned_to = $2")
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 AND assigned_to = $3")
+            .bind(*tenant_id.as_uuid())
             .bind(queue_id.0)
             .bind(user_id.0)
             .fetch_one(&*self.pool)
@@ -416,8 +420,9 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn count_items(&self, _tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64> {
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1")
+    async fn count_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2")
+            .bind(*tenant_id.as_uuid())
             .bind(queue_id.0)
             .fetch_one(&*self.pool)
             .await
@@ -426,8 +431,9 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(total)
     }
 
-    async fn count_items_for_user(&self, _tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64> {
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE queue_id = $1 AND assigned_to = $2")
+    async fn count_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 AND assigned_to = $3")
+            .bind(*tenant_id.as_uuid())
             .bind(queue_id.0)
             .bind(user_id.0)
             .fetch_one(&*self.pool)
@@ -442,10 +448,11 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         let now = Utc::now();
 
         sqlx::query(
-            r#"INSERT INTO queue_items (id, queue_id, invoice_id, assigned_to, priority, entered_at)
-            VALUES ($1, $2, $3, $4, $5, $6)"#
+            r#"INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, assigned_to, status, priority, entered_at)
+            VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)"#
         )
         .bind(id)
+        .bind(*tenant_id.as_uuid())
         .bind(queue_id.0)
         .bind(invoice_id.0)
         .bind(assigned_to.map(|u| u.0))
@@ -869,6 +876,8 @@ impl WorkQueueRow {
                 "review" => QueueType::Review,
                 "approval" => QueueType::Approval,
                 "exception" => QueueType::Exception,
+                "payment" => QueueType::Payment,
+                "custom" => QueueType::Custom,
                 _ => QueueType::Review,
             },
             assigned_users: vec![],

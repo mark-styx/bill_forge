@@ -27,6 +27,8 @@ import {
   Tag,
   Briefcase,
   CreditCard,
+  ArrowRightLeft,
+  Image,
 } from 'lucide-react';
 
 interface InvoicePanelProps {
@@ -55,6 +57,8 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
   const { hasModule } = useAuthStore();
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<Partial<Invoice>>({});
+  const [showMoveToQueue, setShowMoveToQueue] = useState(false);
+  const [selectedQueueId, setSelectedQueueId] = useState('');
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -133,6 +137,46 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
       toast.error(err.message || 'Failed to put invoice on hold');
     },
   });
+
+  // Fetch documents associated with this invoice
+  const { data: documents } = useQuery({
+    queryKey: ['invoice-documents', invoiceId],
+    queryFn: () => documentsApi.listForInvoice(invoiceId!),
+    enabled: !!invoiceId,
+  });
+
+  // Fetch available queues for move-to-queue
+  const { data: queues } = useQuery({
+    queryKey: ['work-queues'],
+    queryFn: () => workflowsApi.listQueues(),
+    enabled: showMoveToQueue,
+  });
+
+  const moveToQueueMutation = useMutation({
+    mutationFn: () => workflowsApi.moveToQueue(invoiceId!, selectedQueueId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['queue-items'] });
+      toast.success('Invoice moved to queue');
+      setShowMoveToQueue(false);
+      setSelectedQueueId('');
+    },
+    onError: (err: any) => {
+      toast.error(err.message || 'Failed to move invoice');
+    },
+  });
+
+  // Document preview handler
+  const handleDocumentPreview = async (docId: string) => {
+    try {
+      const blob = await documentsApi.downloadBlob(docId);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch {
+      toast.error('Failed to load document');
+    }
+  };
 
   if (!invoiceId) return null;
 
@@ -346,6 +390,81 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
                   <p className="text-sm text-foreground">{(invoice as any).notes}</p>
                 </div>
               )}
+
+              {/* Document Preview */}
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
+                  <Image className="w-3.5 h-3.5" />
+                  Documents
+                </h3>
+                {documents && documents.length > 0 ? (
+                  <div className="space-y-2">
+                    {documents.map((doc: any) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+                          <span className="text-sm text-foreground truncate">
+                            {doc.file_name || doc.original_name || 'Document'}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleDocumentPreview(doc.id)}
+                          className="btn btn-sm bg-primary/10 text-primary hover:bg-primary/20 flex-shrink-0"
+                        >
+                          <Eye className="w-3.5 h-3.5 mr-1" />
+                          View
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-lg bg-secondary/30 text-center">
+                    <p className="text-sm text-muted-foreground">No documents attached</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Move to Queue Dialog */}
+              {showMoveToQueue && (
+                <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 space-y-3">
+                  <h3 className="text-sm font-medium text-foreground">Move to Queue</h3>
+                  <select
+                    value={selectedQueueId}
+                    onChange={(e) => setSelectedQueueId(e.target.value)}
+                    className="input w-full"
+                  >
+                    <option value="">Select a queue...</option>
+                    {queues?.map((q: any) => (
+                      <option key={q.id} value={q.id}>
+                        {q.name} ({q.queue_type})
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowMoveToQueue(false); setSelectedQueueId(''); }}
+                      className="btn btn-secondary btn-sm flex-1"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => moveToQueueMutation.mutate()}
+                      disabled={!selectedQueueId || moveToQueueMutation.isPending}
+                      className="btn btn-primary btn-sm flex-1"
+                    >
+                      {moveToQueueMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                      ) : (
+                        <ArrowRightLeft className="w-4 h-4 mr-1" />
+                      )}
+                      Move
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
         </div>
@@ -413,6 +532,16 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
                       <CheckCircle className="w-4 h-4 mr-1.5" />
                     )}
                     Approve
+                  </button>
+                )}
+
+                {invoice && hasModule('invoice_processing') && (
+                  <button
+                    onClick={() => setShowMoveToQueue(true)}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    <ArrowRightLeft className="w-4 h-4 mr-1.5" />
+                    Move to Queue
                   </button>
                 )}
 

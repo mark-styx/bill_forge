@@ -4,6 +4,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 use std::time::Instant;
 
+use billforge_invoice_capture::ocr;
 use crate::state::AppState;
 
 /// Basic health check response
@@ -36,6 +37,20 @@ pub enum HealthStatus {
 pub struct HealthChecks {
     pub database: ComponentHealth,
     pub storage: ComponentHealth,
+    pub ocr: ComponentHealth,
+}
+
+/// OCR health check response
+#[derive(Serialize)]
+pub struct OcrHealthResponse {
+    pub configured_provider: String,
+    pub providers: Vec<OcrProviderStatus>,
+}
+
+#[derive(Serialize)]
+pub struct OcrProviderStatus {
+    pub name: String,
+    pub available: bool,
 }
 
 #[derive(Serialize)]
@@ -142,6 +157,22 @@ pub async fn detailed_health(State(state): State<AppState>) -> Json<DetailedHeal
         },
     };
 
+    // Check OCR health
+    let providers = ocr::available_providers();
+    let configured_provider = state.config.ocr_provider.clone();
+    let ocr_available = providers.iter().any(|(name, available)| {
+        name == &configured_provider && *available
+    });
+    let ocr = ComponentHealth {
+        status: if ocr_available { ComponentStatus::Up } else { ComponentStatus::Degraded },
+        latency_ms: None,
+        message: if ocr_available {
+            None
+        } else {
+            Some(format!("Configured provider '{}' not available, falling back to mock OCR", configured_provider))
+        },
+    };
+
     // Determine overall status
     let overall_status = match (&database.status, &storage.status) {
         (ComponentStatus::Up, ComponentStatus::Up) => HealthStatus::Healthy,
@@ -155,7 +186,20 @@ pub async fn detailed_health(State(state): State<AppState>) -> Json<DetailedHeal
         status: overall_status,
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: start_time,
-        checks: HealthChecks { database, storage },
+        checks: HealthChecks { database, storage, ocr },
         environment,
+    })
+}
+
+/// OCR-specific health check endpoint
+pub async fn ocr_health(State(state): State<AppState>) -> Json<OcrHealthResponse> {
+    let providers = ocr::available_providers();
+    let configured_provider = state.config.ocr_provider.clone();
+
+    Json(OcrHealthResponse {
+        configured_provider,
+        providers: providers.into_iter().map(|(name, available)| {
+            OcrProviderStatus { name: name.to_string(), available }
+        }).collect(),
     })
 }

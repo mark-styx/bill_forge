@@ -161,8 +161,8 @@ async fn upload_invoice(
 
             let storage_key = format!("{}/{}", tenant.tenant_id.as_str(), document_id);
 
-            // Run OCR on the document
-            let ocr_provider = ocr::create_provider("tesseract");
+            // Run OCR on the document (use configured provider)
+            let ocr_provider = ocr::create_provider(&state.config.ocr_provider);
             let ocr_result = ocr_provider.extract(&data, &content_type).await;
 
             // Determine capture status and invoice data based on OCR result
@@ -325,7 +325,7 @@ async fn rerun_ocr(
     // Create the invoice capture service
     let invoice_repo = std::sync::Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool));
     let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
-        "tesseract", // Use default OCR provider
+        &state.config.ocr_provider,
         invoice_repo,
         state.storage.clone(),
     );

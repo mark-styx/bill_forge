@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { workflowsApi, invoicesApi } from '@/lib/api';
 import Link from 'next/link';
+import { useState } from 'react';
 import {
   ArrowLeft,
   Layers,
@@ -21,6 +22,8 @@ import {
   CheckCircle2,
   XCircle,
   PauseCircle,
+  X,
+  Save,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,6 +40,14 @@ export default function WorkQueueDetailPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const queueId = params.id as string;
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({
+    name: '',
+    description: '',
+    sla_hours: '',
+    escalation_hours: '',
+    default_sort: 'priority_desc',
+  });
 
   const { data: queue, isLoading: queueLoading } = useQuery({
     queryKey: ['work-queue', queueId],
@@ -78,6 +89,48 @@ export default function WorkQueueDetailPage() {
       toast.error(error.message || 'Failed to complete item');
     },
   });
+
+  const updateQueueMutation = useMutation({
+    mutationFn: (data: any) => workflowsApi.updateQueue(queueId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['work-queue', queueId] });
+      queryClient.invalidateQueries({ queryKey: ['work-queues'] });
+      toast.success('Queue settings updated');
+      setShowSettings(false);
+    },
+    onError: (error: any) => {
+      toast.error(error.message || 'Failed to update queue');
+    },
+  });
+
+  const openSettings = () => {
+    if (queue) {
+      setSettingsForm({
+        name: queue.name,
+        description: queue.description || '',
+        sla_hours: queue.settings?.sla_hours?.toString() || '',
+        escalation_hours: queue.settings?.escalation_hours?.toString() || '',
+        default_sort: queue.settings?.default_sort || 'priority_desc',
+      });
+      setShowSettings(true);
+    }
+  };
+
+  const handleSaveSettings = () => {
+    if (!queue) return;
+    updateQueueMutation.mutate({
+      name: settingsForm.name,
+      description: settingsForm.description || undefined,
+      queue_type: queue.queue_type,
+      assigned_users: queue.assigned_users || [],
+      assigned_roles: queue.assigned_roles || [],
+      settings: {
+        default_sort: settingsForm.default_sort,
+        ...(settingsForm.sla_hours ? { sla_hours: parseInt(settingsForm.sla_hours) } : {}),
+        ...(settingsForm.escalation_hours ? { escalation_hours: parseInt(settingsForm.escalation_hours) } : {}),
+      },
+    });
+  };
 
   if (queueLoading) {
     return (
@@ -150,7 +203,7 @@ export default function WorkQueueDetailPage() {
             </div>
           </div>
 
-          <button className="btn btn-secondary btn-sm">
+          <button onClick={openSettings} className="btn btn-secondary btn-sm">
             <Settings className="w-4 h-4 mr-1.5" />
             Settings
           </button>
@@ -391,6 +444,106 @@ export default function WorkQueueDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40"
+            onClick={() => setShowSettings(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md">
+              <div className="flex items-center justify-between p-4 border-b border-border">
+                <h2 className="text-lg font-semibold text-foreground">Queue Settings</h2>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-4 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Queue Name</label>
+                  <input
+                    type="text"
+                    value={settingsForm.name}
+                    onChange={(e) => setSettingsForm({ ...settingsForm, name: e.target.value })}
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Description</label>
+                  <textarea
+                    value={settingsForm.description}
+                    onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
+                    className="input w-full min-h-[60px]"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">SLA (hours)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={settingsForm.sla_hours}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, sla_hours: e.target.value })}
+                      className="input w-full"
+                      placeholder="e.g., 24"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">Escalation (hours)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={settingsForm.escalation_hours}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, escalation_hours: e.target.value })}
+                      className="input w-full"
+                      placeholder="e.g., 48"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Default Sort</label>
+                  <select
+                    value={settingsForm.default_sort}
+                    onChange={(e) => setSettingsForm({ ...settingsForm, default_sort: e.target.value })}
+                    className="input w-full"
+                  >
+                    <option value="priority_desc">Priority (High to Low)</option>
+                    <option value="priority_asc">Priority (Low to High)</option>
+                    <option value="entered_at_asc">Date Entered (Oldest First)</option>
+                    <option value="entered_at_desc">Date Entered (Newest First)</option>
+                    <option value="due_date_asc">Due Date (Earliest First)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 p-4 border-t border-border">
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveSettings}
+                  disabled={!settingsForm.name.trim() || updateQueueMutation.isPending}
+                  className="btn btn-primary btn-sm"
+                >
+                  {updateQueueMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                  ) : (
+                    <Save className="w-4 h-4 mr-1.5" />
+                  )}
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

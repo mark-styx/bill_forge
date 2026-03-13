@@ -294,23 +294,23 @@
 |----------|-------|---------|--------|--------|
 | P0 | ISSUE-07 | Refresh takes back to login (auth bug) | 3-4 hrs | DONE |
 | P0 | ISSUE-06 | Default queues + error queue don't exist | 2-3 hrs | DONE |
-| P0 | ISSUE-08 | Created queues not showing | 2-3 hrs | TODO |
+| P0 | ISSUE-08 | Created queues not showing | 2-3 hrs | DONE |
 | P0 | ISSUE-09 | Error creating vendor | 1-2 hrs | DONE |
-| P0 | ISSUE-05 | OCR not working locally | 3-4 hrs | TODO |
-| P1 | ISSUE-04 | Document viewer in detail pane | 1 day | TODO |
-| P1 | ISSUE-11 | Manual invoice queue movement UI | 3-4 hrs | TODO |
+| P0 | ISSUE-05 | OCR not working locally | 3-4 hrs | DONE |
+| P1 | ISSUE-04 | Document viewer in detail pane | 1 day | DONE |
+| P1 | ISSUE-11 | Manual invoice queue movement UI | 3-4 hrs | DONE |
 | P1 | ISSUE-02 | Allow updating on-hold invoices | 2-3 hrs | DONE |
-| P1 | ISSUE-10 | Queue settings button handler | 3-4 hrs | TODO |
+| P1 | ISSUE-10 | Queue settings button handler | 3-4 hrs | DONE |
 | P2 | ISSUE-01 | Esc key closes detail panes | 1-2 hrs | DONE |
 
 **Sprint 11 Success Criteria:**
 - [x] Page refresh preserves session (no redirect to login)
 - [x] Default queues auto-created for new tenants and existing seed data
-- [ ] Queue CRUD fully functional (create, list, update settings)
+- [x] Queue CRUD fully functional (create, list, update settings)
 - [x] Vendor creation works without errors
-- [ ] Tesseract OCR runs locally on uploaded documents
-- [ ] PDF/image viewer visible in invoice detail pane
-- [ ] Users can move invoices between queues via UI
+- [x] Tesseract OCR runs locally on uploaded documents
+- [x] PDF/image viewer visible in invoice detail pane
+- [x] Users can move invoices between queues via UI
 - [x] On-hold invoices can be edited
 - [x] Esc key closes all detail/side panes
 
