@@ -325,6 +325,28 @@ pub struct ApprovalLimit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Input for creating/updating an approval delegation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateApprovalDelegationInput {
+    pub delegator_id: String,
+    pub delegate_id: String,
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    #[serde(default)]
+    pub conditions: Option<Vec<RuleCondition>>,
+}
+
+/// Input for creating/updating an approval limit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateApprovalLimitInput {
+    pub user_id: String,
+    pub max_amount: Money,
+    #[serde(default)]
+    pub vendor_restrictions: Option<Vec<uuid::Uuid>>,
+    #[serde(default)]
+    pub department_restrictions: Option<Vec<String>>,
+}
+
 // ============================================================================
 // Queue Flow Configuration
 // ============================================================================

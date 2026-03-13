@@ -8,10 +8,12 @@ use billforge_core::{
         AssignmentRule, AssignmentRuleId, CreateAssignmentRuleInput, AssignmentCondition, AssignmentTarget,
         ApprovalRequest, ApprovalStatus,
         WorkflowTemplate, WorkflowTemplateId, CreateWorkflowTemplateInput, WorkflowTemplateStage,
+        ApprovalDelegation, CreateApprovalDelegationInput,
+        ApprovalLimit, CreateApprovalLimitInput,
         InvoiceId,
     },
-    traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository, WorkflowTemplateRepository},
-    types::{Pagination, PaginatedResponse, PaginationMeta},
+    traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository, WorkflowTemplateRepository, ApprovalDelegationRepository, ApprovalLimitRepository},
+    types::{Pagination, PaginatedResponse, PaginationMeta, Money},
     UserId, TenantId, Error, Result,
 };
 use chrono::Utc;
@@ -1189,5 +1191,284 @@ impl WorkflowTemplateRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
+    }
+}
+
+// ============================================================================
+// Approval Delegation Repository
+// ============================================================================
+
+#[derive(Debug, sqlx::FromRow)]
+struct DelegationRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    delegator_id: Uuid,
+    delegate_id: Uuid,
+    start_date: chrono::DateTime<chrono::Utc>,
+    end_date: chrono::DateTime<chrono::Utc>,
+    is_active: bool,
+    conditions: Option<sqlx::types::Json<Vec<RuleCondition>>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl DelegationRow {
+    fn into_delegation(self, tenant_id: &TenantId) -> ApprovalDelegation {
+        ApprovalDelegation {
+            id: self.id,
+            tenant_id: tenant_id.clone(),
+            delegator_id: UserId(self.delegator_id),
+            delegate_id: UserId(self.delegate_id),
+            start_date: self.start_date,
+            end_date: self.end_date,
+            is_active: self.is_active,
+            conditions: self.conditions.map(|c| c.0),
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[async_trait]
+impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let delegator_id = Uuid::parse_str(&input.delegator_id)
+            .map_err(|_| Error::Validation("Invalid delegator ID".to_string()))?;
+        let delegate_id = Uuid::parse_str(&input.delegate_id)
+            .map_err(|_| Error::Validation("Invalid delegate ID".to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO approval_delegations (
+                id, tenant_id, delegator_id, delegate_id, start_date, end_date, is_active, conditions, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        )
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .bind(delegator_id)
+        .bind(delegate_id)
+        .bind(input.start_date)
+        .bind(input.end_date)
+        .bind(true)
+        .bind(input.conditions.as_ref().map(|c| sqlx::types::Json(c)))
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create delegation: {}", e)))?;
+
+        Ok(ApprovalDelegation {
+            id,
+            tenant_id: tenant_id.clone(),
+            delegator_id: UserId(delegator_id),
+            delegate_id: UserId(delegate_id),
+            start_date: input.start_date,
+            end_date: input.end_date,
+            is_active: true,
+            conditions: input.conditions,
+            created_at: now,
+        })
+    }
+
+    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalDelegation>> {
+        let result = sqlx::query_as::<_, DelegationRow>(
+            "SELECT * FROM approval_delegations WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get delegation: {}", e)))?;
+
+        Ok(result.map(|row| row.into_delegation(tenant_id)))
+    }
+
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalDelegation>> {
+        let rows = sqlx::query_as::<_, DelegationRow>(
+            "SELECT * FROM approval_delegations WHERE tenant_id = $1 ORDER BY created_at DESC"
+        )
+        .bind(*tenant_id.as_uuid())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list delegations: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_delegation(tenant_id)).collect())
+    }
+
+    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation> {
+        let delegator_id = Uuid::parse_str(&input.delegator_id)
+            .map_err(|_| Error::Validation("Invalid delegator ID".to_string()))?;
+        let delegate_id = Uuid::parse_str(&input.delegate_id)
+            .map_err(|_| Error::Validation("Invalid delegate ID".to_string()))?;
+
+        sqlx::query(
+            r#"UPDATE approval_delegations SET
+                delegator_id = $1, delegate_id = $2, start_date = $3, end_date = $4, conditions = $5
+            WHERE id = $6 AND tenant_id = $7"#
+        )
+        .bind(delegator_id)
+        .bind(delegate_id)
+        .bind(input.start_date)
+        .bind(input.end_date)
+        .bind(input.conditions.as_ref().map(|c| sqlx::types::Json(c)))
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update delegation: {}", e)))?;
+
+        ApprovalDelegationRepository::get_by_id(self, tenant_id, id)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                resource_type: "ApprovalDelegation".to_string(),
+                id: id.to_string(),
+            })
+    }
+
+    async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM approval_delegations WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(*tenant_id.as_uuid())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete delegation: {}", e)))?;
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Approval Limit Repository
+// ============================================================================
+
+#[derive(Debug, sqlx::FromRow)]
+struct ApprovalLimitRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    max_amount_cents: i64,
+    currency: String,
+    vendor_restrictions: Option<sqlx::types::Json<Vec<Uuid>>>,
+    department_restrictions: Option<sqlx::types::Json<Vec<String>>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ApprovalLimitRow {
+    fn into_limit(self, tenant_id: &TenantId) -> ApprovalLimit {
+        ApprovalLimit {
+            id: self.id,
+            tenant_id: tenant_id.clone(),
+            user_id: UserId(self.user_id),
+            max_amount: Money::new(self.max_amount_cents, self.currency),
+            vendor_restrictions: self.vendor_restrictions.map(|v| v.0),
+            department_restrictions: self.department_restrictions.map(|d| d.0),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[async_trait]
+impl ApprovalLimitRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalLimitInput) -> Result<ApprovalLimit> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let user_id = Uuid::parse_str(&input.user_id)
+            .map_err(|_| Error::Validation("Invalid user ID".to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO approval_limits (
+                id, tenant_id, user_id, max_amount_cents, currency, vendor_restrictions, department_restrictions, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        )
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id)
+        .bind(input.max_amount.amount)
+        .bind(&input.max_amount.currency)
+        .bind(input.vendor_restrictions.as_ref().map(|v| sqlx::types::Json(v)))
+        .bind(input.department_restrictions.as_ref().map(|d| sqlx::types::Json(d)))
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create approval limit: {}", e)))?;
+
+        Ok(ApprovalLimit {
+            id,
+            tenant_id: tenant_id.clone(),
+            user_id: UserId(user_id),
+            max_amount: input.max_amount,
+            vendor_restrictions: input.vendor_restrictions,
+            department_restrictions: input.department_restrictions,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalLimit>> {
+        let result = sqlx::query_as::<_, ApprovalLimitRow>(
+            "SELECT * FROM approval_limits WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get approval limit: {}", e)))?;
+
+        Ok(result.map(|row| row.into_limit(tenant_id)))
+    }
+
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalLimit>> {
+        let rows = sqlx::query_as::<_, ApprovalLimitRow>(
+            "SELECT * FROM approval_limits WHERE tenant_id = $1 ORDER BY created_at DESC"
+        )
+        .bind(*tenant_id.as_uuid())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list approval limits: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_limit(tenant_id)).collect())
+    }
+
+    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalLimitInput) -> Result<ApprovalLimit> {
+        let now = Utc::now();
+        let user_id = Uuid::parse_str(&input.user_id)
+            .map_err(|_| Error::Validation("Invalid user ID".to_string()))?;
+
+        sqlx::query(
+            r#"UPDATE approval_limits SET
+                user_id = $1, max_amount_cents = $2, currency = $3,
+                vendor_restrictions = $4, department_restrictions = $5, updated_at = $6
+            WHERE id = $7 AND tenant_id = $8"#
+        )
+        .bind(user_id)
+        .bind(input.max_amount.amount)
+        .bind(&input.max_amount.currency)
+        .bind(input.vendor_restrictions.as_ref().map(|v| sqlx::types::Json(v)))
+        .bind(input.department_restrictions.as_ref().map(|d| sqlx::types::Json(d)))
+        .bind(now)
+        .bind(id)
+        .bind(*tenant_id.as_uuid())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update approval limit: {}", e)))?;
+
+        ApprovalLimitRepository::get_by_id(self, tenant_id, id)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                resource_type: "ApprovalLimit".to_string(),
+                id: id.to_string(),
+            })
+    }
+
+    async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM approval_limits WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(*tenant_id.as_uuid())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete approval limit: {}", e)))?;
+
+        Ok(())
     }
 }

@@ -444,6 +444,24 @@ export const workflowsApi = {
     api.post(`/api/v1/workflows/templates/${id}/activate`),
   deactivateTemplate: (id: string) =>
     api.post(`/api/v1/workflows/templates/${id}/deactivate`),
+
+  // Approval Delegations
+  listDelegations: () => api.get<ApprovalDelegation[]>('/api/v1/workflows/delegations'),
+  getDelegation: (id: string) => api.get<ApprovalDelegation>(`/api/v1/workflows/delegations/${id}`),
+  createDelegation: (data: CreateApprovalDelegationInput) =>
+    api.post<ApprovalDelegation>('/api/v1/workflows/delegations', data),
+  updateDelegation: (id: string, data: CreateApprovalDelegationInput) =>
+    api.put<ApprovalDelegation>(`/api/v1/workflows/delegations/${id}`, data),
+  deleteDelegation: (id: string) => api.delete(`/api/v1/workflows/delegations/${id}`),
+
+  // Approval Limits
+  listApprovalLimits: () => api.get<ApprovalLimitConfig[]>('/api/v1/workflows/approval-limits'),
+  getApprovalLimit: (id: string) => api.get<ApprovalLimitConfig>(`/api/v1/workflows/approval-limits/${id}`),
+  createApprovalLimit: (data: CreateApprovalLimitInput) =>
+    api.post<ApprovalLimitConfig>('/api/v1/workflows/approval-limits', data),
+  updateApprovalLimit: (id: string, data: CreateApprovalLimitInput) =>
+    api.put<ApprovalLimitConfig>(`/api/v1/workflows/approval-limits/${id}`, data),
+  deleteApprovalLimit: (id: string) => api.delete(`/api/v1/workflows/approval-limits/${id}`),
 };
 
 // Reports API
@@ -669,6 +687,44 @@ export interface BulkOperationResult {
     invoice_id: string;
     error: string;
   }>;
+}
+
+export interface ApprovalDelegation {
+  id: string;
+  tenant_id: string;
+  delegator_id: string;
+  delegate_id: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  conditions?: AssignmentCondition[];
+  created_at: string;
+}
+
+export interface CreateApprovalDelegationInput {
+  delegator_id: string;
+  delegate_id: string;
+  start_date: string;
+  end_date: string;
+  conditions?: AssignmentCondition[];
+}
+
+export interface ApprovalLimitConfig {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  max_amount: { amount: number; currency: string };
+  vendor_restrictions?: string[];
+  department_restrictions?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateApprovalLimitInput {
+  user_id: string;
+  max_amount: { amount: number; currency: string };
+  vendor_restrictions?: string[];
+  department_restrictions?: string[];
 }
 
 export interface PaginationMeta {

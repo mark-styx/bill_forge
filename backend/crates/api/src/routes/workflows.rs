@@ -14,8 +14,10 @@ use billforge_core::{
         CreateAssignmentRuleInput, AssignmentRule, QueueItem, BulkOperationInput, BulkOperationResult,
         BulkOperationError, BulkOperationType,
         CreateWorkflowTemplateInput, WorkflowTemplate,
+        ApprovalDelegation, CreateApprovalDelegationInput,
+        ApprovalLimit, CreateApprovalLimitInput,
     },
-    traits::{InvoiceRepository, WorkflowRuleRepository, WorkQueueRepository, AssignmentRuleRepository, WorkflowTemplateRepository},
+    traits::{InvoiceRepository, WorkflowRuleRepository, WorkQueueRepository, AssignmentRuleRepository, WorkflowTemplateRepository, ApprovalDelegationRepository, ApprovalLimitRepository},
     types::Pagination,
 };
 use billforge_email::EmailTemplates;
@@ -61,6 +63,18 @@ pub fn routes() -> Router<AppState> {
         .route("/templates/:id", delete(delete_template))
         .route("/templates/:id/activate", post(activate_template))
         .route("/templates/:id/deactivate", post(deactivate_template))
+        // Approval Delegations
+        .route("/delegations", get(list_delegations))
+        .route("/delegations", post(create_delegation))
+        .route("/delegations/:id", get(get_delegation))
+        .route("/delegations/:id", put(update_delegation))
+        .route("/delegations/:id", delete(delete_delegation))
+        // Approval Limits
+        .route("/approval-limits", get(list_approval_limits))
+        .route("/approval-limits", post(create_approval_limit))
+        .route("/approval-limits/:id", get(get_approval_limit))
+        .route("/approval-limits/:id", put(update_approval_limit))
+        .route("/approval-limits/:id", delete(delete_approval_limit))
         // Invoice processing actions
         .route("/invoices/:id/hold", post(put_on_hold))
         .route("/invoices/:id/release", post(release_from_hold))
@@ -992,10 +1006,156 @@ async fn move_to_queue(
     } else {
         None
     };
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
     let item = repo.move_item(&tenant.tenant_id, &invoice_id, &queue_id, assign_to.as_ref()).await?;
-    
+
     Ok(Json(item))
+}
+
+// ============================================================================
+// Approval Delegation Handlers
+// ============================================================================
+
+async fn list_delegations(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+) -> ApiResult<Json<Vec<ApprovalDelegation>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let delegations = ApprovalDelegationRepository::list(&repo, &tenant.tenant_id).await?;
+    Ok(Json(delegations))
+}
+
+async fn get_delegation(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ApprovalDelegation>> {
+    let delegation_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid delegation ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let delegation = ApprovalDelegationRepository::get_by_id(&repo, &tenant.tenant_id, delegation_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "ApprovalDelegation".to_string(),
+            id: id.clone(),
+        })?;
+
+    Ok(Json(delegation))
+}
+
+async fn create_delegation(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Json(input): Json<CreateApprovalDelegationInput>,
+) -> ApiResult<Json<ApprovalDelegation>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let delegation = ApprovalDelegationRepository::create(&repo, &tenant.tenant_id, input).await?;
+    Ok(Json(delegation))
+}
+
+async fn update_delegation(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+    Json(input): Json<CreateApprovalDelegationInput>,
+) -> ApiResult<Json<ApprovalDelegation>> {
+    let delegation_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid delegation ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let delegation = ApprovalDelegationRepository::update(&repo, &tenant.tenant_id, delegation_id, input).await?;
+    Ok(Json(delegation))
+}
+
+async fn delete_delegation(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let delegation_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid delegation ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    ApprovalDelegationRepository::delete(&repo, &tenant.tenant_id, delegation_id).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ============================================================================
+// Approval Limit Handlers
+// ============================================================================
+
+async fn list_approval_limits(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+) -> ApiResult<Json<Vec<ApprovalLimit>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let limits = ApprovalLimitRepository::list(&repo, &tenant.tenant_id).await?;
+    Ok(Json(limits))
+}
+
+async fn get_approval_limit(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ApprovalLimit>> {
+    let limit_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval limit ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let limit = ApprovalLimitRepository::get_by_id(&repo, &tenant.tenant_id, limit_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "ApprovalLimit".to_string(),
+            id: id.clone(),
+        })?;
+
+    Ok(Json(limit))
+}
+
+async fn create_approval_limit(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Json(input): Json<CreateApprovalLimitInput>,
+) -> ApiResult<Json<ApprovalLimit>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let limit = ApprovalLimitRepository::create(&repo, &tenant.tenant_id, input).await?;
+    Ok(Json(limit))
+}
+
+async fn update_approval_limit(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+    Json(input): Json<CreateApprovalLimitInput>,
+) -> ApiResult<Json<ApprovalLimit>> {
+    let limit_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval limit ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let limit = ApprovalLimitRepository::update(&repo, &tenant.tenant_id, limit_id, input).await?;
+    Ok(Json(limit))
+}
+
+async fn delete_approval_limit(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let limit_id = id.parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval limit ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    ApprovalLimitRepository::delete(&repo, &tenant.tenant_id, limit_id).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
 }

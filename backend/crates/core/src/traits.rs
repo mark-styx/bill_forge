@@ -123,6 +123,26 @@ pub trait WorkflowTemplateRepository: Send + Sync {
     async fn get_default(&self, tenant_id: &TenantId) -> Result<Option<WorkflowTemplate>>;
 }
 
+/// Repository for approval delegations
+#[async_trait]
+pub trait ApprovalDelegationRepository: Send + Sync {
+    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation>;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalDelegation>>;
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalDelegation>>;
+    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation>;
+    async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()>;
+}
+
+/// Repository for approval limits
+#[async_trait]
+pub trait ApprovalLimitRepository: Send + Sync {
+    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalLimitInput) -> Result<ApprovalLimit>;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalLimit>>;
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalLimit>>;
+    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalLimitInput) -> Result<ApprovalLimit>;
+    async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()>;
+}
+
 /// Repository for documents
 #[async_trait]
 pub trait DocumentRepository: Send + Sync {
