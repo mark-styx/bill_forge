@@ -302,6 +302,13 @@ export default function AssignmentRulesPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            <Link
+                              href={`/processing/assignment-rules/${rule.id}/edit`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="p-2 text-muted-foreground hover:text-primary rounded-lg hover:bg-primary/10 transition-colors"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Link>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter, useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { workflowsApi } from '@/lib/api';
 import { toast } from 'sonner';
@@ -60,8 +60,8 @@ interface ConditionRow {
   field: string;
   operator: string;
   value: string;
-  value2: string; // for "between" operator
-  customFieldName: string; // for "custom_field" field
+  value2: string;
+  customFieldName: string;
 }
 
 function getFieldType(fieldValue: string): string {
@@ -112,9 +112,56 @@ function formatConditionPreview(c: ConditionRow): string {
   return `${field} ${op} ${displayValue || '...'}`;
 }
 
-export default function NewAssignmentRulePage() {
+// Parse backend AssignmentTarget into form-friendly values
+function parseAssignTarget(target: any): { type: string; value: string } {
+  if (typeof target === 'object') {
+    if ('User' in target) return { type: 'user', value: target.User };
+    if ('Role' in target) return { type: 'role', value: target.Role };
+    if ('RoundRobin' in target) return { type: 'round_robin', value: target.RoundRobin.join(', ') };
+    if ('LeastLoaded' in target) return { type: 'least_loaded', value: target.LeastLoaded.join(', ') };
+  }
+  if (target === 'VendorApprover') return { type: 'vendor_approver', value: '' };
+  if (target === 'DepartmentApprover') return { type: 'department_approver', value: '' };
+  return { type: 'role', value: '' };
+}
+
+// Parse backend condition into ConditionRow
+function parseCondition(condition: any): ConditionRow {
+  let value = '';
+  let value2 = '';
+  let customFieldName = '';
+
+  if (condition.field === 'custom_field' && typeof condition.value === 'object' && condition.value?.field) {
+    customFieldName = condition.value.field;
+    value = String(condition.value.value ?? '');
+  } else if (condition.operator === 'between' && Array.isArray(condition.value)) {
+    value = String(condition.value[0] ?? '');
+    value2 = String(condition.value[1] ?? '');
+  } else if ((condition.operator === 'in' || condition.operator === 'not_in') && Array.isArray(condition.value)) {
+    value = condition.value.join(', ');
+  } else if (condition.value != null) {
+    value = String(condition.value);
+  }
+
+  return {
+    field: condition.field,
+    operator: condition.operator,
+    value,
+    value2,
+    customFieldName,
+  };
+}
+
+export default function EditAssignmentRulePage() {
   const router = useRouter();
+  const params = useParams();
+  const ruleId = params.id as string;
   const queryClient = useQueryClient();
+
+  const { data: existingRule, isLoading: ruleLoading } = useQuery({
+    queryKey: ['assignment-rule', ruleId],
+    queryFn: () => workflowsApi.getAssignmentRule(ruleId),
+  });
 
   const { data: queues } = useQuery({
     queryKey: ['work-queues'],
@@ -135,23 +182,45 @@ export default function NewAssignmentRulePage() {
   ]);
 
   const [showPreview, setShowPreview] = useState(false);
+  const [initialized, setInitialized] = useState(false);
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => workflowsApi.createAssignmentRule(data),
+  // Pre-populate form when existing rule loads
+  useEffect(() => {
+    if (existingRule && !initialized) {
+      const assignTarget = parseAssignTarget(existingRule.assign_to);
+      setFormData({
+        name: existingRule.name,
+        description: existingRule.description || '',
+        queue_id: existingRule.queue_id,
+        priority: existingRule.priority,
+        assign_type: assignTarget.type,
+        assign_value: assignTarget.value,
+      });
+
+      if (existingRule.conditions && existingRule.conditions.length > 0) {
+        setConditions(existingRule.conditions.map(parseCondition));
+      }
+
+      setInitialized(true);
+    }
+  }, [existingRule, initialized]);
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => workflowsApi.updateAssignmentRule(ruleId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['assignment-rules'] });
-      toast.success('Assignment rule created');
+      queryClient.invalidateQueries({ queryKey: ['assignment-rule', ruleId] });
+      toast.success('Assignment rule updated');
       router.push('/processing/assignment-rules');
     },
     onError: (error: Error) => {
-      toast.error(error.message || 'Failed to create rule');
+      toast.error(error.message || 'Failed to update rule');
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Build assign_to payload matching backend AssignmentTarget enum
     let assign_to: any;
     switch (formData.assign_type) {
       case 'role':
@@ -174,7 +243,6 @@ export default function NewAssignmentRulePage() {
         break;
     }
 
-    // Build conditions payload
     const builtConditions = conditions
       .filter(c => {
         if (!operatorNeedsValue(c.operator)) return true;
@@ -207,7 +275,7 @@ export default function NewAssignmentRulePage() {
         };
       });
 
-    createMutation.mutate({
+    updateMutation.mutate({
       name: formData.name,
       description: formData.description || undefined,
       queue_id: formData.queue_id,
@@ -230,7 +298,6 @@ export default function NewAssignmentRulePage() {
       if (i !== index) return c;
       const updated = { ...c, [key]: value };
 
-      // When field changes, reset operator if it's not valid for the new field type
       if (key === 'field') {
         const validOps = getOperatorsForField(value);
         if (!validOps.find(op => op.value === updated.operator)) {
@@ -251,6 +318,17 @@ export default function NewAssignmentRulePage() {
     !operatorNeedsValue(c.operator) || c.value.trim() !== ''
   );
 
+  if (ruleLoading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Loading rule...
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       {/* Header */}
@@ -262,8 +340,8 @@ export default function NewAssignmentRulePage() {
           <ArrowLeft className="w-4 h-4" />
           Back to Assignment Rules
         </Link>
-        <h1 className="text-2xl font-semibold text-foreground">New Assignment Rule</h1>
-        <p className="text-muted-foreground mt-0.5">Define conditions for automatically assigning invoices</p>
+        <h1 className="text-2xl font-semibold text-foreground">Edit Assignment Rule</h1>
+        <p className="text-muted-foreground mt-0.5">Modify conditions and assignment targets for this rule</p>
       </div>
 
       {/* Condition Preview */}
@@ -556,18 +634,18 @@ export default function NewAssignmentRulePage() {
             </Link>
             <button
               type="submit"
-              disabled={!isValid || createMutation.isPending}
+              disabled={!isValid || updateMutation.isPending}
               className="btn bg-processing text-processing-foreground hover:bg-processing/90 disabled:opacity-50"
             >
-              {createMutation.isPending ? (
+              {updateMutation.isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creating...
+                  Saving...
                 </>
               ) : (
                 <>
                   <CheckCircle className="w-4 h-4 mr-2" />
-                  Create Rule
+                  Save Changes
                 </>
               )}
             </button>
