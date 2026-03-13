@@ -21,6 +21,11 @@ export default function ProcessingPage() {
     queryFn: () => workflowsApi.listPendingApprovals(),
   });
 
+  const { data: queues, isLoading: queuesLoading } = useQuery({
+    queryKey: ['work-queues'],
+    queryFn: () => workflowsApi.listQueues(),
+  });
+
   const stats = [
     { name: 'Pending Approval', count: approvals?.length ?? 0, icon: Clock, color: 'text-warning', bg: 'bg-warning/10' },
     { name: 'Approved Today', count: 12, icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
@@ -144,30 +149,41 @@ export default function ProcessingPage() {
             </Link>
           </div>
           <div className="p-5 space-y-3">
-            {[
-              { name: 'Initial Review', count: 12, icon: Clock, color: 'text-warning', bg: 'bg-warning/10', href: '/processing/queues/review' },
-              { name: 'Manager Approval', count: 5, icon: ClipboardCheck, color: 'text-primary', bg: 'bg-primary/10', href: '/processing/queues/approval' },
-              { name: 'Ready for Payment', count: 8, icon: CheckCircle, color: 'text-success', bg: 'bg-success/10', href: '/processing/queues/payment' },
-            ].map((queue) => (
-              <Link
-                key={queue.name}
-                href={queue.href}
-                className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg hover:bg-secondary transition-colors group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-lg ${queue.bg}`}>
-                    <queue.icon className={`w-4 h-4 ${queue.color}`} />
-                  </div>
-                  <div>
-                    <p className="font-medium text-foreground group-hover:text-primary transition-colors">
-                      {queue.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{queue.count} items</p>
-                  </div>
+            {queuesLoading ? (
+              <div className="text-center py-6 text-muted-foreground">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  Loading queues...
                 </div>
-                <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all" />
-              </Link>
-            ))}
+              </div>
+            ) : !queues || queues.length === 0 ? (
+              <div className="text-center py-6 text-muted-foreground text-sm">
+                No queues configured
+              </div>
+            ) : (
+              queues.map((queue) => (
+                <Link
+                  key={queue.id}
+                  href={`/processing/queues/${queue.id}`}
+                  className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg hover:bg-secondary transition-colors group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-processing/10">
+                      <Layers className="w-4 h-4 text-processing" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground group-hover:text-primary transition-colors">
+                        {queue.name}
+                      </p>
+                      {queue.description && (
+                        <p className="text-xs text-muted-foreground">{queue.description}</p>
+                      )}
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                </Link>
+              ))
+            )}
           </div>
         </div>
       </div>

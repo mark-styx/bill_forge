@@ -449,7 +449,7 @@ async fn seed_default_queues(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
             "#,
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id.to_string())
+        .bind(tenant_id)
         .bind(name)
         .bind(description)
         .bind(queue_type)

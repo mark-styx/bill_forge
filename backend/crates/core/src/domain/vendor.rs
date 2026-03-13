@@ -236,6 +236,7 @@ pub struct CreateVendorInput {
     pub default_gl_code: Option<String>,
     pub default_department: Option<String>,
     pub notes: Option<String>,
+    #[serde(default)]
     pub tags: Vec<String>,
 }
 
