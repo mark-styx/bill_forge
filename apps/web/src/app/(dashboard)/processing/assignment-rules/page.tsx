@@ -36,7 +36,7 @@ export default function AssignmentRulesPage() {
   });
 
   const { data: queues } = useQuery({
-    queryKey: ['queues'],
+    queryKey: ['work-queues'],
     queryFn: () => workflowsApi.listQueues(),
   });
 
@@ -86,18 +86,48 @@ export default function AssignmentRulesPage() {
       equals: 'equals',
       not_equals: 'does not equal',
       greater_than: 'is greater than',
+      greater_than_or_equal: 'is at least',
       less_than: 'is less than',
+      less_than_or_equal: 'is at most',
       contains: 'contains',
       starts_with: 'starts with',
+      ends_with: 'ends with',
+      in: 'is one of',
+      not_in: 'is not one of',
+      between: 'is between',
+      is_null: 'is empty',
+      is_not_null: 'is not empty',
     };
 
     const field = fieldLabels[condition.field] || condition.field;
     const operator = operatorLabels[condition.operator] || condition.operator;
     let value = condition.value;
 
+    // Handle null-check operators (no value displayed)
+    if (condition.operator === 'is_null' || condition.operator === 'is_not_null') {
+      return `${field} ${operator}`;
+    }
+
     // Format amount in dollars
     if (condition.field === 'amount' && typeof value === 'number') {
       value = `$${(value / 100).toLocaleString()}`;
+    }
+
+    // Format between as range
+    if (condition.operator === 'between' && Array.isArray(value)) {
+      const min = condition.field === 'amount' ? `$${(value[0] / 100).toLocaleString()}` : value[0];
+      const max = condition.field === 'amount' ? `$${(value[1] / 100).toLocaleString()}` : value[1];
+      return `${field} ${operator} ${min} and ${max}`;
+    }
+
+    // Format in/not_in as list
+    if ((condition.operator === 'in' || condition.operator === 'not_in') && Array.isArray(value)) {
+      return `${field} ${operator} [${value.join(', ')}]`;
+    }
+
+    // Format custom_field with field name
+    if (condition.field === 'custom_field' && typeof value === 'object' && value?.field) {
+      return `${value.field} ${operator} ${value.value}`;
     }
 
     return `${field} ${operator} ${value}`;
