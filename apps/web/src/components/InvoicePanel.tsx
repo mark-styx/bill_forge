@@ -56,6 +56,16 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<Partial<Invoice>>({});
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onClose) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const { data: invoice, isLoading, error } = useQuery({
     queryKey: ['invoice', invoiceId],
     queryFn: () => invoicesApi.get(invoiceId!),
@@ -130,7 +140,7 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
   const StatusIcon = status.icon;
 
   // Determine which actions are available based on status and modules
-  const canEdit = invoice && ['draft', 'pending', 'ready_for_review', 'submitted'].includes(invoice.processing_status);
+  const canEdit = invoice && ['draft', 'pending', 'ready_for_review', 'submitted', 'on_hold', 'in_review', 'pending_review'].includes(invoice.processing_status);
   const canSubmit = invoice && hasModule('invoice_processing') && ['draft', 'ready_for_review', 'reviewed'].includes(invoice.processing_status);
   const canApprove = invoice && hasModule('invoice_processing') && ['submitted', 'pending_approval'].includes(invoice.processing_status);
   const canHold = invoice && hasModule('invoice_processing') && !['paid', 'voided', 'on_hold'].includes(invoice.processing_status);

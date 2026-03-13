@@ -255,29 +255,3 @@ if (typeof window !== 'undefined') {
   }
 }
 
-// Initialize API token on store hydration
-if (typeof window !== 'undefined') {
-  const stored = localStorage.getItem('billforge-auth');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed.state?.accessToken) {
-        api.setToken(parsed.state.accessToken);
-      }
-      if (parsed.state?.refreshToken) {
-        api.setRefreshToken(parsed.state.refreshToken);
-      }
-      // Set up refresh/logout callbacks
-      api.setTokenRefreshCallback((access, refresh) => {
-        const store = useAuthStore.getState();
-        store.setTokens(access, refresh);
-      });
-      api.setLogoutCallback(() => {
-        const store = useAuthStore.getState();
-        store.logout();
-      });
-    } catch (e) {
-      // Ignore parse errors
-    }
-  }
-}

@@ -36,7 +36,7 @@ export default function NewVendorPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: typeof formData) => vendorsApi.create(data),
+    mutationFn: (data: { name: string; vendor_type: string; email?: string; phone?: string }) => vendorsApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vendors'] });
       toast.success('Vendor created successfully');
@@ -49,7 +49,13 @@ export default function NewVendorPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate(formData);
+    const payload = {
+      name: formData.name,
+      vendor_type: formData.vendor_type,
+      ...(formData.email.trim() ? { email: formData.email.trim() } : {}),
+      ...(formData.phone.trim() ? { phone: formData.phone.trim() } : {}),
+    };
+    createMutation.mutate(payload);
   };
 
   const isValid = formData.name.trim().length > 0;
