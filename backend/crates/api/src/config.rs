@@ -145,11 +145,26 @@ impl Config {
 
         // In development, also allow common dev origins
         if environment.is_development() {
-            let dev_origins = vec![
+            let mut dev_origins = vec![
                 "http://localhost:3000".to_string(),
                 "http://localhost:3001".to_string(),
+                "http://localhost:8002".to_string(),
                 "http://127.0.0.1:3000".to_string(),
+                "http://127.0.0.1:8002".to_string(),
             ];
+            // Auto-detect LAN IP and add origin for LAN access
+            if let Ok(output) = std::process::Command::new("ipconfig")
+                .args(["getifaddr", "en0"])
+                .output()
+            {
+                if let Ok(ip) = String::from_utf8(output.stdout) {
+                    let ip = ip.trim();
+                    if !ip.is_empty() {
+                        dev_origins.push(format!("http://{}:8002", ip));
+                        dev_origins.push(format!("http://{}:3000", ip));
+                    }
+                }
+            }
             for origin in dev_origins {
                 if !allowed_origins.contains(&origin) {
                     allowed_origins.push(origin);
