@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
-import { api } from '@/lib/api';
+import { api, invoiceStatusApi, InvoiceStatusConfig, InvoiceStatusConfigInput } from '@/lib/api';
 import { toast } from 'sonner';
 import { ColorPicker, ColorSwatch, GradientPicker } from '@/components/ui/color-picker';
 import {
@@ -24,11 +24,18 @@ import {
   Save,
   Download,
   Copy,
+  Tags,
+  Plus,
+  Trash2,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 
 const tabs = [
   { id: 'appearance', name: 'Appearance', icon: Palette },
   { id: 'branding', name: 'Branding', icon: Sparkles },
+  { id: 'statuses', name: 'Invoice Statuses', icon: Tags },
   { id: 'organization', name: 'Organization', icon: Building2 },
   { id: 'profile', name: 'Profile', icon: User },
   { id: 'notifications', name: 'Notifications', icon: Bell },
@@ -449,6 +456,11 @@ export default function SettingsPage() {
             </>
           )}
 
+          {/* Invoice Statuses Tab */}
+          {activeTab === 'statuses' && (
+            <InvoiceStatusesTab />
+          )}
+
           {/* Organization Tab */}
           {activeTab === 'organization' && (
             <div className="card p-6">
@@ -648,6 +660,427 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Color presets for status configuration
+const colorPresets = [
+  { name: 'Green', color: 'green', bg: 'bg-success/10', text: 'text-success' },
+  { name: 'Blue', color: 'blue', bg: 'bg-primary/10', text: 'text-primary' },
+  { name: 'Yellow', color: 'yellow', bg: 'bg-warning/10', text: 'text-warning' },
+  { name: 'Red', color: 'red', bg: 'bg-error/10', text: 'text-error' },
+  { name: 'Gray', color: 'gray', bg: 'bg-secondary', text: 'text-muted-foreground' },
+  { name: 'Purple', color: 'purple', bg: 'bg-violet-500/10', text: 'text-violet-600' },
+  { name: 'Orange', color: 'orange', bg: 'bg-orange-500/10', text: 'text-orange-600' },
+  { name: 'Teal', color: 'teal', bg: 'bg-teal-500/10', text: 'text-teal-600' },
+];
+
+interface StatusFormRow {
+  status_key: string;
+  display_label: string;
+  color: string;
+  bg_color: string;
+  text_color: string;
+  sort_order: number;
+  is_terminal: boolean;
+  is_active: boolean;
+  category: string;
+  isNew?: boolean;
+}
+
+function InvoiceStatusesTab() {
+  const queryClient = useQueryClient();
+  const [activeCategory, setActiveCategory] = useState<'processing' | 'capture'>('processing');
+  const [statuses, setStatuses] = useState<StatusFormRow[]>([]);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data: statusConfigs, isLoading } = useQuery({
+    queryKey: ['invoice-status-config'],
+    queryFn: () => invoiceStatusApi.list(),
+  });
+
+  // Sync fetched data into local state
+  useEffect(() => {
+    if (statusConfigs && !hasChanges) {
+      setStatuses(statusConfigs.map(s => ({
+        status_key: s.status_key,
+        display_label: s.display_label,
+        color: s.color,
+        bg_color: s.bg_color,
+        text_color: s.text_color,
+        sort_order: s.sort_order,
+        is_terminal: s.is_terminal,
+        is_active: s.is_active,
+        category: s.category,
+      })));
+    }
+  }, [statusConfigs, hasChanges]);
+
+  const saveMutation = useMutation({
+    mutationFn: (data: InvoiceStatusConfigInput[]) => invoiceStatusApi.update(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoice-status-config'] });
+      setHasChanges(false);
+      toast.success('Invoice statuses saved');
+    },
+    onError: () => toast.error('Failed to save statuses'),
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: () => invoiceStatusApi.seedDefaults(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoice-status-config'] });
+      setHasChanges(false);
+      toast.success('Default statuses restored');
+    },
+    onError: () => toast.error('Failed to seed defaults'),
+  });
+
+  const filteredStatuses = statuses
+    .filter(s => s.category === activeCategory)
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  const updateStatus = (index: number, field: keyof StatusFormRow, value: unknown) => {
+    const globalIndex = statuses.findIndex(
+      s => s.status_key === filteredStatuses[index].status_key && s.category === activeCategory
+    );
+    if (globalIndex === -1) return;
+    const updated = [...statuses];
+    (updated[globalIndex] as unknown as Record<string, unknown>)[field] = value;
+    setStatuses(updated);
+    setHasChanges(true);
+  };
+
+  const applyColorPreset = (index: number, preset: typeof colorPresets[0]) => {
+    const globalIndex = statuses.findIndex(
+      s => s.status_key === filteredStatuses[index].status_key && s.category === activeCategory
+    );
+    if (globalIndex === -1) return;
+    const updated = [...statuses];
+    updated[globalIndex] = {
+      ...updated[globalIndex],
+      color: preset.color,
+      bg_color: preset.bg,
+      text_color: preset.text,
+    };
+    setStatuses(updated);
+    setHasChanges(true);
+  };
+
+  const moveStatus = (index: number, direction: 'up' | 'down') => {
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= filteredStatuses.length) return;
+
+    const globalA = statuses.findIndex(
+      s => s.status_key === filteredStatuses[index].status_key && s.category === activeCategory
+    );
+    const globalB = statuses.findIndex(
+      s => s.status_key === filteredStatuses[swapIndex].status_key && s.category === activeCategory
+    );
+    if (globalA === -1 || globalB === -1) return;
+
+    const updated = [...statuses];
+    const tmpOrder = updated[globalA].sort_order;
+    updated[globalA] = { ...updated[globalA], sort_order: updated[globalB].sort_order };
+    updated[globalB] = { ...updated[globalB], sort_order: tmpOrder };
+    setStatuses(updated);
+    setHasChanges(true);
+  };
+
+  const addStatus = () => {
+    const maxOrder = filteredStatuses.reduce((max, s) => Math.max(max, s.sort_order), -1);
+    const newKey = `custom_${Date.now()}`;
+    setStatuses(prev => [...prev, {
+      status_key: newKey,
+      display_label: 'New Status',
+      color: 'blue',
+      bg_color: 'bg-primary/10',
+      text_color: 'text-primary',
+      sort_order: maxOrder + 1,
+      is_terminal: false,
+      is_active: true,
+      category: activeCategory,
+      isNew: true,
+    }]);
+    setHasChanges(true);
+  };
+
+  const removeStatus = (index: number) => {
+    const target = filteredStatuses[index];
+    setStatuses(prev => prev.filter(s => !(s.status_key === target.status_key && s.category === target.category)));
+    setHasChanges(true);
+  };
+
+  const handleSave = () => {
+    saveMutation.mutate(statuses.map(s => ({
+      status_key: s.status_key,
+      display_label: s.display_label,
+      color: s.color,
+      bg_color: s.bg_color,
+      text_color: s.text_color,
+      sort_order: s.sort_order,
+      is_terminal: s.is_terminal,
+      is_active: s.is_active,
+      category: s.category,
+    })));
+  };
+
+  if (isLoading) {
+    return (
+      <div className="card p-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-6 bg-secondary rounded w-48" />
+          <div className="h-4 bg-secondary rounded w-72" />
+          <div className="space-y-3 mt-6">
+            {[1, 2, 3, 4, 5].map(i => (
+              <div key={i} className="h-14 bg-secondary rounded" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="card p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Invoice Statuses</h2>
+            <p className="text-sm text-muted-foreground">
+              Customize status labels, colors, and ordering for your organization
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => seedMutation.mutate()}
+              disabled={seedMutation.isPending}
+              className="btn btn-ghost btn-sm"
+            >
+              <RotateCcw className="w-4 h-4 mr-1.5" />
+              Reset Defaults
+            </button>
+          </div>
+        </div>
+
+        {/* Category Tabs */}
+        <div className="flex gap-1 p-1 bg-secondary/50 rounded-lg mb-6 w-fit">
+          {(['processing', 'capture'] as const).map(cat => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeCategory === cat
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {cat === 'processing' ? 'Processing Statuses' : 'Capture Statuses'}
+            </button>
+          ))}
+        </div>
+
+        {/* Status List */}
+        <div className="space-y-2">
+          {/* Header */}
+          <div className="grid grid-cols-[40px_1fr_180px_120px_80px_80px_60px] gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            <div>Order</div>
+            <div>Label</div>
+            <div>Color</div>
+            <div>Status Key</div>
+            <div>Terminal</div>
+            <div>Active</div>
+            <div></div>
+          </div>
+
+          {filteredStatuses.map((status, index) => (
+            <div
+              key={status.status_key}
+              className="grid grid-cols-[40px_1fr_180px_120px_80px_80px_60px] gap-3 items-center px-3 py-3 bg-secondary/30 rounded-lg hover:bg-secondary/50 transition-colors"
+            >
+              {/* Reorder */}
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => moveStatus(index, 'up')}
+                  disabled={index === 0}
+                  className="p-0.5 hover:bg-secondary rounded disabled:opacity-30"
+                >
+                  <ArrowUp className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => moveStatus(index, 'down')}
+                  disabled={index === filteredStatuses.length - 1}
+                  className="p-0.5 hover:bg-secondary rounded disabled:opacity-30"
+                >
+                  <ArrowDown className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Label */}
+              <div className="flex items-center gap-3">
+                <span
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.bg_color} ${status.text_color}`}
+                >
+                  {status.display_label}
+                </span>
+                <input
+                  type="text"
+                  value={status.display_label}
+                  onChange={(e) => updateStatus(index, 'display_label', e.target.value)}
+                  className="input input-sm flex-1 max-w-[200px]"
+                />
+              </div>
+
+              {/* Color Preset */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {colorPresets.map(preset => (
+                  <button
+                    key={preset.color}
+                    onClick={() => applyColorPreset(index, preset)}
+                    className={`w-5 h-5 rounded-full border-2 transition-all ${
+                      status.color === preset.color
+                        ? 'border-foreground scale-110'
+                        : 'border-transparent hover:border-muted-foreground/50'
+                    }`}
+                    style={{
+                      backgroundColor: preset.color === 'gray' ? '#9ca3af'
+                        : preset.color === 'green' ? '#22c55e'
+                        : preset.color === 'blue' ? '#3b82f6'
+                        : preset.color === 'yellow' ? '#eab308'
+                        : preset.color === 'red' ? '#ef4444'
+                        : preset.color === 'purple' ? '#8b5cf6'
+                        : preset.color === 'orange' ? '#f97316'
+                        : preset.color === 'teal' ? '#14b8a6'
+                        : '#6b7280'
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Status Key */}
+              <div>
+                {status.isNew ? (
+                  <input
+                    type="text"
+                    value={status.status_key}
+                    onChange={(e) => updateStatus(index, 'status_key', e.target.value.toLowerCase().replace(/\s+/g, '_'))}
+                    className="input input-sm w-full font-mono text-xs"
+                    placeholder="status_key"
+                  />
+                ) : (
+                  <span className="text-xs font-mono text-muted-foreground">{status.status_key}</span>
+                )}
+              </div>
+
+              {/* Terminal Toggle */}
+              <div className="flex justify-center">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={status.is_terminal}
+                    onChange={(e) => updateStatus(index, 'is_terminal', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                </label>
+              </div>
+
+              {/* Active Toggle */}
+              <div className="flex justify-center">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={status.is_active}
+                    onChange={(e) => updateStatus(index, 'is_active', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-success" />
+                </label>
+              </div>
+
+              {/* Delete */}
+              <div className="flex justify-center">
+                <button
+                  onClick={() => removeStatus(index)}
+                  className="p-1.5 text-muted-foreground hover:text-error rounded transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {filteredStatuses.length === 0 && (
+            <div className="text-center py-8 text-muted-foreground">
+              <Tags className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No statuses configured for this category.</p>
+              <p className="text-xs mt-1">Click "Reset Defaults" to seed the default statuses, or add a custom one.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Add Status Button */}
+        <button
+          onClick={addStatus}
+          className="mt-4 flex items-center gap-2 px-4 py-2 border-2 border-dashed border-border rounded-lg text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors w-full justify-center"
+        >
+          <Plus className="w-4 h-4" />
+          Add Custom Status
+        </button>
+
+        {/* Save Bar */}
+        {hasChanges && (
+          <div className="mt-6 pt-6 border-t border-border flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              You have unsaved changes
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setHasChanges(false);
+                  // Re-sync from server data
+                  if (statusConfigs) {
+                    setStatuses(statusConfigs.map(s => ({
+                      status_key: s.status_key,
+                      display_label: s.display_label,
+                      color: s.color,
+                      bg_color: s.bg_color,
+                      text_color: s.text_color,
+                      sort_order: s.sort_order,
+                      is_terminal: s.is_terminal,
+                      is_active: s.is_active,
+                      category: s.category,
+                    })));
+                  }
+                }}
+                className="btn btn-ghost btn-sm"
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saveMutation.isPending}
+                className="btn btn-primary btn-md"
+              >
+                <Save className="w-4 h-4 mr-1.5" />
+                {saveMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Info Card */}
+      <div className="card p-4 bg-primary/5 border-primary/20">
+        <h3 className="text-sm font-semibold text-foreground mb-1">About Status Configuration</h3>
+        <ul className="text-xs text-muted-foreground space-y-1">
+          <li><strong>Status Key</strong> - Internal identifier used in the system (cannot be changed for existing statuses)</li>
+          <li><strong>Terminal</strong> - Terminal statuses represent end states (e.g., Paid, Voided, Rejected)</li>
+          <li><strong>Active</strong> - Inactive statuses are hidden from dropdowns and filters</li>
+          <li><strong>Custom statuses</strong> - Add organization-specific statuses beyond the defaults</li>
+        </ul>
       </div>
     </div>
   );

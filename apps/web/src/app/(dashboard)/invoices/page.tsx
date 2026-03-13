@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { invoicesApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
+import { useStatusConfig } from '@/hooks/useStatusConfig';
 import InvoicePanel from '@/components/InvoicePanel';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import {
@@ -18,28 +19,14 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
-const statusStyles: Record<string, { bg: string; text: string }> = {
-  pending: { bg: 'bg-warning/10', text: 'text-warning' },
-  processing: { bg: 'bg-primary/10', text: 'text-primary' },
-  ready_for_review: { bg: 'bg-warning/10', text: 'text-warning' },
-  reviewed: { bg: 'bg-success/10', text: 'text-success' },
-  submitted: { bg: 'bg-primary/10', text: 'text-primary' },
-  pending_approval: { bg: 'bg-warning/10', text: 'text-warning' },
-  approved: { bg: 'bg-success/10', text: 'text-success' },
-  rejected: { bg: 'bg-error/10', text: 'text-error' },
-  on_hold: { bg: 'bg-warning/10', text: 'text-warning' },
-  ready_for_payment: { bg: 'bg-success/10', text: 'text-success' },
-  paid: { bg: 'bg-success/10', text: 'text-success' },
-  draft: { bg: 'bg-secondary', text: 'text-muted-foreground' },
-  failed: { bg: 'bg-error/10', text: 'text-error' },
-};
-
 export default function InvoicesPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const { hasModule } = useAuthStore();
+  const { getStatusDisplay, getProcessingStatuses } = useStatusConfig();
+  const processingStatuses = getProcessingStatuses();
 
   const { data, isLoading } = useQuery({
     queryKey: ['invoices', page, search, statusFilter],
@@ -99,14 +86,9 @@ export default function InvoicesPage() {
             className="input w-auto"
           >
             <option value="">All Statuses</option>
-            <option value="draft">Draft</option>
-            <option value="submitted">Submitted</option>
-            <option value="pending_approval">Pending Approval</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="on_hold">On Hold</option>
-            <option value="ready_for_payment">Ready for Payment</option>
-            <option value="paid">Paid</option>
+            {processingStatuses.map(s => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
           </select>
           <button className="btn btn-secondary btn-sm">
             <Filter className="w-4 h-4 mr-1.5" />
@@ -160,11 +142,11 @@ export default function InvoicesPage() {
               </tr>
             ) : (
               invoices.map((invoice) => {
-                const status = statusStyles[invoice.processing_status] || statusStyles.draft;
+                const statusDisplay = getStatusDisplay(invoice.processing_status);
                 const isError = invoice.capture_status === 'failed';
-                
+
                 return (
-                  <tr 
+                  <tr
                     key={invoice.id}
                     onClick={() => setSelectedInvoiceId(invoice.id)}
                     className="cursor-pointer hover:bg-secondary/50 transition-colors"
@@ -193,8 +175,8 @@ export default function InvoicesPage() {
                     </td>
                     <td>
                       <div className="flex flex-col gap-1">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.bg} ${status.text}`}>
-                          {invoice.processing_status.replace(/_/g, ' ')}
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusDisplay.bg} ${statusDisplay.text}`}>
+                          {statusDisplay.label}
                         </span>
                         {/* Show OCR confidence if available and not high (Sprint 3) */}
                         {invoice.ocr_confidence !== undefined &&

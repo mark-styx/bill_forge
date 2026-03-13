@@ -110,6 +110,9 @@ async fn create_tenant_database(
     // Seed default queues
     seed_default_queues(&tenant_pool, tenant_id).await?;
 
+    // Seed default invoice status config
+    seed_default_status_config(&tenant_pool, tenant_id).await?;
+
     Ok(())
 }
 
@@ -200,6 +203,30 @@ async fn create_tenant_tables(pool: &PgPool) -> Result<()> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(tenant_id, invoice_number)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Invoice status config table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS invoice_status_config (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            status_key VARCHAR(50) NOT NULL,
+            display_label VARCHAR(100) NOT NULL,
+            color VARCHAR(50) NOT NULL DEFAULT 'gray',
+            bg_color VARCHAR(50) NOT NULL DEFAULT 'bg-secondary',
+            text_color VARCHAR(50) NOT NULL DEFAULT 'text-muted-foreground',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_terminal BOOLEAN NOT NULL DEFAULT false,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            category VARCHAR(20) NOT NULL DEFAULT 'processing',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, status_key)
         )
         "#,
     )
@@ -435,5 +462,55 @@ async fn seed_default_queues(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
     }
 
     println!("    ✓ Created {} default queues", default_queues.len());
+    Ok(())
+}
+
+async fn seed_default_status_config(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
+    let statuses = vec![
+        // Processing statuses
+        ("draft", "Draft", "gray", "bg-secondary", "text-muted-foreground", 0, false, "processing"),
+        ("submitted", "Submitted", "blue", "bg-primary/10", "text-primary", 1, false, "processing"),
+        ("pending_approval", "Pending Approval", "yellow", "bg-warning/10", "text-warning", 2, false, "processing"),
+        ("approved", "Approved", "green", "bg-success/10", "text-success", 3, false, "processing"),
+        ("rejected", "Rejected", "red", "bg-error/10", "text-error", 4, true, "processing"),
+        ("on_hold", "On Hold", "yellow", "bg-warning/10", "text-warning", 5, false, "processing"),
+        ("ready_for_payment", "Ready for Payment", "green", "bg-success/10", "text-success", 6, false, "processing"),
+        ("paid", "Paid", "green", "bg-success/10", "text-success", 7, true, "processing"),
+        ("voided", "Voided", "gray", "bg-secondary", "text-muted-foreground", 8, true, "processing"),
+        // Capture statuses
+        ("pending", "Pending", "yellow", "bg-warning/10", "text-warning", 0, false, "capture"),
+        ("processing", "Processing", "blue", "bg-primary/10", "text-primary", 1, false, "capture"),
+        ("ready_for_review", "Ready for Review", "yellow", "bg-warning/10", "text-warning", 2, false, "capture"),
+        ("reviewed", "Reviewed", "green", "bg-success/10", "text-success", 3, true, "capture"),
+        ("failed", "Failed", "red", "bg-error/10", "text-error", 4, true, "capture"),
+    ];
+
+    for (status_key, display_label, color, bg_color, text_color, sort_order, is_terminal, category) in &statuses {
+        sqlx::query(
+            r#"
+            INSERT INTO invoice_status_config
+                (id, tenant_id, status_key, display_label, color, bg_color, text_color,
+                 sort_order, is_terminal, is_active, category, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11, $12)
+            ON CONFLICT (tenant_id, status_key) DO NOTHING
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(status_key)
+        .bind(display_label)
+        .bind(color)
+        .bind(bg_color)
+        .bind(text_color)
+        .bind(sort_order)
+        .bind(is_terminal)
+        .bind(category)
+        .bind(Utc::now())
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+    }
+
+    println!("    ✓ Created {} default invoice status configs", statuses.len());
     Ok(())
 }

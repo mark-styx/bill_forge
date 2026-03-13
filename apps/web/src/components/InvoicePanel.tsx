@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { invoicesApi, workflowsApi, documentsApi, Invoice } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
+import { useStatusConfig } from '@/hooks/useStatusConfig';
 import { toast } from 'sonner';
 import {
   X,
@@ -36,25 +37,26 @@ interface InvoicePanelProps {
   onClose: () => void;
 }
 
-const statusStyles: Record<string, { bg: string; text: string; icon: typeof Clock }> = {
-  pending: { bg: 'bg-warning/10', text: 'text-warning', icon: Clock },
-  processing: { bg: 'bg-primary/10', text: 'text-primary', icon: Loader2 },
-  ready_for_review: { bg: 'bg-warning/10', text: 'text-warning', icon: Eye },
-  reviewed: { bg: 'bg-success/10', text: 'text-success', icon: CheckCircle },
-  submitted: { bg: 'bg-primary/10', text: 'text-primary', icon: Send },
-  pending_approval: { bg: 'bg-warning/10', text: 'text-warning', icon: Clock },
-  approved: { bg: 'bg-success/10', text: 'text-success', icon: CheckCircle },
-  rejected: { bg: 'bg-error/10', text: 'text-error', icon: XCircle },
-  on_hold: { bg: 'bg-warning/10', text: 'text-warning', icon: PauseCircle },
-  ready_for_payment: { bg: 'bg-success/10', text: 'text-success', icon: CreditCard },
-  paid: { bg: 'bg-success/10', text: 'text-success', icon: CheckCircle },
-  draft: { bg: 'bg-secondary', text: 'text-muted-foreground', icon: Edit2 },
-  failed: { bg: 'bg-error/10', text: 'text-error', icon: AlertTriangle },
+const statusIcons: Record<string, typeof Clock> = {
+  pending: Clock,
+  processing: Loader2,
+  ready_for_review: Eye,
+  reviewed: CheckCircle,
+  submitted: Send,
+  pending_approval: Clock,
+  approved: CheckCircle,
+  rejected: XCircle,
+  on_hold: PauseCircle,
+  ready_for_payment: CreditCard,
+  paid: CheckCircle,
+  draft: Edit2,
+  failed: AlertTriangle,
 };
 
 export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) {
   const queryClient = useQueryClient();
   const { hasModule } = useAuthStore();
+  const { getStatusDisplay } = useStatusConfig();
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<Partial<Invoice>>({});
   const [showMoveToQueue, setShowMoveToQueue] = useState(false);
@@ -180,8 +182,8 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
 
   if (!invoiceId) return null;
 
-  const status = invoice ? statusStyles[invoice.processing_status] || statusStyles.draft : statusStyles.draft;
-  const StatusIcon = status.icon;
+  const statusDisplay = invoice ? getStatusDisplay(invoice.processing_status) : getStatusDisplay('draft');
+  const StatusIcon = statusIcons[invoice?.processing_status ?? 'draft'] || Clock;
 
   // Determine which actions are available based on status and modules
   const canEdit = invoice && ['draft', 'pending', 'ready_for_review', 'submitted', 'on_hold', 'in_review', 'pending_review'].includes(invoice.processing_status);
@@ -236,9 +238,9 @@ export default function InvoicePanel({ invoiceId, onClose }: InvoicePanelProps) 
           ) : invoice ? (
             <div className="p-4 space-y-6">
               {/* Status Badge */}
-              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${status.bg} ${status.text}`}>
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${statusDisplay.bg} ${statusDisplay.text}`}>
                 <StatusIcon className="w-4 h-4" />
-                {invoice.processing_status.replace(/_/g, ' ')}
+                {statusDisplay.label}
               </div>
 
               {/* Amount */}

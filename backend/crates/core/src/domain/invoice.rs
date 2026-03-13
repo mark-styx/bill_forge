@@ -342,6 +342,204 @@ pub struct CreateLineItemInput {
     pub project: Option<String>,
 }
 
+/// Per-tenant invoice status configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceStatusConfig {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub status_key: String,
+    pub display_label: String,
+    pub color: String,
+    pub bg_color: String,
+    pub text_color: String,
+    pub sort_order: i32,
+    pub is_terminal: bool,
+    pub is_active: bool,
+    pub category: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input for creating/updating an invoice status config entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceStatusConfigInput {
+    pub status_key: String,
+    pub display_label: String,
+    pub color: String,
+    pub bg_color: String,
+    pub text_color: String,
+    pub sort_order: i32,
+    pub is_terminal: bool,
+    pub is_active: bool,
+    pub category: String,
+}
+
+/// Default processing statuses matching the current hardcoded enum
+pub fn default_processing_statuses() -> Vec<InvoiceStatusConfigInput> {
+    vec![
+        InvoiceStatusConfigInput {
+            status_key: "draft".to_string(),
+            display_label: "Draft".to_string(),
+            color: "gray".to_string(),
+            bg_color: "bg-secondary".to_string(),
+            text_color: "text-muted-foreground".to_string(),
+            sort_order: 0,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "submitted".to_string(),
+            display_label: "Submitted".to_string(),
+            color: "blue".to_string(),
+            bg_color: "bg-primary/10".to_string(),
+            text_color: "text-primary".to_string(),
+            sort_order: 1,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "pending_approval".to_string(),
+            display_label: "Pending Approval".to_string(),
+            color: "yellow".to_string(),
+            bg_color: "bg-warning/10".to_string(),
+            text_color: "text-warning".to_string(),
+            sort_order: 2,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "approved".to_string(),
+            display_label: "Approved".to_string(),
+            color: "green".to_string(),
+            bg_color: "bg-success/10".to_string(),
+            text_color: "text-success".to_string(),
+            sort_order: 3,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "rejected".to_string(),
+            display_label: "Rejected".to_string(),
+            color: "red".to_string(),
+            bg_color: "bg-error/10".to_string(),
+            text_color: "text-error".to_string(),
+            sort_order: 4,
+            is_terminal: true,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "on_hold".to_string(),
+            display_label: "On Hold".to_string(),
+            color: "yellow".to_string(),
+            bg_color: "bg-warning/10".to_string(),
+            text_color: "text-warning".to_string(),
+            sort_order: 5,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "ready_for_payment".to_string(),
+            display_label: "Ready for Payment".to_string(),
+            color: "green".to_string(),
+            bg_color: "bg-success/10".to_string(),
+            text_color: "text-success".to_string(),
+            sort_order: 6,
+            is_terminal: false,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "paid".to_string(),
+            display_label: "Paid".to_string(),
+            color: "green".to_string(),
+            bg_color: "bg-success/10".to_string(),
+            text_color: "text-success".to_string(),
+            sort_order: 7,
+            is_terminal: true,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "voided".to_string(),
+            display_label: "Voided".to_string(),
+            color: "gray".to_string(),
+            bg_color: "bg-secondary".to_string(),
+            text_color: "text-muted-foreground".to_string(),
+            sort_order: 8,
+            is_terminal: true,
+            is_active: true,
+            category: "processing".to_string(),
+        },
+    ]
+}
+
+/// Default capture statuses
+pub fn default_capture_statuses() -> Vec<InvoiceStatusConfigInput> {
+    vec![
+        InvoiceStatusConfigInput {
+            status_key: "pending".to_string(),
+            display_label: "Pending".to_string(),
+            color: "yellow".to_string(),
+            bg_color: "bg-warning/10".to_string(),
+            text_color: "text-warning".to_string(),
+            sort_order: 0,
+            is_terminal: false,
+            is_active: true,
+            category: "capture".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "processing".to_string(),
+            display_label: "Processing".to_string(),
+            color: "blue".to_string(),
+            bg_color: "bg-primary/10".to_string(),
+            text_color: "text-primary".to_string(),
+            sort_order: 1,
+            is_terminal: false,
+            is_active: true,
+            category: "capture".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "ready_for_review".to_string(),
+            display_label: "Ready for Review".to_string(),
+            color: "yellow".to_string(),
+            bg_color: "bg-warning/10".to_string(),
+            text_color: "text-warning".to_string(),
+            sort_order: 2,
+            is_terminal: false,
+            is_active: true,
+            category: "capture".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "reviewed".to_string(),
+            display_label: "Reviewed".to_string(),
+            color: "green".to_string(),
+            bg_color: "bg-success/10".to_string(),
+            text_color: "text-success".to_string(),
+            sort_order: 3,
+            is_terminal: true,
+            is_active: true,
+            category: "capture".to_string(),
+        },
+        InvoiceStatusConfigInput {
+            status_key: "failed".to_string(),
+            display_label: "Failed".to_string(),
+            color: "red".to_string(),
+            bg_color: "bg-error/10".to_string(),
+            text_color: "text-error".to_string(),
+            sort_order: 4,
+            is_terminal: true,
+            is_active: true,
+            category: "capture".to_string(),
+        },
+    ]
+}
+
 /// Filters for querying invoices
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InvoiceFilters {

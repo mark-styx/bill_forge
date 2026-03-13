@@ -324,15 +324,15 @@
 |----------|-------|---------|--------|
 | P1 | ISSUE-14 | Deeper workflow implementation | 2-3 days | DONE |
 | P1 | ISSUE-12 | Full assignment rule conditions in UI | 1 day | DONE |
-| P2 | ISSUE-03 | Customizable invoice statuses per org | 2-3 days |
+| P2 | ISSUE-03 | Customizable invoice statuses per org | 2-3 days | DONE |
 
 **Sprint 12 Success Criteria:**
 - [x] Multi-step workflow chains configurable per tenant
 - [x] Visual workflow editor functional
 - [x] All backend condition fields/operators exposed in rule builder UI
 - [x] Compound AND/OR conditions supported (AND logic with visual separators and preview)
-- [ ] Tenants can customize invoice status names and colors
-- [ ] Default statuses seeded, matching current hardcoded values
+- [x] Tenants can customize invoice status names and colors
+- [x] Default statuses seeded, matching current hardcoded values
 - [x] Workflow templates available ("Standard AP", "High-Value Review")
 
 ---

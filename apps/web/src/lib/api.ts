@@ -782,6 +782,48 @@ export const feedbackApi = {
   list: () => api.get<FeedbackEntry[]>('/api/v1/feedback'),
 };
 
+// Invoice Status Config Types
+export interface InvoiceStatusConfig {
+  id: string;
+  status_key: string;
+  display_label: string;
+  color: string;
+  bg_color: string;
+  text_color: string;
+  sort_order: number;
+  is_terminal: boolean;
+  is_active: boolean;
+  category: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceStatusConfigInput {
+  status_key: string;
+  display_label: string;
+  color: string;
+  bg_color: string;
+  text_color: string;
+  sort_order: number;
+  is_terminal: boolean;
+  is_active: boolean;
+  category: string;
+}
+
+export const invoiceStatusApi = {
+  list: (category?: string) =>
+    api.get<InvoiceStatusConfig[]>(`/api/v1/settings/invoice-statuses${category ? `?category=${category}` : ''}`),
+
+  update: (statuses: InvoiceStatusConfigInput[]) =>
+    api.put<InvoiceStatusConfig[]>('/api/v1/settings/invoice-statuses', statuses),
+
+  seedDefaults: () =>
+    api.post<{ message: string }>('/api/v1/settings/invoice-statuses/seed-defaults', {}),
+
+  delete: (statusKey: string) =>
+    api.delete<{ success: boolean }>(`/api/v1/settings/invoice-statuses/${statusKey}`),
+};
+
 // Organization Theme Types
 export interface OrganizationThemeColors {
   primary: string;
