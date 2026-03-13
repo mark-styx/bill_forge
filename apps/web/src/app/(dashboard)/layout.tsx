@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
 import { NotificationCenter, type Notification } from '@/components/ui/notification-center';
 import { ThemeQuickSwitcher } from '@/components/ui/theme-quick-switcher';
+import { FeedbackChat } from '@/components/ui/feedback-chat';
 import {
   FileText,
   ClipboardCheck,
@@ -50,7 +51,7 @@ const navigation: NavItem[] = [
     module: 'invoice_capture',
     children: [
       { name: 'Invoices', href: '/invoices', icon: FileText, module: 'invoice_capture' },
-      { name: 'Errors', href: '/processing/queues/11111111-4444-5555-6666-777777770001', icon: AlertTriangle, module: 'invoice_capture' },
+      { name: 'Errors', href: '/processing/queues?type=exception', icon: AlertTriangle, module: 'invoice_capture' },
     ]
   },
   {
@@ -137,11 +138,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => document.removeEventListener('keydown', handleEscape);
   }, [sidebarCollapsed, toggleSidebar]);
 
+  const hasHydrated = useAuthStore((s) => s.hasHydrated);
+
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (hasHydrated && !isAuthenticated) {
       router.push('/login');
     }
-  }, [isAuthenticated, router]);
+  }, [hasHydrated, isAuthenticated, router]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -150,6 +153,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         .catch(() => setPersonas([]));
     }
   }, [isAuthenticated]);
+
+  if (!hasHydrated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-pulse text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) return null;
 
@@ -460,6 +471,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Page content */}
         <main className="p-6 animate-fade-in">{children}</main>
       </div>
+
+      {/* Feedback Chat */}
+      <FeedbackChat />
     </div>
   );
 }

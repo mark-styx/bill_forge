@@ -107,6 +107,9 @@ async fn create_tenant_database(
     // Seed invoices
     seed_invoices(&tenant_pool, tenant_id, &users, &vendors).await?;
 
+    // Seed default queues
+    seed_default_queues(&tenant_pool, tenant_id).await?;
+
     Ok(())
 }
 
@@ -145,6 +148,28 @@ async fn create_tenant_tables(pool: &PgPool) -> Result<()> {
             metadata JSONB DEFAULT '{}',
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Work queues table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS work_queues (
+            id UUID PRIMARY KEY,
+            tenant_id VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            queue_type VARCHAR(50) NOT NULL,
+            assigned_users JSONB DEFAULT '[]',
+            assigned_roles JSONB DEFAULT '[]',
+            is_default BOOLEAN NOT NULL DEFAULT false,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            settings JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
     )
@@ -370,5 +395,45 @@ async fn seed_invoices(
     }
 
     println!("    ✓ Created {} invoices", invoice_count);
+    Ok(())
+}
+
+async fn seed_default_queues(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
+    let default_queues = vec![
+        ("AP Processing", "review", "Main AP processing queue for incoming invoices", true, 24, 48),
+        ("Review Queue", "review", "Secondary review queue for flagged invoices", false, 16, 32),
+        ("Error Queue", "exception", "Queue for invoices with processing errors", false, 8, 16),
+        ("Approval Queue", "approval", "Queue for invoices pending approval", false, 24, 48),
+        ("Payment Queue", "payment", "Queue for approved invoices ready for payment", false, 48, 72),
+    ];
+
+    for (name, queue_type, description, is_default, sla_hours, escalation_hours) in &default_queues {
+        let settings = serde_json::json!({
+            "default_sort": "priority_desc",
+            "sla_hours": sla_hours,
+            "escalation_hours": escalation_hours,
+        });
+
+        sqlx::query(
+            r#"
+            INSERT INTO work_queues (id, tenant_id, name, description, queue_type, is_default, settings, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id.to_string())
+        .bind(name)
+        .bind(description)
+        .bind(queue_type)
+        .bind(is_default)
+        .bind(&settings)
+        .bind(Utc::now())
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+    }
+
+    println!("    ✓ Created {} default queues", default_queues.len());
     Ok(())
 }
