@@ -387,6 +387,107 @@ pub enum DefaultQueueStage {
 }
 
 // ============================================================================
+// Workflow Templates
+// ============================================================================
+
+/// Unique identifier for a workflow template
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WorkflowTemplateId(pub Uuid);
+
+impl WorkflowTemplateId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for WorkflowTemplateId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for WorkflowTemplateId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for WorkflowTemplateId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
+/// A workflow template defines a multi-step pipeline of queue stages
+/// that invoices flow through from intake to payment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTemplate {
+    pub id: WorkflowTemplateId,
+    pub tenant_id: TenantId,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_active: bool,
+    pub is_default: bool,
+    /// Ordered list of stages in this workflow pipeline
+    pub stages: Vec<WorkflowTemplateStage>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A stage within a workflow template pipeline
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTemplateStage {
+    /// Position in the pipeline (0 = first)
+    pub order: i32,
+    /// Display name for this stage
+    pub name: String,
+    /// The queue type at this stage
+    pub stage_type: StageType,
+    /// Optional: link to an existing queue
+    pub queue_id: Option<WorkQueueId>,
+    /// SLA hours for this stage
+    pub sla_hours: Option<i32>,
+    /// Escalation hours (auto-escalate after this time)
+    pub escalation_hours: Option<i32>,
+    /// Whether this stage requires explicit user action to proceed
+    pub requires_action: bool,
+    /// Conditions to automatically skip this stage
+    pub skip_conditions: Vec<RuleCondition>,
+    /// Conditions to auto-complete and advance to next stage
+    pub auto_advance_conditions: Vec<RuleCondition>,
+}
+
+/// Type of workflow stage
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageType {
+    /// Intake/OCR processing
+    Intake,
+    /// Initial AP review
+    Review,
+    /// Manager/role approval required
+    Approval,
+    /// Exception handling
+    Exception,
+    /// Ready for payment
+    Payment,
+    /// Custom stage
+    Custom,
+}
+
+/// Input for creating or updating a workflow template
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWorkflowTemplateInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub is_default: bool,
+    pub stages: Vec<WorkflowTemplateStage>,
+}
+
+// ============================================================================
 // Assignment Rules
 // ============================================================================
 

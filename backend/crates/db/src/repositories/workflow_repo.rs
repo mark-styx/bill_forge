@@ -7,9 +7,10 @@ use billforge_core::{
         WorkQueue, WorkQueueId, CreateWorkQueueInput, QueueType, QueueItem, QueueSettings,
         AssignmentRule, AssignmentRuleId, CreateAssignmentRuleInput, AssignmentCondition, AssignmentTarget,
         ApprovalRequest, ApprovalStatus,
+        WorkflowTemplate, WorkflowTemplateId, CreateWorkflowTemplateInput, WorkflowTemplateStage,
         InvoiceId,
     },
-    traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository},
+    traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository, WorkflowTemplateRepository},
     types::{Pagination, PaginatedResponse, PaginationMeta},
     UserId, TenantId, Error, Result,
 };
@@ -812,6 +813,151 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
     }
 }
 
+#[async_trait]
+impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
+    async fn create(&self, tenant_id: &TenantId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate> {
+        let id = WorkflowTemplateId::new();
+        let now = Utc::now();
+
+        // If this template is set as default, unset any existing default
+        if input.is_default {
+            sqlx::query("UPDATE workflow_templates SET is_default = false WHERE tenant_id = $1 AND is_default = true")
+                .bind(*tenant_id.as_uuid())
+                .execute(&*self.pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to unset default template: {}", e)))?;
+        }
+
+        sqlx::query(
+            r#"INSERT INTO workflow_templates (
+                id, tenant_id, name, description, is_active, is_default, stages, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        )
+        .bind(id.0)
+        .bind(*tenant_id.as_uuid())
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(true)
+        .bind(input.is_default)
+        .bind(sqlx::types::Json(&input.stages))
+        .bind(now)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create workflow template: {}", e)))?;
+
+        Ok(WorkflowTemplate {
+            id,
+            tenant_id: tenant_id.clone(),
+            name: input.name,
+            description: input.description,
+            is_active: true,
+            is_default: input.is_default,
+            stages: input.stages,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkflowTemplateId) -> Result<Option<WorkflowTemplate>> {
+        let result = sqlx::query_as::<_, WorkflowTemplateRow>(
+            "SELECT * FROM workflow_templates WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(id.0)
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get workflow template: {}", e)))?;
+
+        Ok(result.map(|row| row.into_template(tenant_id)))
+    }
+
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<WorkflowTemplate>> {
+        let rows = sqlx::query_as::<_, WorkflowTemplateRow>(
+            "SELECT * FROM workflow_templates WHERE tenant_id = $1 ORDER BY is_default DESC, name"
+        )
+        .bind(*tenant_id.as_uuid())
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list workflow templates: {}", e)))?;
+
+        Ok(rows.into_iter().map(|row| row.into_template(tenant_id)).collect())
+    }
+
+    async fn update(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate> {
+        let now = Utc::now();
+
+        // If this template is set as default, unset any existing default
+        if input.is_default {
+            sqlx::query("UPDATE workflow_templates SET is_default = false WHERE tenant_id = $1 AND is_default = true AND id != $2")
+                .bind(*tenant_id.as_uuid())
+                .bind(id.0)
+                .execute(&*self.pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to unset default template: {}", e)))?;
+        }
+
+        sqlx::query(
+            r#"UPDATE workflow_templates SET
+                name = $1, description = $2, is_default = $3, stages = $4, updated_at = $5
+            WHERE id = $6 AND tenant_id = $7"#
+        )
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(input.is_default)
+        .bind(sqlx::types::Json(&input.stages))
+        .bind(now)
+        .bind(id.0)
+        .bind(*tenant_id.as_uuid())
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update workflow template: {}", e)))?;
+
+        WorkflowTemplateRepository::get_by_id(self, tenant_id, id)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                resource_type: "WorkflowTemplate".to_string(),
+                id: id.to_string(),
+            })
+    }
+
+    async fn delete(&self, tenant_id: &TenantId, id: &WorkflowTemplateId) -> Result<()> {
+        sqlx::query("DELETE FROM workflow_templates WHERE id = $1 AND tenant_id = $2")
+            .bind(id.0)
+            .bind(*tenant_id.as_uuid())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to delete workflow template: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn set_active(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, is_active: bool) -> Result<()> {
+        sqlx::query("UPDATE workflow_templates SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+            .bind(is_active)
+            .bind(Utc::now())
+            .bind(id.0)
+            .bind(*tenant_id.as_uuid())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to set workflow template active: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn get_default(&self, tenant_id: &TenantId) -> Result<Option<WorkflowTemplate>> {
+        let result = sqlx::query_as::<_, WorkflowTemplateRow>(
+            "SELECT * FROM workflow_templates WHERE tenant_id = $1 AND is_default = true AND is_active = true LIMIT 1"
+        )
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get default workflow template: {}", e)))?;
+
+        Ok(result.map(|row| row.into_template(tenant_id)))
+    }
+}
+
 // Helper structs for mapping database rows
 
 #[derive(sqlx::FromRow)]
@@ -1013,6 +1159,35 @@ impl ApprovalRequestRow {
             responded_at: self.responded_at,
             expires_at: None,
             created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct WorkflowTemplateRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    name: String,
+    description: Option<String>,
+    is_active: bool,
+    is_default: bool,
+    stages: sqlx::types::Json<Vec<WorkflowTemplateStage>>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+impl WorkflowTemplateRow {
+    fn into_template(self, tenant_id: &TenantId) -> WorkflowTemplate {
+        WorkflowTemplate {
+            id: WorkflowTemplateId(self.id),
+            tenant_id: tenant_id.clone(),
+            name: self.name,
+            description: self.description,
+            is_active: self.is_active,
+            is_default: self.is_default,
+            stages: self.stages.0,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         }
     }
 }

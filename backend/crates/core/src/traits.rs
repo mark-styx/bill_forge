@@ -100,6 +100,18 @@ pub trait ApproverRegistrationRepository: Send + Sync {
     async fn remove_department_approver(&self, tenant_id: &TenantId, department: &str, user_id: &UserId) -> Result<()>;
 }
 
+/// Repository for workflow templates
+#[async_trait]
+pub trait WorkflowTemplateRepository: Send + Sync {
+    async fn create(&self, tenant_id: &TenantId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate>;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkflowTemplateId) -> Result<Option<WorkflowTemplate>>;
+    async fn list(&self, tenant_id: &TenantId) -> Result<Vec<WorkflowTemplate>>;
+    async fn update(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate>;
+    async fn delete(&self, tenant_id: &TenantId, id: &WorkflowTemplateId) -> Result<()>;
+    async fn set_active(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, is_active: bool) -> Result<()>;
+    async fn get_default(&self, tenant_id: &TenantId) -> Result<Option<WorkflowTemplate>>;
+}
+
 /// Repository for documents
 #[async_trait]
 pub trait DocumentRepository: Send + Sync {

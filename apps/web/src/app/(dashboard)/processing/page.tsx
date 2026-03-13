@@ -12,6 +12,7 @@ import {
   Layers,
   AlertCircle,
   TrendingUp,
+  Sparkles,
 } from 'lucide-react';
 
 export default function ProcessingPage() {
@@ -174,7 +175,17 @@ export default function ProcessingPage() {
       {/* Quick Actions */}
       <div className="card p-5">
         <h2 className="font-semibold text-foreground mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <Link href="/processing/workflows" className="action-card group">
+            <div className="action-card-icon bg-vendor/10">
+              <Sparkles className="w-5 h-5 text-vendor" />
+            </div>
+            <div className="flex-1">
+              <p className="font-medium text-foreground">Workflow Templates</p>
+              <p className="text-sm text-muted-foreground">Multi-step pipelines</p>
+            </div>
+            <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground group-hover:translate-x-1 transition-all" />
+          </Link>
           <Link href="/processing/assignment-rules" className="action-card group">
             <div className="action-card-icon bg-processing/10">
               <TrendingUp className="w-5 h-5 text-processing" />

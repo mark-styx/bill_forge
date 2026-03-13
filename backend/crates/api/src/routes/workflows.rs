@@ -13,8 +13,9 @@ use billforge_core::{
         CreateWorkQueueInput, CreateWorkflowRuleInput, WorkQueue, WorkflowRule,
         CreateAssignmentRuleInput, AssignmentRule, QueueItem, BulkOperationInput, BulkOperationResult,
         BulkOperationError, BulkOperationType,
+        CreateWorkflowTemplateInput, WorkflowTemplate,
     },
-    traits::{InvoiceRepository, WorkflowRuleRepository, WorkQueueRepository, AssignmentRuleRepository},
+    traits::{InvoiceRepository, WorkflowRuleRepository, WorkQueueRepository, AssignmentRuleRepository, WorkflowTemplateRepository},
     types::Pagination,
 };
 use billforge_email::EmailTemplates;
@@ -52,6 +53,14 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/:id/reject", post(reject))
         // Bulk operations
         .route("/bulk", post(bulk_operation))
+        // Workflow templates
+        .route("/templates", get(list_templates))
+        .route("/templates", post(create_template))
+        .route("/templates/:id", get(get_template))
+        .route("/templates/:id", put(update_template))
+        .route("/templates/:id", delete(delete_template))
+        .route("/templates/:id/activate", post(activate_template))
+        .route("/templates/:id/deactivate", post(deactivate_template))
         // Invoice processing actions
         .route("/invoices/:id/hold", post(put_on_hold))
         .route("/invoices/:id/release", post(release_from_hold))
@@ -713,6 +722,107 @@ async fn reject(
         "rejected_by": user.user_id.0.to_string(),
         "reason": reason
     })))
+}
+
+// ============================================================================
+// Workflow Template Handlers
+// ============================================================================
+
+async fn list_templates(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+) -> ApiResult<Json<Vec<WorkflowTemplate>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let templates = WorkflowTemplateRepository::list(&repo, &tenant.tenant_id).await?;
+    Ok(Json(templates))
+}
+
+async fn get_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<WorkflowTemplate>> {
+    let template_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid template ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let template = WorkflowTemplateRepository::get_by_id(&repo, &tenant.tenant_id, &template_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "WorkflowTemplate".to_string(),
+            id: id.clone(),
+        })?;
+
+    Ok(Json(template))
+}
+
+async fn create_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Json(input): Json<CreateWorkflowTemplateInput>,
+) -> ApiResult<Json<WorkflowTemplate>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let template = WorkflowTemplateRepository::create(&repo, &tenant.tenant_id, input).await?;
+    Ok(Json(template))
+}
+
+async fn update_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+    Json(input): Json<CreateWorkflowTemplateInput>,
+) -> ApiResult<Json<WorkflowTemplate>> {
+    let template_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid template ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    let template = WorkflowTemplateRepository::update(&repo, &tenant.tenant_id, &template_id, input).await?;
+    Ok(Json(template))
+}
+
+async fn delete_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let template_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid template ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowTemplateRepository::delete(&repo, &tenant.tenant_id, &template_id).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+async fn activate_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let template_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid template ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowTemplateRepository::set_active(&repo, &tenant.tenant_id, &template_id, true).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+async fn deactivate_template(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let template_id = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid template ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
+    WorkflowTemplateRepository::set_active(&repo, &tenant.tenant_id, &template_id, false).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 // ============================================================================

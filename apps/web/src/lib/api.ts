@@ -431,6 +431,19 @@ export const workflowsApi = {
     api.post(`/api/v1/workflows/invoices/${invoiceId}/ready-for-payment`),
   moveToQueue: (invoiceId: string, queueId: string, assignTo?: string) =>
     api.post(`/api/v1/workflows/invoices/${invoiceId}/move-to-queue`, { queue_id: queueId, assign_to: assignTo }),
+
+  // Workflow Templates
+  listTemplates: () => api.get<WorkflowTemplate[]>('/api/v1/workflows/templates'),
+  getTemplate: (id: string) => api.get<WorkflowTemplate>(`/api/v1/workflows/templates/${id}`),
+  createTemplate: (data: CreateWorkflowTemplateInput) =>
+    api.post<WorkflowTemplate>('/api/v1/workflows/templates', data),
+  updateTemplate: (id: string, data: CreateWorkflowTemplateInput) =>
+    api.put<WorkflowTemplate>(`/api/v1/workflows/templates/${id}`, data),
+  deleteTemplate: (id: string) => api.delete(`/api/v1/workflows/templates/${id}`),
+  activateTemplate: (id: string) =>
+    api.post(`/api/v1/workflows/templates/${id}/activate`),
+  deactivateTemplate: (id: string) =>
+    api.post(`/api/v1/workflows/templates/${id}/deactivate`),
 };
 
 // Reports API
@@ -694,6 +707,43 @@ export interface WorkflowMetrics {
   rejection_rate: number;
 }
 
+// Workflow Template types
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  is_default: boolean;
+  stages: WorkflowTemplateStage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowTemplateStage {
+  order: number;
+  name: string;
+  stage_type: 'intake' | 'review' | 'approval' | 'exception' | 'payment' | 'custom';
+  queue_id?: string;
+  sla_hours?: number;
+  escalation_hours?: number;
+  requires_action: boolean;
+  skip_conditions: RuleCondition[];
+  auto_advance_conditions: RuleCondition[];
+}
+
+export interface RuleCondition {
+  field: string;
+  operator: string;
+  value: unknown;
+}
+
+export interface CreateWorkflowTemplateInput {
+  name: string;
+  description?: string;
+  is_default: boolean;
+  stages: WorkflowTemplateStage[];
+}
+
 // Document types
 export interface DocumentUploadResponse {
   id: string;
@@ -713,6 +763,24 @@ export interface DocumentMetadata {
   created_at: string;
   url: string;
 }
+
+// Feedback API
+export interface FeedbackEntry {
+  id: string;
+  user_email: string;
+  user_name: string;
+  message: string;
+  category: string;
+  page?: string;
+  timestamp: string;
+}
+
+export const feedbackApi = {
+  submit: (data: { message: string; category?: string; page?: string }) =>
+    api.post<FeedbackEntry>('/api/v1/feedback', data),
+
+  list: () => api.get<FeedbackEntry[]>('/api/v1/feedback'),
+};
 
 // Organization Theme Types
 export interface OrganizationThemeColors {
