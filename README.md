@@ -22,6 +22,66 @@
 
 BillForge automates the full accounts payable lifecycle, from document capture through payment approval. Built as a modular monorepo with strict multi-tenant isolation, each module can be independently enabled per organization.
 
+## Screenshots
+
+<details open>
+<summary><strong>Dashboard</strong> - Real-time KPIs, quick actions, and activity feed</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Login</strong> - Multi-tenant login with product configuration</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/login.png" alt="Login" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Invoices</strong> - Invoice management with search, filters, and status tracking</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/invoices.png" alt="Invoices" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Invoice Processing</strong> - Approvals, work queues, and workflow management</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/processing.png" alt="Invoice Processing" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Workflow Templates</strong> - Multi-step invoice processing pipelines</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/workflows.png" alt="Workflow Templates" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Reports</strong> - Analytics, charts, and performance metrics</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/reports.png" alt="Reports" width="100%" />
+</p>
+</details>
+
+<details>
+<summary><strong>Settings</strong> - Organization configuration and customization</summary>
+<br />
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Settings" width="100%" />
+</p>
+</details>
+
+## Architecture
+
 ### System Architecture
 
 ```mermaid
