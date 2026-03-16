@@ -18,7 +18,7 @@ desired_count = 2
 db_engine = "mysql"
 db_engine_version = "5.7"
 db_instance_class = "db.t3.micro"
-db_username = "admin"
-db_password = "password"
+db_username = ""     # Set via CI/CD secrets
+db_password = ""     # Set via CI/CD secrets
 
 environment = "dev"

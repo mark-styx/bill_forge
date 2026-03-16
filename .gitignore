@@ -52,6 +52,9 @@ Cargo.lock
 .grepai/
 
 
+# Feedback data
+feedback.jsonl
+
 # Automation
 .venv
 ollama_mcp_server.py

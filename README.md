@@ -1,60 +1,64 @@
 # BillForge
 
-A modular SaaS platform for Accounts Payable teams to manage invoices, vendors, approvals, and reporting.
+A modular, multi-tenant SaaS platform for Accounts Payable teams to manage invoices, vendors, approvals, and reporting.
 
-## Architecture Overview
+## Architecture
 
-BillForge is built as a **modular monorepo** with complete tenant isolation. Each product module can be independently subscribed to, yet all share a cohesive user experience.
+BillForge is a **monorepo** with a Rust backend and Next.js frontend, built around strict tenant isolation. Each product module can be independently subscribed to while sharing a cohesive user experience.
 
-### Products
+### Modules
 
-| Product | Description | Key Features |
-|---------|-------------|--------------|
-| **Invoice Capture** | OCR-powered invoice data extraction | Multi-OCR support, field correction UI, data export, API |
-| **Invoice Processing** | Workflow management for invoice approval | Role-based approvals, custom routing rules, work queues |
-| **Vendor Management** | Vendor lifecycle management | Tax document storage, contractor communication |
-| **Reporting** | Analytics and dashboards | Cross-module insights, custom reports |
+| Module | Description | Key Features |
+|--------|-------------|--------------|
+| **Invoice Capture** | OCR-powered data extraction | Tesseract / AWS Textract / Google Vision, field correction, confidence scoring |
+| **Invoice Processing** | Workflow and approval management | Work queues, assignment rules, approval chains, delegation, limits |
+| **Vendor Management** | Vendor lifecycle and communication | Tax document storage, contacts, messaging |
+| **Reporting** | Analytics and dashboards | Aging analysis, vendor summaries, workflow metrics, predictive analytics |
+| **Integrations** | Accounting system sync | QuickBooks Online OAuth, Xero OAuth |
+| **Mobile** | Mobile app backend | Delta sync, push notifications (FCM + APNS), mobile approvals |
 
 ## Tech Stack
 
-- **Frontend**: Next.js 14+ (App Router), TypeScript, Tailwind CSS, shadcn/ui
-- **Backend**: Rust (Axum), DuckDB, SQLite (metadata)
-- **OCR**: Tesseract (local), AWS Textract, Google Vision (cloud options)
-- **Auth**: Custom JWT with tenant isolation
-- **Storage**: S3-compatible object storage
+- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, shadcn/ui, React Query, Zustand
+- **Backend**: Rust (Axum 0.7), async with Tokio
+- **Database**: PostgreSQL (via sqlx), 59 migrations
+- **Auth**: Custom JWT with per-request tenant isolation
+- **OCR**: Tesseract (default), AWS Textract, Google Vision
+- **Storage**: Local filesystem or S3-compatible object storage
+- **Testing**: Vitest, React Testing Library, MSW
 
 ## Project Structure
 
 ```
 bill_forge/
 ├── apps/
-│   └── web/                    # Next.js frontend application
+│   └── web/                      # Next.js frontend
 ├── backend/
 │   ├── crates/
-│   │   ├── api/                # HTTP API layer (Axum)
-│   │   ├── core/               # Shared domain logic
-│   │   ├── invoice-capture/    # OCR and data extraction
-│   │   ├── invoice-processing/ # Workflow engine
-│   │   ├── vendor-mgmt/        # Vendor management
-│   │   ├── reporting/          # Analytics engine
-│   │   ├── auth/               # Authentication & authorization
-│   │   └── db/                 # Database layer (DuckDB + SQLite)
-│   └── Cargo.toml              # Workspace configuration
+│   │   ├── api/                  # Axum HTTP API (routes, config, middleware)
+│   │   ├── core/                 # Domain types, traits, error handling
+│   │   ├── db/                   # PostgreSQL repositories (sqlx)
+│   │   ├── auth/                 # JWT authentication
+│   │   ├── invoice-capture/      # OCR pipeline
+│   │   ├── invoice-processing/   # Workflow engine
+│   │   ├── vendor-mgmt/          # Vendor management
+│   │   ├── reporting/            # Analytics
+│   │   ├── quickbooks/           # QuickBooks Online integration
+│   │   ├── xero/                 # Xero integration
+│   │   ├── worker/               # Background jobs
+│   │   ├── analytics/            # Predictive analytics
+│   │   ├── email/                # SMTP email
+│   │   ├── notifications/        # Slack/Teams notifications
+│   │   ├── mobile-push/          # FCM + APNS push notifications
+│   │   └── feedback/             # User feedback collection
+│   ├── migrations/               # PostgreSQL migrations
+│   └── Cargo.toml                # Workspace configuration
 ├── packages/
-│   └── shared-types/           # TypeScript types shared across modules
-├── migrations/                 # Database migrations
-├── sandbox/                    # Sandbox environment configuration
-└── docker/                     # Docker configurations
+│   └── shared-types/             # Shared TypeScript types
+├── sandbox/                      # Demo environment and seed data
+├── terraform/                    # Infrastructure as code
+└── docker/                       # Docker configurations
 ```
-
-## Multi-Tenancy Model
-
-BillForge uses **database-per-tenant** isolation:
-
-- Each tenant has isolated DuckDB files for analytical data
-- SQLite for tenant metadata and authentication
-- Complete data segregation with no possibility of cross-tenant access
-- Tenant context validated on every request
 
 ## Getting Started
 
@@ -62,23 +66,24 @@ BillForge uses **database-per-tenant** isolation:
 
 - Node.js 20+
 - Rust 1.75+
-- Docker & Docker Compose
+- PostgreSQL 15+
 - pnpm 8+
+- Docker & Docker Compose (optional, for managed infrastructure)
 
 ### Development Setup
 
 ```bash
-# Install dependencies
+# Install frontend dependencies
 pnpm install
 
-# Start infrastructure (databases, storage)
-docker-compose up -d
+# Start infrastructure (PostgreSQL, Redis)
+docker-compose -f docker/docker-compose.yml up -d
 
 # Run database migrations
 pnpm db:migrate
 
-# Start backend (Rust)
-cd backend && cargo run
+# Start backend
+pnpm backend:dev
 
 # Start frontend (separate terminal)
 pnpm dev
@@ -86,42 +91,75 @@ pnpm dev
 
 ### Sandbox Mode
 
+Pre-configured demo environment with seed data:
+
 ```bash
-# Start sandbox with seed data
 pnpm sandbox:start
-
-# Access at http://localhost:3000
-# Demo credentials in sandbox/README.md
 ```
 
-## Environment Variables
+### Production Build
 
-Copy `.env.example` to `.env` and configure:
+```bash
+# Backend
+cd backend && cargo build --release
+# Binary output: backend/target/release/billforge-server
 
-```env
-# Database
-DATABASE_URL=sqlite://./data/billforge.db
-TENANT_DB_PATH=./data/tenants
-
-# Authentication
-JWT_SECRET=your-secret-key
-JWT_EXPIRY=24h
-
-# OCR Configuration
-OCR_PROVIDER=tesseract # tesseract | aws_textract | google_vision
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-GOOGLE_APPLICATION_CREDENTIALS=
-
-# Storage
-STORAGE_PROVIDER=local # local | s3
-S3_BUCKET=
-S3_REGION=
+# Frontend
+pnpm build
 ```
 
-## API Documentation
+### Useful Commands
 
-API documentation available at `/api/docs` when running locally.
+| Command | Description |
+|---------|-------------|
+| `pnpm dev` | Start frontend dev server |
+| `pnpm backend:dev` | Start backend with hot reload |
+| `pnpm backend:build` | Production backend build |
+| `pnpm db:migrate` | Run database migrations |
+| `pnpm test` | Run all tests |
+| `pnpm lint` | Lint all packages |
+| `pnpm typecheck` | TypeScript type checking |
+| `pnpm sandbox:start` | Start sandbox with seed data |
+| `pnpm sandbox:reset` | Reset sandbox to clean state |
+
+## Configuration
+
+The backend is configured via environment variables. Key settings:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | Required |
+| `JWT_SECRET` | Secret for JWT signing | Required in production |
+| `BACKEND_HOST` | Server bind address | `127.0.0.1` |
+| `BACKEND_PORT` | Server port | `8080` |
+| `STORAGE_PROVIDER` | `local` or `s3` | `local` |
+| `OCR_PROVIDER` | `tesseract`, `aws_textract`, or `google_vision` | `tesseract` |
+| `REDIS_URL` | Redis connection string | Optional |
+
+See `.env.example` for a complete list.
+
+## API
+
+All API routes are namespaced under `/api/v1`:
+
+| Route | Module |
+|-------|--------|
+| `/api/v1/auth` | Authentication |
+| `/api/v1/invoices` | Invoice management |
+| `/api/v1/vendors` | Vendor management |
+| `/api/v1/workflows` | Queues, rules, approvals, delegations |
+| `/api/v1/reports` | Reporting and analytics |
+| `/api/v1/dashboard` | Dashboard metrics |
+| `/api/v1/documents` | Document storage |
+| `/api/v1/audit` | Audit logs |
+| `/api/v1/settings` | Organization settings |
+| `/api/v1/quickbooks` | QuickBooks OAuth |
+| `/api/v1/xero` | Xero OAuth |
+| `/api/v1/analytics/predictive` | Predictive analytics |
+| `/api/v1/mobile` | Mobile sync and push |
+| `/api/v1/feedback` | User feedback |
+
+Health checks available at `/health`, `/health/live`, `/health/ready`, `/health/detailed`.
 
 ## License
 
