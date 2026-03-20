@@ -12,7 +12,7 @@ const SANDBOX_TENANT_ID = 'sandbox-tenant-001';
 const SANDBOX_ADMIN = {
   email: 'admin@sandbox.local',
   password: 'sandbox123',
-  name: 'Sandbox Admin',
+  name: 'Sarah Chen',
 };
 
 // Demo vendors

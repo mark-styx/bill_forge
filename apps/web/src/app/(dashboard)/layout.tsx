@@ -6,12 +6,8 @@ import Link from 'next/link';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
-import { sandboxApi, PersonaInfo } from '@/lib/api';
-import { toast } from 'sonner';
 import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
 import { NotificationCenter, type Notification } from '@/components/ui/notification-center';
-import { ThemeQuickSwitcher } from '@/components/ui/theme-quick-switcher';
-import { FeedbackChat } from '@/components/ui/feedback-chat';
 import {
   FileText,
   ClipboardCheck,
@@ -22,16 +18,14 @@ import {
   Home,
   ChevronDown,
   ScanLine,
-  Layers,
-  RefreshCw,
   ChevronLeft,
   ChevronRight,
-  Check,
   AlertTriangle,
   FolderOpen,
   Workflow,
   ListChecks,
   Sparkles,
+  Bell,
 } from 'lucide-react';
 
 interface NavItem {
@@ -70,61 +64,50 @@ const navigation: NavItem[] = [
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
 ];
 
-const personaIcons: Record<string, typeof FileText> = {
-  full_platform: Layers,
-  invoice_ocr_only: ScanLine,
-  invoice_processing_only: ClipboardCheck,
-  vendor_management_only: Users,
-  ap_lite: FileText,
-};
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isAuthenticated, user, tenant, currentPersona, logout, hasModule, switchPersona, refreshTenantContext } = useAuthStore();
+  const { isAuthenticated, user, tenant, logout, hasModule } = useAuthStore();
   const { sidebarCollapsed, toggleSidebar, getCurrentColors } = useThemeStore();
-  const { getBrandGradient, isOrgThemeActive } = useOrganizationTheme();
+  const { getBrandGradient } = useOrganizationTheme();
 
-  const [personas, setPersonas] = useState<PersonaInfo[]>([]);
-  const [showPersonaSwitcher, setShowPersonaSwitcher] = useState(false);
-  const [switchingPersona, setSwitchingPersona] = useState(false);
   const [expandedSections, setExpandedSections] = useState<string[]>(['Invoice Capture', 'Processing']);
 
   const colors = getCurrentColors();
   const brandGradient = getBrandGradient();
 
-  // Sample notifications
+  // Notifications driven by real data in production — using realistic samples for demo
   const [notifications, setNotifications] = useState<Notification[]>([
     {
       id: '1',
       type: 'success',
       title: 'Invoice approved',
-      message: 'Invoice #INV-2024-001 has been approved.',
+      message: 'AWS-2024-JAN ($15,234.67) approved by Sarah Chen.',
       timestamp: new Date(Date.now() - 5 * 60 * 1000),
       read: false,
-      actionUrl: '/invoices/1',
+      actionUrl: '/processing/approvals',
       actionLabel: 'View',
       module: 'processing',
     },
     {
       id: '2',
-      type: 'info',
-      title: 'New vendor',
-      message: 'Acme Corporation completed registration.',
+      type: 'warning',
+      title: 'Overdue invoice',
+      message: 'ACME-2023-OLD is 60+ days past due. Needs attention.',
       timestamp: new Date(Date.now() - 30 * 60 * 1000),
       read: false,
-      actionUrl: '/vendors',
-      module: 'vendor',
+      actionUrl: '/processing/approvals',
+      module: 'processing',
     },
     {
       id: '3',
-      type: 'warning',
-      title: 'Review needed',
-      message: 'Invoice #INV-2024-003 flagged for review.',
+      type: 'info',
+      title: '5 invoices ready for payment',
+      message: '$7,213.45 total across 5 approved invoices.',
       timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
       read: true,
-      actionUrl: '/invoices/3',
-      module: 'capture',
+      actionUrl: '/processing/queues',
+      module: 'processing',
     },
   ]);
 
@@ -147,14 +130,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [hasHydrated, isAuthenticated, router]);
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      sandboxApi.listPersonas()
-        .then(setPersonas)
-        .catch(() => setPersonas([]));
-    }
-  }, [isAuthenticated]);
-
   if (!hasHydrated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -170,21 +145,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push('/login');
   };
 
-  const handleSwitchPersona = async (personaId: string) => {
-    setSwitchingPersona(true);
-    try {
-      await switchPersona(personaId);
-      await refreshTenantContext();
-      toast.success('Configuration updated');
-      setShowPersonaSwitcher(false);
-      router.refresh();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to switch');
-    } finally {
-      setSwitchingPersona(false);
-    }
-  };
-
   const toggleSection = (name: string) => {
     setExpandedSections(prev =>
       prev.includes(name) ? prev.filter(s => s !== name) : [...prev, name]
@@ -198,8 +158,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
     return pathname.startsWith(`${item.href}/`);
   };
-
-  const CurrentPersonaIcon = currentPersona ? personaIcons[currentPersona.id] || Layers : Layers;
 
   return (
     <div className="min-h-screen bg-background">
@@ -306,23 +264,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Bottom section */}
         <div className="border-t border-border flex-shrink-0">
-          {/* Module badges */}
-          {!sidebarCollapsed && (
-            <div className="p-3 border-b border-border/50">
-              <div className="flex flex-wrap gap-1.5">
-                {hasModule('invoice_capture') && (
-                  <span className="bright-chip bright-chip-capture">OCR</span>
-                )}
-                {hasModule('invoice_processing') && (
-                  <span className="bright-chip bright-chip-processing">Processing</span>
-                )}
-                {hasModule('vendor_management') && (
-                  <span className="bright-chip bright-chip-vendor">Vendors</span>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* User */}
           <div className={`p-3 ${sidebarCollapsed ? 'flex justify-center' : ''}`}>
             {sidebarCollapsed ? (
@@ -372,75 +313,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
             {/* Right actions */}
             <div className="flex items-center gap-2">
-              {/* Persona Switcher */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowPersonaSwitcher(!showPersonaSwitcher)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm bg-secondary/80 hover:bg-secondary transition-colors"
-                >
-                  <CurrentPersonaIcon className="w-4 h-4" style={{ color: `hsl(${colors.primary})` }} />
-                  <span className="text-foreground font-medium hidden sm:inline">
-                    {currentPersona?.name || 'Full Platform'}
-                  </span>
-                  <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${showPersonaSwitcher ? 'rotate-180' : ''}`} />
-                </button>
-
-                {showPersonaSwitcher && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowPersonaSwitcher(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-72 bg-card border border-border rounded-2xl shadow-soft-xl z-50 animate-scale-in overflow-hidden">
-                      <div className="p-3 border-b border-border bg-secondary/30">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Configuration</p>
-                      </div>
-                      <div className="max-h-80 overflow-y-auto p-1.5">
-                        {personas.map((persona) => {
-                          const Icon = personaIcons[persona.id] || Layers;
-                          const isSelected = persona.id === currentPersona?.id;
-
-                          return (
-                            <button
-                              key={persona.id}
-                              onClick={() => handleSwitchPersona(persona.id)}
-                              disabled={switchingPersona || isSelected}
-                              className={`w-full p-2.5 rounded-xl text-left flex items-start gap-3 transition-all disabled:opacity-50 ${
-                                isSelected ? 'bg-primary/10 border border-primary/20' : 'hover:bg-secondary'
-                              }`}
-                            >
-                              <div
-                                className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                                  isSelected ? 'text-white shadow-md' : 'bg-secondary text-muted-foreground'
-                                }`}
-                                style={isSelected ? { background: brandGradient } : {}}
-                              >
-                                <Icon className="w-4 h-4" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className={`text-sm font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>
-                                  {persona.name}
-                                </p>
-                                <p className="text-xs text-muted-foreground truncate">
-                                  {persona.modules?.filter(m => m.enabled).length || 0} modules
-                                </p>
-                              </div>
-                              {isSelected && <Check className="w-4 h-4 text-primary mt-1" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {switchingPersona && (
-                        <div className="p-3 border-t border-border flex items-center justify-center text-muted-foreground bg-secondary/30">
-                          <RefreshCw className="w-4 h-4 animate-spin mr-2" />
-                          <span className="text-sm">Switching...</span>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Theme Quick Switcher */}
-              <ThemeQuickSwitcher compact />
-
               {/* Notifications */}
               <NotificationCenter
                 notifications={notifications}
@@ -472,9 +344,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Page content */}
         <main className="p-6 animate-fade-in">{children}</main>
       </div>
-
-      {/* Feedback Chat */}
-      <FeedbackChat />
     </div>
   );
 }

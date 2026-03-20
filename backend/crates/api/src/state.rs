@@ -109,7 +109,7 @@ impl AppState {
         tracing::info!("Creating sandbox tenant and admin user...");
 
         // Create sandbox tenant with all modules enabled
-        metadata_db.create_tenant(&sandbox_tenant_id, "Sandbox Company").await
+        metadata_db.create_tenant(&sandbox_tenant_id, "Meridian Industries").await
             .map_err(|e| anyhow::anyhow!("Failed to create sandbox tenant: {}", e))?;
 
         // Enable all modules for sandbox
@@ -201,7 +201,7 @@ impl AppState {
             tenant_id: sandbox_tenant_id.clone(),
             email: "admin@sandbox.local".to_string(),
             password_hash,
-            name: "Sandbox Admin".to_string(),
+            name: "Sarah Chen".to_string(),
             roles: vec![Role::TenantAdmin],
         }).await
             .map_err(|e| anyhow::anyhow!("Failed to create sandbox user: {}", e))?;
@@ -209,8 +209,8 @@ impl AppState {
         // Seed demo data
         Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
 
-        tracing::info!("Sandbox initialized! Login with:");
-        tracing::info!("  Tenant ID: {}", sandbox_tenant_id);
+        tracing::info!("Demo environment initialized. Login with:");
+        tracing::info!("  Tenant: Meridian Industries ({})", sandbox_tenant_id);
         tracing::info!("  Email: admin@sandbox.local");
         tracing::info!("  Password: sandbox123");
 

@@ -361,7 +361,7 @@ Once all services are healthy (takes 2-3 minutes on first build):
 | Email | `admin@sandbox.local` |
 | Password | `sandbox123` |
 
-The sandbox tenant is auto-created on first startup with:
+The demo tenant (Meridian Industries) is auto-created on first startup with:
 - 16 vendors (business + contractor types)
 - 30+ invoices across all workflow stages (pending review, pending approval, approved, paid, on hold, rejected, OCR errors)
 - 5 work queues (AP Processing, Approval, Payment, Error, Hold)

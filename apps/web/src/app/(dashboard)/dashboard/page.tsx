@@ -14,14 +14,12 @@ import {
   CheckCircle,
   DollarSign,
   Users,
-  TrendingUp,
   AlertCircle,
   ArrowRight,
   ArrowUpRight,
   Plus,
   Upload,
   Eye,
-  Sparkles,
   Activity,
   Zap,
   BarChart3,
@@ -30,7 +28,7 @@ import {
 import Link from 'next/link';
 
 export default function DashboardPage() {
-  const { hasModule, currentPersona, user, tenant } = useAuthStore();
+  const { hasModule, user, tenant } = useAuthStore();
   const { getCurrentColors } = useThemeStore();
   const { getBrandGradient } = useOrganizationTheme();
 
@@ -51,8 +49,6 @@ export default function DashboardPage() {
       colorKey: 'warning',
       href: '/invoices?status=pending',
       module: 'invoice_capture',
-      trend: '+12%',
-      trendUp: true,
     },
     {
       name: 'Awaiting Approval',
@@ -121,29 +117,11 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground flex items-center gap-2">
+          <h1 className="text-2xl font-semibold text-foreground">
             Welcome back, {user?.name?.split(' ')[0] || 'there'}
-            <Sparkles className="w-5 h-5 text-warning" />
           </h1>
           <p className="text-muted-foreground mt-0.5">{welcomeMessage()}</p>
         </div>
-        {currentPersona && (
-          <div
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border"
-            style={{
-              background: `linear-gradient(135deg, hsl(${colors.primary} / 0.05), hsl(${colors.accent} / 0.05))`,
-              borderColor: `hsl(${colors.primary} / 0.2)`,
-            }}
-          >
-            <div
-              className="w-2 h-2 rounded-full animate-pulse"
-              style={{ background: `hsl(${colors.primary})` }}
-            />
-            <span className="text-sm font-medium" style={{ color: `hsl(${colors.primary})` }}>
-              {currentPersona.name}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* Stats Grid */}
@@ -187,15 +165,6 @@ export default function DashboardPage() {
                 </div>
                 <p className="text-sm text-muted-foreground mt-0.5">{stat.name}</p>
               </div>
-              {stat.trend && (
-                <div
-                  className="mt-2 flex items-center gap-1 text-xs font-medium"
-                  style={{ color: stat.trendUp ? 'hsl(162 78% 42%)' : 'hsl(0 84% 60%)' }}
-                >
-                  <TrendingUp className={`w-3 h-3 ${stat.trendUp ? '' : 'rotate-180'}`} />
-                  {stat.trend} from last week
-                </div>
-              )}
             </Link>
           );
         })}
@@ -291,7 +260,7 @@ export default function DashboardPage() {
                 className="card card-hover p-4 group flex items-center gap-4"
               >
                 <div className="bright-icon bright-icon-reporting">
-                  <TrendingUp className="w-5 h-5" />
+                  <BarChart3 className="w-5 h-5" />
                 </div>
                 <div className="flex-1">
                   <p className="font-medium text-foreground">View Reports</p>
@@ -312,9 +281,10 @@ export default function DashboardPage() {
           <div className="card p-4">
             <div className="space-y-4">
               {[
-                { action: 'Invoice #1247 approved', time: '2 min ago', icon: CheckCircle, colorKey: 'success' },
-                { action: 'New vendor: Acme Corp', time: '15 min ago', icon: Users, colorKey: 'vendor' },
-                { action: 'Invoice #1246 uploaded', time: '1 hour ago', icon: Upload, colorKey: 'capture' },
+                { action: 'AWS-2024-JAN approved', time: '2 min ago', icon: CheckCircle, colorKey: 'success' },
+                { action: '6 invoices uploaded via OCR', time: '15 min ago', icon: Upload, colorKey: 'capture' },
+                { action: 'MMA-Q1-2024 sent for approval', time: '1 hour ago', icon: AlertCircle, colorKey: 'warning' },
+                { action: 'DevOps Solutions LLC added', time: '3 hours ago', icon: Users, colorKey: 'vendor' },
               ].map((activity, i) => {
                 const colorValue = getColorValue(activity.colorKey);
                 return (
@@ -333,14 +303,6 @@ export default function DashboardPage() {
                 );
               })}
             </div>
-            <Link
-              href="/activity"
-              className="mt-4 flex items-center justify-center gap-1 text-sm font-medium transition-colors"
-              style={{ color: `hsl(${colors.primary})` }}
-            >
-              View all activity
-              <ArrowRight className="w-4 h-4" />
-            </Link>
           </div>
         </div>
       </div>
@@ -372,13 +334,13 @@ export default function DashboardPage() {
                     <div className="text-2xl font-semibold text-foreground">
                       <AnimatedCounter value={summary?.invoices_pending_review ?? 0} duration={1000} />
                     </div>
-                    <p className="text-xs text-muted-foreground">Pending</p>
+                    <p className="text-xs text-muted-foreground">Pending review</p>
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={94} suffix="%" duration={1200} />
+                      <AnimatedCounter value={summary?.invoices_this_month ?? 0} duration={1200} />
                     </div>
-                    <p className="text-xs text-muted-foreground">Accuracy</p>
+                    <p className="text-xs text-muted-foreground">This month</p>
                   </div>
                 </div>
                 <Link href="/invoices">
@@ -462,9 +424,9 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={85} suffix="%" duration={1200} />
+                      <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1200} />
                     </div>
-                    <p className="text-xs text-muted-foreground">W-9 on file</p>
+                    <p className="text-xs text-muted-foreground">Ready to pay</p>
                   </div>
                 </div>
                 <Link href="/vendors">
