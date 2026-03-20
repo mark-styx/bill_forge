@@ -5,9 +5,10 @@ global:
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: []
+        - targets: ['alertmanager:9093']
 
-rule_files: []
+rule_files:
+  - '/etc/prometheus/alerts.yml'
 
 scrape_configs:
   # BillForge API metrics

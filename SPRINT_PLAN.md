@@ -135,9 +135,9 @@
 
 ### P1 - Should Have for Pilot
 - [ ] OpenAPI/Swagger documentation review
-- [ ] Error handling audit (replace remaining `.unwrap()` in production paths)
-- [ ] Rate limiting on auth endpoints
-- [ ] Production logging configuration (JSON structured logs)
+- [x] Error handling audit — 24 `.unwrap()` calls in API crate audited, all safe (metrics registration, serde serialization, Response::builder)
+- [x] Rate limiting on auth endpoints — per-IP token bucket (20 req/60s), returns 429 when exceeded
+- [x] Production logging configuration — JSON structured logs in production, human-readable in dev
 - [ ] Basic monitoring alerts (Prometheus/Grafana configs exist)
 
 ### P2 - Nice to Have
@@ -159,6 +159,6 @@
 | Dockerfile (frontend) | ✅ |
 | Terraform modules | ✅ |
 | Kubernetes manifests | ✅ |
-| GitHub Actions CI | 🔧 Being fixed |
+| GitHub Actions CI | ✅ Green (Postgres service containers for sqlx) |
 | Prometheus/Grafana | ✅ Config exists |
 | Nginx reverse proxy | ✅ Config exists |
