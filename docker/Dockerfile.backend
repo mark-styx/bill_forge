@@ -35,11 +35,18 @@ RUN if [ -d ".sqlx" ] && [ "$(ls -A .sqlx 2>/dev/null)" ]; then \
     else \
       echo "==> No sqlx cache found, using embedded PostgreSQL"; \
       pg_ctlcluster 15 main start && \
+      echo "==> PG started, creating database..."; \
       su postgres -c "createdb billforge" && \
+      echo "==> Database created, adding extensions..."; \
       su postgres -c "psql -d billforge -c 'CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";'" && \
+      echo "==> Running migrations..."; \
       for f in migrations/*.sql; do \
-        su postgres -c "psql -d billforge -f /app/$f" 2>/dev/null || true; \
+        echo "  Running: $(basename $f)"; \
+        su postgres -c "psql -d billforge -f /app/$f" 2>&1 || echo "  WARN: $(basename $f) had errors"; \
       done && \
+      echo "==> Migration summary:"; \
+      su postgres -c "psql -d billforge -c '\dt'" && \
+      echo "==> Starting cargo build..."; \
       DATABASE_URL=postgres://postgres@localhost:5432/billforge \
         cargo build --release --bin billforge-server 2>&1 && \
       (DATABASE_URL=postgres://postgres@localhost:5432/billforge \

@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts (rebuilt in Docker)
+.next
+out
+dist
+build
+target
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Test/coverage
+coverage/
+.nyc_output/
+
+# Data directories
+data/
+
+# Agent artifacts
+.claude
+.locust/
+agent-logs/
+.grepai/

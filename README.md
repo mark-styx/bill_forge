@@ -336,24 +336,43 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) to access the application.
 
-### Full-Stack Docker
+### Full-Stack Docker (Recommended for Demos)
 
-Run everything in containers:
+Run the entire stack in containers — no Rust or Node.js toolchain required:
 
 ```bash
 docker compose up --build
-# API: http://localhost:8080
-# Web: http://localhost:3000
-# MinIO console: http://localhost:9001 (minioadmin/minioadmin)
 ```
 
-### Sandbox Mode
+Once all services are healthy (takes 2-3 minutes on first build):
 
-Launch a pre-configured demo environment:
+| Service | URL |
+|---------|-----|
+| **Web UI** | [http://localhost:3000](http://localhost:3000) |
+| **API** | [http://localhost:8080](http://localhost:8080) |
+| **Swagger** | [http://localhost:8080/swagger-ui](http://localhost:8080/swagger-ui) |
+| **MinIO Console** | [http://localhost:9001](http://localhost:9001) (minioadmin/minioadmin) |
+
+**Demo Login Credentials:**
+
+| Field | Value |
+|-------|-------|
+| Tenant ID | `11111111-1111-1111-1111-111111111111` |
+| Email | `admin@sandbox.local` |
+| Password | `sandbox123` |
+
+The sandbox tenant is auto-created on first startup with:
+- 16 vendors (business + contractor types)
+- 30+ invoices across all workflow stages (pending review, pending approval, approved, paid, on hold, rejected, OCR errors)
+- 5 work queues (AP Processing, Approval, Payment, Error, Hold)
+- Assignment rules and approval requests
+- Line item details for select invoices
+
+To reset demo data, remove volumes and restart:
 
 ```bash
-pnpm sandbox:start    # Start with seed data
-pnpm sandbox:reset    # Reset to clean state
+docker compose down -v
+docker compose up --build
 ```
 
 ### Production Build
