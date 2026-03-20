@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO approver_expertise (\n                id, tenant_id, user_id, expertise_type, expertise_key,\n                total_approved, total_rejected, avg_time_hours, expertise_score,\n                last_used_at, created_at, updated_at\n            ) VALUES (\n                $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), NOW()\n            )\n            ON CONFLICT (tenant_id, user_id, expertise_type, expertise_key)\n            DO UPDATE SET\n                total_approved = approver_expertise.total_approved + $6,\n                total_rejected = approver_expertise.total_rejected + $7,\n                avg_time_hours = $8,\n                expertise_score = $9,\n                last_used_at = NOW(),\n                updated_at = NOW()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Numeric",
+        "Numeric"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9dbb9882198b58fa8645496bfa5491fd44b33077585e6a7d0b10efe8604028b7"
+}

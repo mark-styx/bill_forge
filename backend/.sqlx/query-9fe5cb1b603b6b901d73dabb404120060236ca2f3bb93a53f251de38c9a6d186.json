@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            selected_approver_id as user_id,\n            routing_factors->>'vendor_id' as vendor_id,\n            routing_factors->>'department' as department,\n            routing_factors->>'gl_code' as gl_code,\n            outcome,\n            time_to_decision_hours\n        FROM routing_optimization_log\n        WHERE tenant_id = $1\n            AND outcome IS NOT NULL\n            AND created_at > NOW() - INTERVAL '30 days'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "department",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "gl_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "outcome",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "time_to_decision_hours",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "9fe5cb1b603b6b901d73dabb404120060236ca2f3bb93a53f251de38c9a6d186"
+}

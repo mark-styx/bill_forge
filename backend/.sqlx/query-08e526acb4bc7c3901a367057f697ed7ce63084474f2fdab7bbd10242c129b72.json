@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::int\n        FROM approval_requests\n        WHERE tenant_id = $1\n          AND requested_from->>'user_id' = $2\n          AND status = 'pending'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "08e526acb4bc7c3901a367057f697ed7ce63084474f2fdab7bbd10242c129b72"
+}

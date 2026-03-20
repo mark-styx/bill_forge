@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM routing_optimization_log\n        WHERE tenant_id = $1\n            AND created_at < NOW() - INTERVAL '90 days'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8253c3e9e06955f1cb68f311b251af228e58a6b4ffa6c3d4364ed2835be58667"
+}

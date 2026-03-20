@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT channel, enabled, notification_types, priority_filter,\n               quiet_hours_start, quiet_hours_end, quiet_hours_timezone\n        FROM user_notification_preferences\n        WHERE user_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "notification_types",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 3,
+        "name": "priority_filter",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "quiet_hours_start",
+        "type_info": "Time"
+      },
+      {
+        "ordinal": 5,
+        "name": "quiet_hours_end",
+        "type_info": "Time"
+      },
+      {
+        "ordinal": 6,
+        "name": "quiet_hours_timezone",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "df9f2f8b61cf389ca8f0104a099ee0cfe87f6c9d66623cfbbc6afe53f75cc2da"
+}

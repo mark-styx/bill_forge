@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            user_id,\n            active_approvals,\n            pending_approvals,\n            completed_this_week,\n            avg_approval_time_hours,\n            workload_score\n        FROM approver_workload_tracking\n        WHERE tenant_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "active_approvals",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "pending_approvals",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "completed_this_week",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "avg_approval_time_hours",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 5,
+        "name": "workload_score",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "b640e5515ff4e6ed332ecbe5a1edd3056fbb999aabbced10fdd4ab47d0aae594"
+}

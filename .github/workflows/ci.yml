@@ -73,19 +73,13 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Generate sqlx offline cache
+      - name: Verify sqlx cache is committed
         run: |
-          cargo install sqlx-cli --no-default-features --features postgres || true
-          cargo sqlx prepare --workspace -- --all-targets --all-features
-        continue-on-error: true
-
-      - name: Upload sqlx cache
-        uses: actions/upload-artifact@v4
-        with:
-          name: sqlx-cache
-          path: backend/.sqlx/
-          if-no-files-found: warn
-          retention-days: 1
+          if [ -d ".sqlx" ] && [ "$(ls .sqlx/*.json 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "sqlx cache found with $(ls .sqlx/*.json | wc -l) query files"
+          else
+            echo "::warning::No .sqlx/ cache found — run 'cargo sqlx prepare --workspace' locally and commit .sqlx/"
+          fi
 
   # Backend tests
   backend-test:
@@ -271,24 +265,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download sqlx cache
-        uses: actions/download-artifact@v4
-        with:
-          name: sqlx-cache
-          path: backend/.sqlx/
-        continue-on-error: true  # Build can still work if cache generation failed
-
-      - name: Verify sqlx cache
-        id: sqlx-check
-        run: |
-          if [ -d "backend/.sqlx" ] && [ "$(ls backend/.sqlx/*.json 2>/dev/null | wc -l)" -gt 0 ]; then
-            echo "sqlx cache found with $(ls backend/.sqlx/*.json | wc -l) files"
-            echo "has_cache=true" >> $GITHUB_OUTPUT
-          else
-            echo "No valid sqlx cache found, Docker will use embedded PostgreSQL"
-            echo "has_cache=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -299,8 +275,6 @@ jobs:
           file: ./docker/Dockerfile.backend
           push: false
           tags: billforge-api:test
-          build-args: |
-            SQLX_OFFLINE=${{ steps.sqlx-check.outputs.has_cache }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

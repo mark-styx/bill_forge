@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, vendor_name, invoice_number, total_amount_cents, currency, due_date, processing_status, modified_at\n        FROM invoices\n        WHERE tenant_id = $1\n          AND modified_at > $2\n        ORDER BY modified_at DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "invoice_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_amount_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "due_date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 6,
+        "name": "processing_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "modified_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "49d452849e1c33a11921cbee89db491b8cf852c459154b84e13ff789710c4cd4"
+}

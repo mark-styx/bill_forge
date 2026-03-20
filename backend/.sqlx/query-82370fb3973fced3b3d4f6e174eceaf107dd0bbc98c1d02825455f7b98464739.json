@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::int\n        FROM invoices\n        WHERE tenant_id = $1\n          AND processing_status = 'pending_review'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "82370fb3973fced3b3d4f6e174eceaf107dd0bbc98c1d02825455f7b98464739"
+}

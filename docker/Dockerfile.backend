@@ -1,50 +1,27 @@
 # Multi-stage build for Rust backend
 # BillForge API Server
 #
-# When CI provides a .sqlx/ cache, builds with SQLX_OFFLINE=true (fast, no PG).
-# Otherwise, starts embedded PostgreSQL for sqlx compile-time validation.
+# Uses committed .sqlx/ cache for offline builds (no database required at build time).
 
 # Build stage
 FROM rust:slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies + PostgreSQL for fallback sqlx validation
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     curl \
-    postgresql \
-    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire backend directory (includes .sqlx/ from CI if present)
+# Copy the entire backend directory (includes .sqlx/ cache)
 COPY backend/ ./
 
-# Build: auto-detect .sqlx cache or fallback to embedded PostgreSQL
-RUN if [ -d ".sqlx" ] && ls .sqlx/*.json >/dev/null 2>&1; then \
-      echo "==> sqlx offline cache detected — building with SQLX_OFFLINE=true"; \
-      ls .sqlx/*.json | wc -l; \
-      SQLX_OFFLINE=true cargo build --release --bin billforge-server 2>&1 && \
-      (SQLX_OFFLINE=true cargo build --release --bin billforge-worker 2>&1 || true); \
-    else \
-      echo "==> No sqlx cache — using embedded PostgreSQL"; \
-      pg_ctlcluster 15 main start && \
-      su postgres -c "createdb billforge" && \
-      su postgres -c "psql -d billforge -c 'CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";'" && \
-      echo "--- Running migrations ---"; \
-      for f in migrations/*.sql; do \
-        su postgres -c "psql -d billforge -f /app/$f" 2>&1 || true; \
-      done && \
-      echo "--- Tables after migrations ---"; \
-      su postgres -c "psql -d billforge -c '\dt'" && \
-      echo "--- Starting cargo build ---"; \
-      DATABASE_URL=postgres://postgres@localhost:5432/billforge \
-        cargo build --release --bin billforge-server 2>&1 && \
-      (DATABASE_URL=postgres://postgres@localhost:5432/billforge \
-        cargo build --release --bin billforge-worker 2>&1 || true) && \
-      pg_ctlcluster 15 main stop; \
-    fi
+# Build with sqlx offline mode using committed cache
+ENV SQLX_OFFLINE=true
+RUN cargo build --release --bin billforge-server 2>&1 && \
+    (cargo build --release --bin billforge-worker 2>&1 || true)
 
 # Runtime stage — slim image
 FROM debian:bookworm-slim

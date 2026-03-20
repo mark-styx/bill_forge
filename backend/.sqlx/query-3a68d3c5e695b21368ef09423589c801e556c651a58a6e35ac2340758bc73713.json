@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE device_tokens\n        SET is_active = false, updated_at = NOW()\n        WHERE tenant_id = $1 AND user_id = $2 AND device_id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3a68d3c5e695b21368ef09423589c801e556c651a58a6e35ac2340758bc73713"
+}

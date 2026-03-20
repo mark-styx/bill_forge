@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO user_notification_preferences (\n            tenant_id, user_id, channel, enabled, notification_types,\n            priority_filter, quiet_hours_start, quiet_hours_end, quiet_hours_timezone\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        ON CONFLICT (user_id, channel)\n        DO UPDATE SET\n            enabled = $4,\n            notification_types = $5,\n            priority_filter = $6,\n            quiet_hours_start = $7,\n            quiet_hours_end = $8,\n            quiet_hours_timezone = $9,\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Bool",
+        "TextArray",
+        "Varchar",
+        "Time",
+        "Time",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "54ebcbb57e310db4a0ab734496b315007040b34dd254bb6e4444e34581ec9ccb"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE teams_webhooks\n        SET is_active = false, updated_at = NOW()\n        WHERE user_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f6c0fd1ce59b5d8d22254e7e71e6e8557c36209a985fdb5519d128aea517efe0"
+}

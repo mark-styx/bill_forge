@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE slack_connections\n        SET is_active = false, updated_at = NOW()\n        WHERE tenant_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31bfd8a605b1538edf4a92ce27ed4435b07804e87780bb65804a317c20bf1d94"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE approver_workload_tracking\n            SET\n                workload_score = $2,\n                metrics_updated_at = NOW()\n            WHERE tenant_id = $1 AND user_id = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Numeric",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38fe4df10eddc2e3d7936e2c7e537f348130906d8359780ddc7040572926bb38"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE approval_requests\n        SET status = 'rejected', responded_at = NOW(), comments = $3\n        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fdacff7da95ab9e71435718ab58054e015edaaf8b416564189d499bf8d079a19"
+}

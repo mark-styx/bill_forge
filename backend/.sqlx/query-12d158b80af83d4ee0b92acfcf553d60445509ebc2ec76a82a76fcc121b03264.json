@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, vendor_name, invoice_number, total_amount_cents, currency\n        FROM invoices\n        WHERE tenant_id = $1\n          AND (vendor_name ILIKE $2 OR invoice_number ILIKE $2)\n        ORDER BY created_at DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "invoice_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_amount_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "currency",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "12d158b80af83d4ee0b92acfcf553d60445509ebc2ec76a82a76fcc121b03264"
+}

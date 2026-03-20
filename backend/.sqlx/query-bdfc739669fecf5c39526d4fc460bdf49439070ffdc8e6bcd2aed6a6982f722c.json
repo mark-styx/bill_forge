@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO slack_connections (\n            tenant_id, user_id, slack_team_id, slack_team_name, slack_user_id,\n            bot_user_id, access_token, bot_access_token, scope, installed_at\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())\n        ON CONFLICT (tenant_id, slack_team_id)\n        DO UPDATE SET\n            slack_team_name = $4,\n            slack_user_id = $5,\n            bot_user_id = $6,\n            access_token = $7,\n            bot_access_token = $8,\n            scope = $9,\n            updated_at = NOW(),\n            is_active = true\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bdfc739669fecf5c39526d4fc460bdf49439070ffdc8e6bcd2aed6a6982f722c"
+}
