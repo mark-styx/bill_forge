@@ -4,7 +4,7 @@
 -- Table: spend_forecasts
 -- Stores time-series forecasts for vendors, departments, and GL codes
 CREATE TABLE spend_forecasts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Entity being forecasted
@@ -42,7 +42,7 @@ CREATE INDEX idx_spend_forecasts_valid ON spend_forecasts(valid_until);
 -- Table: invoice_anomalies
 -- Detected anomalies in invoices, approvals, and vendor behavior
 CREATE TABLE invoice_anomalies (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Anomaly details
@@ -97,7 +97,7 @@ CREATE INDEX idx_invoice_anomalies_unacknowledged ON invoice_anomalies(tenant_id
 -- Table: forecast_accuracy_log
 -- Track forecast accuracy over time for model improvement
 CREATE TABLE forecast_accuracy_log (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Forecast reference
@@ -131,7 +131,7 @@ CREATE INDEX idx_forecast_accuracy_calculated ON forecast_accuracy_log(calculate
 -- Table: budget_alerts
 -- Proactive alerts for budget thresholds and vendor concentration
 CREATE TABLE budget_alerts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Alert details
@@ -181,7 +181,7 @@ CREATE INDEX idx_budget_alerts_active ON budget_alerts(tenant_id, dismissed) WHE
 -- Table: anomaly_rules
 -- Configurable thresholds for anomaly detection
 CREATE TABLE anomaly_rules (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
 
     -- Rule scope
