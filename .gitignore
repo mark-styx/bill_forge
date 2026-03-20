@@ -55,7 +55,7 @@ Cargo.lock
 # Feedback data
 feedback.jsonl
 
-# Automation
+# Automation & Agent Artifacts
 .venv
 ollama_mcp_server.py
 *complete.sh
@@ -65,7 +65,10 @@ progress-report-*.md
 progress-*.md
 agent-logs/
 agent-flow.sh
+agent-*.sh
+agent-*.txt
+*.code
+
 # Locust AI
-.locust/data/
-.locust/artifacts/
+.locust/
 *.locust.log
