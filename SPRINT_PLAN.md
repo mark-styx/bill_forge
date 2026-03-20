@@ -129,8 +129,8 @@
 ### P0 - Must Fix Before Pilot
 - [x] CI pipeline green on GitHub Actions
 - [ ] End-to-end smoke test: upload → OCR → queue → approve → export
-- [ ] Docker Compose full-stack startup (API + frontend + PostgreSQL + Redis)
-- [ ] Seed data for demo/pilot environments
+- [x] Docker Compose full-stack startup (API + frontend + PostgreSQL + Redis + MinIO)
+- [x] Seed data for demo/pilot environments (seed.rs with 5 pilot tenants)
 - [x] Environment variable documentation (`.env.example` complete)
 
 ### P1 - Should Have for Pilot

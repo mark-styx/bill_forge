@@ -308,20 +308,43 @@ bill_forge/
 ### Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Clone and configure
+git clone https://github.com/mark-styx/bill_forge.git
+cd bill_forge
+cp .env.example .env   # Edit with your settings
+
+# 2. Start infrastructure (PostgreSQL, Redis, MinIO)
+docker compose up -d postgres redis minio minio-init
+
+# 3. Install frontend dependencies
 pnpm install
 
-# 2. Start infrastructure
-docker-compose -f docker/docker-compose.yml up -d
+# 4. Run database migrations
+for f in backend/migrations/*.sql; do
+  PGPASSWORD=postgres psql -h localhost -U postgres -d billforge -f "$f"
+done
 
-# 3. Run migrations
-pnpm db:migrate
+# 5. Seed demo data (optional)
+cd backend && cargo run --bin seed && cd ..
 
-# 4. Start backend (with hot reload)
+# 6. Start backend (with hot reload)
 pnpm backend:dev
 
-# 5. Start frontend (separate terminal)
+# 7. Start frontend (separate terminal)
 pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) to access the application.
+
+### Full-Stack Docker
+
+Run everything in containers:
+
+```bash
+docker compose up --build
+# API: http://localhost:8080
+# Web: http://localhost:3000
+# MinIO console: http://localhost:9001 (minioadmin/minioadmin)
 ```
 
 ### Sandbox Mode

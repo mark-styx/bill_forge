@@ -54,8 +54,8 @@ RUN mkdir -p /app/data/tenants /app/data/files && \
 ENV RUST_LOG=info
 ENV BACKEND_HOST=0.0.0.0
 ENV BACKEND_PORT=8080
-ENV DATABASE_URL=sqlite:///app/data/billforge.db
-ENV TENANT_DB_PATH=/app/data/tenants
+# DATABASE_URL must be provided at runtime via environment variable
+# ENV DATABASE_URL=postgres://user:pass@host:5432/billforge
 ENV LOCAL_STORAGE_PATH=/app/data/files
 ENV OCR_PROVIDER=tesseract
 ENV ENVIRONMENT=production
