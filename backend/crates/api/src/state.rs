@@ -149,6 +149,46 @@ impl AppState {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to run QuickBooks migrations: {}", e))?;
 
+        // Run workflow + vendor-statement migrations (adds vendor columns, line items, etc.)
+        billforge_db::tenant_db::run_workflow_migrations(&tenant_pool).await
+            .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
+
+        // Create invoice_line_items and invoice_status_config for seed data
+        sqlx::raw_sql(r#"
+            CREATE TABLE IF NOT EXISTS invoice_line_items (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                line_number INTEGER NOT NULL DEFAULT 0,
+                description TEXT NOT NULL,
+                quantity REAL,
+                unit_price_cents BIGINT,
+                total_amount_cents BIGINT NOT NULL,
+                notes TEXT,
+                gl_code TEXT,
+                department TEXT
+            );
+            CREATE TABLE IF NOT EXISTS invoice_status_config (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tenant_id UUID NOT NULL,
+                status_key VARCHAR(50) NOT NULL,
+                display_label VARCHAR(100) NOT NULL,
+                color VARCHAR(50) NOT NULL DEFAULT 'gray',
+                bg_color VARCHAR(50) NOT NULL DEFAULT 'bg-secondary',
+                text_color VARCHAR(50) NOT NULL DEFAULT 'text-muted-foreground',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_terminal BOOLEAN NOT NULL DEFAULT false,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                category VARCHAR(20) NOT NULL DEFAULT 'processing',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(tenant_id, status_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
+        "#)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create line items tables: {}", e))?;
+
         // Run audit migrations
         audit.run_migrations(&sandbox_tenant_id).await
             .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
