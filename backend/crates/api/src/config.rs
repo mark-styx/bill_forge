@@ -34,6 +34,10 @@ pub struct Config {
     pub sage_intacct: Option<SageIntacctConfig>,
     /// Salesforce CRM integration configuration (None if Salesforce is disabled)
     pub salesforce: Option<SalesforceConfig>,
+    /// Workday Financial Management integration configuration (None if Workday is disabled)
+    pub workday: Option<WorkdayConfig>,
+    /// Bill.com AP payments integration configuration (None if Bill.com is disabled)
+    pub bill_com: Option<BillComConfig>,
     /// FCM (Firebase Cloud Messaging) configuration (None if push notifications are disabled)
     pub fcm: Option<FcmConfig>,
     /// APNS (Apple Push Notification Service) configuration (None if push notifications are disabled)
@@ -132,6 +136,44 @@ impl SalesforceEnvironment {
             _ => Self::Sandbox,
         }
     }
+}
+
+/// Workday Financial Management integration configuration
+#[derive(Debug, Clone)]
+pub struct WorkdayConfig {
+    /// OAuth client ID (from Workday API Client registration)
+    pub client_id: String,
+    /// OAuth client secret
+    pub client_secret: String,
+    /// Workday tenant URL (e.g. "https://impl.workday.com")
+    pub tenant_url: String,
+    /// Workday tenant name (e.g. "acme_corp")
+    pub tenant_name: String,
+    /// Environment (sandbox or production)
+    pub environment: WorkdayEnvironment,
+}
+
+/// Workday environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkdayEnvironment {
+    Sandbox,
+    Production,
+}
+
+impl WorkdayEnvironment {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "production" | "prod" => Self::Production,
+            _ => Self::Sandbox,
+        }
+    }
+}
+
+/// Bill.com AP payments integration configuration
+#[derive(Debug, Clone)]
+pub struct BillComConfig {
+    /// Whether Bill.com integration is enabled
+    pub enabled: bool,
 }
 
 /// Environment mode for the application
@@ -278,6 +320,31 @@ impl Config {
             None
         };
 
+        // Load Workday configuration (optional - only if WORKDAY_CLIENT_ID is set)
+        let workday = if let Ok(client_id) = std::env::var("WORKDAY_CLIENT_ID") {
+            Some(WorkdayConfig {
+                client_id,
+                client_secret: std::env::var("WORKDAY_CLIENT_SECRET")
+                    .unwrap_or_default(),
+                tenant_url: std::env::var("WORKDAY_TENANT_URL")
+                    .unwrap_or_else(|_| "https://impl.workday.com".to_string()),
+                tenant_name: std::env::var("WORKDAY_TENANT_NAME")
+                    .unwrap_or_default(),
+                environment: WorkdayEnvironment::from_str(
+                    &std::env::var("WORKDAY_ENVIRONMENT").unwrap_or_default()
+                ),
+            })
+        } else {
+            None
+        };
+
+        // Load Bill.com configuration (credential-based, always available)
+        let bill_com = Some(BillComConfig {
+            enabled: std::env::var("BILL_COM_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
+        });
+
         // Load FCM configuration (optional - only if FCM_API_KEY is set)
         let fcm = if let Ok(api_key) = std::env::var("FCM_API_KEY") {
             Some(FcmConfig {
@@ -343,6 +410,8 @@ impl Config {
             xero,
             sage_intacct,
             salesforce,
+            workday,
+            bill_com,
             fcm,
             apns,
         })

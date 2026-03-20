@@ -902,6 +902,7 @@ dependencies = [
  "axum-extra",
  "billforge-analytics",
  "billforge-auth",
+ "billforge-bill-com",
  "billforge-billing",
  "billforge-core",
  "billforge-db",
@@ -915,6 +916,7 @@ dependencies = [
  "billforge-sage-intacct",
  "billforge-salesforce",
  "billforge-vendor-mgmt",
+ "billforge-workday",
  "billforge-xero",
  "chrono",
  "dotenvy",
@@ -955,6 +957,23 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "billforge-bill-com"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "billforge-core",
+ "chrono",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
  "tracing",
  "uuid",
 ]
@@ -1239,6 +1258,26 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "billforge-workday"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "billforge-core",
+ "chrono",
+ "oauth2",
+ "quick-xml",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "urlencoding",
  "uuid",
 ]
 

@@ -19,14 +19,14 @@ import {
 } from 'lucide-react';
 
 type IntegrationStatus = 'connected' | 'disconnected' | 'available';
-type IntegrationCategory = 'erp' | 'crm' | 'all';
+type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'all';
 
 interface Integration {
   id: string;
   name: string;
   description: string;
   longDescription: string;
-  category: 'erp' | 'crm';
+  category: 'erp' | 'crm' | 'payments';
   status: IntegrationStatus;
   logo: string;
   authType: 'oauth' | 'credentials';
@@ -130,16 +130,64 @@ const integrations: Integration[] = [
     },
     docsUrl: 'https://developer.salesforce.com/docs',
   },
+  {
+    id: 'workday',
+    name: 'Workday',
+    description: 'Enterprise ERP with supplier sync, invoice export, and multi-company support.',
+    longDescription: 'Connect Workday Financial Management for enterprise-grade AP automation. Sync suppliers as vendors, map ledger accounts and spend categories, and export approved invoices as Workday supplier invoices. Supports multi-company environments with OAuth 2.0 (API Client registration) and automatic token refresh.',
+    category: 'erp',
+    status: 'disconnected' as IntegrationStatus,
+    logo: '/integrations/workday.svg',
+    authType: 'oauth' as const,
+    capabilities: [
+      'Supplier → Vendor sync',
+      'Ledger account mapping',
+      'Supplier invoice export',
+      'Multi-company support',
+      'Spend category sync',
+    ],
+    endpoints: {
+      connect: '/api/v1/workday/connect',
+      status: '/api/v1/workday/status',
+      disconnect: '/api/v1/workday/disconnect',
+    },
+    docsUrl: 'https://developer.workday.com/documentation',
+  },
+  {
+    id: 'bill-com',
+    name: 'Bill.com',
+    description: 'AP payment execution — ACH, check, and virtual card payments from approved invoices.',
+    longDescription: 'Connect Bill.com to execute payments directly from BillForge. After an invoice is approved and pushed to Bill.com as a bill, pay vendors via ACH, check, or virtual card — all without leaving BillForge. Supports bulk payments, funding account selection, and real-time payment status tracking. Uses session-based API authentication.',
+    category: 'payments',
+    status: 'disconnected' as IntegrationStatus,
+    logo: '/integrations/bill-com.svg',
+    authType: 'credentials' as const,
+    capabilities: [
+      'Vendor sync',
+      'Push approved invoices as bills',
+      'ACH / Check / Virtual Card payments',
+      'Bulk payment support',
+      'Payment status tracking',
+    ],
+    endpoints: {
+      connect: '/api/v1/bill-com/connect',
+      status: '/api/v1/bill-com/status',
+      disconnect: '/api/v1/bill-com/disconnect',
+    },
+    docsUrl: 'https://developer.bill.com/docs',
+  },
 ];
 
 const categoryIcons = {
   erp: Database,
   crm: Users,
+  payments: BarChart3,
 };
 
 const categoryLabels = {
   erp: 'ERP / Accounting',
   crm: 'CRM',
+  payments: 'Payments',
 };
 
 function IntegrationLogo({ integration }: { integration: Integration }) {
@@ -149,6 +197,8 @@ function IntegrationLogo({ integration }: { integration: Integration }) {
     'xero': { bg: 'bg-sky-100 dark:bg-sky-900/40', text: 'text-sky-700 dark:text-sky-300', label: 'XR' },
     'sage-intacct': { bg: 'bg-green-100 dark:bg-green-900/40', text: 'text-green-700 dark:text-green-300', label: 'SI' },
     'salesforce': { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-300', label: 'SF' },
+    'workday': { bg: 'bg-orange-100 dark:bg-orange-900/40', text: 'text-orange-700 dark:text-orange-300', label: 'WD' },
+    'bill-com': { bg: 'bg-violet-100 dark:bg-violet-900/40', text: 'text-violet-700 dark:text-violet-300', label: 'BC' },
   };
 
   const style = logoMap[integration.id] || { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-300', label: '??' };
@@ -312,7 +362,7 @@ export default function IntegrationsPage() {
       // Redirect to OAuth flow
       window.location.href = integration.endpoints.connect;
     } else {
-      // Show credentials modal (for Sage Intacct)
+      // Show credentials modal (for Sage Intacct, Bill.com)
       // In production this would open a modal form
       alert(`Configure ${integration.name} credentials in Settings → Integrations`);
     }
@@ -353,7 +403,7 @@ export default function IntegrationsPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-6">
-        {(['all', 'erp', 'crm'] as IntegrationCategory[]).map((cat) => (
+        {(['all', 'erp', 'crm', 'payments'] as IntegrationCategory[]).map((cat) => (
           <button
             key={cat}
             onClick={() => setFilter(cat)}
@@ -411,7 +461,7 @@ export default function IntegrationsPage() {
           Coming soon
         </h3>
         <div className="flex flex-wrap gap-3">
-          {['NetSuite', 'Workday', 'SAP', 'Microsoft Dynamics 365', 'FreshBooks', 'Bill.com'].map((name) => (
+          {['NetSuite', 'SAP', 'Microsoft Dynamics 365', 'FreshBooks'].map((name) => (
             <span
               key={name}
               className="inline-flex items-center px-3 py-1.5 text-sm text-zinc-400 dark:text-zinc-500 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg"

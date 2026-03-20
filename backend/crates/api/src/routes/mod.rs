@@ -16,6 +16,8 @@ pub mod quickbooks;
 pub mod xero;
 pub mod sage_intacct;
 pub mod salesforce;
+pub mod workday;
+pub mod bill_com;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
@@ -92,6 +94,10 @@ fn api_routes() -> Router<AppState> {
         .nest("/sage-intacct", sage_intacct::routes())
         // Salesforce CRM integration
         .nest("/salesforce", salesforce::routes())
+        // Workday Financial Management integration
+        .nest("/workday", workday::routes())
+        // Bill.com AP payments integration
+        .nest("/bill-com", bill_com::routes())
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)
