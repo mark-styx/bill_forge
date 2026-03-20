@@ -14,6 +14,8 @@ mod sandbox;
 pub mod email_actions;
 pub mod quickbooks;
 pub mod xero;
+pub mod sage_intacct;
+pub mod salesforce;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
@@ -86,6 +88,10 @@ fn api_routes() -> Router<AppState> {
         .nest("/quickbooks", quickbooks::routes())
         // Xero integration
         .nest("/xero", xero::routes())
+        // Sage Intacct integration
+        .nest("/sage-intacct", sage_intacct::routes())
+        // Salesforce CRM integration
+        .nest("/salesforce", salesforce::routes())
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)

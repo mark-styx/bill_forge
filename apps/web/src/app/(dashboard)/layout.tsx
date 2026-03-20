@@ -62,6 +62,7 @@ const navigation: NavItem[] = [
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
+  { name: 'Integrations', href: '/integrations', icon: Workflow, module: null },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

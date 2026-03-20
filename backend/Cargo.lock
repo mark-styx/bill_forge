@@ -912,6 +912,8 @@ dependencies = [
  "billforge-notifications",
  "billforge-quickbooks",
  "billforge-reporting",
+ "billforge-sage-intacct",
+ "billforge-salesforce",
  "billforge-vendor-mgmt",
  "billforge-xero",
  "chrono",
@@ -1184,6 +1186,43 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "billforge-sage-intacct"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "billforge-core",
+ "chrono",
+ "quick-xml",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "billforge-salesforce"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "billforge-core",
+ "chrono",
+ "oauth2",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "urlencoding",
  "uuid",
 ]
 
@@ -3381,6 +3420,16 @@ name = "protobuf"
 version = "2.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "106dd99e98437432fed6519dedecfade6a06a73bb7b2a1e019fdd2bee5778d94"
+
+[[package]]
+name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+dependencies = [
+ "memchr",
+ "serde",
+]
 
 [[package]]
 name = "quinn"

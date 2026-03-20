@@ -13,6 +13,8 @@ members = [
     "crates/reporting",
     "crates/quickbooks",
     "crates/xero",
+    "crates/sage-intacct",
+    "crates/salesforce",
     "crates/worker",
     "crates/analytics",
     "crates/feedback",

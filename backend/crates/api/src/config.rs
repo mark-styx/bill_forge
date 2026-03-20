@@ -30,6 +30,10 @@ pub struct Config {
     pub quickbooks: Option<QuickBooksConfig>,
     /// Xero integration configuration (None if Xero is disabled)
     pub xero: Option<XeroConfig>,
+    /// Sage Intacct integration configuration (None if Sage Intacct is disabled)
+    pub sage_intacct: Option<SageIntacctConfig>,
+    /// Salesforce CRM integration configuration (None if Salesforce is disabled)
+    pub salesforce: Option<SalesforceConfig>,
     /// FCM (Firebase Cloud Messaging) configuration (None if push notifications are disabled)
     pub fcm: Option<FcmConfig>,
     /// APNS (Apple Push Notification Service) configuration (None if push notifications are disabled)
@@ -86,6 +90,42 @@ pub enum XeroEnvironment {
 }
 
 impl XeroEnvironment {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "production" | "prod" => Self::Production,
+            _ => Self::Sandbox,
+        }
+    }
+}
+
+/// Sage Intacct ERP integration configuration
+#[derive(Debug, Clone)]
+pub struct SageIntacctConfig {
+    /// Whether Sage Intacct integration is enabled
+    pub enabled: bool,
+}
+
+/// Salesforce CRM integration configuration
+#[derive(Debug, Clone)]
+pub struct SalesforceConfig {
+    /// Connected App client ID (Consumer Key)
+    pub client_id: String,
+    /// Connected App client secret (Consumer Secret)
+    pub client_secret: String,
+    /// OAuth redirect URI
+    pub redirect_uri: String,
+    /// Environment (sandbox or production)
+    pub environment: SalesforceEnvironment,
+}
+
+/// Salesforce environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SalesforceEnvironment {
+    Sandbox,
+    Production,
+}
+
+impl SalesforceEnvironment {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "production" | "prod" => Self::Production,
@@ -215,6 +255,29 @@ impl Config {
             None
         };
 
+        // Load Sage Intacct configuration (credential-based, always available)
+        let sage_intacct = Some(SageIntacctConfig {
+            enabled: std::env::var("SAGE_INTACCT_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true),
+        });
+
+        // Load Salesforce configuration (optional - only if SALESFORCE_CLIENT_ID is set)
+        let salesforce = if let Ok(client_id) = std::env::var("SALESFORCE_CLIENT_ID") {
+            Some(SalesforceConfig {
+                client_id,
+                client_secret: std::env::var("SALESFORCE_CLIENT_SECRET")
+                    .unwrap_or_default(),
+                redirect_uri: std::env::var("SALESFORCE_REDIRECT_URI")
+                    .unwrap_or_else(|_| format!("{}/api/v1/salesforce/callback", frontend_url)),
+                environment: SalesforceEnvironment::from_str(
+                    &std::env::var("SALESFORCE_ENVIRONMENT").unwrap_or_default()
+                ),
+            })
+        } else {
+            None
+        };
+
         // Load FCM configuration (optional - only if FCM_API_KEY is set)
         let fcm = if let Ok(api_key) = std::env::var("FCM_API_KEY") {
             Some(FcmConfig {
@@ -278,6 +341,8 @@ impl Config {
             email,
             quickbooks,
             xero,
+            sage_intacct,
+            salesforce,
             fcm,
             apns,
         })
