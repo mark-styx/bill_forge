@@ -1,44 +1,51 @@
 # Multi-stage build for Rust backend
 # BillForge API Server
 #
-# Uses an embedded PostgreSQL during build so sqlx::query! macros
-# can validate queries against the real schema at compile time.
+# Two build strategies:
+# 1. With .sqlx/ cache: SQLX_OFFLINE=true, fast build, no PostgreSQL needed
+# 2. Without cache: starts embedded PostgreSQL for sqlx macro validation
 
-# Build stage with PostgreSQL for sqlx compile-time checking
+# Build stage
 FROM rust:slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies + PostgreSQL
+# Install build dependencies + PostgreSQL for fallback sqlx validation
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     postgresql \
     postgresql-client \
-    sudo \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Start PostgreSQL directly (service command is blocked by policy-rc.d in Docker)
-# Create database and run migrations
-COPY backend/migrations ./migrations
-RUN pg_ctlcluster 15 main start && \
-    sudo -u postgres createdb billforge && \
-    for f in migrations/*.sql; do \
-        sudo -u postgres psql -d billforge -f "$f" 2>/dev/null || true; \
-    done && \
-    pg_ctlcluster 15 main stop
+# Copy Cargo.lock if present (for reproducible builds)
+COPY backend/Cargo.lock* ./
 
-# Copy workspace configuration and source
+# Copy source code
 COPY backend/Cargo.toml ./
 COPY backend/crates ./crates
+COPY backend/migrations ./migrations
 
-# Build with live PostgreSQL for sqlx macro validation
-ENV DATABASE_URL=postgres://postgres@localhost:5432/billforge
-RUN pg_ctlcluster 15 main start && \
-    cargo build --release --bin billforge-server 2>&1 && \
-    (cargo build --release --bin billforge-worker 2>&1 || true) && \
-    pg_ctlcluster 15 main stop
+# Build with sqlx offline cache if available, otherwise use embedded PostgreSQL
+RUN if [ -d ".sqlx" ] && [ "$(ls -A .sqlx 2>/dev/null)" ]; then \
+      echo "==> Building with SQLX_OFFLINE cache (fast path)"; \
+      SQLX_OFFLINE=true cargo build --release --bin billforge-server 2>&1 && \
+      (SQLX_OFFLINE=true cargo build --release --bin billforge-worker 2>&1 || true); \
+    else \
+      echo "==> No sqlx cache found, using embedded PostgreSQL"; \
+      pg_ctlcluster 15 main start && \
+      su postgres -c "createdb billforge" && \
+      su postgres -c "psql -d billforge -c 'CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";'" && \
+      for f in migrations/*.sql; do \
+        su postgres -c "psql -d billforge -f /app/$f" 2>/dev/null || true; \
+      done && \
+      DATABASE_URL=postgres://postgres@localhost:5432/billforge \
+        cargo build --release --bin billforge-server 2>&1 && \
+      (DATABASE_URL=postgres://postgres@localhost:5432/billforge \
+        cargo build --release --bin billforge-worker 2>&1 || true) && \
+      pg_ctlcluster 15 main stop; \
+    fi
 
 # Runtime stage — slim image without Rust, PostgreSQL, or build tools
 FROM debian:bookworm-slim
