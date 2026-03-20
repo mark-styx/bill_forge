@@ -28,7 +28,8 @@ RUN service postgresql start && \
     service postgresql stop
 
 # Copy workspace configuration and source
-COPY backend/Cargo.toml backend/Cargo.lock ./
+# Note: Cargo.lock is generated during build if not present
+COPY backend/Cargo.toml ./
 COPY backend/crates ./crates
 
 # Build with live PostgreSQL for sqlx macro validation

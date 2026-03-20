@@ -47,7 +47,7 @@ coverage/
 *.tsbuildinfo
 
 # Rust
-Cargo.lock
+# Cargo.lock is committed for reproducible builds (recommended for applications)
 **/*.rs.bk
 .grepai/
 
