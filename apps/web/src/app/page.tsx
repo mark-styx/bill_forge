@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
+import { FileText } from 'lucide-react';
 
 export default function HomePage() {
   const router = useRouter();
@@ -14,19 +15,31 @@ export default function HomePage() {
 
     if (isAuthenticated) {
       router.push('/dashboard');
-    } else {
-      router.push('/login');
     }
   }, [isAuthenticated, hasHydrated, router]);
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="text-center">
-        <div className="animate-pulse">
-          <div className="text-4xl font-bold text-white mb-2">BillForge</div>
-          <div className="text-slate-400">Loading...</div>
+  // Show loading only while checking auth state
+  if (!hasHydrated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="text-center">
+          <div className="animate-pulse">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-500/20 mb-4">
+              <FileText className="w-8 h-8 text-blue-400" />
+            </div>
+            <div className="text-xl font-semibold text-white">BillForge</div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  // If authenticated, we'll redirect above. Otherwise, dynamically import marketing page.
+  if (!isAuthenticated) {
+    // Redirect to the marketing page for unauthenticated users
+    router.push('/home');
+    return null;
+  }
+
+  return null;
 }
