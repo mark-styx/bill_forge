@@ -20,11 +20,10 @@ pub mod mobile;
 mod settings;
 mod feedback;
 
+use crate::middleware::{rate_limit_auth, RateLimiterState};
 use crate::state::AppState;
 use crate::metrics;
-use axum::{routing::get, Router};
-use std::time::Duration;
-use tower::limit::RateLimitLayer;
+use axum::{middleware, routing::get, Extension, Router};
 
 /// Create the main API router
 pub fn create_router(state: AppState) -> Router {
@@ -63,7 +62,8 @@ fn api_routes() -> Router<AppState> {
     Router::new()
         // Authentication (rate limited: 20 requests per 60 seconds per source IP)
         .nest("/auth", auth::routes()
-            .layer(RateLimitLayer::new(20, Duration::from_secs(60))))
+            .layer(middleware::from_fn(rate_limit_auth))
+            .layer(Extension(RateLimiterState::new(20, 60))))
         // Invoice Capture module
         .nest("/invoices", invoices::routes())
         // Vendor Management module
