@@ -127,11 +127,11 @@
 ## Remaining Work (Pre-Launch)
 
 ### P0 - Must Fix Before Pilot
-- [ ] CI pipeline green on GitHub Actions (in progress)
+- [x] CI pipeline green on GitHub Actions
 - [ ] End-to-end smoke test: upload → OCR → queue → approve → export
 - [ ] Docker Compose full-stack startup (API + frontend + PostgreSQL + Redis)
 - [ ] Seed data for demo/pilot environments
-- [ ] Environment variable documentation (`.env.example` complete)
+- [x] Environment variable documentation (`.env.example` complete)
 
 ### P1 - Should Have for Pilot
 - [ ] OpenAPI/Swagger documentation review
