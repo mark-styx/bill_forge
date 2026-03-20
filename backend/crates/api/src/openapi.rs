@@ -49,7 +49,38 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         (name = "Vendors", description = "Vendor management"),
         (name = "Workflows", description = "Approval workflows, queues, and rules"),
         (name = "Reports", description = "Financial reporting and analytics"),
-        (name = "Health", description = "System health and monitoring")
+        (name = "Health", description = "System health and monitoring"),
+        (name = "Dashboard", description = "Dashboard metrics and KPIs"),
+        (name = "QuickBooks", description = "QuickBooks Online integration"),
+        (name = "Xero", description = "Xero accounting integration")
+    ),
+    paths(
+        // Dashboard endpoints
+        crate::routes::dashboard::get_dashboard_metrics,
+        crate::routes::dashboard::get_invoice_metrics,
+        crate::routes::dashboard::get_approval_metrics,
+        crate::routes::dashboard::get_vendor_metrics,
+        crate::routes::dashboard::get_team_metrics,
+        // QuickBooks integration
+        crate::routes::quickbooks::quickbooks_connect,
+        crate::routes::quickbooks::quickbooks_callback,
+        crate::routes::quickbooks::quickbooks_disconnect,
+        crate::routes::quickbooks::quickbooks_status,
+        crate::routes::quickbooks::sync_vendors,
+        crate::routes::quickbooks::sync_accounts,
+        crate::routes::quickbooks::export_invoice_to_quickbooks,
+        crate::routes::quickbooks::get_account_mappings,
+        crate::routes::quickbooks::update_account_mappings,
+        // Xero integration
+        crate::routes::xero::xero_connect,
+        crate::routes::xero::xero_callback,
+        crate::routes::xero::xero_disconnect,
+        crate::routes::xero::xero_status,
+        crate::routes::xero::sync_contacts,
+        crate::routes::xero::sync_accounts,
+        crate::routes::xero::export_invoice_to_xero,
+        crate::routes::xero::get_account_mappings,
+        crate::routes::xero::update_account_mappings,
     ),
     components(
         schemas(

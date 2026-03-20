@@ -134,11 +134,11 @@
 - [x] Environment variable documentation (`.env.example` complete)
 
 ### P1 - Should Have for Pilot
-- [ ] OpenAPI/Swagger documentation review
+- [x] OpenAPI/Swagger documentation review — 24 paths registered, 12 schemas, 9 tags, Swagger UI at /swagger-ui
 - [x] Error handling audit — 24 `.unwrap()` calls in API crate audited, all safe (metrics registration, serde serialization, Response::builder)
 - [x] Rate limiting on auth endpoints — per-IP token bucket (20 req/60s), returns 429 when exceeded
 - [x] Production logging configuration — JSON structured logs in production, human-readable in dev
-- [ ] Basic monitoring alerts (Prometheus/Grafana configs exist)
+- [x] Basic monitoring alerts — Prometheus alerts wired (4 rule groups, 16 alerts), Grafana dashboard provisioned (11 panels)
 
 ### P2 - Nice to Have
 - [ ] Test coverage improvement (target 80%)
