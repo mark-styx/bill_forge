@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     postgresql \
     postgresql-client \
     sudo \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Start PostgreSQL directly (service command is blocked by policy-rc.d in Docker)
