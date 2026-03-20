@@ -5,7 +5,7 @@
 # can validate queries against the real schema at compile time.
 
 # Build stage with PostgreSQL for sqlx compile-time checking
-FROM rust:1.75-slim-bookworm AS builder
+FROM rust:1.82-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -18,26 +18,26 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Initialize and start PostgreSQL, create database, run migrations
+# Start PostgreSQL directly (service command is blocked by policy-rc.d in Docker)
+# Create database and run migrations
 COPY backend/migrations ./migrations
-RUN service postgresql start && \
+RUN pg_ctlcluster 15 main start && \
     sudo -u postgres createdb billforge && \
     for f in migrations/*.sql; do \
         sudo -u postgres psql -d billforge -f "$f" 2>/dev/null || true; \
     done && \
-    service postgresql stop
+    pg_ctlcluster 15 main stop
 
 # Copy workspace configuration and source
-# Note: Cargo.lock is generated during build if not present
 COPY backend/Cargo.toml ./
 COPY backend/crates ./crates
 
 # Build with live PostgreSQL for sqlx macro validation
 ENV DATABASE_URL=postgres://postgres@localhost:5432/billforge
-RUN service postgresql start && \
+RUN pg_ctlcluster 15 main start && \
     cargo build --release --bin billforge-server 2>&1 && \
     (cargo build --release --bin billforge-worker 2>&1 || true) && \
-    service postgresql stop
+    pg_ctlcluster 15 main stop
 
 # Runtime stage — slim image without Rust, PostgreSQL, or build tools
 FROM debian:bookworm-slim
