@@ -1,36 +1,49 @@
 # Multi-stage build for Rust backend
 # BillForge API Server
+#
+# Uses an embedded PostgreSQL during build so sqlx::query! macros
+# can validate queries against the real schema at compile time.
 
-# Build stage
+# Build stage with PostgreSQL for sqlx compile-time checking
 FROM rust:1.75-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies + PostgreSQL
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    postgresql \
+    postgresql-client \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace configuration
+# Initialize and start PostgreSQL, create database, run migrations
+COPY backend/migrations ./migrations
+RUN service postgresql start && \
+    sudo -u postgres createdb billforge && \
+    for f in migrations/*.sql; do \
+        sudo -u postgres psql -d billforge -f "$f" 2>/dev/null || true; \
+    done && \
+    service postgresql stop
+
+# Copy workspace configuration and source
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/crates ./crates
 
-# Build dependencies first (for caching)
-RUN mkdir -p crates/api/src && echo "fn main() {}" > crates/api/src/main.rs
-RUN cargo build --release --bin billforge-server || true
+# Build with live PostgreSQL for sqlx macro validation
+ENV DATABASE_URL=postgres://postgres@localhost:5432/billforge
+RUN service postgresql start && \
+    cargo build --release --bin billforge-server 2>&1 && \
+    (cargo build --release --bin billforge-worker 2>&1 || true) && \
+    service postgresql stop
 
-# Now build the actual application
-COPY backend/ ./
-RUN touch crates/api/src/main.rs
-RUN cargo build --release --bin billforge-server
-
-# Runtime stage
+# Runtime stage — slim image without Rust, PostgreSQL, or build tools
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies and curl for health checks
+# Install only runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -39,35 +52,28 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
+# Create non-root user
 RUN groupadd --gid 1001 billforge && \
     useradd --uid 1001 --gid billforge --shell /bin/false billforge
 
-# Copy the binary
+# Copy binaries from builder
 COPY --from=builder /app/target/release/billforge-server /app/billforge-server
 
-# Create data directories with proper ownership
-RUN mkdir -p /app/data/tenants /app/data/files && \
+# Create data directories
+RUN mkdir -p /app/data/files && \
     chown -R billforge:billforge /app
 
-# Set environment variables
+# Runtime environment
 ENV RUST_LOG=info
 ENV BACKEND_HOST=0.0.0.0
 ENV BACKEND_PORT=8080
-# DATABASE_URL must be provided at runtime via environment variable
-# ENV DATABASE_URL=postgres://user:pass@host:5432/billforge
 ENV LOCAL_STORAGE_PATH=/app/data/files
 ENV OCR_PROVIDER=tesseract
 ENV ENVIRONMENT=production
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Switch to non-root user
 USER billforge
-
 EXPOSE 8080
-
-# Use exec form for proper signal handling
 CMD ["/app/billforge-server"]

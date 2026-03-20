@@ -16,14 +16,33 @@ async fn main() -> anyhow::Result<()> {
     // Load environment variables
     dotenvy::dotenv().ok();
 
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "billforge_api=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Initialize tracing with environment-aware formatting
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "billforge_api=debug,tower_http=debug".into());
+
+    let is_production = std::env::var("ENVIRONMENT")
+        .map(|e| e == "production" || e == "staging")
+        .unwrap_or(false);
+
+    if is_production {
+        // JSON structured logs for production (machine-parseable)
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_span_list(true),
+            )
+            .init();
+    } else {
+        // Human-readable logs for development
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     // Load configuration
     let config = Config::from_env()?;

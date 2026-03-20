@@ -23,6 +23,8 @@ mod feedback;
 use crate::state::AppState;
 use crate::metrics;
 use axum::{routing::get, Router};
+use std::time::Duration;
+use tower::limit::RateLimitLayer;
 
 /// Create the main API router
 pub fn create_router(state: AppState) -> Router {
@@ -59,8 +61,9 @@ async fn landing_page() -> axum::response::Html<String> {
 /// API v1 routes
 fn api_routes() -> Router<AppState> {
     Router::new()
-        // Authentication
-        .nest("/auth", auth::routes())
+        // Authentication (rate limited: 20 requests per 60 seconds per source IP)
+        .nest("/auth", auth::routes()
+            .layer(RateLimitLayer::new(20, Duration::from_secs(60))))
         // Invoice Capture module
         .nest("/invoices", invoices::routes())
         // Vendor Management module

@@ -249,13 +249,10 @@ jobs:
         continue-on-error: true
 
   # Docker build test
-  # NOTE: Backend Docker build requires SQLX_OFFLINE + .sqlx cache or a build-time DB.
-  # Generate cache with: cd backend && cargo sqlx prepare -- --all-targets --all-features
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
     needs: [backend-check, frontend-check]
-    continue-on-error: true  # Requires sqlx offline cache; tracked as follow-up
 
     steps:
       - uses: actions/checkout@v4
