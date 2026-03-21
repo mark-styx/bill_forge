@@ -26,6 +26,8 @@ import {
   ListChecks,
   Sparkles,
   Bell,
+  Shield,
+  Inbox,
 } from 'lucide-react';
 
 interface NavItem {
@@ -56,6 +58,8 @@ const navigation: NavItem[] = [
     children: [
       { name: 'Work Queues', href: '/processing/queues', icon: FolderOpen, module: 'invoice_processing' },
       { name: 'Approvals', href: '/processing/approvals', icon: ListChecks, module: 'invoice_processing' },
+      { name: 'Approval Inbox', href: '/processing/approval-inbox', icon: Inbox, module: 'invoice_processing' },
+      { name: 'Approval Policies', href: '/processing/approval-policies', icon: Shield, module: 'invoice_processing' },
       { name: 'Workflows', href: '/processing/workflows', icon: Sparkles, module: 'invoice_processing' },
       { name: 'Assignment Rules', href: '/processing/assignment-rules', icon: Workflow, module: 'invoice_processing' },
     ]

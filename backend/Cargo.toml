@@ -17,6 +17,8 @@ members = [
     "crates/salesforce",
     "crates/workday",
     "crates/bill-com",
+    "crates/ocr-pipeline",
+    "crates/approval-engine",
     "crates/worker",
     "crates/analytics",
     "crates/feedback",

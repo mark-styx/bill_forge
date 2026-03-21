@@ -21,6 +21,8 @@ pub mod bill_com;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
+pub mod ocr_pipeline;
+pub mod approval_chains;
 mod settings;
 mod feedback;
 
@@ -110,4 +112,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/feedback", feedback::routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
+        // OCR Pipeline (batch upload, job management, processing)
+        .nest("/ocr", ocr_pipeline::routes())
+        // Approval Chains (policies, multi-level approvals, escalation)
+        .nest("/approval-chains", approval_chains::routes())
 }

@@ -27,6 +27,8 @@ billforge-bill-com = { path = "../bill-com" }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
 billforge-analytics = { path = "../analytics" }
+billforge-ocr-pipeline = { path = "../ocr-pipeline" }
+billforge-approval-engine = { path = "../approval-engine" }
 
 # Web framework
 axum = { workspace = true }

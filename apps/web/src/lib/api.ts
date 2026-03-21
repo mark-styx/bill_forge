@@ -946,6 +946,186 @@ export interface CreateUserThemeInput {
   mode: 'light' | 'dark' | 'system';
 }
 
+// ──────────────────────────── OCR Pipeline Types ────────────────────────────
+
+export interface OcrJob {
+  id: string;
+  tenant_id: string;
+  document_id: string;
+  file_name: string;
+  mime_type: string;
+  provider: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  attempt_count: number;
+  max_attempts: number;
+  result: Record<string, unknown> | null;
+  matched_vendor_id: string | null;
+  vendor_match_confidence: number | null;
+  error_message: string | null;
+  processing_time_ms: number | null;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface BatchUploadResult {
+  total_files: number;
+  jobs_created: number;
+  job_ids: string[];
+  errors: { file_name: string; error: string }[];
+}
+
+export interface OcrPipelineStats {
+  total_jobs: number;
+  pending_jobs: number;
+  processing_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  cancelled_jobs: number;
+  avg_processing_time_ms: number | null;
+  total_corrections: number;
+  vendor_match_rate: number | null;
+}
+
+export interface VendorAlias {
+  id: string;
+  tenant_id: string;
+  vendor_id: string;
+  alias: string;
+  is_learned: boolean;
+  created_at: string;
+}
+
+// ──────────────────────────── Approval Chain Types ────────────────────────────
+
+export interface ApprovalChainLevel {
+  id: string;
+  policy_id: string;
+  level: number;
+  name: string;
+  approver_type: 'user' | 'role' | 'department_head' | 'manager_chain';
+  approver_ids: string[];
+  required_approvals: number;
+  escalation_timeout_hours: number | null;
+  escalate_to: string | null;
+  allow_delegation: boolean;
+  auto_approve_below: number | null;
+  created_at: string;
+}
+
+export interface ApprovalPolicy {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  priority: number;
+  match_criteria: Record<string, unknown>;
+  require_sequential: boolean;
+  allow_self_approval: boolean;
+  created_at: string;
+  updated_at: string;
+  levels?: ApprovalChainLevel[];
+}
+
+export interface CreatePolicyInput {
+  name: string;
+  description?: string;
+  is_active: boolean;
+  priority: number;
+  match_criteria: Record<string, unknown>;
+  require_sequential: boolean;
+  allow_self_approval: boolean;
+  levels: {
+    level: number;
+    name: string;
+    approver_type: string;
+    approver_ids: string[];
+    required_approvals: number;
+    escalation_timeout_hours?: number;
+    escalate_to?: string;
+    allow_delegation: boolean;
+    auto_approve_below?: number;
+  }[];
+}
+
+export interface ApprovalChain {
+  id: string;
+  tenant_id: string;
+  invoice_id: string;
+  policy_id: string;
+  status: 'pending' | 'in_progress' | 'approved' | 'rejected' | 'cancelled';
+  current_level: number;
+  total_levels: number;
+  final_decision: string | null;
+  final_decided_by: string | null;
+  final_decided_at: string | null;
+  escalation_count: number;
+  last_escalated_at: string | null;
+  initiated_by: string;
+  initiated_at: string;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalChainStep {
+  id: string;
+  chain_id: string;
+  level: number;
+  approver_id: string;
+  status: string;
+  decision: string | null;
+  comments: string | null;
+  decided_at: string | null;
+  delegated_from: string | null;
+  delegated_reason: string | null;
+  escalated: boolean;
+  due_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApprovalChainDetail {
+  chain: ApprovalChain;
+  policy: ApprovalPolicy;
+  steps: ApprovalChainStep[];
+  activity: ApprovalActivity[];
+}
+
+export interface PendingApproval {
+  step_id: string;
+  chain_id: string;
+  invoice_id: string;
+  level: number;
+  policy_name: string;
+  due_at: string | null;
+  escalated: boolean;
+  created_at: string;
+}
+
+export interface ApprovalActivity {
+  id: string;
+  tenant_id: string;
+  chain_id: string;
+  step_id: string | null;
+  invoice_id: string;
+  action: string;
+  actor_id: string;
+  actor_role: string | null;
+  comments: string | null;
+  metadata: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface EscalationResult {
+  escalated_count: number;
+  steps: ApprovalChainStep[];
+}
+
 // Organization Theme API
 export const organizationThemeApi = {
   // Get organization theme
@@ -1016,4 +1196,113 @@ export const userThemeApi = {
       effective_mode: 'light' | 'dark' | 'system';
       can_override: boolean;
     }>('/api/v1/user/theme/effective'),
+};
+
+// OCR Pipeline API
+export const ocrPipelineApi = {
+  // Batch upload files for OCR processing
+  batchUpload: (files: File[]) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+    return api.upload<BatchUploadResult>('/api/v1/ocr/upload', formData);
+  },
+
+  // List OCR jobs
+  listJobs: (params?: { status?: string; limit?: number; offset?: number }) => {
+    const query = params ? `?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))}` : '';
+    return api.get<OcrJob[]>(`/api/v1/ocr/jobs${query}`);
+  },
+
+  // Get single OCR job
+  getJob: (id: string) =>
+    api.get<OcrJob>(`/api/v1/ocr/jobs/${id}`),
+
+  // Retry a failed job
+  retryJob: (id: string) =>
+    api.post<OcrJob>(`/api/v1/ocr/jobs/${id}/retry`),
+
+  // Cancel a pending/processing job
+  cancelJob: (id: string) =>
+    api.post<OcrJob>(`/api/v1/ocr/jobs/${id}/cancel`),
+
+  // Trigger processing of next queued job
+  processNext: () =>
+    api.post<{ job: OcrJob | null }>('/api/v1/ocr/process'),
+
+  // Get OCR pipeline statistics
+  getStats: () =>
+    api.get<OcrPipelineStats>('/api/v1/ocr/stats'),
+
+  // Record a user correction to an OCR field
+  recordCorrection: (jobId: string, data: { field_name: string; original_value?: string; corrected_value: string }) =>
+    api.post<{ success: boolean }>(`/api/v1/ocr/jobs/${jobId}/corrections`, data),
+
+  // List vendor aliases
+  listVendorAliases: () =>
+    api.get<VendorAlias[]>('/api/v1/ocr/vendor-aliases'),
+};
+
+// Approval Chains API
+export const approvalChainsApi = {
+  // List approval policies
+  listPolicies: () =>
+    api.get<ApprovalPolicy[]>('/api/v1/approval-chains/policies'),
+
+  // Create approval policy
+  createPolicy: (data: CreatePolicyInput) =>
+    api.post<ApprovalPolicy>('/api/v1/approval-chains/policies', data),
+
+  // Get single policy
+  getPolicy: (id: string) =>
+    api.get<ApprovalPolicy>(`/api/v1/approval-chains/policies/${id}`),
+
+  // Update policy (partial)
+  updatePolicy: (id: string, data: Partial<CreatePolicyInput>) =>
+    api.put<ApprovalPolicy>(`/api/v1/approval-chains/policies/${id}`, data),
+
+  // Delete policy
+  deletePolicy: (id: string) =>
+    api.delete(`/api/v1/approval-chains/policies/${id}`),
+
+  // List active approval chains
+  listChains: (params?: { status?: string; limit?: number; offset?: number }) => {
+    const query = params ? `?${new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))}` : '';
+    return api.get<ApprovalChain[]>(`/api/v1/approval-chains/chains${query}`);
+  },
+
+  // Get chain detail
+  getChainDetail: (id: string) =>
+    api.get<ApprovalChainDetail>(`/api/v1/approval-chains/chains/${id}`),
+
+  // Recall (cancel) a chain
+  recallChain: (id: string) =>
+    api.post<ApprovalChain>(`/api/v1/approval-chains/chains/${id}/recall`),
+
+  // Approve a step
+  approveStep: (stepId: string, data?: { comments?: string }) =>
+    api.post<ApprovalChainStep>(`/api/v1/approval-chains/steps/${stepId}/approve`, data || {}),
+
+  // Reject a step
+  rejectStep: (stepId: string, data?: { comments?: string }) =>
+    api.post<ApprovalChainStep>(`/api/v1/approval-chains/steps/${stepId}/reject`, data || {}),
+
+  // Delegate a step
+  delegateStep: (stepId: string, data: { delegate_to: string; reason?: string }) =>
+    api.post<ApprovalChainStep>(`/api/v1/approval-chains/steps/${stepId}/delegate`, data),
+
+  // Get current user's pending approvals
+  myPendingApprovals: () =>
+    api.get<PendingApproval[]>('/api/v1/approval-chains/pending'),
+
+  // Submit invoice for approval
+  submitForApproval: (invoiceId: string, data: { amount_cents: number; department?: string; vendor_id?: string }) =>
+    api.post<ApprovalChain>(`/api/v1/approval-chains/submit/${invoiceId}`, data),
+
+  // Process overdue escalations (admin)
+  escalateOverdue: () =>
+    api.post<EscalationResult>('/api/v1/approval-chains/escalate'),
+
+  // Get activity log for an invoice
+  getActivity: (invoiceId: string) =>
+    api.get<ApprovalActivity[]>(`/api/v1/approval-chains/activity/${invoiceId}`),
 };
