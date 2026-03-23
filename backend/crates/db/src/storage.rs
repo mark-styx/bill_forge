@@ -404,9 +404,7 @@ mod s3_storage {
         config::{Region, Builder as S3ConfigBuilder},
         primitives::ByteStream,
         Client as S3Client,
-        presigning::PresigningConfig,
     };
-    use std::time::Duration;
 
     /// AWS S3 storage service for production deployments
     pub struct S3StorageService {
@@ -431,7 +429,9 @@ mod s3_storage {
             }
 
             let config = config_builder.load().await;
-            let s3_config = S3ConfigBuilder::new().from(&config).build();
+            let s3_config = S3ConfigBuilder::from(&config)
+                .force_path_style(true)
+                .build();
             let client = S3Client::from_conf(s3_config);
 
             Ok(Self {
@@ -476,8 +476,9 @@ mod s3_storage {
             Ok(document_id)
         }
 
-        async fn download(&self, storage_key: &str) -> Result<Vec<u8>> {
-            let key = self.build_key(storage_key);
+        async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
 
             let output = self.client
                 .get_object()
@@ -496,8 +497,9 @@ mod s3_storage {
             Ok(bytes.to_vec())
         }
 
-        async fn delete(&self, storage_key: &str) -> Result<()> {
-            let key = self.build_key(storage_key);
+        async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
 
             self.client
                 .delete_object()
@@ -509,6 +511,17 @@ mod s3_storage {
 
             tracing::debug!("Deleted document from S3: {}", key);
             Ok(())
+        }
+
+        async fn get_url(&self, tenant_id: &TenantId, file_id: Uuid, _expires_in_secs: u64) -> Result<String> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
+            // Return a direct URL (for MinIO/S3 compatible services)
+            Ok(format!("{}/{}/{}",
+                std::env::var("S3_ENDPOINT").unwrap_or_else(|_| "https://s3.amazonaws.com".to_string()),
+                self.bucket,
+                key
+            ))
         }
 
         async fn health_check(&self) -> Result<()> {

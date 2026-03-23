@@ -404,20 +404,36 @@ impl OcrPipeline {
     ) -> Result<(), PipelineError> {
         let tenant_uuid = *tenant_id.as_uuid();
 
-        // Verify the job exists and belongs to this tenant
-        let _job = self.get_job(tenant_id, correction.job_id).await?;
+        // Verify the job exists and belongs to this tenant, then look up invoice_id
+        let job = self.get_job(tenant_id, correction.job_id).await?;
+        let invoice_row = sqlx::query(
+            "SELECT id FROM invoices WHERE document_id = $1 AND tenant_id = $2 LIMIT 1",
+        )
+        .bind(job.document_id)
+        .bind(tenant_uuid)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let invoice_id: Uuid = match invoice_row {
+            Some(row) => row.get("id"),
+            None => {
+                tracing::warn!(job_id = %correction.job_id, "No invoice found for OCR job correction");
+                Uuid::nil()
+            }
+        };
 
         sqlx::query(
             r#"
-            INSERT INTO ocr_corrections (
-                id, tenant_id, job_id, field_name,
-                original_value, corrected_value, corrected_by, corrected_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO ocr_field_corrections (
+                id, tenant_id, ocr_job_id, invoice_id, field_name,
+                original_value, corrected_value, corrected_by, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(Uuid::new_v4())
         .bind(tenant_uuid)
         .bind(correction.job_id)
+        .bind(invoice_id)
         .bind(&correction.field_name)
         .bind(&correction.original_value)
         .bind(&correction.corrected_value)
@@ -488,7 +504,7 @@ impl OcrPipeline {
 
         // Correction count
         let correction_row = sqlx::query(
-            "SELECT COUNT(*) as total_corrections FROM ocr_corrections WHERE tenant_id = $1",
+            "SELECT COUNT(*) as total_corrections FROM ocr_field_corrections WHERE tenant_id = $1",
         )
         .bind(tenant_uuid)
         .fetch_one(&self.pool)
