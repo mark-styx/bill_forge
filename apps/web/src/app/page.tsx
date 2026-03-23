@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth';
 import { FileText } from 'lucide-react';
+import LandingPage from '@/app/home/page';
 
 export default function HomePage() {
   const router = useRouter();
@@ -34,12 +35,11 @@ export default function HomePage() {
     );
   }
 
-  // If authenticated, we'll redirect above. Otherwise, dynamically import marketing page.
-  if (!isAuthenticated) {
-    // Redirect to the marketing page for unauthenticated users
-    router.push('/home');
+  // Authenticated users redirect to dashboard (handled in useEffect)
+  if (isAuthenticated) {
     return null;
   }
 
-  return null;
+  // Unauthenticated users see the marketing/landing page
+  return <LandingPage />;
 }

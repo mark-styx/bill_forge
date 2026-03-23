@@ -29,9 +29,17 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     tenantId: '11111111-1111-1111-1111-111111111111',
-    email: 'admin@sandbox.local',
-    password: 'sandbox123',
+    email: '',
+    password: '',
   });
+
+  const fillDemoCredentials = () => {
+    setFormData({
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      email: 'admin@sandbox.local',
+      password: 'sandbox123',
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +102,7 @@ export default function LoginPage() {
 
           <div className="pt-8">
             <p className="text-sm text-white/60">
-              Built for mid-market finance teams processing 300–5,000 invoices/month.
+              Modern AP automation for growing companies.
             </p>
           </div>
         </div>
@@ -184,6 +192,18 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
+
+            {/* Demo CTA */}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={fillDemoCredentials}
+                className="text-sm text-primary hover:text-primary/80 font-medium transition-colors inline-flex items-center gap-1.5"
+              >
+                Try the demo
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
             {/* Security note */}
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400">

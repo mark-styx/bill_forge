@@ -112,11 +112,11 @@ const steps = [
 const pricingPlans = [
   {
     name: 'Starter',
-    description: 'Teams processing up to 300 invoices/month',
-    price: 99,
+    description: 'Teams processing up to 500 invoices/month',
+    price: 299,
     period: 'month',
     features: [
-      'Up to 300 invoices/month',
+      'Up to 500 invoices/month',
       'OCR capture (PDF + email)',
       '5 user seats',
       'Single-level approval workflows',
@@ -129,9 +129,9 @@ const pricingPlans = [
     gradient: 'capture' as const,
   },
   {
-    name: 'Professional',
-    description: 'Growing AP teams, 300–2,000 invoices/month',
-    price: 299,
+    name: 'Growth',
+    description: 'Growing AP teams, 500–2,000 invoices/month',
+    price: 599,
     period: 'month',
     features: [
       'Up to 2,000 invoices/month',
@@ -149,23 +149,42 @@ const pricingPlans = [
     gradient: 'primary' as const,
   },
   {
-    name: 'Enterprise',
-    description: 'High-volume teams with complex requirements',
-    price: 999,
+    name: 'Scale',
+    description: 'High-volume AP, 2,000–5,000 invoices/month',
+    price: 1199,
     period: 'month',
     features: [
       'Up to 5,000 invoices/month',
+      '50 user seats',
+      'Multi-level approval routing',
+      'Custom integrations via API',
+      'Advanced analytics & reporting',
+      'Dedicated onboarding',
+      'SLA with uptime guarantee',
+      'Priority support',
+    ],
+    cta: 'Start Free Trial',
+    popular: false,
+    gradient: 'vendor' as const,
+  },
+  {
+    name: 'Enterprise',
+    description: 'Custom solutions for complex requirements',
+    price: null,
+    period: 'month',
+    features: [
+      'Unlimited invoices',
       'Unlimited user seats',
       'SSO / SAML integration',
       'Custom integrations via API',
       'Data residency options',
-      'Dedicated onboarding & CSM',
+      'Dedicated CSM',
       'SLA with uptime guarantee',
-      'Custom contract available',
+      'Custom contract',
     ],
-    cta: 'Request a Demo',
+    cta: 'Contact Sales',
     popular: false,
-    gradient: 'vendor' as const,
+    gradient: 'reporting' as const,
   },
 ];
 
@@ -175,6 +194,36 @@ export default function LandingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
+
+      {/* Sticky Header */}
+      <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-lg">
+        <div className="container mx-auto px-4 flex items-center justify-between h-16">
+          <div className="flex items-center gap-2">
+            <div
+              className="flex h-9 w-9 items-center justify-center rounded-xl"
+              style={{ background: `linear-gradient(135deg, hsl(${colors.primary}), hsl(${colors.accent}))` }}
+            >
+              <FileText className="h-5 w-5 text-white" />
+            </div>
+            <span className="text-xl font-bold text-foreground">BillForge</span>
+          </div>
+          <nav className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
+            <Link href="#features" className="hover:text-foreground transition-colors">Features</Link>
+            <Link href="#how-it-works" className="hover:text-foreground transition-colors">How It Works</Link>
+            <Link href="#pricing" className="hover:text-foreground transition-colors">Pricing</Link>
+          </nav>
+          <div className="flex items-center gap-3">
+            <Link href="/login">
+              <Button variant="ghost" size="sm">Sign In</Button>
+            </Link>
+            <Link href="/login">
+              <GradientButton gradient="primary" size="sm">
+                Start Free Trial
+              </GradientButton>
+            </Link>
+          </div>
+        </div>
+      </header>
 
       {/* Hero Section */}
       <section id="hero" className="relative overflow-hidden py-24 md:py-36">
@@ -385,7 +434,7 @@ export default function LandingPage() {
             </p>
           </div>
 
-          <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-3">
+          <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-2 lg:grid-cols-4">
             {pricingPlans.map((plan) => (
               <GradientCard
                 key={plan.name}
@@ -405,8 +454,14 @@ export default function LandingPage() {
                     <p className="text-sm text-muted-foreground mt-1">{plan.description}</p>
                   </div>
                   <div className="mb-6">
-                    <span className="text-4xl font-bold text-foreground">${plan.price}</span>
-                    <span className="text-muted-foreground text-sm">/{plan.period}</span>
+                    {plan.price !== null ? (
+                      <>
+                        <span className="text-4xl font-bold text-foreground">${plan.price.toLocaleString()}</span>
+                        <span className="text-muted-foreground text-sm">/{plan.period}</span>
+                      </>
+                    ) : (
+                      <span className="text-4xl font-bold text-foreground">Custom</span>
+                    )}
                   </div>
                   <ul className="mb-6 space-y-3">
                     {plan.features.map((feature) => (
@@ -433,10 +488,7 @@ export default function LandingPage() {
           </div>
 
           <p className="text-center text-sm text-muted-foreground mt-8">
-            Processing more than 5,000 invoices/month?{' '}
-            <Link href="/login" className="text-primary hover:underline font-medium">
-              Talk to us about custom volume pricing.
-            </Link>
+            All plans include a 14-day free trial. No credit card required.
           </p>
         </div>
       </section>
