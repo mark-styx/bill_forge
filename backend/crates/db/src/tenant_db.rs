@@ -32,6 +32,12 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_workflow_migrations(pool).await?;
     run_vendor_statement_migrations(pool).await?;
 
+    // OCR pipeline tables (batch processing, corrections, vendor aliases)
+    run_ocr_pipeline_migrations(pool).await?;
+
+    // Approval chain tables (policies, chains, steps, activity log)
+    run_approval_chain_migrations(pool).await?;
+
     Ok(())
 }
 
@@ -279,6 +285,252 @@ async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await
     .map_err(|e| Error::Migration(format!("Failed to run vendor statement migrations: {}", e)))?;
+
+    Ok(())
+}
+
+/// Run OCR pipeline migrations for a tenant database.
+/// Schema matches the columns used by the `ocr-pipeline` crate's runtime SQL queries.
+pub async fn run_ocr_pipeline_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(
+        r#"
+        -- OCR processing jobs (async pipeline)
+        -- Column names match the ocr-pipeline crate's runtime queries exactly.
+        CREATE TABLE IF NOT EXISTS ocr_jobs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            document_id UUID NOT NULL,
+            file_name TEXT NOT NULL DEFAULT '',
+            mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+
+            -- Job configuration
+            provider TEXT NOT NULL DEFAULT 'tesseract',
+            priority INTEGER NOT NULL DEFAULT 100,
+
+            -- Status tracking
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+
+            -- Results (JSONB column named 'result' as pipeline code expects)
+            result JSONB,
+
+            -- Vendor matching
+            matched_vendor_id UUID REFERENCES vendors(id),
+            vendor_match_confidence REAL,
+
+            -- Processing metadata
+            error_message TEXT,
+            processing_time_ms BIGINT,
+
+            -- Timestamps
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ocr_jobs_tenant ON ocr_jobs(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_ocr_jobs_status ON ocr_jobs(tenant_id, status);
+        CREATE INDEX IF NOT EXISTS idx_ocr_jobs_document ON ocr_jobs(document_id);
+        CREATE INDEX IF NOT EXISTS idx_ocr_jobs_queued ON ocr_jobs(priority ASC, created_at ASC) WHERE status = 'pending';
+
+        -- OCR corrections (table name matches pipeline code: ocr_corrections)
+        CREATE TABLE IF NOT EXISTS ocr_corrections (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            job_id UUID NOT NULL REFERENCES ocr_jobs(id) ON DELETE CASCADE,
+            field_name TEXT NOT NULL,
+            original_value TEXT,
+            corrected_value TEXT NOT NULL,
+            corrected_by UUID NOT NULL REFERENCES users(id),
+            corrected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ocr_corrections_tenant ON ocr_corrections(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_ocr_corrections_job ON ocr_corrections(job_id);
+
+        -- Vendor aliases (learned from corrections, used for fuzzy matching)
+        CREATE TABLE IF NOT EXISTS vendor_aliases (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+            alias TEXT NOT NULL,
+            is_learned BOOLEAN NOT NULL DEFAULT false,
+            source TEXT NOT NULL DEFAULT 'manual',
+            match_count INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+            UNIQUE(tenant_id, vendor_id, alias)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vendor_aliases_tenant ON vendor_aliases(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_vendor_aliases_lookup ON vendor_aliases(tenant_id, alias);
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| Error::Migration(format!("Failed to run OCR pipeline migrations: {}", e)))?;
+
+    Ok(())
+}
+
+/// Run approval chain migrations for a tenant database
+/// Creates tables for multi-level approval policies, chains, steps, and activity log.
+/// Adapted from migration 065 — removes FK references to tenants table.
+pub async fn run_approval_chain_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(
+        r#"
+        -- Approval policies: define how approvals work per tenant
+        CREATE TABLE IF NOT EXISTS approval_policies (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            is_default BOOLEAN NOT NULL DEFAULT false,
+
+            match_criteria JSONB NOT NULL DEFAULT '{}',
+            priority INTEGER NOT NULL DEFAULT 0,
+
+            require_sequential BOOLEAN NOT NULL DEFAULT true,
+            require_all_levels BOOLEAN NOT NULL DEFAULT true,
+            allow_self_approval BOOLEAN NOT NULL DEFAULT false,
+            auto_approve_below_cents BIGINT,
+
+            escalation_enabled BOOLEAN NOT NULL DEFAULT true,
+            escalation_timeout_hours INTEGER DEFAULT 48,
+            final_escalation_user_id UUID REFERENCES users(id),
+
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_approval_policies_tenant ON approval_policies(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_policies_active ON approval_policies(tenant_id, is_active, priority DESC);
+
+        -- Approval chain levels: ordered steps within a policy
+        CREATE TABLE IF NOT EXISTS approval_chain_levels (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            policy_id UUID NOT NULL REFERENCES approval_policies(id) ON DELETE CASCADE,
+            tenant_id UUID NOT NULL,
+
+            level_order INTEGER NOT NULL,
+            name VARCHAR(255) NOT NULL,
+
+            approver_type TEXT NOT NULL,
+            approver_user_ids JSONB DEFAULT '[]',
+            approver_role TEXT,
+
+            min_amount_cents BIGINT DEFAULT 0,
+            max_amount_cents BIGINT,
+
+            required_approver_count INTEGER NOT NULL DEFAULT 1,
+
+            timeout_hours INTEGER,
+
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+            UNIQUE(policy_id, level_order)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chain_levels_policy ON approval_chain_levels(policy_id);
+        CREATE INDEX IF NOT EXISTS idx_chain_levels_tenant ON approval_chain_levels(tenant_id);
+
+        -- Active approval chains: tracks a running approval for a specific invoice
+        CREATE TABLE IF NOT EXISTS active_approval_chains (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+            policy_id UUID NOT NULL REFERENCES approval_policies(id),
+
+            status TEXT NOT NULL DEFAULT 'in_progress',
+            current_level INTEGER NOT NULL DEFAULT 1,
+            total_levels INTEGER NOT NULL,
+
+            final_decision TEXT,
+            final_decided_by UUID REFERENCES users(id),
+            final_decided_at TIMESTAMPTZ,
+
+            escalation_count INTEGER NOT NULL DEFAULT 0,
+            last_escalated_at TIMESTAMPTZ,
+
+            initiated_by UUID NOT NULL REFERENCES users(id),
+            initiated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_active_chains_tenant ON active_approval_chains(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_active_chains_invoice ON active_approval_chains(invoice_id);
+        CREATE INDEX IF NOT EXISTS idx_active_chains_status ON active_approval_chains(tenant_id, status);
+
+        -- Individual approval steps within an active chain
+        CREATE TABLE IF NOT EXISTS approval_chain_steps (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            chain_id UUID NOT NULL REFERENCES active_approval_chains(id) ON DELETE CASCADE,
+            tenant_id UUID NOT NULL,
+            level_id UUID NOT NULL REFERENCES approval_chain_levels(id),
+
+            level_order INTEGER NOT NULL,
+
+            assigned_to UUID NOT NULL REFERENCES users(id),
+
+            status TEXT NOT NULL DEFAULT 'pending',
+            decision TEXT,
+            comments TEXT,
+
+            delegated_to UUID REFERENCES users(id),
+            delegated_at TIMESTAMPTZ,
+            delegation_reason TEXT,
+
+            assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            due_at TIMESTAMPTZ,
+            responded_at TIMESTAMPTZ,
+
+            escalated_at TIMESTAMPTZ,
+            escalated_to UUID REFERENCES users(id),
+            escalation_reason TEXT,
+
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chain_steps_chain ON approval_chain_steps(chain_id);
+        CREATE INDEX IF NOT EXISTS idx_chain_steps_assigned ON approval_chain_steps(assigned_to, status);
+        CREATE INDEX IF NOT EXISTS idx_chain_steps_pending ON approval_chain_steps(tenant_id, status, due_at) WHERE status = 'pending';
+
+        -- Approval activity log (immutable audit trail)
+        CREATE TABLE IF NOT EXISTS approval_activity_log (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            chain_id UUID NOT NULL REFERENCES active_approval_chains(id) ON DELETE CASCADE,
+            step_id UUID REFERENCES approval_chain_steps(id),
+            invoice_id UUID NOT NULL REFERENCES invoices(id),
+
+            action TEXT NOT NULL,
+            actor_id UUID NOT NULL REFERENCES users(id),
+            actor_role TEXT,
+
+            comments TEXT,
+            metadata JSONB DEFAULT '{}',
+            ip_address INET,
+
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_approval_activity_chain ON approval_activity_log(chain_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_activity_invoice ON approval_activity_log(invoice_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_activity_actor ON approval_activity_log(actor_id);
+        CREATE INDEX IF NOT EXISTS idx_approval_activity_tenant ON approval_activity_log(tenant_id, created_at DESC);
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| Error::Migration(format!("Failed to run approval chain migrations: {}", e)))?;
 
     Ok(())
 }

@@ -86,6 +86,7 @@ services:
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 8080
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/billforge
+      TENANT_DB_TEMPLATE: postgres://postgres:postgres@postgres:5432/{database}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: dev-jwt-secret-change-in-production-minimum-32-chars
       TOKEN_SECRET_KEY: dev-token-secret-change-in-production
@@ -119,7 +120,8 @@ services:
       api:
         condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080/api
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      INTERNAL_API_URL: http://api:8080
 
 volumes:
   postgres_data:

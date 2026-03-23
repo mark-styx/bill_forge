@@ -96,12 +96,16 @@ impl AppState {
         // Check if sandbox tenant already exists
         if metadata_db.tenant_exists(&sandbox_tenant_id).await? {
             tracing::info!("Sandbox tenant already exists, ensuring migrations are up to date...");
-            // Re-run only workflow/vendor-statement migrations to pick up new tables
+            // Re-run migrations to pick up new tables
             // (uses CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN IF NOT EXISTS)
             let tenant_pool = db.tenant(&sandbox_tenant_id).await
                 .map_err(|e| anyhow::anyhow!("Failed to get tenant db: {}", e))?;
             billforge_db::tenant_db::run_workflow_migrations(&tenant_pool).await
                 .map_err(|e| anyhow::anyhow!("Failed to re-run workflow migrations: {}", e))?;
+            billforge_db::tenant_db::run_ocr_pipeline_migrations(&tenant_pool).await
+                .map_err(|e| anyhow::anyhow!("Failed to run OCR pipeline migrations: {}", e))?;
+            billforge_db::tenant_db::run_approval_chain_migrations(&tenant_pool).await
+                .map_err(|e| anyhow::anyhow!("Failed to run approval chain migrations: {}", e))?;
             tracing::info!("Sandbox tenant migrations updated successfully");
             return Ok(());
         }
@@ -153,6 +157,14 @@ impl AppState {
         billforge_db::tenant_db::run_workflow_migrations(&tenant_pool).await
             .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
 
+        // Run OCR pipeline migrations (batch processing, corrections, vendor aliases)
+        billforge_db::tenant_db::run_ocr_pipeline_migrations(&tenant_pool).await
+            .map_err(|e| anyhow::anyhow!("Failed to run OCR pipeline migrations: {}", e))?;
+
+        // Run approval chain migrations (policies, chains, steps, activity log)
+        billforge_db::tenant_db::run_approval_chain_migrations(&tenant_pool).await
+            .map_err(|e| anyhow::anyhow!("Failed to run approval chain migrations: {}", e))?;
+
         // Create invoice_line_items and invoice_status_config for seed data
         sqlx::raw_sql(r#"
             CREATE TABLE IF NOT EXISTS invoice_line_items (
@@ -193,18 +205,47 @@ impl AppState {
         audit.run_migrations(&sandbox_tenant_id).await
             .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
 
-        // Create sandbox admin user with hashed password
-        let password_hash = billforge_auth::PasswordService::new().hash("sandbox123")
+        // Create sandbox users with hashed password
+        let password_service = billforge_auth::PasswordService::new();
+        let password_hash = password_service.hash("sandbox123")
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
 
+        // Admin user
         metadata_db.create_user(&CreateUserInput {
             tenant_id: sandbox_tenant_id.clone(),
             email: "admin@sandbox.local".to_string(),
-            password_hash,
+            password_hash: password_hash.clone(),
             name: "Sarah Chen".to_string(),
             roles: vec![Role::TenantAdmin],
         }).await
-            .map_err(|e| anyhow::anyhow!("Failed to create sandbox user: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create sandbox admin: {}", e))?;
+
+        // AP Clerk user
+        let _ = metadata_db.create_user(&CreateUserInput {
+            tenant_id: sandbox_tenant_id.clone(),
+            email: "ap.clerk@sandbox.local".to_string(),
+            password_hash: password_hash.clone(),
+            name: "Mike Johnson".to_string(),
+            roles: vec![Role::ApUser],
+        }).await;
+
+        // Approver user
+        let _ = metadata_db.create_user(&CreateUserInput {
+            tenant_id: sandbox_tenant_id.clone(),
+            email: "approver@sandbox.local".to_string(),
+            password_hash: password_hash.clone(),
+            name: "Lisa Wang".to_string(),
+            roles: vec![Role::Approver],
+        }).await;
+
+        // Report Viewer user
+        let _ = metadata_db.create_user(&CreateUserInput {
+            tenant_id: sandbox_tenant_id.clone(),
+            email: "viewer@sandbox.local".to_string(),
+            password_hash,
+            name: "Tom Garcia".to_string(),
+            roles: vec![Role::ReportViewer],
+        }).await;
 
         // Seed demo data
         Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
@@ -218,7 +259,36 @@ impl AppState {
     }
 
     /// Seed demo vendors, invoices, and default queues for the sandbox
-    async fn seed_sandbox_data(pool: &sqlx::PgPool, _tenant_id: &TenantId) -> Result<()> {
+    async fn seed_sandbox_data(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Result<()> {
+        let tenant_uuid = *tenant_id.as_uuid();
+
+        // ==========================================================
+        // Seed users in the tenant database (needed for FK references)
+        // ==========================================================
+        let users = vec![
+            ("17b66d9b-6da5-4cfb-93ad-f8d2f1aefe8f", "admin@sandbox.local", "Sarah Chen", r#"["tenant_admin"]"#),
+            ("22222222-2222-2222-2222-222222220001", "ap.clerk@sandbox.local", "Mike Johnson", r#"["ap_user"]"#),
+            ("22222222-2222-2222-2222-222222220002", "approver@sandbox.local", "Lisa Wang", r#"["approver"]"#),
+            ("22222222-2222-2222-2222-222222220003", "viewer@sandbox.local", "Tom Garcia", r#"["report_viewer"]"#),
+        ];
+
+        for (id, email, name, roles) in &users {
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            // Use a dummy password hash — auth is checked via metadata DB, not tenant DB
+            sqlx::query(
+                "INSERT INTO users (id, tenant_id, email, password_hash, name, roles, is_active, created_at, updated_at)
+                 VALUES ($1, $2, $3, 'not-used-for-auth', $4, $5::jsonb, true, NOW(), NOW())
+                 ON CONFLICT (tenant_id, email) DO NOTHING"
+            )
+            .bind(id_uuid)
+            .bind(tenant_uuid)
+            .bind(email)
+            .bind(name)
+            .bind(roles)
+            .execute(pool)
+            .await
+            .ok();
+        }
 
         // ==========================================================
         // Seed default work queues (the standard AP workflow pipeline)
@@ -537,7 +607,102 @@ impl AppState {
             .ok();
         }
 
-        tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, and {} approval requests", 
+        // ==========================================================
+        // Seed approval policies (multi-level approval engine)
+        // ==========================================================
+        let admin_uuid = uuid::Uuid::parse_str(admin_id)?;
+        let approver_id = "22222222-2222-2222-2222-222222220002";
+
+        // Policy 1: Standard Approval (default) — for invoices $500–$10,000
+        let policy1_id = uuid::Uuid::parse_str("bbbbbbbb-0001-0001-0001-000000000001")?;
+        sqlx::query(
+            "INSERT INTO approval_policies (id, tenant_id, name, description, is_active, is_default,
+             match_criteria, priority, require_sequential, require_all_levels, allow_self_approval,
+             auto_approve_below_cents, escalation_enabled, escalation_timeout_hours, final_escalation_user_id,
+             created_at, updated_at)
+             VALUES ($1, $2, 'Standard Approval', 'Default approval policy for regular invoices',
+             true, true, '{\"min_amount_cents\": 50000, \"max_amount_cents\": 1000000}'::jsonb,
+             10, true, true, false, 50000, true, 48, $3, NOW(), NOW())
+             ON CONFLICT (id) DO NOTHING"
+        )
+        .bind(policy1_id)
+        .bind(tenant_uuid)
+        .bind(admin_uuid)
+        .execute(pool)
+        .await
+        .ok();
+
+        // Level 1 for Standard: Manager approval (Lisa Wang)
+        let level1_1_id = uuid::Uuid::parse_str("cccccccc-0001-0001-0001-000000000001")?;
+        sqlx::query(
+            "INSERT INTO approval_chain_levels (id, policy_id, tenant_id, level_order, name,
+             approver_type, approver_user_ids, min_amount_cents, max_amount_cents,
+             required_approver_count, timeout_hours, created_at, updated_at)
+             VALUES ($1, $2, $3, 1, 'Manager Approval', 'user', $4::jsonb, 50000, 1000000, 1, 48, NOW(), NOW())
+             ON CONFLICT (policy_id, level_order) DO NOTHING"
+        )
+        .bind(level1_1_id)
+        .bind(policy1_id)
+        .bind(tenant_uuid)
+        .bind(serde_json::json!([approver_id]))
+        .execute(pool)
+        .await
+        .ok();
+
+        // Policy 2: High-Value Approval — for invoices > $10,000 (two-level)
+        let policy2_id = uuid::Uuid::parse_str("bbbbbbbb-0002-0002-0002-000000000002")?;
+        sqlx::query(
+            "INSERT INTO approval_policies (id, tenant_id, name, description, is_active, is_default,
+             match_criteria, priority, require_sequential, require_all_levels, allow_self_approval,
+             auto_approve_below_cents, escalation_enabled, escalation_timeout_hours, final_escalation_user_id,
+             created_at, updated_at)
+             VALUES ($1, $2, 'High-Value Approval', 'Two-level approval for invoices over $10,000',
+             true, false, '{\"min_amount_cents\": 1000000}'::jsonb,
+             20, true, true, false, NULL, true, 24, $3, NOW(), NOW())
+             ON CONFLICT (id) DO NOTHING"
+        )
+        .bind(policy2_id)
+        .bind(tenant_uuid)
+        .bind(admin_uuid)
+        .execute(pool)
+        .await
+        .ok();
+
+        // Level 1 for High-Value: Manager (Lisa Wang)
+        let level2_1_id = uuid::Uuid::parse_str("cccccccc-0002-0001-0001-000000000001")?;
+        sqlx::query(
+            "INSERT INTO approval_chain_levels (id, policy_id, tenant_id, level_order, name,
+             approver_type, approver_user_ids, min_amount_cents, max_amount_cents,
+             required_approver_count, timeout_hours, created_at, updated_at)
+             VALUES ($1, $2, $3, 1, 'Manager Approval', 'user', $4::jsonb, 1000000, NULL, 1, 24, NOW(), NOW())
+             ON CONFLICT (policy_id, level_order) DO NOTHING"
+        )
+        .bind(level2_1_id)
+        .bind(policy2_id)
+        .bind(tenant_uuid)
+        .bind(serde_json::json!([approver_id]))
+        .execute(pool)
+        .await
+        .ok();
+
+        // Level 2 for High-Value: Executive (Sarah Chen - admin)
+        let level2_2_id = uuid::Uuid::parse_str("cccccccc-0002-0002-0002-000000000002")?;
+        sqlx::query(
+            "INSERT INTO approval_chain_levels (id, policy_id, tenant_id, level_order, name,
+             approver_type, approver_user_ids, min_amount_cents, max_amount_cents,
+             required_approver_count, timeout_hours, created_at, updated_at)
+             VALUES ($1, $2, $3, 2, 'Executive Approval', 'user', $4::jsonb, 1000000, NULL, 1, 48, NOW(), NOW())
+             ON CONFLICT (policy_id, level_order) DO NOTHING"
+        )
+        .bind(level2_2_id)
+        .bind(policy2_id)
+        .bind(tenant_uuid)
+        .bind(serde_json::json!([admin_id]))
+        .execute(pool)
+        .await
+        .ok();
+
+        tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, {} approval requests, and 2 approval policies",
             queues.len(), assignment_rules.len(), vendors.len(), invoices.len(), line_items.len(), approval_requests.len());
         Ok(())
     }
