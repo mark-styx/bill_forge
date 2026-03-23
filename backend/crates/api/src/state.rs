@@ -4,7 +4,7 @@ use crate::Config;
 use anyhow::Result;
 use billforge_auth::AuthService;
 use billforge_core::{Module, Role, TenantId, traits::{AuditService, StorageService}};
-use billforge_db::{DatabaseManager, LocalStorageService};
+use billforge_db::{DatabaseManager, LocalStorageService, StorageConfig, create_storage_service};
 use billforge_db::metadata_db::CreateUserInput;
 use billforge_db::repositories::AuditRepositoryImpl;
 use billforge_email::{EmailService, EmailServiceImpl, MockEmailService};
@@ -35,11 +35,29 @@ impl AppState {
         let auth = AuthService::new(config.jwt.clone(), metadata_db);
         let auth = Arc::new(auth);
 
-        // Initialize storage service (stores files in data/documents)
-        let storage_path = std::path::Path::new(&config.tenant_db_path).parent()
-            .unwrap_or_else(|| std::path::Path::new("./data"));
-        let storage: Arc<dyn StorageService> = Arc::new(LocalStorageService::new(storage_path).await
-            .map_err(|e| anyhow::anyhow!("Failed to create storage service: {}", e))?);
+        // Initialize storage service based on STORAGE_PROVIDER env var
+        let storage: Arc<dyn StorageService> = match std::env::var("STORAGE_PROVIDER").as_deref() {
+            Ok("s3") => {
+                let bucket = std::env::var("S3_BUCKET").unwrap_or_else(|_| "billforge-files".to_string());
+                let region = std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+                let endpoint = std::env::var("S3_ENDPOINT").ok();
+                tracing::info!(bucket = %bucket, region = %region, endpoint = ?endpoint, "Using S3 storage");
+                let storage_config = StorageConfig::S3 { bucket, region, endpoint, key_prefix: None };
+                Arc::from(create_storage_service(storage_config).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create S3 storage service: {}", e))?)
+            }
+            _ => {
+                let storage_path = std::env::var("LOCAL_STORAGE_PATH")
+                    .unwrap_or_else(|_| {
+                        std::path::Path::new(&config.tenant_db_path).parent()
+                            .unwrap_or_else(|| std::path::Path::new("./data"))
+                            .to_string_lossy().to_string()
+                    });
+                tracing::info!(path = %storage_path, "Using local storage");
+                Arc::new(LocalStorageService::new(&storage_path).await
+                    .map_err(|e| anyhow::anyhow!("Failed to create local storage service: {}", e))?)
+            }
+        };
 
         // Initialize audit service
         let audit_pool = db.metadata();

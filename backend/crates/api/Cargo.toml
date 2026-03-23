@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 billforge-core = { path = "../core" }
-billforge-db = { path = "../db" }
+billforge-db = { path = "../db", features = ["s3"] }
 billforge-auth = { path = "../auth" }
 billforge-email = { path = "../email" }
 billforge-billing = { path = "../billing" }
