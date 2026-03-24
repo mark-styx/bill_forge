@@ -114,6 +114,68 @@ impl TesseractOcr {
         Ok(text)
     }
 
+    /// Convert a PDF to images via pdftoppm and OCR each page
+    async fn ocr_pdf(&self, pdf_data: &[u8]) -> Result<String> {
+        // Write PDF to temp file
+        let mut pdf_file = NamedTempFile::with_suffix(".pdf")
+            .map_err(|e| Error::Ocr(format!("Failed to create temp file: {}", e)))?;
+        pdf_file.write_all(pdf_data)
+            .map_err(|e| Error::Ocr(format!("Failed to write temp file: {}", e)))?;
+
+        let pdf_path = pdf_file.path().to_str()
+            .ok_or_else(|| Error::Ocr("Invalid temp file path".to_string()))?;
+
+        // Create output directory for images
+        let output_dir = tempfile::tempdir()
+            .map_err(|e| Error::Ocr(format!("Failed to create temp dir: {}", e)))?;
+        let output_prefix = output_dir.path().join("page");
+        let output_prefix_str = output_prefix.to_str()
+            .ok_or_else(|| Error::Ocr("Invalid output path".to_string()))?;
+
+        // Convert PDF to PNG images using pdftoppm
+        let convert_output = TokioCommand::new("pdftoppm")
+            .arg("-png")
+            .arg("-r")
+            .arg("300") // 300 DPI for good OCR quality
+            .arg(pdf_path)
+            .arg(output_prefix_str)
+            .output()
+            .await
+            .map_err(|e| Error::Ocr(format!("Failed to run pdftoppm: {}. Is poppler-utils installed?", e)))?;
+
+        if !convert_output.status.success() {
+            let stderr = String::from_utf8_lossy(&convert_output.stderr);
+            // Fall back to direct tesseract on PDF if pdftoppm fails
+            tracing::warn!("pdftoppm failed ({}), falling back to direct tesseract on PDF", stderr.trim());
+            return self.ocr_image(pdf_data, "application/pdf").await;
+        }
+
+        // Find all generated page images and OCR each one
+        let mut all_text = String::new();
+        let mut page_images: Vec<_> = std::fs::read_dir(output_dir.path())
+            .map_err(|e| Error::Ocr(format!("Failed to read output dir: {}", e)))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|ext| ext == "png").unwrap_or(false))
+            .collect();
+        page_images.sort_by_key(|e| e.file_name());
+
+        for entry in &page_images {
+            let image_data = tokio::fs::read(entry.path()).await
+                .map_err(|e| Error::Ocr(format!("Failed to read page image: {}", e)))?;
+            let page_text = self.ocr_image(&image_data, "image/png").await?;
+            if !all_text.is_empty() {
+                all_text.push('\n');
+            }
+            all_text.push_str(&page_text);
+        }
+
+        if all_text.is_empty() {
+            return Err(Error::Ocr("No text extracted from PDF pages".to_string()));
+        }
+
+        Ok(all_text)
+    }
+
     /// Parse extracted text to find invoice fields
     fn parse_invoice_data(&self, raw_text: &str) -> OcrExtractionResult {
         let lines: Vec<&str> = raw_text.lines().collect();
@@ -400,8 +462,12 @@ impl OcrService for TesseractOcr {
             return Ok(result);
         }
 
-        // Run OCR
-        let raw_text = self.ocr_image(document_bytes, mime_type).await?;
+        // Run OCR — for PDFs, convert to images first for better accuracy
+        let raw_text = if mime_type == "application/pdf" {
+            self.ocr_pdf(document_bytes).await?
+        } else {
+            self.ocr_image(document_bytes, mime_type).await?
+        };
 
         // Parse the extracted text
         let mut result = self.parse_invoice_data(&raw_text);
