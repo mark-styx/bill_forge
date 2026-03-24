@@ -90,33 +90,47 @@ async fn main() -> anyhow::Result<()> {
 
 /// Build CORS layer with appropriate configuration based on environment
 fn build_cors_layer(config: &Config) -> CorsLayer {
-    let allowed_origins: Vec<HeaderValue> = config
-        .allowed_origins
-        .iter()
-        .filter_map(|origin| origin.parse().ok())
-        .collect();
+    let methods = [
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+    ];
+    let headers = [
+        HeaderName::from_static("content-type"),
+        HeaderName::from_static("authorization"),
+        HeaderName::from_static("x-request-id"),
+        HeaderName::from_static("x-tenant-id"),
+    ];
 
-    tracing::info!(
-        origins = ?config.allowed_origins,
-        "CORS configured with allowed origins"
-    );
+    if config.environment.is_development() {
+        tracing::info!("CORS configured with Any origin (development mode)");
+        // In development, allow any origin so LAN clients can connect.
+        // Note: allow_credentials(true) is incompatible with Any origin.
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(methods)
+            .allow_headers(headers)
+            .max_age(Duration::from_secs(3600))
+    } else {
+        let allowed_origins: Vec<HeaderValue> = config
+            .allowed_origins
+            .iter()
+            .filter_map(|origin| origin.parse().ok())
+            .collect();
 
-    CorsLayer::new()
-        .allow_origin(allowed_origins)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([
-            HeaderName::from_static("content-type"),
-            HeaderName::from_static("authorization"),
-            HeaderName::from_static("x-request-id"),
-            HeaderName::from_static("x-tenant-id"),
-        ])
-        .allow_credentials(true)
-        .max_age(Duration::from_secs(3600))
+        tracing::info!(
+            origins = ?config.allowed_origins,
+            "CORS configured with allowed origins"
+        );
+
+        CorsLayer::new()
+            .allow_origin(allowed_origins)
+            .allow_methods(methods)
+            .allow_headers(headers)
+            .allow_credentials(true)
+            .max_age(Duration::from_secs(3600))
+    }
 }

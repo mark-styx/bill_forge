@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = '';
 
 interface ApiResponse<T> {
   data?: T;
@@ -509,7 +509,7 @@ export const documentsApi = {
 
   // Get download URL for a document (legacy - use downloadBlob instead for authenticated access)
   getDownloadUrl: (id: string) =>
-    `${API_BASE_URL}/api/v1/documents/${id}`,
+    `/api/v1/documents/${id}`,
 
   // Download document as blob with authentication
   downloadBlob: (id: string) =>

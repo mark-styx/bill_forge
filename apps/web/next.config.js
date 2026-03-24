@@ -3,7 +3,10 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   images: {
-    domains: ['localhost'],
+    remotePatterns: [
+      { protocol: 'http', hostname: '**' },
+      { protocol: 'https', hostname: '**' },
+    ],
   },
   async rewrites() {
     // INTERNAL_API_URL is for server-side rewrites (Docker internal network).
