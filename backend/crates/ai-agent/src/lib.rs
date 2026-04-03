@@ -5,9 +5,9 @@
 
 pub mod agent;
 pub mod context;
-pub mod tools;
 pub mod handlers;
 pub mod models;
+pub mod tools;
 
 pub use agent::WinstonAgent;
 pub use handlers::create_router;

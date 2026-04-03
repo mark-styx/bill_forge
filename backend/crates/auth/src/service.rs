@@ -24,12 +24,10 @@ impl AuthService {
     }
 
     /// Register a new user
-    pub async fn register(
-        &self,
-        input: RegisterInput,
-    ) -> Result<AuthResponse> {
+    pub async fn register(&self, input: RegisterInput) -> Result<AuthResponse> {
         // Validate password strength
-        self.password_service.validate_password_strength(&input.password)?;
+        self.password_service
+            .validate_password_strength(&input.password)?;
 
         // Check if user already exists
         if self
@@ -67,17 +65,13 @@ impl AuthService {
             .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
-        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
-            .unwrap_or_default();
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0).unwrap_or_default();
 
         // Generate tokens
         let user_id = UserId(user.id);
-        let access_token = self.jwt_service.create_access_token(
-            &user_id,
-            &tenant_id,
-            &user.email,
-            &roles,
-        )?;
+        let access_token =
+            self.jwt_service
+                .create_access_token(&user_id, &tenant_id, &user.email, &roles)?;
         let refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
@@ -95,15 +89,44 @@ impl AuthService {
             tenant: TenantInfo {
                 id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                }).unwrap_or_default(),
+                enabled_modules: tenant
+                    .enabled_modules
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
-                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
-                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
+                    logo_url: tenant
+                        .settings
+                        .get("logo_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    primary_color: tenant
+                        .settings
+                        .get("primary_color")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    company_name: tenant
+                        .settings
+                        .get("company_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Company")
+                        .to_string(),
+                    timezone: tenant
+                        .settings
+                        .get("timezone")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("UTC")
+                        .to_string(),
+                    default_currency: tenant
+                        .settings
+                        .get("default_currency")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("USD")
+                        .to_string(),
                 },
             },
         })
@@ -144,17 +167,13 @@ impl AuthService {
             .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
-        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
-            .unwrap_or_default();
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0).unwrap_or_default();
 
         // Generate tokens
         let user_id = UserId(user.id);
-        let access_token = self.jwt_service.create_access_token(
-            &user_id,
-            &tenant_id,
-            &user.email,
-            &roles,
-        )?;
+        let access_token =
+            self.jwt_service
+                .create_access_token(&user_id, &tenant_id, &user.email, &roles)?;
         let refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
@@ -172,15 +191,44 @@ impl AuthService {
             tenant: TenantInfo {
                 id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                }).unwrap_or_default(),
+                enabled_modules: tenant
+                    .enabled_modules
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
-                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
-                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
+                    logo_url: tenant
+                        .settings
+                        .get("logo_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    primary_color: tenant
+                        .settings
+                        .get("primary_color")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    company_name: tenant
+                        .settings
+                        .get("company_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Company")
+                        .to_string(),
+                    timezone: tenant
+                        .settings
+                        .get("timezone")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("UTC")
+                        .to_string(),
+                    default_currency: tenant
+                        .settings
+                        .get("default_currency")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("USD")
+                        .to_string(),
                 },
             },
         })
@@ -213,17 +261,13 @@ impl AuthService {
             .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
 
         // Convert roles from JSON
-        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0)
-            .unwrap_or_default();
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0).unwrap_or_default();
 
         // Generate new tokens
         let user_id = UserId(user.id);
-        let access_token = self.jwt_service.create_access_token(
-            &user_id,
-            &tenant_id,
-            &user.email,
-            &roles,
-        )?;
+        let access_token =
+            self.jwt_service
+                .create_access_token(&user_id, &tenant_id, &user.email, &roles)?;
         let new_refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
@@ -241,15 +285,44 @@ impl AuthService {
             tenant: TenantInfo {
                 id: TenantId::from_uuid(tenant.id),
                 name: tenant.name,
-                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                }).unwrap_or_default(),
+                enabled_modules: tenant
+                    .enabled_modules
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 settings: TenantSettingsInfo {
-                    logo_url: tenant.settings.get("logo_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    primary_color: tenant.settings.get("primary_color").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    company_name: tenant.settings.get("company_name").and_then(|v| v.as_str()).unwrap_or("Company").to_string(),
-                    timezone: tenant.settings.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
-                    default_currency: tenant.settings.get("default_currency").and_then(|v| v.as_str()).unwrap_or("USD").to_string(),
+                    logo_url: tenant
+                        .settings
+                        .get("logo_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    primary_color: tenant
+                        .settings
+                        .get("primary_color")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    company_name: tenant
+                        .settings
+                        .get("company_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Company")
+                        .to_string(),
+                    timezone: tenant
+                        .settings
+                        .get("timezone")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("UTC")
+                        .to_string(),
+                    default_currency: tenant
+                        .settings
+                        .get("default_currency")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("USD")
+                        .to_string(),
                 },
             },
         })
@@ -282,8 +355,7 @@ impl AuthService {
             tenant_name: tenant.name,
             enabled_modules: serde_json::from_value(tenant.enabled_modules.0.clone())
                 .unwrap_or_default(),
-            settings: serde_json::from_value(tenant.settings.0.clone())
-                .unwrap_or_default(),
+            settings: serde_json::from_value(tenant.settings.0.clone()).unwrap_or_default(),
         })
     }
 
@@ -408,9 +480,9 @@ impl AuthService {
 
         let id = uuid::Uuid::new_v4();
         let now = chrono::Utc::now();
-        let expires_at = input.expires_in_days.map(|days| {
-            now + chrono::Duration::days(days as i64)
-        });
+        let expires_at = input
+            .expires_in_days
+            .map(|days| now + chrono::Duration::days(days as i64));
 
         // Store the API key
         self.metadata_db
@@ -464,7 +536,10 @@ impl AuthService {
         }
 
         // Verify the key hash matches
-        if !self.password_service.verify(api_key, &stored_key.key_hash)? {
+        if !self
+            .password_service
+            .verify(api_key, &stored_key.key_hash)?
+        {
             return Err(Error::InvalidToken("Invalid API key".to_string()));
         }
 
@@ -474,8 +549,8 @@ impl AuthService {
             .await?;
 
         // Return a synthetic user context for API key access
-        let roles: Vec<Role> = serde_json::from_value(stored_key.roles.0.clone())
-            .unwrap_or_default();
+        let roles: Vec<Role> =
+            serde_json::from_value(stored_key.roles.0.clone()).unwrap_or_default();
         Ok(UserContext {
             user_id: UserId::from_uuid(stored_key.id), // Use key ID as user ID
             tenant_id: TenantId::from_uuid(stored_key.tenant_id),
@@ -491,8 +566,8 @@ impl AuthService {
         Ok(records
             .into_iter()
             .map(|r| {
-                let roles: Vec<Role> = serde_json::from_value(r.roles.0.clone())
-                    .unwrap_or_default();
+                let roles: Vec<Role> =
+                    serde_json::from_value(r.roles.0.clone()).unwrap_or_default();
                 ApiKey {
                     id: r.id,
                     tenant_id: TenantId::from_uuid(r.tenant_id),

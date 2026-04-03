@@ -15,7 +15,11 @@ pub async fn sync_vendors(tenant_id: &str, _payload: &Value, _config: &WorkerCon
     Ok(())
 }
 
-pub async fn sync_accounts(tenant_id: &str, _payload: &Value, _config: &WorkerConfig) -> Result<()> {
+pub async fn sync_accounts(
+    tenant_id: &str,
+    _payload: &Value,
+    _config: &WorkerConfig,
+) -> Result<()> {
     info!("Syncing QuickBooks accounts for tenant: {}", tenant_id);
 
     // This job is now handled by the API endpoint directly
@@ -25,7 +29,11 @@ pub async fn sync_accounts(tenant_id: &str, _payload: &Value, _config: &WorkerCo
     Ok(())
 }
 
-pub async fn export_invoice(tenant_id: &str, _payload: &Value, _config: &WorkerConfig) -> Result<()> {
+pub async fn export_invoice(
+    tenant_id: &str,
+    _payload: &Value,
+    _config: &WorkerConfig,
+) -> Result<()> {
     info!("Exporting invoice to QuickBooks for tenant: {}", tenant_id);
 
     // This job is now handled by the API endpoint directly

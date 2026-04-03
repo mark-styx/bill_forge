@@ -83,10 +83,7 @@ impl WorkdayOAuth {
             .http_client
             .post(&self.token_url())
             .basic_auth(&self.config.client_id, Some(&self.config.client_secret))
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-            ])
+            .form(&[("grant_type", "authorization_code"), ("code", code)])
             .send()
             .await
             .context("Failed to send token request to Workday")?;
@@ -101,8 +98,8 @@ impl WorkdayOAuth {
             anyhow::bail!("Workday token exchange failed: {}", body);
         }
 
-        let tokens: WorkdayTokens = serde_json::from_str(&body)
-            .context("Failed to parse Workday token response")?;
+        let tokens: WorkdayTokens =
+            serde_json::from_str(&body).context("Failed to parse Workday token response")?;
 
         Ok(tokens)
     }
@@ -131,8 +128,8 @@ impl WorkdayOAuth {
             anyhow::bail!("Workday token refresh failed: {}", body);
         }
 
-        let tokens: WorkdayTokens = serde_json::from_str(&body)
-            .context("Failed to parse Workday token response")?;
+        let tokens: WorkdayTokens =
+            serde_json::from_str(&body).context("Failed to parse Workday token response")?;
 
         Ok(tokens)
     }

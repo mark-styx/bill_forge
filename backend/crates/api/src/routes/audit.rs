@@ -11,7 +11,7 @@ use axum::{
 use billforge_core::{
     domain::AuditEntry,
     traits::AuditFilters,
-    types::{Pagination, PaginatedResponse, Role},
+    types::{PaginatedResponse, Pagination, Role},
     Error,
 };
 use serde::Deserialize;
@@ -68,7 +68,9 @@ async fn list_audit_logs(
     };
 
     let audit_service = state.audit_service();
-    let result = audit_service.query(&user.tenant_id, filters, &pagination).await?;
+    let result = audit_service
+        .query(&user.tenant_id, filters, &pagination)
+        .await?;
 
     Ok(Json(result))
 }

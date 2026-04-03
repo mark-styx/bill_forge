@@ -30,11 +30,7 @@ pub struct WorkdayClient {
 
 impl WorkdayClient {
     /// Create a new Workday API client
-    pub fn new(
-        access_token: String,
-        tenant_url: String,
-        tenant_name: String,
-    ) -> Self {
+    pub fn new(access_token: String, tenant_url: String, tenant_name: String) -> Self {
         Self {
             http_client: reqwest::Client::new(),
             access_token,
@@ -45,10 +41,7 @@ impl WorkdayClient {
 
     /// Build API URL for a resource
     fn build_url(&self, resource: &str) -> String {
-        format!(
-            "{}/api/v1/{}",
-            self.tenant_url, resource
-        )
+        format!("{}/api/v1/{}", self.tenant_url, resource)
     }
 
     /// Make a GET request to Workday REST API
@@ -74,8 +67,7 @@ impl WorkdayClient {
             anyhow::bail!("Workday API request failed (HTTP {}): {}", status, body);
         }
 
-        serde_json::from_str(&body)
-            .context("Failed to parse Workday API response")
+        serde_json::from_str(&body).context("Failed to parse Workday API response")
     }
 
     /// Make a POST request to Workday REST API
@@ -99,11 +91,14 @@ impl WorkdayClient {
             .context("Failed to read Workday API response")?;
 
         if !status.is_success() {
-            anyhow::bail!("Workday API request failed (HTTP {}): {}", status, response_body);
+            anyhow::bail!(
+                "Workday API request failed (HTTP {}): {}",
+                status,
+                response_body
+            );
         }
 
-        serde_json::from_str(&response_body)
-            .context("Failed to parse Workday API response")
+        serde_json::from_str(&response_body).context("Failed to parse Workday API response")
     }
 
     // ──────────────────────────── Supplier Operations ────────────────────────────
@@ -114,11 +109,7 @@ impl WorkdayClient {
         page: i32,
         page_size: i32,
     ) -> Result<WorkdayQueryResponse<WorkdaySupplier>> {
-        let resource = format!(
-            "suppliers?offset={}&limit={}",
-            page * page_size,
-            page_size
-        );
+        let resource = format!("suppliers?offset={}&limit={}", page * page_size, page_size);
 
         self.get(&resource).await
     }
@@ -173,10 +164,7 @@ impl WorkdayClient {
     }
 
     /// Get a supplier invoice by ID
-    pub async fn get_supplier_invoice(
-        &self,
-        invoice_id: &str,
-    ) -> Result<WorkdaySupplierInvoice> {
+    pub async fn get_supplier_invoice(&self, invoice_id: &str) -> Result<WorkdaySupplierInvoice> {
         self.get(&format!("supplierInvoices/{}", invoice_id)).await
     }
 

@@ -141,8 +141,9 @@ async fn workday_connect(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let wd_config = state.config.workday.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("Workday integration not configured".to_string()))?;
+    let wd_config = state.config.workday.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Workday integration not configured".to_string())
+    })?;
 
     let oauth = WorkdayOAuth::new(WorkdayOAuthConfig {
         client_id: wd_config.client_id.clone(),
@@ -205,14 +206,15 @@ async fn workday_callback(
         return Err(billforge_core::Error::Validation("Invalid state token".to_string()).into());
     }
 
-    let tenant_id: billforge_core::TenantId = parts[0].parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid tenant ID in state token".to_string()))?;
+    let tenant_id: billforge_core::TenantId = parts[0].parse().map_err(|_| {
+        billforge_core::Error::Validation("Invalid tenant ID in state token".to_string())
+    })?;
 
     let pool = state.db.tenant(&tenant_id).await?;
 
     // Verify state token
     let stored_state: Option<(String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT state_token, expires_at FROM workday_oauth_states WHERE tenant_id = $1"
+        "SELECT state_token, expires_at FROM workday_oauth_states WHERE tenant_id = $1",
     )
     .bind(tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -225,12 +227,16 @@ async fn workday_callback(
         .unwrap_or(false);
 
     if !is_valid {
-        return Err(billforge_core::Error::Validation("Invalid or expired state token".to_string()).into());
+        return Err(billforge_core::Error::Validation(
+            "Invalid or expired state token".to_string(),
+        )
+        .into());
     }
 
     // Get Workday configuration
-    let wd_config = state.config.workday.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("Workday integration not configured".to_string()))?;
+    let wd_config = state.config.workday.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Workday integration not configured".to_string())
+    })?;
 
     let oauth = WorkdayOAuth::new(WorkdayOAuthConfig {
         client_id: wd_config.client_id.clone(),
@@ -241,8 +247,9 @@ async fn workday_callback(
     });
 
     // Exchange authorization code for tokens
-    let tokens = oauth.exchange_code(&params.code).await
-        .map_err(|e| billforge_core::Error::Validation(format!("Workday OAuth token exchange failed: {}", e)))?;
+    let tokens = oauth.exchange_code(&params.code).await.map_err(|e| {
+        billforge_core::Error::Validation(format!("Workday OAuth token exchange failed: {}", e))
+    })?;
 
     // Workday access tokens expire based on the expires_in field
     let now = Utc::now();
@@ -270,7 +277,7 @@ async fn workday_callback(
             access_token = $4,
             refresh_token = COALESCE($5, workday_connections.refresh_token),
             access_token_expires_at = $6,
-            updated_at = NOW()"
+            updated_at = NOW()",
     )
     .bind(tenant_id.as_uuid())
     .bind(&wd_config.tenant_url)
@@ -280,7 +287,9 @@ async fn workday_callback(
     .bind(access_token_expires_at)
     .execute(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to store Workday tokens: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to store Workday tokens: {}", e))
+    })?;
 
     // Clean up state token
     sqlx::query("DELETE FROM workday_oauth_states WHERE tenant_id = $1")
@@ -289,7 +298,10 @@ async fn workday_callback(
         .await
         .ok();
 
-    Ok(Redirect::temporary(&format!("{}/dashboard?workday=connected", state.config.frontend_url)))
+    Ok(Redirect::temporary(&format!(
+        "{}/dashboard?workday=connected",
+        state.config.frontend_url
+    )))
 }
 
 /// Disconnect Workday
@@ -312,7 +324,7 @@ async fn workday_disconnect(
     // Get current connection to revoke token
     let connection: Option<(String, String, String)> = sqlx::query_as(
         "SELECT access_token, workday_tenant_url, workday_tenant_name
-         FROM workday_connections WHERE tenant_id = $1"
+         FROM workday_connections WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -365,7 +377,7 @@ async fn workday_status(
     let connection: Option<(String, String, bool, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         "SELECT workday_tenant_url, workday_tenant_name, sync_enabled, last_sync_at
          FROM workday_connections
-         WHERE tenant_id = $1"
+         WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -412,7 +424,9 @@ async fn get_workday_client(
     .flatten();
 
     let (mut access_token, refresh_token, tenant_url, tenant_name, token_expires_at) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("Workday not connected or sync disabled".to_string()))?;
+        .ok_or_else(
+        || billforge_core::Error::Validation("Workday not connected or sync disabled".to_string()),
+    )?;
 
     // Check if token needs refresh
     if token_expires_at <= Utc::now() {
@@ -444,11 +458,15 @@ async fn get_workday_client(
                     access_token = new_tokens.access_token;
                 }
                 Err(_) => {
-                    return Err(billforge_core::Error::Validation("Workday token expired. Please reconnect.".to_string()));
+                    return Err(billforge_core::Error::Validation(
+                        "Workday token expired. Please reconnect.".to_string(),
+                    ));
                 }
             }
         } else {
-            return Err(billforge_core::Error::Validation("Workday integration not configured".to_string()));
+            return Err(billforge_core::Error::Validation(
+                "Workday integration not configured".to_string(),
+            ));
         }
     }
 
@@ -479,7 +497,7 @@ async fn sync_suppliers(
     let sync_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO workday_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'suppliers', 'running', NOW())"
+         VALUES ($1, $2, 'suppliers', 'running', NOW())",
     )
     .bind(sync_id)
     .bind(tenant.tenant_id.as_uuid())
@@ -493,7 +511,9 @@ async fn sync_suppliers(
     let page_size = 100;
 
     loop {
-        let result = client.query_suppliers(page, page_size).await
+        let result = client
+            .query_suppliers(page, page_size)
+            .await
             .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
 
         let fetched = result.data.len();
@@ -515,7 +535,7 @@ async fn sync_suppliers(
         let existing: Option<(Uuid,)> = sqlx::query_as(
             "SELECT v.id FROM vendors v
              INNER JOIN workday_supplier_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.workday_supplier_id = $2"
+             WHERE m.tenant_id = $1 AND m.workday_supplier_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(&supplier.supplier_id)
@@ -531,7 +551,7 @@ async fn sync_suppliers(
             // Update existing vendor
             sqlx::query(
                 "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
-                 WHERE id = $1"
+                 WHERE id = $1",
             )
             .bind(vendor_id)
             .bind(&supplier.supplier_name)
@@ -600,7 +620,11 @@ async fn sync_suppliers(
         .await
         .ok();
 
-    Ok(Json(SyncResponse { imported, updated, skipped }))
+    Ok(Json(SyncResponse {
+        imported,
+        updated,
+        skipped,
+    }))
 }
 
 /// Sync ledger accounts from Workday
@@ -627,7 +651,9 @@ async fn sync_accounts(
     let page_size = 100;
 
     loop {
-        let result = client.query_ledger_accounts(page, page_size).await
+        let result = client
+            .query_ledger_accounts(page, page_size)
+            .await
             .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
 
         let fetched = result.data.len();
@@ -663,7 +689,9 @@ async fn sync_accounts(
         created += 1;
     }
 
-    Ok(Json(serde_json::json!({ "status": "synced", "count": created })))
+    Ok(Json(
+        serde_json::json!({ "status": "synced", "count": created }),
+    ))
 }
 
 /// Export invoice to Workday as supplier invoice
@@ -688,12 +716,14 @@ async fn export_invoice_to_workday(
     let client = get_workday_client(&state, &pool, &tenant.tenant_id).await?;
 
     // Get invoice from database
-    let invoice_id: billforge_core::domain::InvoiceId = request.invoice_id.parse()
+    let invoice_id: billforge_core::domain::InvoiceId = request
+        .invoice_id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let invoice: Option<(String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT vendor_name, invoice_number, total_amount_cents, due_date, po_number
-         FROM invoices WHERE id = $1"
+         FROM invoices WHERE id = $1",
     )
     .bind(invoice_id.as_uuid())
     .fetch_optional(&*pool)
@@ -701,8 +731,8 @@ async fn export_invoice_to_workday(
     .ok()
     .flatten();
 
-    let (vendor_name, invoice_number, total_cents, due_date, po_number) = invoice
-        .ok_or_else(|| billforge_core::Error::NotFound {
+    let (vendor_name, invoice_number, total_cents, due_date, po_number) =
+        invoice.ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: request.invoice_id.clone(),
         })?;
@@ -711,7 +741,7 @@ async fn export_invoice_to_workday(
     let supplier_mapping: Option<(String,)> = sqlx::query_as(
         "SELECT workday_supplier_id FROM workday_supplier_mappings
          WHERE tenant_id = $1 AND billforge_vendor_id IN
-         (SELECT vendor_id FROM invoices WHERE id = $2)"
+         (SELECT vendor_id FROM invoices WHERE id = $2)",
     )
     .bind(tenant.tenant_id.as_uuid())
     .bind(invoice_id.as_uuid())
@@ -720,12 +750,14 @@ async fn export_invoice_to_workday(
     .ok()
     .flatten();
 
-    let workday_supplier_id = supplier_mapping
-        .map(|(id,)| id)
-        .ok_or_else(|| billforge_core::Error::Validation("Vendor not found in Workday. Please sync suppliers first.".to_string()))?;
+    let workday_supplier_id = supplier_mapping.map(|(id,)| id).ok_or_else(|| {
+        billforge_core::Error::Validation(
+            "Vendor not found in Workday. Please sync suppliers first.".to_string(),
+        )
+    })?;
 
     // Build Workday supplier invoice
-    use billforge_workday::{WorkdaySupplierInvoice, WorkdayInvoiceLine};
+    use billforge_workday::{WorkdayInvoiceLine, WorkdaySupplierInvoice};
 
     let amount = total_cents as f64 / 100.0;
     let today = chrono::Utc::now().date_naive();
@@ -753,7 +785,9 @@ async fn export_invoice_to_workday(
     };
 
     // Create supplier invoice in Workday
-    let result = client.create_supplier_invoice(&wd_invoice).await
+    let result = client
+        .create_supplier_invoice(&wd_invoice)
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
 
     let workday_invoice_id = result.id.unwrap_or_default();
@@ -844,7 +878,7 @@ async fn update_account_mappings(
         sqlx::query(
             "UPDATE workday_account_mappings
              SET billforge_gl_code = $3, updated_at = NOW()
-             WHERE tenant_id = $1 AND workday_account_id = $2"
+             WHERE tenant_id = $1 AND workday_account_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(&mapping.workday_account_id)
@@ -875,7 +909,9 @@ async fn list_companies(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let client = get_workday_client(&state, &pool, &tenant.tenant_id).await?;
 
-    let companies = client.query_companies().await
+    let companies = client
+        .query_companies()
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
 
     Ok(Json(companies.data))

@@ -55,9 +55,9 @@ impl From<ApprovalError> for billforge_core::Error {
                     to: requested,
                 }
             }
-            ApprovalError::AlreadyCompleted => billforge_core::Error::Conflict(
-                "Approval chain already completed".to_string(),
-            ),
+            ApprovalError::AlreadyCompleted => {
+                billforge_core::Error::Conflict("Approval chain already completed".to_string())
+            }
             ApprovalError::SelfApprovalNotAllowed => {
                 billforge_core::Error::Forbidden("Self-approval not allowed".to_string())
             }

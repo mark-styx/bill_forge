@@ -201,7 +201,10 @@ Review the invoice at: {approval_url}
 ---
 This email was sent by BillForge."#,
             if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
-                format!("\nQuick Actions:\n- Approve: {}\n- Reject: {}\n", approve, reject)
+                format!(
+                    "\nQuick Actions:\n- Approve: {}\n- Reject: {}\n",
+                    approve, reject
+                )
             } else {
                 String::new()
             }
@@ -321,11 +324,7 @@ This email was sent by BillForge."#
     }
 
     /// Welcome email for new users
-    pub fn welcome_user(
-        user_name: &str,
-        tenant_name: &str,
-        login_url: &str,
-    ) -> (String, String) {
+    pub fn welcome_user(user_name: &str, tenant_name: &str, login_url: &str) -> (String, String) {
         let html = Self::wrap_html(
             &format!(
                 r#"<h1>Welcome to BillForge!</h1>
@@ -360,11 +359,7 @@ This email was sent by BillForge."#
     }
 
     /// Password reset email
-    pub fn password_reset(
-        user_name: &str,
-        reset_url: &str,
-        expires_in: &str,
-    ) -> (String, String) {
+    pub fn password_reset(user_name: &str, reset_url: &str, expires_in: &str) -> (String, String) {
         let html = Self::wrap_html(
             &format!(
                 r#"<h1>Password Reset Request</h1>
@@ -500,7 +495,10 @@ impl<E: EmailService> EmailNotifier<E> {
         self.service
             .send(
                 to,
-                &format!("Approval Required: Invoice {} from {}", invoice_number, vendor_name),
+                &format!(
+                    "Approval Required: Invoice {} from {}",
+                    invoice_number, vendor_name
+                ),
                 &html,
                 &text,
             )
@@ -515,12 +513,8 @@ impl<E: EmailService> EmailNotifier<E> {
         amount: &str,
         approved_by: &str,
     ) -> Result<()> {
-        let (html, text) = EmailTemplates::invoice_approved(
-            invoice_number,
-            vendor_name,
-            amount,
-            approved_by,
-        );
+        let (html, text) =
+            EmailTemplates::invoice_approved(invoice_number, vendor_name, amount, approved_by);
 
         self.service
             .send(

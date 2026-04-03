@@ -164,7 +164,8 @@ async fn get_dashboard_metrics(
         metrics_repo.get_approval_metrics(&tenant.tenant_id),
         metrics_repo.get_vendor_metrics(&tenant.tenant_id),
         metrics_repo.get_team_metrics(&tenant.tenant_id)
-    ).map_err(|e| Error::Internal(format!("Failed to fetch metrics: {}", e)))?;
+    )
+    .map_err(|e| Error::Internal(format!("Failed to fetch metrics: {}", e)))?;
 
     let metrics = DashboardMetrics {
         invoices: InvoiceMetrics {
@@ -192,22 +193,30 @@ async fn get_dashboard_metrics(
         vendors: VendorMetrics {
             total_vendors: vendor_metrics.total_vendors as u64,
             new_this_month: vendor_metrics.new_this_month as u64,
-            top_vendors: vendor_metrics.top_vendors.into_iter().map(|v| TopVendor {
-                vendor_id: v.vendor_id,
-                vendor_name: v.vendor_name,
-                invoice_count: v.invoice_count as u64,
-                total_amount: v.total_amount,
-            }).collect(),
+            top_vendors: vendor_metrics
+                .top_vendors
+                .into_iter()
+                .map(|v| TopVendor {
+                    vendor_id: v.vendor_id,
+                    vendor_name: v.vendor_name,
+                    invoice_count: v.invoice_count as u64,
+                    total_amount: v.total_amount,
+                })
+                .collect(),
             concentration_percentage: vendor_metrics.concentration_percentage,
         },
         team: TeamMetrics {
-            members: team_metrics.members.into_iter().map(|m| TeamMemberStats {
-                user_id: m.user_id,
-                user_name: m.user_name,
-                approvals_this_month: m.approvals_this_month as u64,
-                rejections_this_month: m.rejections_this_month as u64,
-                avg_response_time_hours: m.avg_response_time_hours,
-            }).collect(),
+            members: team_metrics
+                .members
+                .into_iter()
+                .map(|m| TeamMemberStats {
+                    user_id: m.user_id,
+                    user_name: m.user_name,
+                    approvals_this_month: m.approvals_this_month as u64,
+                    rejections_this_month: m.rejections_this_month as u64,
+                    avg_response_time_hours: m.avg_response_time_hours,
+                })
+                .collect(),
             avg_approvals_per_member: team_metrics.avg_approvals_per_member,
             total_pending_actions: team_metrics.total_pending_actions as u64,
         },
@@ -318,12 +327,16 @@ async fn get_vendor_metrics(
     let metrics = VendorMetrics {
         total_vendors: db_metrics.total_vendors as u64,
         new_this_month: db_metrics.new_this_month as u64,
-        top_vendors: db_metrics.top_vendors.into_iter().map(|v| TopVendor {
-            vendor_id: v.vendor_id,
-            vendor_name: v.vendor_name,
-            invoice_count: v.invoice_count as u64,
-            total_amount: v.total_amount,
-        }).collect(),
+        top_vendors: db_metrics
+            .top_vendors
+            .into_iter()
+            .map(|v| TopVendor {
+                vendor_id: v.vendor_id,
+                vendor_name: v.vendor_name,
+                invoice_count: v.invoice_count as u64,
+                total_amount: v.total_amount,
+            })
+            .collect(),
         concentration_percentage: db_metrics.concentration_percentage,
     };
 
@@ -354,13 +367,17 @@ async fn get_team_metrics(
         .map_err(|e| Error::Internal(format!("Failed to fetch team metrics: {}", e)))?;
 
     let metrics = TeamMetrics {
-        members: db_metrics.members.into_iter().map(|m| TeamMemberStats {
-            user_id: m.user_id,
-            user_name: m.user_name,
-            approvals_this_month: m.approvals_this_month as u64,
-            rejections_this_month: m.rejections_this_month as u64,
-            avg_response_time_hours: m.avg_response_time_hours,
-        }).collect(),
+        members: db_metrics
+            .members
+            .into_iter()
+            .map(|m| TeamMemberStats {
+                user_id: m.user_id,
+                user_name: m.user_name,
+                approvals_this_month: m.approvals_this_month as u64,
+                rejections_this_month: m.rejections_this_month as u64,
+                avg_response_time_hours: m.avg_response_time_hours,
+            })
+            .collect(),
         avg_approvals_per_member: db_metrics.avg_approvals_per_member,
         total_pending_actions: db_metrics.total_pending_actions as u64,
     };

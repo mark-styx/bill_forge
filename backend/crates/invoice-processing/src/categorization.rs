@@ -106,7 +106,8 @@ impl CategorizationEngine {
             .await?;
 
         // Calculate overall confidence
-        let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
+        let overall_confidence =
+            self.calculate_overall_confidence(&gl_code, &department, &cost_center);
 
         Ok(InvoiceCategorization {
             invoice_id: Uuid::nil(), // Will be set by caller
@@ -342,15 +343,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_line_item_analysis_software() {
-        let items = vec![
-            LineItemInput {
-                description: "Annual software license".to_string(),
-                quantity: Some(1.0),
-                amount: 1200.0,
-            },
-        ];
+        let items = vec![LineItemInput {
+            description: "Annual software license".to_string(),
+            quantity: Some(1.0),
+            amount: 1200.0,
+        }];
 
-        let engine = CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
+        let engine =
+            CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
 
         // Can't test async easily in unit tests without runtime
         // This would be tested in integration tests

@@ -32,7 +32,7 @@ impl PasswordService {
     pub fn verify(&self, password: &str, hash: &str) -> Result<bool> {
         let parsed_hash = PasswordHash::new(hash)
             .map_err(|e| Error::Internal(format!("Invalid password hash: {}", e)))?;
-        
+
         Ok(self
             .argon2
             .verify_password(password.as_bytes(), &parsed_hash)
@@ -75,7 +75,7 @@ mod tests {
     fn test_hash_and_verify() {
         let service = PasswordService::new();
         let password = "TestPassword123!";
-        
+
         let hash = service.hash(password).unwrap();
         assert!(service.verify(password, &hash).unwrap());
         assert!(!service.verify("wrong_password", &hash).unwrap());
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn test_password_validation() {
         let service = PasswordService::new();
-        
+
         assert!(service.validate_password_strength("Short1").is_err());
         assert!(service.validate_password_strength("alllowercase1").is_err());
         assert!(service.validate_password_strength("ALLUPPERCASE1").is_err());

@@ -11,13 +11,13 @@ use crate::state::AppState;
 use crate::ApiResult;
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Create mobile routes
 pub fn routes() -> Router<AppState> {
@@ -74,7 +74,10 @@ async fn register_device(
 
     // Validate platform
     if payload.platform != "ios" && payload.platform != "android" {
-        return Err(billforge_core::Error::Validation("Invalid platform. Must be 'ios' or 'android'".to_string()).into());
+        return Err(billforge_core::Error::Validation(
+            "Invalid platform. Must be 'ios' or 'android'".to_string(),
+        )
+        .into());
     }
 
     // Validate token format based on platform
@@ -309,9 +312,9 @@ async fn get_dashboard(
             currency: row.currency,
             due_date: row.due_date,
             status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-            days_until_due: row.due_date.map(|d| {
-                (d - Utc::now().date_naive()).num_days() as i32
-            }),
+            days_until_due: row
+                .due_date
+                .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
             requires_action: row.processing_status == "pending_approval",
             created_at: Utc::now(), // TODO: Add created_at to invoices table
         })
@@ -374,9 +377,9 @@ async fn list_invoices(
             currency: row.currency,
             due_date: row.due_date,
             status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-            days_until_due: row.due_date.map(|d| {
-                (d - Utc::now().date_naive()).num_days() as i32
-            }),
+            days_until_due: row
+                .due_date
+                .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
             requires_action: row.processing_status == "pending_approval",
             created_at: Utc::now(),
         })
@@ -420,9 +423,9 @@ async fn get_invoice(
         currency: row.currency,
         due_date: row.due_date,
         status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-        days_until_due: row.due_date.map(|d| {
-            (d - Utc::now().date_naive()).num_days() as i32
-        }),
+        days_until_due: row
+            .due_date
+            .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
         requires_action: row.processing_status == "pending_approval",
         created_at: Utc::now(),
     };
@@ -435,15 +438,42 @@ async fn get_invoice(
         for field in selected_fields {
             match field.trim() {
                 "id" => map.insert("id".to_string(), serde_json::to_value(&invoice.id).unwrap()),
-                "vendor_name" => map.insert("vendor_name".to_string(), serde_json::to_value(&invoice.vendor_name).unwrap()),
-                "invoice_number" => map.insert("invoice_number".to_string(), serde_json::to_value(&invoice.invoice_number).unwrap()),
-                "total_amount" => map.insert("total_amount".to_string(), serde_json::to_value(&invoice.total_amount_cents).unwrap()),
-                "currency" => map.insert("currency".to_string(), serde_json::to_value(&invoice.currency).unwrap()),
-                "due_date" => map.insert("due_date".to_string(), serde_json::to_value(&invoice.due_date).unwrap()),
-                "status" => map.insert("status".to_string(), serde_json::to_value(&invoice.status).unwrap()),
-                "days_until_due" => map.insert("days_until_due".to_string(), serde_json::to_value(&invoice.days_until_due).unwrap()),
-                "requires_action" => map.insert("requires_action".to_string(), serde_json::to_value(&invoice.requires_action).unwrap()),
-                "created_at" => map.insert("created_at".to_string(), serde_json::to_value(&invoice.created_at).unwrap()),
+                "vendor_name" => map.insert(
+                    "vendor_name".to_string(),
+                    serde_json::to_value(&invoice.vendor_name).unwrap(),
+                ),
+                "invoice_number" => map.insert(
+                    "invoice_number".to_string(),
+                    serde_json::to_value(&invoice.invoice_number).unwrap(),
+                ),
+                "total_amount" => map.insert(
+                    "total_amount".to_string(),
+                    serde_json::to_value(&invoice.total_amount_cents).unwrap(),
+                ),
+                "currency" => map.insert(
+                    "currency".to_string(),
+                    serde_json::to_value(&invoice.currency).unwrap(),
+                ),
+                "due_date" => map.insert(
+                    "due_date".to_string(),
+                    serde_json::to_value(&invoice.due_date).unwrap(),
+                ),
+                "status" => map.insert(
+                    "status".to_string(),
+                    serde_json::to_value(&invoice.status).unwrap(),
+                ),
+                "days_until_due" => map.insert(
+                    "days_until_due".to_string(),
+                    serde_json::to_value(&invoice.days_until_due).unwrap(),
+                ),
+                "requires_action" => map.insert(
+                    "requires_action".to_string(),
+                    serde_json::to_value(&invoice.requires_action).unwrap(),
+                ),
+                "created_at" => map.insert(
+                    "created_at".to_string(),
+                    serde_json::to_value(&invoice.created_at).unwrap(),
+                ),
                 _ => continue,
             };
         }
@@ -503,9 +533,9 @@ async fn list_approvals(
                 currency: row.currency,
                 due_date: row.due_date,
                 status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-                days_until_due: row.due_date.map(|d| {
-                    (d - Utc::now().date_naive()).num_days() as i32
-                }),
+                days_until_due: row
+                    .due_date
+                    .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
                 requires_action: true,
                 created_at: row.created_at,
             },

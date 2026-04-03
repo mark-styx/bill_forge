@@ -45,7 +45,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
                 file_size, mime_type, uploaded_by, uploaded_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            "#
+            "#,
         )
         .bind(id)
         .bind(*tenant_id.as_uuid())
@@ -66,7 +66,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<TaxDocument>> {
         let result = sqlx::query_as::<_, TaxDocumentRow>(
-            "SELECT * FROM vendor_documents WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM vendor_documents WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id)
         .bind(*tenant_id.as_uuid())
@@ -77,7 +77,11 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
         Ok(result.map(|row| row.into_tax_document()))
     }
 
-    async fn list_for_vendor(&self, tenant_id: &TenantId, vendor_id: &VendorId) -> Result<Vec<TaxDocument>> {
+    async fn list_for_vendor(
+        &self,
+        tenant_id: &TenantId,
+        vendor_id: &VendorId,
+    ) -> Result<Vec<TaxDocument>> {
         let rows = sqlx::query_as::<_, TaxDocumentRow>(
             "SELECT * FROM vendor_documents WHERE tenant_id = $1 AND vendor_id = $2 ORDER BY uploaded_at DESC"
         )
@@ -87,7 +91,10 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to list tax documents: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_tax_document()).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_tax_document())
+            .collect())
     }
 
     async fn delete(&self, tenant_id: &TenantId, id: Uuid) -> Result<()> {

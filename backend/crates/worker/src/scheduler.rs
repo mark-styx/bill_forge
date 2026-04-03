@@ -103,12 +103,11 @@ async fn enqueue_embedding_refresh_job(
 ) -> Result<()> {
     // Get all active tenants
     let metadata_pool = pg_manager.metadata();
-    let tenants: Vec<String> = sqlx::query_scalar(
-        "SELECT id::text FROM tenants WHERE active = true",
-    )
-    .fetch_all(metadata_pool)
-    .await
-    .context("Failed to fetch active tenants")?;
+    let tenants: Vec<String> =
+        sqlx::query_scalar("SELECT id::text FROM tenants WHERE active = true")
+            .fetch_all(metadata_pool)
+            .await
+            .context("Failed to fetch active tenants")?;
 
     // Enqueue job for each tenant
     for tenant_id in tenants {

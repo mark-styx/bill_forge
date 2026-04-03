@@ -197,9 +197,10 @@ fn parse_environment(env: &str) -> Result<BillComEnvironment, billforge_core::Er
     match env.to_lowercase().as_str() {
         "production" => Ok(BillComEnvironment::Production),
         "sandbox" => Ok(BillComEnvironment::Sandbox),
-        _ => Err(billforge_core::Error::Validation(
-            format!("Invalid environment '{}'. Must be 'production' or 'sandbox'.", env)
-        )),
+        _ => Err(billforge_core::Error::Validation(format!(
+            "Invalid environment '{}'. Must be 'production' or 'sandbox'.",
+            env
+        ))),
     }
 }
 
@@ -211,7 +212,7 @@ async fn get_bill_com_client(
     let connection: Option<(String, String, String, String, String)> = sqlx::query_as(
         "SELECT dev_key, org_id, user_name, password, environment
          FROM bill_com_connections
-         WHERE tenant_id = $1 AND sync_enabled = true"
+         WHERE tenant_id = $1 AND sync_enabled = true",
     )
     .bind(tenant_id.as_uuid())
     .fetch_optional(pool)
@@ -219,8 +220,9 @@ async fn get_bill_com_client(
     .ok()
     .flatten();
 
-    let (dev_key, org_id, user_name, password, environment) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("Bill.com not connected or sync disabled".to_string()))?;
+    let (dev_key, org_id, user_name, password, environment) = connection.ok_or_else(|| {
+        billforge_core::Error::Validation("Bill.com not connected or sync disabled".to_string())
+    })?;
 
     let env = parse_environment(&environment)?;
 
@@ -233,7 +235,9 @@ async fn get_bill_com_client(
         environment: env,
     });
 
-    let session = auth.login().await
+    let session = auth
+        .login()
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Bill.com login failed: {}", e)))?;
 
     let client = BillComClient::new(session, env, dev_key);
@@ -269,10 +273,12 @@ async fn bill_com_connect(
         environment: env,
     });
 
-    let session = auth.login().await
-        .map_err(|e| billforge_core::Error::Validation(
-            format!("Failed to connect to Bill.com: {}. Please verify your credentials.", e)
-        ))?;
+    let session = auth.login().await.map_err(|e| {
+        billforge_core::Error::Validation(format!(
+            "Failed to connect to Bill.com: {}. Please verify your credentials.",
+            e
+        ))
+    })?;
 
     // Store credentials in database (encrypted in production)
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -290,7 +296,7 @@ async fn bill_com_connect(
             password = $5,
             environment = $6,
             sync_enabled = true,
-            updated_at = NOW()"
+            updated_at = NOW()",
     )
     .bind(tenant.tenant_id.as_uuid())
     .bind(&request.org_id)
@@ -355,7 +361,7 @@ async fn bill_com_status(
     let connection: Option<(String, String, bool, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         "SELECT org_id, environment, sync_enabled, last_sync_at
          FROM bill_com_connections
-         WHERE tenant_id = $1"
+         WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -408,7 +414,7 @@ async fn sync_vendors(
     let sync_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO bill_com_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'vendors', 'running', NOW())"
+         VALUES ($1, $2, 'vendors', 'running', NOW())",
     )
     .bind(sync_id)
     .bind(tenant.tenant_id.as_uuid())
@@ -422,7 +428,9 @@ async fn sync_vendors(
     let page_size = 100;
 
     loop {
-        let result = client.list_vendors(page, page_size).await
+        let result = client
+            .list_vendors(page, page_size)
+            .await
             .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
 
         all_vendors.extend(result.data);
@@ -448,7 +456,7 @@ async fn sync_vendors(
         let existing: Option<(Uuid,)> = sqlx::query_as(
             "SELECT v.id FROM vendors v
              INNER JOIN bill_com_vendor_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.bill_com_vendor_id = $2"
+             WHERE m.tenant_id = $1 AND m.bill_com_vendor_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(bc_vendor_id)
@@ -464,7 +472,7 @@ async fn sync_vendors(
             // Update existing vendor
             sqlx::query(
                 "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
-                 WHERE id = $1"
+                 WHERE id = $1",
             )
             .bind(vendor_id)
             .bind(&bc_vendor.name)
@@ -531,7 +539,11 @@ async fn sync_vendors(
         .await
         .ok();
 
-    Ok(Json(SyncResponse { imported, updated, skipped }))
+    Ok(Json(SyncResponse {
+        imported,
+        updated,
+        skipped,
+    }))
 }
 
 /// Push approved BillForge invoice to Bill.com as a bill
@@ -556,12 +568,14 @@ async fn push_bill_to_bill_com(
     let (client, _env) = get_bill_com_client(&pool, &tenant.tenant_id).await?;
 
     // Get invoice from database
-    let invoice_id: billforge_core::domain::InvoiceId = request.invoice_id.parse()
+    let invoice_id: billforge_core::domain::InvoiceId = request
+        .invoice_id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let invoice: Option<(String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT vendor_name, invoice_number, total_amount_cents, due_date, invoice_date
-         FROM invoices WHERE id = $1"
+         FROM invoices WHERE id = $1",
     )
     .bind(invoice_id.as_uuid())
     .fetch_optional(&*pool)
@@ -569,8 +583,8 @@ async fn push_bill_to_bill_com(
     .ok()
     .flatten();
 
-    let (vendor_name, invoice_number, total_cents, due_date, invoice_date) = invoice
-        .ok_or_else(|| billforge_core::Error::NotFound {
+    let (vendor_name, invoice_number, total_cents, due_date, invoice_date) =
+        invoice.ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: request.invoice_id.clone(),
         })?;
@@ -579,7 +593,7 @@ async fn push_bill_to_bill_com(
     let vendor_mapping: Option<(String,)> = sqlx::query_as(
         "SELECT bill_com_vendor_id FROM bill_com_vendor_mappings
          WHERE tenant_id = $1 AND billforge_vendor_id IN
-         (SELECT vendor_id FROM invoices WHERE id = $2)"
+         (SELECT vendor_id FROM invoices WHERE id = $2)",
     )
     .bind(tenant.tenant_id.as_uuid())
     .bind(invoice_id.as_uuid())
@@ -588,9 +602,11 @@ async fn push_bill_to_bill_com(
     .ok()
     .flatten();
 
-    let bill_com_vendor_id = vendor_mapping
-        .map(|(id,)| id)
-        .ok_or_else(|| billforge_core::Error::Validation("Vendor not found in Bill.com. Please sync vendors first.".to_string()))?;
+    let bill_com_vendor_id = vendor_mapping.map(|(id,)| id).ok_or_else(|| {
+        billforge_core::Error::Validation(
+            "Vendor not found in Bill.com. Please sync vendors first.".to_string(),
+        )
+    })?;
 
     // Build Bill.com bill
     use billforge_bill_com::{BillComBill, BillComBillLine};
@@ -624,7 +640,9 @@ async fn push_bill_to_bill_com(
     };
 
     // Create bill in Bill.com
-    let result = client.create_bill(&bill).await
+    let result = client
+        .create_bill(&bill)
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
 
     let bill_com_bill_id = result.id.unwrap_or_default();
@@ -674,11 +692,17 @@ async fn pay_bill(
     let (client, _env) = get_bill_com_client(&pool, &tenant.tenant_id).await?;
 
     // Get the bill from Bill.com to verify it exists and get vendor_id
-    let bc_bill = client.get_bill(&request.bill_com_bill_id).await
+    let bc_bill = client
+        .get_bill(&request.bill_com_bill_id)
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
 
     let process_date = chrono::NaiveDate::parse_from_str(&request.process_date, "%Y-%m-%d")
-        .map_err(|_| billforge_core::Error::Validation("Invalid process_date format. Use YYYY-MM-DD.".to_string()))?;
+        .map_err(|_| {
+            billforge_core::Error::Validation(
+                "Invalid process_date format. Use YYYY-MM-DD.".to_string(),
+            )
+        })?;
 
     // Create payment in Bill.com
     use billforge_bill_com::BillComPayment;
@@ -697,16 +721,20 @@ async fn pay_bill(
         created_time: None,
     };
 
-    let result = client.create_payment(&payment).await
-        .map_err(|e| billforge_core::Error::Validation(format!("Bill.com payment failed: {}", e)))?;
+    let result = client.create_payment(&payment).await.map_err(|e| {
+        billforge_core::Error::Validation(format!("Bill.com payment failed: {}", e))
+    })?;
 
     let bill_com_payment_id = result.id.clone().unwrap_or_default();
-    let payment_status = result.status.clone().unwrap_or_else(|| "Scheduled".to_string());
+    let payment_status = result
+        .status
+        .clone()
+        .unwrap_or_else(|| "Scheduled".to_string());
 
     // Find the BillForge invoice linked to this bill
     let invoice_link: Option<(Uuid,)> = sqlx::query_as(
         "SELECT invoice_id FROM bill_com_bill_exports
-         WHERE tenant_id = $1 AND bill_com_bill_id = $2"
+         WHERE tenant_id = $1 AND bill_com_bill_id = $2",
     )
     .bind(tenant.tenant_id.as_uuid())
     .bind(&request.bill_com_bill_id)
@@ -725,7 +753,7 @@ async fn pay_bill(
             id, tenant_id, invoice_id, bill_com_payment_id, amount_cents,
             process_date, status, disbursement_type, confirmation_number, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())"
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())",
     )
     .bind(payment_record_id)
     .bind(tenant.tenant_id.as_uuid())
@@ -767,22 +795,34 @@ async fn pay_bulk(
     let (client, _env) = get_bill_com_client(&pool, &tenant.tenant_id).await?;
 
     let process_date = chrono::NaiveDate::parse_from_str(&request.process_date, "%Y-%m-%d")
-        .map_err(|_| billforge_core::Error::Validation("Invalid process_date format. Use YYYY-MM-DD.".to_string()))?;
+        .map_err(|_| {
+            billforge_core::Error::Validation(
+                "Invalid process_date format. Use YYYY-MM-DD.".to_string(),
+            )
+        })?;
 
     // Build bulk payment request
-    use billforge_bill_com::{BillComBulkPaymentRequest, BillComBulkPaymentItem};
+    use billforge_bill_com::{BillComBulkPaymentItem, BillComBulkPaymentRequest};
 
     let bulk_request = BillComBulkPaymentRequest {
         process_date,
         funding_account: request.funding_account_id.clone(),
-        payments: request.payments.iter().map(|p| BillComBulkPaymentItem {
-            bill_id: p.bill_com_bill_id.clone(),
-            amount: p.amount,
-        }).collect(),
+        payments: request
+            .payments
+            .iter()
+            .map(|p| BillComBulkPaymentItem {
+                bill_id: p.bill_com_bill_id.clone(),
+                amount: p.amount,
+            })
+            .collect(),
     };
 
-    let result = client.create_bulk_payment(&bulk_request).await
-        .map_err(|e| billforge_core::Error::Validation(format!("Bill.com bulk payment failed: {}", e)))?;
+    let result = client
+        .create_bulk_payment(&bulk_request)
+        .await
+        .map_err(|e| {
+            billforge_core::Error::Validation(format!("Bill.com bulk payment failed: {}", e))
+        })?;
 
     // Store payment records for each bill
     for item in &request.payments {
@@ -791,7 +831,7 @@ async fn pay_bulk(
         // Find the BillForge invoice linked to this bill
         let invoice_link: Option<(Uuid,)> = sqlx::query_as(
             "SELECT invoice_id FROM bill_com_bill_exports
-             WHERE tenant_id = $1 AND bill_com_bill_id = $2"
+             WHERE tenant_id = $1 AND bill_com_bill_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(&item.bill_com_bill_id)
@@ -808,7 +848,7 @@ async fn pay_bulk(
                 id, tenant_id, invoice_id, bill_com_payment_id, amount_cents,
                 process_date, status, disbursement_type, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'Scheduled', 'bulk', NOW(), NOW())"
+            VALUES ($1, $2, $3, $4, $5, $6, 'Scheduled', 'bulk', NOW(), NOW())",
         )
         .bind(payment_record_id)
         .bind(tenant.tenant_id.as_uuid())
@@ -845,30 +885,53 @@ async fn list_payments(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let records: Vec<PaymentRecord> = sqlx::query_as::<_, (String, Uuid, String, i64, String, String, String, Option<String>)>(
+    let records: Vec<PaymentRecord> = sqlx::query_as::<
+        _,
+        (
+            String,
+            Uuid,
+            String,
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+        ),
+    >(
         "SELECT id::text, invoice_id, bill_com_payment_id, amount_cents,
                 process_date, status, disbursement_type, confirmation_number
          FROM bill_com_payment_records
          WHERE tenant_id = $1
-         ORDER BY created_at DESC"
+         ORDER BY created_at DESC",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_all(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to get payment records: {}", e)))?
     .into_iter()
-    .map(|(id, invoice_id, bc_payment_id, amount_cents, process_date, status, disbursement_type, confirmation_number)| {
-        PaymentRecord {
+    .map(
+        |(
             id,
-            invoice_id: invoice_id.to_string(),
-            bill_com_payment_id: bc_payment_id,
+            invoice_id,
+            bc_payment_id,
             amount_cents,
             process_date,
             status,
             disbursement_type,
             confirmation_number,
-        }
-    })
+        )| {
+            PaymentRecord {
+                id,
+                invoice_id: invoice_id.to_string(),
+                bill_com_payment_id: bc_payment_id,
+                amount_cents,
+                process_date,
+                status,
+                disbursement_type,
+                confirmation_number,
+            }
+        },
+    )
     .collect();
 
     Ok(Json(records))
@@ -892,7 +955,9 @@ async fn list_funding_accounts(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let (client, _env) = get_bill_com_client(&pool, &tenant.tenant_id).await?;
 
-    let result = client.list_funding_accounts().await
+    let result = client
+        .list_funding_accounts()
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
 
     Ok(Json(result.data))

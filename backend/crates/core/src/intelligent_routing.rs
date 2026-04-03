@@ -9,11 +9,7 @@
 //!
 //! The system learns from outcomes to improve routing decisions over time.
 
-use crate::{
-    domain::Invoice,
-    types::TenantId,
-    Error, Result, UserId,
-};
+use crate::{domain::Invoice, types::TenantId, Error, Result, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -159,10 +155,7 @@ impl std::str::FromStr for ExpertiseType {
             "department" => Ok(Self::Department),
             "gl_code" => Ok(Self::GlCode),
             "amount_range" => Ok(Self::AmountRange),
-            _ => Err(Error::Validation(format!(
-                "Invalid expertise type: {}",
-                s
-            ))),
+            _ => Err(Error::Validation(format!("Invalid expertise type: {}", s))),
         }
     }
 }
@@ -266,10 +259,8 @@ impl IntelligentRoutingEngine {
             .expect("At least one candidate exists");
 
         // Check if delegation applies
-        let (final_approver, delegated_from) = self.apply_delegation(
-            best.user_id.clone(),
-            availabilities,
-        );
+        let (final_approver, delegated_from) =
+            self.apply_delegation(best.user_id.clone(), availabilities);
 
         // Determine strategy used
         let strategy = self.determine_strategy(&candidates);
@@ -386,19 +377,17 @@ impl IntelligentRoutingEngine {
         let now = Utc::now();
 
         // Find active availability record
-        let active_availability = availabilities.iter().find(|a| {
-            a.user_id == *user_id && a.start_at <= now && a.end_at > now
-        });
+        let active_availability = availabilities
+            .iter()
+            .find(|a| a.user_id == *user_id && a.start_at <= now && a.end_at > now);
 
         match active_availability {
-            Some(availability) => {
-                match availability.status {
-                    AvailabilityStatus::Available => 1.0,
-                    AvailabilityStatus::Busy => 0.3,
-                    AvailabilityStatus::OutOfOffice => 0.0,
-                    AvailabilityStatus::Vacation => 0.0,
-                }
-            }
+            Some(availability) => match availability.status {
+                AvailabilityStatus::Available => 1.0,
+                AvailabilityStatus::Busy => 0.3,
+                AvailabilityStatus::OutOfOffice => 0.0,
+                AvailabilityStatus::Vacation => 0.0,
+            },
             None => {
                 // No explicit availability record - check working hours
                 if self.is_within_working_hours(now) {
@@ -466,20 +455,24 @@ impl IntelligentRoutingEngine {
         }
 
         // Check if expertise was a major differentiator
-        let expertise_range = candidates.iter().map(|c| c.expertise_score).fold(
-            (f64::MAX, f64::MIN),
-            |(min, max), score| (min.min(score), max.max(score)),
-        );
+        let expertise_range = candidates
+            .iter()
+            .map(|c| c.expertise_score)
+            .fold((f64::MAX, f64::MIN), |(min, max), score| {
+                (min.min(score), max.max(score))
+            });
 
         if expertise_range.1 - expertise_range.0 > 0.3 {
             return RoutingStrategy::ExpertBased;
         }
 
         // Check if workload was a major differentiator
-        let workload_range = candidates.iter().map(|c| c.workload_score).fold(
-            (f64::MAX, f64::MIN),
-            |(min, max), score| (min.min(score), max.max(score)),
-        );
+        let workload_range = candidates
+            .iter()
+            .map(|c| c.workload_score)
+            .fold((f64::MAX, f64::MIN), |(min, max), score| {
+                (min.min(score), max.max(score))
+            });
 
         if workload_range.1 - workload_range.0 > 0.3 {
             return RoutingStrategy::LeastLoaded;

@@ -21,13 +21,18 @@ async fn create_test_state() -> AppState {
     // Set required environment variables for testing
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
-    std::env::set_var("DATABASE_URL", "postgres://postgres@localhost:5432/billforge_test");
+    std::env::set_var(
+        "DATABASE_URL",
+        "postgres://postgres@localhost:5432/billforge_test",
+    );
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
 
     let config = Config::from_env().expect("Failed to load test config");
-    AppState::new(&config).await.expect("Failed to create test state")
+    AppState::new(&config)
+        .await
+        .expect("Failed to create test state")
 }
 
 /// Helper to create the test router
@@ -125,11 +130,9 @@ fn create_test_invoice_image() -> Vec<u8> {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 pixel
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE, // CRC
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, // CRC
         0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, // IDAT chunk
-        0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00,
-        0x05, 0xFE, 0x02, 0xFE, // Data + CRC
+        0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, // Data + CRC
         0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND chunk
         0xAE, 0x42, 0x60, 0x82, // CRC
     ];
@@ -222,13 +225,25 @@ async fn test_invoice_upload_with_pdf() {
     let json: Value = serde_json::from_slice(&body_bytes).expect("Response should be JSON");
 
     // Verify response structure
-    assert!(json.get("invoice_id").is_some(), "Response should have invoice_id");
-    assert!(json.get("document_id").is_some(), "Response should have document_id");
-    assert!(json.get("message").is_some(), "Response should have message");
+    assert!(
+        json.get("invoice_id").is_some(),
+        "Response should have invoice_id"
+    );
+    assert!(
+        json.get("document_id").is_some(),
+        "Response should have document_id"
+    );
+    assert!(
+        json.get("message").is_some(),
+        "Response should have message"
+    );
 
     // Verify invoice_id is a valid UUID
     let invoice_id = json["invoice_id"].as_str().unwrap();
-    assert!(Uuid::parse_str(invoice_id).is_ok(), "invoice_id should be a valid UUID");
+    assert!(
+        Uuid::parse_str(invoice_id).is_ok(),
+        "invoice_id should be a valid UUID"
+    );
 }
 
 #[tokio::test]
@@ -353,7 +368,6 @@ async fn test_invoice_upload_requires_file() {
 // /backend/crates/invoice-capture/src/ocr/tesseract.rs
 // Integration tests here focus on the full upload → OCR → queue routing flow
 
-
 // Note: Detailed OCR extraction logic tests are in the invoice-capture crate
 // Integration tests focus on the end-to-end flow with real file uploads
 
@@ -433,8 +447,7 @@ async fn test_high_confidence_routes_to_ap_queue() {
     // High confidence should route to AP queue (ready_for_review) or similar
     let capture_status = invoice["capture_status"].as_str().unwrap_or("");
     assert_ne!(
-        capture_status,
-        "failed",
+        capture_status, "failed",
         "High confidence invoice should not be in failed status"
     );
 }
@@ -446,8 +459,8 @@ async fn test_high_confidence_routes_to_ap_queue() {
 #[tokio::test]
 #[ignore = "Requires tesseract installation"]
 async fn test_ocr_processing_time_under_5_seconds() {
-    use billforge_invoice_capture::ocr::TesseractOcr;
     use billforge_core::traits::OcrService;
+    use billforge_invoice_capture::ocr::TesseractOcr;
     use std::time::Instant;
 
     if !TesseractOcr::is_available() {
@@ -474,7 +487,10 @@ async fn test_ocr_processing_time_under_5_seconds() {
         duration
     );
 
-    println!("✓ OCR processing time: {:?} (requirement: <5s P95)", duration);
+    println!(
+        "✓ OCR processing time: {:?} (requirement: <5s P95)",
+        duration
+    );
 }
 
 // ============================================================================
@@ -484,8 +500,8 @@ async fn test_ocr_processing_time_under_5_seconds() {
 #[tokio::test]
 #[ignore = "Requires tesseract installation"]
 async fn test_ocr_handles_corrupted_file_gracefully() {
-    use billforge_invoice_capture::ocr::TesseractOcr;
     use billforge_core::traits::OcrService;
+    use billforge_invoice_capture::ocr::TesseractOcr;
 
     if !TesseractOcr::is_available() {
         eprintln!("Skipping OCR error handling test - tesseract not installed");
@@ -507,8 +523,8 @@ async fn test_ocr_handles_corrupted_file_gracefully() {
             // If it succeeds, fields should be empty or have low confidence
             println!("OCR returned result for corrupted file (fields may be empty)");
             assert!(
-                extraction.invoice_number.value.is_none() ||
-                extraction.total_amount.value.is_none(),
+                extraction.invoice_number.value.is_none()
+                    || extraction.total_amount.value.is_none(),
                 "Corrupted file should have empty or missing fields"
             );
         }
@@ -522,8 +538,8 @@ async fn test_ocr_handles_corrupted_file_gracefully() {
 #[tokio::test]
 #[ignore = "Requires tesseract installation"]
 async fn test_ocr_supported_formats() {
-    use billforge_invoice_capture::ocr::TesseractOcr;
     use billforge_core::traits::OcrService;
+    use billforge_invoice_capture::ocr::TesseractOcr;
 
     if !TesseractOcr::is_available() {
         eprintln!("Skipping OCR formats test - tesseract not installed");

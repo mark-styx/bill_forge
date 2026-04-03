@@ -2,7 +2,9 @@
 
 use crate::ocr;
 use billforge_core::{
-    domain::{CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, OcrExtractionResult},
+    domain::{
+        CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, OcrExtractionResult,
+    },
     traits::{InvoiceRepository, OcrService, StorageService},
     types::{Money, TenantId, UserId},
     Result,
@@ -83,14 +85,8 @@ impl InvoiceCaptureService {
             invoice_date: ocr_result.invoice_date.value,
             due_date: ocr_result.due_date.value,
             po_number: ocr_result.po_number.value.clone(),
-            subtotal: ocr_result
-                .subtotal
-                .value
-                .map(Money::usd),
-            tax_amount: ocr_result
-                .tax_amount
-                .value
-                .map(Money::usd),
+            subtotal: ocr_result.subtotal.value.map(Money::usd),
+            tax_amount: ocr_result.tax_amount.value.map(Money::usd),
             total_amount: Money::usd(ocr_result.total_amount.value.unwrap_or(0.0)),
             currency: ocr_result
                 .currency
@@ -101,11 +97,7 @@ impl InvoiceCaptureService {
                 .line_items
                 .iter()
                 .map(|item| CreateLineItemInput {
-                    description: item
-                        .description
-                        .value
-                        .clone()
-                        .unwrap_or_default(),
+                    description: item.description.value.clone().unwrap_or_default(),
                     quantity: item.quantity.value,
                     unit_price: item.unit_price.value.map(Money::usd),
                     amount: Money::usd(item.amount.value.unwrap_or(0.0)),
@@ -155,7 +147,10 @@ impl InvoiceCaptureService {
             })?;
 
         // Download the document
-        let document_bytes = self.storage.download(tenant_id, invoice.document_id).await?;
+        let document_bytes = self
+            .storage
+            .download(tenant_id, invoice.document_id)
+            .await?;
 
         // Update status
         self.invoice_repo

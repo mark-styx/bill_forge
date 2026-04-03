@@ -72,11 +72,7 @@ impl SalesforceClient {
     }
 
     /// Make a POST request to Salesforce API
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        resource: &str,
-        body: &B,
-    ) -> Result<T> {
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
         let url = self.build_url(resource);
 
         let response = self
@@ -118,11 +114,7 @@ impl SalesforceClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Salesforce API update failed ({}): {}",
-                status,
-                error_text
-            );
+            anyhow::bail!("Salesforce API update failed ({}): {}", status, error_text);
         }
 
         Ok(())
@@ -170,9 +162,7 @@ impl SalesforceClient {
         &self,
         custom_filter: Option<&str>,
     ) -> Result<Vec<SalesforceAccount>> {
-        let where_clause = custom_filter.unwrap_or(
-            "Type IN ('Vendor', 'Partner', 'Supplier')"
-        );
+        let where_clause = custom_filter.unwrap_or("Type IN ('Vendor', 'Partner', 'Supplier')");
 
         let soql = format!(
             "SELECT Id, Name, Type, Industry, Website, Phone, \
@@ -262,10 +252,7 @@ impl SalesforceClient {
         account_id: Option<&str>,
     ) -> Result<Vec<SalesforceOpportunity>> {
         let where_clause = if let Some(acct_id) = account_id {
-            format!(
-                "AccountId = '{}' AND StageName = 'Closed Won'",
-                acct_id
-            )
+            format!("AccountId = '{}' AND StageName = 'Closed Won'", acct_id)
         } else {
             "StageName = 'Closed Won'".to_string()
         };
@@ -310,7 +297,8 @@ impl SalesforceClient {
 
     /// Describe an SObject (get field metadata)
     pub async fn describe_object(&self, object_name: &str) -> Result<serde_json::Value> {
-        self.get(&format!("sobjects/{}/describe", object_name)).await
+        self.get(&format!("sobjects/{}/describe", object_name))
+            .await
     }
 
     /// Update a record's custom field (e.g., push payment status to Account)

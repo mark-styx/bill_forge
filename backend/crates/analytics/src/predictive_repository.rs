@@ -26,7 +26,8 @@ impl PredictiveRepository {
     /// Save a forecast to the database
     pub async fn save_forecast(&self, tenant_id: Uuid, forecast: &Forecast) -> Result<Uuid> {
         let id = Uuid::new_v4();
-        let valid_until = forecast.generated_at + chrono::Duration::days(forecast.horizon.days() as i64);
+        let valid_until =
+            forecast.generated_at + chrono::Duration::days(forecast.horizon.days() as i64);
 
         sqlx::query(
             r#"
@@ -280,12 +281,22 @@ impl PredictiveRepository {
                 Some(Anomaly {
                     id: row.try_get("id").ok()?,
                     tenant_id: row.try_get("tenant_id").ok()?,
-                    anomaly_type: serde_json::from_str(&row.try_get::<String, _>("anomaly_type").ok()?).ok()?,
+                    anomaly_type: serde_json::from_str(
+                        &row.try_get::<String, _>("anomaly_type").ok()?,
+                    )
+                    .ok()?,
                     entity_id: row.try_get("entity_id").ok()?,
-                    entity_type: serde_json::from_str(&row.try_get::<String, _>("entity_type").ok()?).ok()?,
-                    severity: serde_json::from_str(&row.try_get::<String, _>("severity").ok()?).ok()?,
+                    entity_type: serde_json::from_str(
+                        &row.try_get::<String, _>("entity_type").ok()?,
+                    )
+                    .ok()?,
+                    severity: serde_json::from_str(&row.try_get::<String, _>("severity").ok()?)
+                        .ok()?,
                     detected_value: row.try_get("detected_value").ok()?,
-                    expected_range: (row.try_get("expected_range_min").ok()?, row.try_get("expected_range_max").ok()?),
+                    expected_range: (
+                        row.try_get("expected_range_min").ok()?,
+                        row.try_get("expected_range_max").ok()?,
+                    ),
                     deviation_score: row.try_get("deviation_score").ok()?,
                     detected_at: row.try_get("detected_at").ok()?,
                     metadata: row.try_get("metadata").ok()?,
@@ -300,11 +311,7 @@ impl PredictiveRepository {
     }
 
     /// Acknowledge an anomaly
-    pub async fn acknowledge_anomaly(
-        &self,
-        anomaly_id: Uuid,
-        user_id: Uuid,
-    ) -> Result<()> {
+    pub async fn acknowledge_anomaly(&self, anomaly_id: Uuid, user_id: Uuid) -> Result<()> {
         let result = sqlx::query(
             r#"
             UPDATE invoice_anomalies
@@ -610,8 +617,8 @@ impl PredictiveRepository {
 /// Forecast accuracy summary for model performance tracking
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForecastAccuracySummary {
-    pub mape: f64,           // Mean Absolute Percentage Error
-    pub mae: f64,            // Mean Absolute Error
-    pub rmse: f64,           // Root Mean Squared Error
+    pub mape: f64, // Mean Absolute Percentage Error
+    pub mae: f64,  // Mean Absolute Error
+    pub rmse: f64, // Root Mean Squared Error
     pub total_forecasts: i32,
 }

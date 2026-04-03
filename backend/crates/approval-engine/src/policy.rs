@@ -80,10 +80,9 @@ impl PolicyService {
         // Insert chain levels in order
         for (idx, level_input) in input.levels.iter().enumerate() {
             let level_id = Uuid::new_v4();
-            let approver_user_ids = serde_json::to_value(
-                level_input.approver_user_ids.as_deref().unwrap_or(&[]),
-            )
-            .unwrap_or_else(|_| serde_json::json!([]));
+            let approver_user_ids =
+                serde_json::to_value(level_input.approver_user_ids.as_deref().unwrap_or(&[]))
+                    .unwrap_or_else(|_| serde_json::json!([]));
 
             sqlx::query(
                 r#"
@@ -300,8 +299,7 @@ impl PolicyService {
             .and_then(|v| v.as_bool())
             .unwrap_or(existing.allow_self_approval);
         let auto_approve_below_cents = if obj.contains_key("auto_approve_below_cents") {
-            obj.get("auto_approve_below_cents")
-                .and_then(|v| v.as_i64())
+            obj.get("auto_approve_below_cents").and_then(|v| v.as_i64())
         } else {
             existing.auto_approve_below_cents
         };
@@ -378,12 +376,11 @@ impl PolicyService {
             .execute(&mut *tx)
             .await?;
 
-        let result =
-            sqlx::query("DELETE FROM approval_policies WHERE id = $1 AND tenant_id = $2")
-                .bind(policy_id)
-                .bind(tenant_id)
-                .execute(&mut *tx)
-                .await?;
+        let result = sqlx::query("DELETE FROM approval_policies WHERE id = $1 AND tenant_id = $2")
+            .bind(policy_id)
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(ApprovalError::PolicyNotFound(policy_id.to_string()));

@@ -3,14 +3,14 @@
 //! Provides analytics and reporting capabilities for BillForge platform.
 
 use crate::models::*;
-use billforge_core::{types::TenantId, Result, Error};
-use sqlx::{PgPool, Row, Column};
+use billforge_core::{types::TenantId, Error, Result};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use sqlx::{Column, PgPool, Row};
 use std::sync::Arc;
-use chrono::{NaiveDate, DateTime, Utc, Duration, Datelike, Timelike};
 
 // Re-export models used in public API
 pub use crate::models::{
-    SpendTrendPoint, CategoryBreakdown, VendorPerformanceMetrics, ApprovalAnalytics,
+    ApprovalAnalytics, CategoryBreakdown, SpendTrendPoint, VendorPerformanceMetrics,
 };
 
 /// Service for generating reports from tenant data
@@ -31,7 +31,7 @@ impl ReportingService {
     ) -> Result<DashboardSummary> {
         // Count invoices pending review (capture_status in pending, ready_for_review)
         let invoices_pending_review: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE capture_status IN ('pending', 'ready_for_review')"
+            "SELECT COUNT(*) FROM invoices WHERE capture_status IN ('pending', 'ready_for_review')",
         )
         .fetch_one(&**pool)
         .await
@@ -39,7 +39,7 @@ impl ReportingService {
 
         // Count invoices pending approval
         let invoices_pending_approval: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'pending_approval'"
+            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'pending_approval'",
         )
         .fetch_one(&**pool)
         .await
@@ -70,12 +70,11 @@ impl ReportingService {
         .unwrap_or(0);
 
         // Count active vendors
-        let vendors_active: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM vendors WHERE status = 'active'"
-        )
-        .fetch_one(&**pool)
-        .await
-        .unwrap_or(0);
+        let vendors_active: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM vendors WHERE status = 'active'")
+                .fetch_one(&**pool)
+                .await
+                .unwrap_or(0);
 
         // Calculate average processing time (hours) for paid invoices
         // Using time from created_at to when it was paid (approximated by updated_at for paid status)
@@ -88,7 +87,7 @@ impl ReportingService {
             FROM invoices
             WHERE processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .fetch_one(&**pool)
         .await
@@ -194,7 +193,7 @@ impl ReportingService {
             FROM invoices i
             LEFT JOIN vendors v ON i.vendor_id = v.id
             WHERE i.vendor_id IS NOT NULL
-            "#
+            "#,
         );
 
         let mut param_count = 1;
@@ -229,18 +228,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (Some(start), None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -250,18 +252,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (None, Some(end)) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -271,18 +276,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (None, None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -291,18 +299,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
         }
     }
@@ -318,7 +329,8 @@ impl ReportingService {
         let year_start = NaiveDate::from_ymd_opt(now.year(), 1, 1)
             .ok_or_else(|| Error::Validation("Invalid year start date".to_string()))?;
 
-        self.get_vendor_spend(tenant_id, pool, Some(year_start), Some(now), limit).await
+        self.get_vendor_spend(tenant_id, pool, Some(year_start), Some(now), limit)
+            .await
     }
 
     /// Get MTD spend by vendor
@@ -332,7 +344,8 @@ impl ReportingService {
         let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
             .ok_or_else(|| Error::Validation("Invalid month start date".to_string()))?;
 
-        self.get_vendor_spend(tenant_id, pool, Some(month_start), Some(now), limit).await
+        self.get_vendor_spend(tenant_id, pool, Some(month_start), Some(now), limit)
+            .await
     }
 
     /// Get count of invoices processed this week (Monday to current day)
@@ -352,7 +365,7 @@ impl ReportingService {
             FROM invoices
             WHERE capture_status = 'reviewed'
             AND DATE(created_at) >= $1
-            "#
+            "#,
         )
         .bind(week_start)
         .fetch_one(&**pool)
@@ -486,7 +499,7 @@ impl ReportingService {
             FROM invoices
             WHERE capture_status = 'reviewed'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .fetch_one(&**pool)
         .await
@@ -502,7 +515,7 @@ impl ReportingService {
             FROM invoices
             WHERE processing_status IN ('approved', 'ready_for_payment', 'paid')
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .fetch_one(&**pool)
         .await
@@ -518,7 +531,7 @@ impl ReportingService {
             FROM invoices
             WHERE processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .fetch_one(&**pool)
         .await
@@ -638,8 +651,7 @@ impl ReportingService {
     ) -> Result<CustomReportResult> {
         // Build query based on report type
         let sql = match query.report_type.as_str() {
-            "invoices_by_department" => {
-                r#"
+            "invoices_by_department" => r#"
                 SELECT
                     COALESCE(department, 'Unassigned') as department,
                     COUNT(*) as invoice_count,
@@ -648,10 +660,9 @@ impl ReportingService {
                 WHERE invoice_date >= $1 AND invoice_date <= $2
                 GROUP BY department
                 ORDER BY total_amount DESC
-                "#.to_string()
-            }
-            "invoices_by_gl_code" => {
-                r#"
+                "#
+            .to_string(),
+            "invoices_by_gl_code" => r#"
                 SELECT
                     COALESCE(gl_code, 'Unassigned') as gl_code,
                     COUNT(*) as invoice_count,
@@ -660,10 +671,9 @@ impl ReportingService {
                 WHERE invoice_date >= $1 AND invoice_date <= $2
                 GROUP BY gl_code
                 ORDER BY total_amount DESC
-                "#.to_string()
-            }
-            "approval_summary" => {
-                r#"
+                "#
+            .to_string(),
+            "approval_summary" => r#"
                 SELECT
                     status,
                     COUNT(*) as count,
@@ -671,10 +681,13 @@ impl ReportingService {
                 FROM approval_requests
                 WHERE created_at >= $1 AND created_at <= $2
                 GROUP BY status
-                "#.to_string()
-            }
+                "#
+            .to_string(),
             _ => {
-                return Err(Error::Validation(format!("Unknown report type: {}", query.report_type)));
+                return Err(Error::Validation(format!(
+                    "Unknown report type: {}",
+                    query.report_type
+                )));
             }
         };
 
@@ -839,7 +852,12 @@ impl ReportingService {
             "gl_code" => "gl_code",
             "department" => "department",
             "cost_center" => "cost_center",
-            _ => return Err(Error::Validation(format!("Invalid category type: {}", category_type))),
+            _ => {
+                return Err(Error::Validation(format!(
+                    "Invalid category type: {}",
+                    category_type
+                )))
+            }
         };
 
         let mut sql = format!(
@@ -858,7 +876,10 @@ impl ReportingService {
             conditions.push("invoice_date >= $1".to_string());
         }
         if end_date.is_some() {
-            conditions.push(format!("invoice_date <= ${}", if start_date.is_some() { 2 } else { 1 }));
+            conditions.push(format!(
+                "invoice_date <= ${}",
+                if start_date.is_some() { 2 } else { 1 }
+            ));
         }
 
         if !conditions.is_empty() {
@@ -866,10 +887,7 @@ impl ReportingService {
             sql.push_str(&conditions.join(" AND "));
         }
 
-        sql.push_str(&format!(
-            " GROUP BY {} ORDER BY total_amount DESC",
-            column
-        ));
+        sql.push_str(&format!(" GROUP BY {} ORDER BY total_amount DESC", column));
 
         #[derive(sqlx::FromRow)]
         struct CategoryRow {
@@ -1194,10 +1212,14 @@ impl ReportingService {
         period_end: NaiveDate,
     ) -> Result<DigestContent> {
         // Get summary metrics
-        let summary = self.get_digest_summary(_tenant_id, pool, period_start, period_end).await?;
+        let summary = self
+            .get_digest_summary(_tenant_id, pool, period_start, period_end)
+            .await?;
 
         // Get highlights based on digest type
-        let highlights = self.get_digest_highlights(_tenant_id, pool, period_start, period_end, &digest_type).await?;
+        let highlights = self
+            .get_digest_highlights(_tenant_id, pool, period_start, period_end, &digest_type)
+            .await?;
 
         // Get actionable items (pending approvals for this user)
         let actionable_items = self.get_actionable_items(_tenant_id, pool, user_id).await?;
@@ -1302,8 +1324,12 @@ impl ReportingService {
         }
 
         // For weekly/monthly, add trend comparison
-        if matches!(digest_type, DigestType::WeeklySummary | DigestType::MonthlySummary) {
-            let prior_start = start_date - chrono::Duration::days((end_date - start_date).num_days() + 1);
+        if matches!(
+            digest_type,
+            DigestType::WeeklySummary | DigestType::MonthlySummary
+        ) {
+            let prior_start =
+                start_date - chrono::Duration::days((end_date - start_date).num_days() + 1);
             let prior_end = start_date - chrono::Duration::days(1);
 
             #[derive(sqlx::FromRow)]
@@ -1329,7 +1355,11 @@ impl ReportingService {
 
             if let Some(trend) = trend {
                 let change_pct = if trend.prior_spend > 0 {
-                    Some(((trend.current_spend - trend.prior_spend) as f64 / trend.prior_spend as f64) * 100.0)
+                    Some(
+                        ((trend.current_spend - trend.prior_spend) as f64
+                            / trend.prior_spend as f64)
+                            * 100.0,
+                    )
                 } else {
                     None
                 };
@@ -1392,7 +1422,11 @@ impl ReportingService {
                 item_type: "pending_approval".to_string(),
                 item_id: row.invoice_id.to_string(),
                 title: format!("Invoice {} from {}", row.invoice_number, row.vendor_name),
-                description: format!("Amount: ${:.2}, Age: {} days", row.amount_cents as f64 / 100.0, row.age_days),
+                description: format!(
+                    "Amount: ${:.2}, Age: {} days",
+                    row.amount_cents as f64 / 100.0,
+                    row.age_days
+                ),
                 url: format!("/invoices/{}", row.invoice_id),
                 priority: if row.age_days > 7 { "high" } else { "normal" }.to_string(),
             })
@@ -1497,14 +1531,10 @@ impl ReportingService {
             DigestFrequency::Weekly => now + chrono::Duration::weeks(1),
             DigestFrequency::Monthly => {
                 // Next month same day
-                chrono::NaiveDate::from_ymd_opt(
-                    now.year(),
-                    now.month() + 1,
-                    now.day(),
-                )
-                .and_then(|d| d.and_hms_opt(now.hour(), now.minute(), 0))
-                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
-                .unwrap_or_else(|| now + chrono::Duration::days(30))
+                chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + 1, now.day())
+                    .and_then(|d| d.and_hms_opt(now.hour(), now.minute(), 0))
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+                    .unwrap_or_else(|| now + chrono::Duration::days(30))
             }
         };
 

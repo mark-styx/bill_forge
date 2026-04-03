@@ -3,13 +3,17 @@
 use crate::config::WorkerConfig;
 use anyhow::Result;
 use billforge_email::EmailService;
+use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use uuid::Uuid;
-use chrono::Utc;
 
-pub async fn send_batch(tenant_id_str: &str, _payload: &Value, config: &WorkerConfig) -> Result<()> {
+pub async fn send_batch(
+    tenant_id_str: &str,
+    _payload: &Value,
+    config: &WorkerConfig,
+) -> Result<()> {
     info!("Sending email batch for tenant: {}", tenant_id_str);
 
     // Create email service from environment
@@ -29,11 +33,15 @@ pub async fn send_batch(tenant_id_str: &str, _payload: &Value, config: &WorkerCo
     }
 
     // Parse tenant ID
-    let tenant_id = tenant_id_str.parse()
+    let tenant_id = tenant_id_str
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid tenant ID: {}", e))?;
 
     // Get tenant-specific database connection
-    let pool = config.pg_manager.tenant(&tenant_id).await
+    let pool = config
+        .pg_manager
+        .tenant(&tenant_id)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to get tenant database: {}", e))?;
 
     // Load pending email notifications
@@ -44,7 +52,11 @@ pub async fn send_batch(tenant_id_str: &str, _payload: &Value, config: &WorkerCo
         return Ok(());
     }
 
-    info!("Loaded {} pending emails for tenant: {}", pending_emails.len(), tenant_id_str);
+    info!(
+        "Loaded {} pending emails for tenant: {}",
+        pending_emails.len(),
+        tenant_id_str
+    );
 
     // Group by recipient for batching
     let grouped = group_by_recipient(pending_emails);
@@ -106,7 +118,7 @@ async fn load_pending_emails(pool: &sqlx::PgPool, tenant_id: &str) -> Result<Vec
           AND (expires_at IS NULL OR expires_at > NOW())
         ORDER BY priority DESC, created_at ASC
         LIMIT 100
-        "#
+        "#,
     )
     .bind(tenant_id)
     .fetch_all(pool)
@@ -140,7 +152,15 @@ async fn send_email_batch(
     let total_count = emails.len();
 
     for email in emails {
-        match email_service.send(&email.recipient_email, &email.subject, &email.html_body, &email.text_body).await {
+        match email_service
+            .send(
+                &email.recipient_email,
+                &email.subject,
+                &email.html_body,
+                &email.text_body,
+            )
+            .await
+        {
             Ok(_) => {
                 sent_ids.push(email.id);
             }
@@ -172,7 +192,7 @@ async fn mark_as_sent(pool: &sqlx::PgPool, ids: &[Uuid]) -> Result<()> {
             sent_at = $1,
             updated_at = $1
         WHERE id = ANY($2)
-        "#
+        "#,
     )
     .bind(now)
     .bind(ids)
@@ -195,7 +215,7 @@ async fn mark_as_failed(pool: &sqlx::PgPool, ids: &[Uuid], error_message: &str) 
             error_message = $1,
             updated_at = $2
         WHERE id = ANY($3)
-        "#
+        "#,
     )
     .bind(error_message)
     .bind(now)

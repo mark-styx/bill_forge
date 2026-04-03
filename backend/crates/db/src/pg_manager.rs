@@ -4,7 +4,7 @@
 //! Each tenant gets a dedicated database with its own connection pool.
 
 use billforge_core::{Error, Result, TenantId};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -32,7 +32,9 @@ impl PgManager {
             .max_connections(5)
             .connect(metadata_db_url)
             .await
-            .map_err(|e| Error::Database(format!("Failed to connect to metadata database: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to connect to metadata database: {}", e))
+            })?;
 
         Ok(Self {
             metadata_pool,
@@ -60,13 +62,11 @@ impl PgManager {
         }
 
         // Verify tenant exists in metadata
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
-        )
-        .bind(tenant_id.as_uuid())
-        .fetch_one(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to check tenant existence: {}", e)))?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)")
+            .bind(tenant_id.as_uuid())
+            .fetch_one(&self.metadata_pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to check tenant existence: {}", e)))?;
 
         if !exists {
             return Err(Error::TenantNotFound(tenant_key));
@@ -81,7 +81,12 @@ impl PgManager {
             .max_connections(10)
             .connect(&tenant_url)
             .await
-            .map_err(|e| Error::Database(format!("Failed to connect to tenant database {}: {}", db_name, e)))?;
+            .map_err(|e| {
+                Error::Database(format!(
+                    "Failed to connect to tenant database {}: {}",
+                    db_name, e
+                ))
+            })?;
 
         let pool = Arc::new(pool);
 
@@ -100,15 +105,13 @@ impl PgManager {
         let db_name = format!("tenant_{}", tenant_key.replace('-', "_"));
 
         // Insert into metadata database
-        sqlx::query(
-            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
-        )
-        .bind(tenant_key)
-        .bind(name)
-        .bind(slugify(name))
-        .execute(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to create tenant in metadata: {}", e)))?;
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(tenant_key)
+            .bind(name)
+            .bind(slugify(name))
+            .execute(&self.metadata_pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to create tenant in metadata: {}", e)))?;
 
         // Create the tenant database
         self.ensure_tenant_database(&db_name).await?;
@@ -119,13 +122,14 @@ impl PgManager {
     /// Ensure a tenant database exists
     async fn ensure_tenant_database(&self, db_name: &str) -> Result<()> {
         // Check if database exists
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
-        )
-        .bind(db_name)
-        .fetch_one(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to check database existence: {}", e)))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(db_name)
+                .fetch_one(&self.metadata_pool)
+                .await
+                .map_err(|e| {
+                    Error::Database(format!("Failed to check database existence: {}", e))
+                })?;
 
         if !exists {
             // Create database (cannot use parameters in CREATE DATABASE)
@@ -133,7 +137,9 @@ impl PgManager {
             sqlx::query(&create_sql)
                 .execute(&self.metadata_pool)
                 .await
-                .map_err(|e| Error::Database(format!("Failed to create database {}: {}", db_name, e)))?;
+                .map_err(|e| {
+                    Error::Database(format!("Failed to create database {}: {}", db_name, e))
+                })?;
 
             tracing::info!("Created tenant database: {}", db_name);
         }
@@ -164,7 +170,9 @@ impl PgManager {
             .bind(tenant_key)
             .execute(&self.metadata_pool)
             .await
-            .map_err(|e| Error::Database(format!("Failed to delete tenant from metadata: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to delete tenant from metadata: {}", e))
+            })?;
 
         tracing::info!("Deleted tenant database: {}", db_name);
         Ok(())
@@ -178,8 +186,9 @@ impl PgManager {
             .map_err(|e| Error::Database(format!("Failed to list tenants: {}", e)))?;
 
         for tenant_id_str in tenants {
-            let tenant_id: TenantId = tenant_id_str.parse()
-                .map_err(|e| Error::Database(format!("Invalid tenant ID {}: {}", tenant_id_str, e)))?;
+            let tenant_id: TenantId = tenant_id_str.parse().map_err(|e| {
+                Error::Database(format!("Invalid tenant ID {}: {}", tenant_id_str, e))
+            })?;
             let pool = self.tenant(&tenant_id).await?;
             self.run_tenant_migrations(&pool).await?;
         }
@@ -194,15 +203,42 @@ impl PgManager {
         // Run all migrations in order
         // These are the same migrations used by the migrate binary
         let migrations = vec![
-            ("001_create_tenants.sql", include_str!("../../../migrations/001_create_tenants.sql")),
-            ("002_create_users.sql", include_str!("../../../migrations/002_create_users.sql")),
-            ("003_create_vendors.sql", include_str!("../../../migrations/003_create_vendors.sql")),
-            ("004_create_invoices.sql", include_str!("../../../migrations/004_create_invoices.sql")),
-            ("005_create_workflow_tables.sql", include_str!("../../../migrations/005_create_workflow_tables.sql")),
-            ("006_create_quickbooks_tables.sql", include_str!("../../../migrations/006_create_quickbooks_tables.sql")),
-            ("007_create_vendor_documents.sql", include_str!("../../../migrations/007_create_vendor_documents.sql")),
-            ("008_create_vendor_contacts.sql", include_str!("../../../migrations/008_create_vendor_contacts.sql")),
-            ("009_create_email_notifications.sql", include_str!("../../../migrations/009_create_email_notifications.sql")),
+            (
+                "001_create_tenants.sql",
+                include_str!("../../../migrations/001_create_tenants.sql"),
+            ),
+            (
+                "002_create_users.sql",
+                include_str!("../../../migrations/002_create_users.sql"),
+            ),
+            (
+                "003_create_vendors.sql",
+                include_str!("../../../migrations/003_create_vendors.sql"),
+            ),
+            (
+                "004_create_invoices.sql",
+                include_str!("../../../migrations/004_create_invoices.sql"),
+            ),
+            (
+                "005_create_workflow_tables.sql",
+                include_str!("../../../migrations/005_create_workflow_tables.sql"),
+            ),
+            (
+                "006_create_quickbooks_tables.sql",
+                include_str!("../../../migrations/006_create_quickbooks_tables.sql"),
+            ),
+            (
+                "007_create_vendor_documents.sql",
+                include_str!("../../../migrations/007_create_vendor_documents.sql"),
+            ),
+            (
+                "008_create_vendor_contacts.sql",
+                include_str!("../../../migrations/008_create_vendor_contacts.sql"),
+            ),
+            (
+                "009_create_email_notifications.sql",
+                include_str!("../../../migrations/009_create_email_notifications.sql"),
+            ),
         ];
 
         for (name, sql) in migrations {
@@ -228,13 +264,7 @@ impl PgManager {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())

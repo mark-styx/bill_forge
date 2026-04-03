@@ -64,7 +64,11 @@ impl PredictiveService {
                 .context("Failed to fit ARIMA model")?;
 
             // Generate forecasts for all horizons
-            for horizon in &[ForecastHorizon::Days30, ForecastHorizon::Days60, ForecastHorizon::Days90] {
+            for horizon in &[
+                ForecastHorizon::Days30,
+                ForecastHorizon::Days60,
+                ForecastHorizon::Days90,
+            ] {
                 match forecaster.forecast(*horizon).await {
                     Ok(forecast) => {
                         // Save to database
@@ -126,7 +130,10 @@ impl PredictiveService {
             // Fit ARIMA model
             let mut forecaster = ArimaForecaster::new();
             if let Err(e) = forecaster.fit(&time_series).await {
-                warn!("Failed to fit ARIMA model for department {}: {}", department, e);
+                warn!(
+                    "Failed to fit ARIMA model for department {}: {}",
+                    department, e
+                );
                 continue;
             }
 
@@ -134,7 +141,10 @@ impl PredictiveService {
             match forecaster.forecast(ForecastHorizon::Days30).await {
                 Ok(forecast) => {
                     if let Err(e) = self.repo.save_forecast(tenant_id, &forecast).await {
-                        warn!("Failed to save forecast for department {}: {}", department, e);
+                        warn!(
+                            "Failed to save forecast for department {}: {}",
+                            department, e
+                        );
                     } else {
                         forecasts.push(forecast);
                     }
@@ -322,11 +332,7 @@ impl PredictiveService {
     }
 
     /// Calculate forecast accuracy by comparing past forecasts to actuals
-    pub async fn calculate_forecast_accuracy(
-        &self,
-        pool: &PgPool,
-        tenant_id: Uuid,
-    ) -> Result<()> {
+    pub async fn calculate_forecast_accuracy(&self, pool: &PgPool, tenant_id: Uuid) -> Result<()> {
         info!("Calculating forecast accuracy for tenant {}", tenant_id);
 
         // Get forecasts that are now in the past (horizon has passed)
@@ -366,8 +372,13 @@ impl PredictiveService {
             // This is simplified - would need to sum spend over the forecast horizon
             let actual_value = match entity_type.as_str() {
                 "\"Vendor\"" | "Vendor" => {
-                    self.calculate_actual_spend_for_vendor(pool, tenant_id, &entity_id, &forecast_date)
-                        .await?
+                    self.calculate_actual_spend_for_vendor(
+                        pool,
+                        tenant_id,
+                        &entity_id,
+                        &forecast_date,
+                    )
+                    .await?
                 }
                 _ => {
                     warn!("Unknown entity type: {}", entity_type);

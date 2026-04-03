@@ -6,9 +6,9 @@
 //! - Multi-level approval support
 //! - Automation rules (auto-approve, auto-submit)
 
-use crate::types::{Money, TenantId, UserId};
 use crate::domain::invoice::InvoiceId;
 use crate::domain::vendor::VendorId;
+use crate::types::{Money, TenantId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

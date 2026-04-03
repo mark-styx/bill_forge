@@ -52,9 +52,8 @@ impl ApnsClient {
             ));
         }
 
-        let private_key = fs::read(&config.private_key_path).map_err(|e| {
-            ApnsError::InvalidConfig(format!("Failed to read private key: {}", e))
-        })?;
+        let private_key = fs::read(&config.private_key_path)
+            .map_err(|e| ApnsError::InvalidConfig(format!("Failed to read private key: {}", e)))?;
 
         Ok(Self {
             config,

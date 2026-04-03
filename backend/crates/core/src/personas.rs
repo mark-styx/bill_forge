@@ -87,19 +87,10 @@ impl SandboxPersona {
                 Module::InvoiceProcessing,
                 Module::VendorManagement,
             ],
-            Self::InvoiceOcrOnly => vec![
-                Module::InvoiceCapture,
-            ],
-            Self::InvoiceProcessingOnly => vec![
-                Module::InvoiceProcessing,
-            ],
-            Self::VendorManagementOnly => vec![
-                Module::VendorManagement,
-            ],
-            Self::ApLite => vec![
-                Module::InvoiceProcessing,
-                Module::VendorManagement,
-            ],
+            Self::InvoiceOcrOnly => vec![Module::InvoiceCapture],
+            Self::InvoiceProcessingOnly => vec![Module::InvoiceProcessing],
+            Self::VendorManagementOnly => vec![Module::VendorManagement],
+            Self::ApLite => vec![Module::InvoiceProcessing, Module::VendorManagement],
         };
         // Reporting is always available
         modules.push(Module::Reporting);
@@ -110,21 +101,22 @@ impl SandboxPersona {
     /// Roles are scoped based on enabled modules
     pub fn available_roles(&self) -> Vec<Role> {
         let mut roles = vec![Role::TenantAdmin, Role::ReportViewer];
-        
+
         let modules = self.enabled_modules();
-        
-        if modules.contains(&Module::InvoiceCapture) || modules.contains(&Module::InvoiceProcessing) {
+
+        if modules.contains(&Module::InvoiceCapture) || modules.contains(&Module::InvoiceProcessing)
+        {
             roles.push(Role::ApUser);
         }
-        
+
         if modules.contains(&Module::InvoiceProcessing) {
             roles.push(Role::Approver);
         }
-        
+
         if modules.contains(&Module::VendorManagement) {
             roles.push(Role::VendorManager);
         }
-        
+
         roles
     }
 
@@ -132,24 +124,24 @@ impl SandboxPersona {
     pub fn reporting_sections(&self) -> Vec<&'static str> {
         let modules = self.enabled_modules();
         let mut sections = vec!["dashboard_summary"];
-        
+
         if modules.contains(&Module::InvoiceCapture) {
             sections.push("ocr_metrics");
             sections.push("capture_pipeline");
         }
-        
+
         if modules.contains(&Module::InvoiceProcessing) {
             sections.push("invoice_aging");
             sections.push("processing_metrics");
             sections.push("approval_metrics");
             sections.push("payment_analytics");
         }
-        
+
         if modules.contains(&Module::VendorManagement) {
             sections.push("vendor_analytics");
             sections.push("vendor_spend");
         }
-        
+
         sections
     }
 
@@ -193,7 +185,7 @@ impl From<SandboxPersona> for PersonaInfo {
     fn from(persona: SandboxPersona) -> Self {
         let enabled_modules = persona.enabled_modules();
         let available_roles = persona.available_roles();
-        
+
         Self {
             id: persona.id().to_string(),
             name: persona.display_name().to_string(),
@@ -247,7 +239,11 @@ impl From<SandboxPersona> for PersonaInfo {
                     available: true,
                 },
             ],
-            reporting_sections: persona.reporting_sections().iter().map(|s| s.to_string()).collect(),
+            reporting_sections: persona
+                .reporting_sections()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }

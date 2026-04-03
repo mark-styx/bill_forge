@@ -16,5 +16,5 @@ pub mod oauth;
 pub mod types;
 
 pub use client::QuickBooksClient;
-pub use oauth::{QuickBooksOAuth, QuickBooksOAuthConfig, QuickBooksEnvironment};
+pub use oauth::{QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig};
 pub use types::*;

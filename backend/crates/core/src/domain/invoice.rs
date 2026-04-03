@@ -66,7 +66,7 @@ impl CaptureStatus {
             Self::Failed => "failed",
         }
     }
-    
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "pending" => Some(Self::Pending),
@@ -123,7 +123,7 @@ impl ProcessingStatus {
             Self::Voided => "voided",
         }
     }
-    
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "draft" => Some(Self::Draft),
@@ -151,36 +151,36 @@ impl Default for ProcessingStatus {
 pub struct Invoice {
     pub id: InvoiceId,
     pub tenant_id: TenantId,
-    
+
     // Vendor information
     pub vendor_id: Option<Uuid>,
     pub vendor_name: String,
-    
+
     // Invoice details
     pub invoice_number: String,
     pub invoice_date: Option<NaiveDate>,
     pub due_date: Option<NaiveDate>,
     pub po_number: Option<String>,
-    
+
     // Financial
     pub subtotal: Option<Money>,
     pub tax_amount: Option<Money>,
     pub total_amount: Money,
     pub currency: String,
-    
+
     // Line items
     pub line_items: Vec<InvoiceLineItem>,
-    
+
     // Status tracking
     pub capture_status: CaptureStatus,
     pub processing_status: ProcessingStatus,
-    
+
     // Queue tracking
     /// Current queue the invoice is in (None = not in workflow yet)
     pub current_queue_id: Option<Uuid>,
     /// User currently assigned to this invoice
     pub assigned_to: Option<UserId>,
-    
+
     // Document reference
     /// Primary document (PDF/image) for this invoice
     pub document_id: Uuid,
@@ -194,12 +194,12 @@ pub struct Invoice {
     pub department: Option<String>,
     pub gl_code: Option<String>,
     pub cost_center: Option<String>,
-    
+
     // Metadata
     pub notes: Option<String>,
     pub tags: Vec<String>,
     pub custom_fields: serde_json::Value,
-    
+
     // Audit
     pub created_by: UserId,
     pub created_at: DateTime<Utc>,

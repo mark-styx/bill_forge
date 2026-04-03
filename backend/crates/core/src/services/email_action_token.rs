@@ -82,11 +82,7 @@ impl EmailActionTokenService {
         let signature = self.sign(&payload_json);
 
         // Create final token (base64-encoded payload + signature)
-        let token = format!(
-            "{}.{}",
-            BASE64_STANDARD.encode(&payload_json),
-            signature
-        );
+        let token = format!("{}.{}", BASE64_STANDARD.encode(&payload_json), signature);
 
         // Store hash in database for revocation checking
         let token_hash = self.hash_token(&token);
@@ -95,7 +91,7 @@ impl EmailActionTokenService {
             r#"INSERT INTO email_action_tokens (
                 id, tenant_id, token_hash, action_type, resource_type, resource_id,
                 user_id, metadata, expires_at, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
         )
         .bind(Uuid::new_v4())
         .bind(*tenant_id.as_uuid())
@@ -115,10 +111,7 @@ impl EmailActionTokenService {
     }
 
     /// Validate and decode a token
-    pub async fn validate_token(
-        &self,
-        token: &str,
-    ) -> Result<EmailActionToken> {
+    pub async fn validate_token(&self, token: &str) -> Result<EmailActionToken> {
         // Split token into payload and signature
         let parts: Vec<&str> = token.split('.').collect();
         if parts.len() != 2 {
@@ -129,16 +122,15 @@ impl EmailActionTokenService {
         let signature = parts[1];
 
         // Decode payload
-        let payload_json = BASE64_STANDARD.decode(payload_b64)
+        let payload_json = BASE64_STANDARD
+            .decode(payload_b64)
             .map_err(|_| Error::Validation("Invalid token encoding".to_string()))?;
 
         let payload: EmailActionToken = serde_json::from_slice(&payload_json)
             .map_err(|_| Error::Validation("Invalid token payload".to_string()))?;
 
         // Verify signature
-        let expected_signature = self.sign(
-            &String::from_utf8_lossy(&payload_json)
-        );
+        let expected_signature = self.sign(&String::from_utf8_lossy(&payload_json));
 
         if signature != expected_signature {
             return Err(Error::Validation("Invalid token signature".to_string()));
@@ -153,7 +145,7 @@ impl EmailActionTokenService {
         let token_hash = self.hash_token(token);
 
         let used: Option<bool> = sqlx::query_scalar(
-            "SELECT (used_at IS NOT NULL) FROM email_action_tokens WHERE token_hash = $1"
+            "SELECT (used_at IS NOT NULL) FROM email_action_tokens WHERE token_hash = $1",
         )
         .bind(&token_hash)
         .fetch_optional(&*self.pool)
@@ -171,13 +163,11 @@ impl EmailActionTokenService {
     pub async fn mark_used(&self, token: &str) -> Result<()> {
         let token_hash = self.hash_token(token);
 
-        sqlx::query(
-            "UPDATE email_action_tokens SET used_at = NOW() WHERE token_hash = $1"
-        )
-        .bind(&token_hash)
-        .execute(&*self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to mark token as used: {}", e)))?;
+        sqlx::query("UPDATE email_action_tokens SET used_at = NOW() WHERE token_hash = $1")
+            .bind(&token_hash)
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to mark token as used: {}", e)))?;
 
         Ok(())
     }

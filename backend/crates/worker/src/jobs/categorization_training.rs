@@ -6,10 +6,10 @@
 
 use anyhow::{Context, Result};
 use billforge_db::PgManager;
-use tracing::{info, warn};
 use std::sync::Arc;
+use tracing::{info, warn};
 
-use billforge_invoice_processing::feedback_loop::{FeedbackLearning, AccuracyMetrics};
+use billforge_invoice_processing::feedback_loop::{AccuracyMetrics, FeedbackLearning};
 
 /// Learn from recent feedback for all tenants
 pub async fn learn_from_feedback(pg_manager: Arc<PgManager>) -> Result<()> {
@@ -17,12 +17,11 @@ pub async fn learn_from_feedback(pg_manager: Arc<PgManager>) -> Result<()> {
 
     // Get all active tenants from metadata database
     let metadata_pool = pg_manager.metadata();
-    let tenants = sqlx::query_as::<_, (String,)>(
-        "SELECT id::text FROM tenants WHERE active = true",
-    )
-    .fetch_all(metadata_pool)
-    .await
-    .context("Failed to fetch tenants")?;
+    let tenants =
+        sqlx::query_as::<_, (String,)>("SELECT id::text FROM tenants WHERE active = true")
+            .fetch_all(metadata_pool)
+            .await
+            .context("Failed to fetch tenants")?;
 
     info!("Learning from feedback for {} tenants", tenants.len());
 
@@ -49,9 +48,12 @@ pub async fn learn_from_feedback(pg_manager: Arc<PgManager>) -> Result<()> {
 }
 
 /// Process feedback for a single tenant
-async fn process_tenant_feedback(pg_manager: &PgManager, tenant_id: &str) -> Result<AccuracyMetrics> {
-    let tenant_id: billforge_core::TenantId = tenant_id.parse()
-        .context("Invalid tenant ID format")?;
+async fn process_tenant_feedback(
+    pg_manager: &PgManager,
+    tenant_id: &str,
+) -> Result<AccuracyMetrics> {
+    let tenant_id: billforge_core::TenantId =
+        tenant_id.parse().context("Invalid tenant ID format")?;
     let pool = pg_manager.tenant(&tenant_id).await?;
 
     let learning = FeedbackLearning::new((*pool).clone());
@@ -101,9 +103,13 @@ async fn process_tenant_feedback(pg_manager: &PgManager, tenant_id: &str) -> Res
 }
 
 /// Get categorization accuracy report for a tenant
-pub async fn get_accuracy_report(pg_manager: &PgManager, tenant_id: &str, days: i32) -> Result<AccuracyReport> {
-    let tenant_id: billforge_core::TenantId = tenant_id.parse()
-        .context("Invalid tenant ID format")?;
+pub async fn get_accuracy_report(
+    pg_manager: &PgManager,
+    tenant_id: &str,
+    days: i32,
+) -> Result<AccuracyReport> {
+    let tenant_id: billforge_core::TenantId =
+        tenant_id.parse().context("Invalid tenant ID format")?;
     let pool = pg_manager.tenant(&tenant_id).await?;
 
     let learning = FeedbackLearning::new((*pool).clone());

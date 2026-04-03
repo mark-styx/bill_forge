@@ -52,7 +52,10 @@ pub async fn inject_context(
         tenant_id,
         user_id,
         user_role: role_name,
-        permissions: permissions.iter().filter_map(|row| row.try_get("name").ok()).collect(),
+        permissions: permissions
+            .iter()
+            .filter_map(|row| row.try_get("name").ok())
+            .collect(),
     })
 }
 

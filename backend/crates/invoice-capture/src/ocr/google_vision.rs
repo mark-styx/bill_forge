@@ -41,7 +41,11 @@ impl GoogleVisionOcr {
     }
 
     /// Create with custom configuration
-    pub fn with_config(project_id: String, credentials_path: String, enable_handwriting: bool) -> Self {
+    pub fn with_config(
+        project_id: String,
+        credentials_path: String,
+        enable_handwriting: bool,
+    ) -> Self {
         Self {
             project_id: Some(project_id),
             credentials_path: Some(credentials_path),
@@ -56,7 +60,11 @@ impl GoogleVisionOcr {
     }
 
     /// Call Google Cloud Vision API for document text detection
-    async fn call_vision_api(&self, document_bytes: &[u8], mime_type: &str) -> Result<VisionResponse> {
+    async fn call_vision_api(
+        &self,
+        document_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<VisionResponse> {
         // Check if credentials are available
         if !Self::is_configured() {
             return Err(Error::Ocr(
@@ -108,7 +116,10 @@ impl GoogleVisionOcr {
             vendor_address: ExtractedField::empty(),
             subtotal: self.extract_amount(&raw_text, &["subtotal", "sub total"]),
             tax_amount: self.extract_amount(&raw_text, &["tax", "vat", "gst"]),
-            total_amount: self.extract_amount(&raw_text, &["total due", "total", "amount due", "grand total"]),
+            total_amount: self.extract_amount(
+                &raw_text,
+                &["total due", "total", "amount due", "grand total"],
+            ),
             currency: self.extract_currency(&raw_text),
             po_number: self.extract_po_number(&raw_text),
             line_items: self.extract_line_items(&raw_text),
@@ -174,7 +185,9 @@ impl GoogleVisionOcr {
             if let Ok(re) = Regex::new(pattern) {
                 if let Some(caps) = re.captures(text) {
                     let date_str = caps.get(0).map(|m| m.as_str()).unwrap_or("");
-                    let formats = ["%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"];
+                    let formats = [
+                        "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y",
+                    ];
 
                     for fmt in formats {
                         if let Ok(date) = NaiveDate::parse_from_str(date_str, fmt) {
@@ -208,10 +221,18 @@ impl GoogleVisionOcr {
         // Fallback: first non-empty, non-invoice line
         for line in lines.iter().take(10) {
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
-            if trimmed.to_lowercase().contains("invoice") { continue; }
-            if trimmed.starts_with('$') { continue; }
-            if trimmed.chars().all(|c| c.is_numeric()) { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.to_lowercase().contains("invoice") {
+                continue;
+            }
+            if trimmed.starts_with('$') {
+                continue;
+            }
+            if trimmed.chars().all(|c| c.is_numeric()) {
+                continue;
+            }
 
             if trimmed.len() > 3 && trimmed.len() < 60 {
                 let has_alpha = trimmed.chars().any(|c| c.is_alphabetic());
@@ -315,8 +336,12 @@ impl GoogleVisionOcr {
         if let Some(re) = item_pattern {
             for line in text.lines() {
                 if let Some(caps) = re.captures(line.trim()) {
-                    let description = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
-                    let amount = caps.get(2)
+                    let description = caps
+                        .get(1)
+                        .map(|m| m.as_str().trim().to_string())
+                        .unwrap_or_default();
+                    let amount = caps
+                        .get(2)
                         .and_then(|m| m.as_str().replace(',', "").parse::<f64>().ok());
 
                     if !description.is_empty() {
@@ -324,7 +349,9 @@ impl GoogleVisionOcr {
                             description: ExtractedField::with_value(description, 0.75),
                             quantity: ExtractedField::empty(),
                             unit_price: ExtractedField::empty(),
-                            amount: amount.map(|a| ExtractedField::with_value(a, 0.8)).unwrap_or_else(ExtractedField::empty),
+                            amount: amount
+                                .map(|a| ExtractedField::with_value(a, 0.8))
+                                .unwrap_or_else(ExtractedField::empty),
                         });
                     }
                 }
@@ -372,7 +399,14 @@ impl OcrService for GoogleVisionOcr {
     }
 
     fn supported_formats(&self) -> Vec<&'static str> {
-        vec!["application/pdf", "image/png", "image/jpeg", "image/tiff", "image/gif", "image/webp"]
+        vec![
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/tiff",
+            "image/gif",
+            "image/webp",
+        ]
     }
 
     fn provider_name(&self) -> &'static str {
@@ -455,7 +489,10 @@ mod tests {
         let items = ocr.extract_line_items(text);
 
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].description.value, Some("Office Supplies".to_string()));
+        assert_eq!(
+            items[0].description.value,
+            Some("Office Supplies".to_string())
+        );
         assert_eq!(items[0].amount.value, Some(250.0));
         assert_eq!(items[1].description.value, Some("Shipping".to_string()));
         assert_eq!(items[1].amount.value, Some(200.0));

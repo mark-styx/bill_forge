@@ -48,9 +48,9 @@ pub struct CategorizationFeedback {
 /// Type of feedback
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FeedbackType {
-    Acceptance,  // User accepted the suggestion
-    Correction,  // User changed the suggestion
-    Rejection,   // User rejected without choosing alternative
+    Acceptance, // User accepted the suggestion
+    Correction, // User changed the suggestion
+    Rejection,  // User rejected without choosing alternative
 }
 
 /// Learning insights from feedback
@@ -138,7 +138,9 @@ impl FeedbackLearning {
         let adjustments = self.analyze_category_adjustments(tenant_id, since).await?;
 
         // Analyze confidence calibration
-        let calibration = self.analyze_confidence_calibration(tenant_id, since).await?;
+        let calibration = self
+            .analyze_confidence_calibration(tenant_id, since)
+            .await?;
 
         Ok(LearningInsights {
             vendor_id: None, // Would be filled for vendor-specific analysis
@@ -245,7 +247,11 @@ impl FeedbackLearning {
     }
 
     /// Get vendor-specific learning insights
-    pub async fn get_vendor_insights(&self, tenant_id: &str, vendor_id: Uuid) -> Result<LearningInsights> {
+    pub async fn get_vendor_insights(
+        &self,
+        tenant_id: &str,
+        vendor_id: Uuid,
+    ) -> Result<LearningInsights> {
         let since = Utc::now() - Duration::days(30);
 
         let adjustments = sqlx::query_as::<_, (String, String, String, i32)>(
@@ -272,7 +278,9 @@ impl FeedbackLearning {
         .await
         .context("Failed to get vendor-specific adjustments")?;
 
-        let calibration = self.analyze_confidence_calibration(tenant_id, since).await?;
+        let calibration = self
+            .analyze_confidence_calibration(tenant_id, since)
+            .await?;
 
         Ok(LearningInsights {
             vendor_id: Some(vendor_id),
@@ -337,7 +345,11 @@ impl FeedbackLearning {
     }
 
     /// Get accuracy metrics for a tenant
-    pub async fn get_accuracy_metrics(&self, tenant_id: &str, days: i32) -> Result<AccuracyMetrics> {
+    pub async fn get_accuracy_metrics(
+        &self,
+        tenant_id: &str,
+        days: i32,
+    ) -> Result<AccuracyMetrics> {
         let since = Utc::now() - Duration::days(days as i64);
 
         let row = sqlx::query_as::<_, (i64, i64, i64, i64)>(

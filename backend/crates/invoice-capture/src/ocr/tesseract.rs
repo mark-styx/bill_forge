@@ -36,8 +36,7 @@ impl TesseractOcr {
         Self {
             tesseract_path: std::env::var("TESSERACT_PATH")
                 .unwrap_or_else(|_| "tesseract".to_string()),
-            language: std::env::var("TESSERACT_LANG")
-                .unwrap_or_else(|_| "eng".to_string()),
+            language: std::env::var("TESSERACT_LANG").unwrap_or_else(|_| "eng".to_string()),
         }
     }
 
@@ -65,16 +64,21 @@ impl TesseractOcr {
         let mut input_file = NamedTempFile::with_suffix(format!(".{}", extension))
             .map_err(|e| Error::Ocr(format!("Failed to create temp file: {}", e)))?;
 
-        input_file.write_all(image_data)
+        input_file
+            .write_all(image_data)
             .map_err(|e| Error::Ocr(format!("Failed to write temp file: {}", e)))?;
 
-        let input_path = input_file.path().to_str()
+        let input_path = input_file
+            .path()
+            .to_str()
             .ok_or_else(|| Error::Ocr("Invalid temp file path".to_string()))?;
 
         // Create output file
         let output_file = NamedTempFile::new()
             .map_err(|e| Error::Ocr(format!("Failed to create output file: {}", e)))?;
-        let output_base = output_file.path().to_str()
+        let output_base = output_file
+            .path()
+            .to_str()
             .ok_or_else(|| Error::Ocr("Invalid output path".to_string()))?;
 
         // Run tesseract
@@ -96,7 +100,8 @@ impl TesseractOcr {
                 return Err(Error::Ocr(
                     "Tesseract not found. Please install tesseract-ocr. \
                      On macOS: brew install tesseract. \
-                     On Ubuntu: apt-get install tesseract-ocr".to_string()
+                     On Ubuntu: apt-get install tesseract-ocr"
+                        .to_string(),
                 ));
             }
             return Err(Error::Ocr(format!("Tesseract failed: {}", stderr)));
@@ -119,17 +124,21 @@ impl TesseractOcr {
         // Write PDF to temp file
         let mut pdf_file = NamedTempFile::with_suffix(".pdf")
             .map_err(|e| Error::Ocr(format!("Failed to create temp file: {}", e)))?;
-        pdf_file.write_all(pdf_data)
+        pdf_file
+            .write_all(pdf_data)
             .map_err(|e| Error::Ocr(format!("Failed to write temp file: {}", e)))?;
 
-        let pdf_path = pdf_file.path().to_str()
+        let pdf_path = pdf_file
+            .path()
+            .to_str()
             .ok_or_else(|| Error::Ocr("Invalid temp file path".to_string()))?;
 
         // Create output directory for images
         let output_dir = tempfile::tempdir()
             .map_err(|e| Error::Ocr(format!("Failed to create temp dir: {}", e)))?;
         let output_prefix = output_dir.path().join("page");
-        let output_prefix_str = output_prefix.to_str()
+        let output_prefix_str = output_prefix
+            .to_str()
             .ok_or_else(|| Error::Ocr("Invalid output path".to_string()))?;
 
         // Convert PDF to PNG images using pdftoppm
@@ -141,12 +150,20 @@ impl TesseractOcr {
             .arg(output_prefix_str)
             .output()
             .await
-            .map_err(|e| Error::Ocr(format!("Failed to run pdftoppm: {}. Is poppler-utils installed?", e)))?;
+            .map_err(|e| {
+                Error::Ocr(format!(
+                    "Failed to run pdftoppm: {}. Is poppler-utils installed?",
+                    e
+                ))
+            })?;
 
         if !convert_output.status.success() {
             let stderr = String::from_utf8_lossy(&convert_output.stderr);
             // Fall back to direct tesseract on PDF if pdftoppm fails
-            tracing::warn!("pdftoppm failed ({}), falling back to direct tesseract on PDF", stderr.trim());
+            tracing::warn!(
+                "pdftoppm failed ({}), falling back to direct tesseract on PDF",
+                stderr.trim()
+            );
             return self.ocr_image(pdf_data, "application/pdf").await;
         }
 
@@ -155,12 +172,18 @@ impl TesseractOcr {
         let mut page_images: Vec<_> = std::fs::read_dir(output_dir.path())
             .map_err(|e| Error::Ocr(format!("Failed to read output dir: {}", e)))?
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|ext| ext == "png").unwrap_or(false))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "png")
+                    .unwrap_or(false)
+            })
             .collect();
         page_images.sort_by_key(|e| e.file_name());
 
         for entry in &page_images {
-            let image_data = tokio::fs::read(entry.path()).await
+            let image_data = tokio::fs::read(entry.path())
+                .await
                 .map_err(|e| Error::Ocr(format!("Failed to read page image: {}", e)))?;
             let page_text = self.ocr_image(&image_data, "image/png").await?;
             if !all_text.is_empty() {
@@ -182,13 +205,25 @@ impl TesseractOcr {
 
         OcrExtractionResult {
             invoice_number: self.extract_invoice_number(raw_text),
-            invoice_date: self.extract_date(raw_text, &["invoice date", "date:", "inv date", "bill date"]),
+            invoice_date: self.extract_date(
+                raw_text,
+                &["invoice date", "date:", "inv date", "bill date"],
+            ),
             due_date: self.extract_date(raw_text, &["due date", "payment due", "due:", "pay by"]),
             vendor_name: self.extract_vendor_name(&lines),
             vendor_address: ExtractedField::empty(),
             subtotal: self.extract_amount(raw_text, &["subtotal", "sub total", "sub-total"]),
             tax_amount: self.extract_amount(raw_text, &["tax", "vat", "gst", "sales tax"]),
-            total_amount: self.extract_amount(raw_text, &["total", "amount due", "grand total", "total due", "balance due"]),
+            total_amount: self.extract_amount(
+                raw_text,
+                &[
+                    "total",
+                    "amount due",
+                    "grand total",
+                    "total due",
+                    "balance due",
+                ],
+            ),
             currency: self.extract_currency(raw_text),
             po_number: self.extract_po_number(raw_text),
             line_items: self.extract_line_items(raw_text),
@@ -261,8 +296,7 @@ impl TesseractOcr {
                     let date_str = caps.get(0).map(|m| m.as_str()).unwrap_or("");
                     // Try multiple formats
                     let formats = [
-                        "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%Y/%m/%d",
-                        "%d/%m/%Y", "%d-%m-%Y",
+                        "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y",
                     ];
                     for fmt in formats {
                         if let Ok(date) = NaiveDate::parse_from_str(date_str, fmt) {
@@ -284,11 +318,24 @@ impl TesseractOcr {
         for (i, line) in lines.iter().take(10).enumerate() {
             let trimmed = line.trim();
             // Skip empty lines and lines that look like addresses or numbers
-            if trimmed.is_empty() { continue; }
-            if trimmed.chars().all(|c| c.is_numeric() || c == '-' || c == '/') { continue; }
-            if trimmed.to_lowercase().contains("invoice") { continue; }
-            if trimmed.to_lowercase().contains("bill to") { continue; }
-            if trimmed.starts_with('$') { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed
+                .chars()
+                .all(|c| c.is_numeric() || c == '-' || c == '/')
+            {
+                continue;
+            }
+            if trimmed.to_lowercase().contains("invoice") {
+                continue;
+            }
+            if trimmed.to_lowercase().contains("bill to") {
+                continue;
+            }
+            if trimmed.starts_with('$') {
+                continue;
+            }
 
             // Prefer lines that look like company names (contains letters, not too long)
             if trimmed.len() > 3 && trimmed.len() < 60 {
@@ -403,22 +450,36 @@ impl TesseractOcr {
         let mut items = Vec::new();
 
         // Look for lines that have description + amount pattern
-        let line_pattern = Regex::new(r"^(.+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)$").ok();
+        let line_pattern =
+            Regex::new(r"^(.+?)\s+(\d+(?:\.\d+)?)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)$").ok();
 
         if let Some(re) = line_pattern {
             for line in text.lines() {
                 if let Some(caps) = re.captures(line.trim()) {
-                    let description = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                    let description = caps
+                        .get(1)
+                        .map(|m| m.as_str().trim().to_string())
+                        .unwrap_or_default();
                     let qty = caps.get(2).and_then(|m| m.as_str().parse::<f64>().ok());
-                    let unit_price = caps.get(3).and_then(|m| m.as_str().replace(',', "").parse::<f64>().ok());
-                    let amount = caps.get(4).and_then(|m| m.as_str().replace(',', "").parse::<f64>().ok());
+                    let unit_price = caps
+                        .get(3)
+                        .and_then(|m| m.as_str().replace(',', "").parse::<f64>().ok());
+                    let amount = caps
+                        .get(4)
+                        .and_then(|m| m.as_str().replace(',', "").parse::<f64>().ok());
 
                     if description.len() > 2 {
                         items.push(ExtractedLineItem {
                             description: ExtractedField::with_value(description, 0.6),
-                            quantity: qty.map(|q| ExtractedField::with_value(q, 0.7)).unwrap_or_else(ExtractedField::empty),
-                            unit_price: unit_price.map(|p| ExtractedField::with_value(p, 0.7)).unwrap_or_else(ExtractedField::empty),
-                            amount: amount.map(|a| ExtractedField::with_value(a, 0.7)).unwrap_or_else(ExtractedField::empty),
+                            quantity: qty
+                                .map(|q| ExtractedField::with_value(q, 0.7))
+                                .unwrap_or_else(ExtractedField::empty),
+                            unit_price: unit_price
+                                .map(|p| ExtractedField::with_value(p, 0.7))
+                                .unwrap_or_else(ExtractedField::empty),
+                            amount: amount
+                                .map(|a| ExtractedField::with_value(a, 0.7))
+                                .unwrap_or_else(ExtractedField::empty),
                         });
                     }
                 }
@@ -486,7 +547,13 @@ impl OcrService for TesseractOcr {
     }
 
     fn supported_formats(&self) -> Vec<&'static str> {
-        vec!["application/pdf", "image/png", "image/jpeg", "image/tiff", "image/bmp"]
+        vec![
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/tiff",
+            "image/bmp",
+        ]
     }
 
     fn provider_name(&self) -> &'static str {

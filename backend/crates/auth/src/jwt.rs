@@ -121,11 +121,7 @@ impl JwtService {
     }
 
     /// Create a refresh token
-    pub fn create_refresh_token(
-        &self,
-        user_id: &UserId,
-        tenant_id: &TenantId,
-    ) -> Result<String> {
+    pub fn create_refresh_token(&self, user_id: &UserId, tenant_id: &TenantId) -> Result<String> {
         let now = Utc::now();
         let exp = now + Duration::days(self.config.refresh_token_expiry_days);
 
@@ -146,11 +142,12 @@ impl JwtService {
     /// Validate and decode an access token
     pub fn validate_access_token(&self, token: &str) -> Result<Claims> {
         let validation = Validation::default();
-        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
-            .map_err(|e| match e.kind() {
+        let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
+            match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => Error::TokenExpired,
                 _ => Error::InvalidToken(e.to_string()),
-            })?;
+            }
+        })?;
 
         if token_data.claims.token_type != TokenType::Access {
             return Err(Error::InvalidToken("Not an access token".to_string()));
@@ -162,11 +159,12 @@ impl JwtService {
     /// Validate and decode a refresh token
     pub fn validate_refresh_token(&self, token: &str) -> Result<Claims> {
         let validation = Validation::default();
-        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
-            .map_err(|e| match e.kind() {
+        let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
+            match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => Error::TokenExpired,
                 _ => Error::InvalidToken(e.to_string()),
-            })?;
+            }
+        })?;
 
         if token_data.claims.token_type != TokenType::Refresh {
             return Err(Error::InvalidToken("Not a refresh token".to_string()));

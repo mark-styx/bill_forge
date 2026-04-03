@@ -2,15 +2,15 @@
 //!
 //! Analytics and reporting for BillForge platform.
 
-pub mod service;
 pub mod models;
+pub mod service;
 
-pub use service::ReportingService;
 pub use models::{
-    DashboardSummary, InvoiceVolume, VendorSpend, VendorSpendWithPeriods, AgingBucket,
-    ProcessingMetrics, StatusDistribution, CustomReportQuery, CustomReportResult, DateRange,
-    ReportFilter, SpendTrendPoint, CategoryBreakdown, VendorPerformanceMetrics, ApprovalAnalytics,
-    BottleneckStage, ApproverWorkload, ExportRequest, ExportFormat, ExportResult,
-    ReportDigest, DigestType, DigestFrequency, UpsertDigestRequest, DigestContent,
-    DigestSummary, DigestHighlight, ActionableItem,
+    ActionableItem, AgingBucket, ApprovalAnalytics, ApproverWorkload, BottleneckStage,
+    CategoryBreakdown, CustomReportQuery, CustomReportResult, DashboardSummary, DateRange,
+    DigestContent, DigestFrequency, DigestHighlight, DigestSummary, DigestType, ExportFormat,
+    ExportRequest, ExportResult, InvoiceVolume, ProcessingMetrics, ReportDigest, ReportFilter,
+    SpendTrendPoint, StatusDistribution, UpsertDigestRequest, VendorPerformanceMetrics,
+    VendorSpend, VendorSpendWithPeriods,
 };
+pub use service::ReportingService;

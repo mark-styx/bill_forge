@@ -31,9 +31,11 @@ where
             .ok_or(ApiError(Error::Unauthenticated))?;
 
         // Extract bearer token
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| ApiError(Error::InvalidToken("Invalid authorization header".to_string())))?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            ApiError(Error::InvalidToken(
+                "Invalid authorization header".to_string(),
+            ))
+        })?;
 
         // Validate token and get user context
         let user_context = app_state.auth.validate_token(token).await?;
@@ -55,10 +57,10 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        
+
         // First get authenticated user
         let auth_user = AuthUser::from_request_parts(parts, state).await?;
-        
+
         // Get tenant context
         let tenant_context = app_state
             .auth
@@ -100,7 +102,9 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !tenant.has_module(Module::InvoiceCapture) {
-            return Err(ApiError(Error::ModuleNotAvailable("Invoice Capture".to_string())));
+            return Err(ApiError(Error::ModuleNotAvailable(
+                "Invoice Capture".to_string(),
+            )));
         }
 
         Ok(Self(user, tenant))
@@ -123,7 +127,9 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !tenant.has_module(Module::InvoiceProcessing) {
-            return Err(ApiError(Error::ModuleNotAvailable("Invoice Processing".to_string())));
+            return Err(ApiError(Error::ModuleNotAvailable(
+                "Invoice Processing".to_string(),
+            )));
         }
 
         Ok(Self(user, tenant))
@@ -146,7 +152,9 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !tenant.has_module(Module::VendorManagement) {
-            return Err(ApiError(Error::ModuleNotAvailable("Vendor Management".to_string())));
+            return Err(ApiError(Error::ModuleNotAvailable(
+                "Vendor Management".to_string(),
+            )));
         }
 
         Ok(Self(user, tenant))

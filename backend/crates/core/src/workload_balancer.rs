@@ -3,9 +3,7 @@
 //! Tracks and balances approver workloads across the system to prevent
 //! bottlenecks and ensure even distribution of approval work.
 
-use crate::{
-    UserId,
-};
+use crate::UserId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -87,7 +85,8 @@ impl WorkloadBalancer {
         let active_score = (active_approvals as f64 / self.config.max_concurrent_approvals as f64)
             * self.config.active_approval_weight;
 
-        let pending_score = (pending_approvals as f64 / self.config.max_concurrent_approvals as f64)
+        let pending_score = (pending_approvals as f64
+            / self.config.max_concurrent_approvals as f64)
             * self.config.pending_approval_weight;
 
         let base_score = (active_score + pending_score) * 50.0; // Scale to 0-100
@@ -165,8 +164,14 @@ impl WorkloadBalancer {
         let overloaded_threshold = 80.0;
         let underloaded_threshold = 20.0;
 
-        let overloaded_count = scores.iter().filter(|s| **s >= overloaded_threshold).count() as i32;
-        let underloaded_count = scores.iter().filter(|s| **s <= underloaded_threshold).count() as i32;
+        let overloaded_count = scores
+            .iter()
+            .filter(|s| **s >= overloaded_threshold)
+            .count() as i32;
+        let underloaded_count = scores
+            .iter()
+            .filter(|s| **s <= underloaded_threshold)
+            .count() as i32;
 
         WorkloadDistributionStats {
             average_workload,
@@ -204,7 +209,8 @@ impl WorkloadBalancer {
             // Suggest transfers from overloaded to underloaded
             for overloaded_approver in &overloaded {
                 for underloaded_approver in &underloaded {
-                    let transfer_count = ((overloaded_approver.workload_score - 50.0) / 10.0).ceil() as i32;
+                    let transfer_count =
+                        ((overloaded_approver.workload_score - 50.0) / 10.0).ceil() as i32;
 
                     if transfer_count > 0 {
                         suggestions.push(RedistributionSuggestion {

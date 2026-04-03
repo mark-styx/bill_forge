@@ -4,8 +4,8 @@
 //! for approval workflows.
 
 use crate::{
-    Notification, NotificationAction, NotificationChannel, NotificationError,
-    NotificationProvider, NotificationResult, ActionType,
+    ActionType, Notification, NotificationAction, NotificationChannel, NotificationError,
+    NotificationProvider, NotificationResult,
 };
 use async_trait::async_trait;
 use billforge_core::UserId;
@@ -307,17 +307,19 @@ impl SlackClient {
         let msg_response: SlackMessageResponse = response.json().await?;
 
         if !msg_response.ok {
-            let error = msg_response.error.unwrap_or_else(|| "Unknown error".to_string());
+            let error = msg_response
+                .error
+                .unwrap_or_else(|| "Unknown error".to_string());
             warn!("Slack API error: {}", error);
             return Err(SlackError::Api(error));
         }
 
-        let ts = msg_response.ts.ok_or_else(|| {
-            SlackError::Api("No timestamp in response".to_string())
-        })?;
-        let channel_id = msg_response.channel.ok_or_else(|| {
-            SlackError::Api("No channel in response".to_string())
-        })?;
+        let ts = msg_response
+            .ts
+            .ok_or_else(|| SlackError::Api("No timestamp in response".to_string()))?;
+        let channel_id = msg_response
+            .channel
+            .ok_or_else(|| SlackError::Api("No channel in response".to_string()))?;
 
         Ok((channel_id, ts))
     }
@@ -362,7 +364,8 @@ impl SlackClient {
                             "notification_id": notification.id,
                             "action_type": action.action_type,
                             "payload": action.payload,
-                        })).unwrap_or_else(|_| "{}".to_string()),
+                        }))
+                        .unwrap_or_else(|_| "{}".to_string()),
                         url: action.url.clone(),
                     }
                 })
@@ -409,7 +412,9 @@ impl SlackClient {
         let im_response: OpenImResponse = response.json().await?;
 
         if !im_response.ok {
-            let error = im_response.error.unwrap_or_else(|| "Unknown error".to_string());
+            let error = im_response
+                .error
+                .unwrap_or_else(|| "Unknown error".to_string());
             return Err(SlackError::Api(error));
         }
 
@@ -419,13 +424,18 @@ impl SlackClient {
 
 #[async_trait]
 impl NotificationProvider for SlackClient {
-    async fn send(&self, notification: &Notification) -> Result<NotificationResult, NotificationError> {
+    async fn send(
+        &self,
+        notification: &Notification,
+    ) -> Result<NotificationResult, NotificationError> {
         // This is a placeholder - actual implementation would need to:
         // 1. Fetch user's Slack access token and channel from database
         // 2. Send message using send_message()
         // 3. Return result with external message ID
 
-        Err(NotificationError::NotConfigured(notification.user_id.clone()))
+        Err(NotificationError::NotConfigured(
+            notification.user_id.clone(),
+        ))
     }
 
     fn provider_name(&self) -> &'static str {

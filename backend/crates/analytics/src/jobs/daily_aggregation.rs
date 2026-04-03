@@ -36,9 +36,15 @@ impl DailyAggregationJob {
         let end_datetime = DateTime::from_naive_utc_and_offset(end_of_day, Utc);
 
         for tenant_id in tenants {
-            match self.aggregate_tenant(&tenant_id, start_datetime, end_datetime).await {
+            match self
+                .aggregate_tenant(&tenant_id, start_datetime, end_datetime)
+                .await
+            {
                 Ok(_) => info!("Aggregated analytics for tenant: {}", tenant_id),
-                Err(e) => warn!("Failed to aggregate analytics for tenant {}: {}", tenant_id, e),
+                Err(e) => warn!(
+                    "Failed to aggregate analytics for tenant {}: {}",
+                    tenant_id, e
+                ),
             }
         }
 

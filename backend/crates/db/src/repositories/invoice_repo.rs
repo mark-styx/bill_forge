@@ -1,12 +1,7 @@
 //! Invoice repository implementation
 
 use async_trait::async_trait;
-use billforge_core::{
-    domain::*,
-    traits::InvoiceRepository,
-    types::*,
-    Error, Result,
-};
+use billforge_core::{domain::*, traits::InvoiceRepository, types::*, Error, Result};
 use chrono::{NaiveDate, Utc};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -84,8 +79,11 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             tax_amount: input.tax_amount,
             total_amount: input.total_amount,
             currency: input.currency,
-            line_items: input.line_items.into_iter().enumerate().map(|(idx, item)| {
-                billforge_core::domain::InvoiceLineItem {
+            line_items: input
+                .line_items
+                .into_iter()
+                .enumerate()
+                .map(|(idx, item)| billforge_core::domain::InvoiceLineItem {
                     id: Uuid::new_v4(),
                     line_number: (idx + 1) as u32,
                     description: item.description,
@@ -95,8 +93,8 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                     gl_code: item.gl_code,
                     department: item.department,
                     project: item.project,
-                }
-            }).collect(),
+                })
+                .collect(),
             capture_status: CaptureStatus::Pending,
             processing_status: ProcessingStatus::Draft,
             current_queue_id: None,
@@ -121,7 +119,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: &InvoiceId) -> Result<Option<Invoice>> {
         let result = sqlx::query_as::<_, InvoiceRow>(
-            "SELECT * FROM invoices WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM invoices WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -164,8 +162,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         ));
 
         // Build query
-        let mut query = sqlx::query_as::<_, InvoiceRow>(&query_str)
-            .bind(*tenant_id.as_uuid());
+        let mut query = sqlx::query_as::<_, InvoiceRow>(&query_str).bind(*tenant_id.as_uuid());
 
         if let Some(ref vendor_id) = filters.vendor_id {
             query = query.bind(vendor_id.to_string());
@@ -193,8 +190,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         let count_query_str = query_str.replace("SELECT *", "SELECT COUNT(*)");
         let count_str = count_query_str.split(" ORDER BY").next().unwrap();
 
-        let mut count_query = sqlx::query_scalar::<_, i64>(count_str)
-            .bind(*tenant_id.as_uuid());
+        let mut count_query = sqlx::query_scalar::<_, i64>(count_str).bind(*tenant_id.as_uuid());
 
         if let Some(ref vendor_id) = filters.vendor_id {
             count_query = count_query.bind(vendor_id.to_string());
@@ -230,29 +226,53 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
     ) -> Result<Invoice> {
         if let Some(obj) = updates.as_object() {
             // Extract all possible field values upfront
-            let vendor_name = obj.get("vendor_name").and_then(|v| v.as_str()).map(String::from);
-            let invoice_number = obj.get("invoice_number").and_then(|v| v.as_str()).map(String::from);
-            let invoice_date = obj.get("invoice_date").and_then(|v| v.as_str())
+            let vendor_name = obj
+                .get("vendor_name")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let invoice_number = obj
+                .get("invoice_number")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let invoice_date = obj
+                .get("invoice_date")
+                .and_then(|v| v.as_str())
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
             let has_invoice_date = obj.contains_key("invoice_date");
-            let due_date = obj.get("due_date").and_then(|v| v.as_str())
+            let due_date = obj
+                .get("due_date")
+                .and_then(|v| v.as_str())
                 .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
             let has_due_date = obj.contains_key("due_date");
-            let po_number = obj.get("po_number").and_then(|v| v.as_str()).map(String::from);
+            let po_number = obj
+                .get("po_number")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let has_po_number = obj.contains_key("po_number");
-            let department = obj.get("department").and_then(|v| v.as_str()).map(String::from);
+            let department = obj
+                .get("department")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let has_department = obj.contains_key("department");
-            let gl_code = obj.get("gl_code").and_then(|v| v.as_str()).map(String::from);
+            let gl_code = obj
+                .get("gl_code")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let has_gl_code = obj.contains_key("gl_code");
-            let cost_center = obj.get("cost_center").and_then(|v| v.as_str()).map(String::from);
+            let cost_center = obj
+                .get("cost_center")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let has_cost_center = obj.contains_key("cost_center");
             let notes = obj.get("notes").and_then(|v| v.as_str()).map(String::from);
             let has_notes = obj.contains_key("notes");
-            let total_amount_cents = obj.get("total_amount")
+            let total_amount_cents = obj
+                .get("total_amount")
                 .and_then(|v| v.as_object())
                 .and_then(|o| o.get("amount"))
                 .and_then(|a| a.as_i64());
-            let currency = obj.get("total_amount")
+            let currency = obj
+                .get("total_amount")
                 .and_then(|v| v.as_object())
                 .and_then(|o| o.get("currency"))
                 .and_then(|c| c.as_str())
@@ -329,7 +349,8 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
 
             if !set_parts.is_empty() {
                 let set_clause = set_parts.join(", ");
-                let sql = format!(
+                let sql =
+                    format!(
                     "UPDATE invoices SET {}, updated_at = NOW() WHERE id = ${} AND tenant_id = ${}",
                     set_clause, param_idx, param_idx + 1
                 );
@@ -345,7 +366,8 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                 }
                 query = query.bind(id.0).bind(*tenant_id.as_uuid());
 
-                query.execute(&*self.pool)
+                query
+                    .execute(&*self.pool)
                     .await
                     .map_err(|e| Error::Database(format!("Failed to update invoice: {}", e)))?;
             }
@@ -454,13 +476,19 @@ impl InvoiceRow {
             invoice_date: self.invoice_date,
             due_date: self.due_date,
             po_number: self.po_number,
-            subtotal: self.subtotal_cents.map(|cents| Money::new(cents, self.currency.clone())),
-            tax_amount: self.tax_amount_cents.map(|cents| Money::new(cents, self.currency.clone())),
+            subtotal: self
+                .subtotal_cents
+                .map(|cents| Money::new(cents, self.currency.clone())),
+            tax_amount: self
+                .tax_amount_cents
+                .map(|cents| Money::new(cents, self.currency.clone())),
             total_amount: Money::new(self.total_amount_cents, self.currency.clone()),
             currency: self.currency,
             line_items: self.line_items.0,
-            capture_status: CaptureStatus::from_str(&self.capture_status).unwrap_or(CaptureStatus::Pending),
-            processing_status: ProcessingStatus::from_str(&self.processing_status).unwrap_or(ProcessingStatus::Draft),
+            capture_status: CaptureStatus::from_str(&self.capture_status)
+                .unwrap_or(CaptureStatus::Pending),
+            processing_status: ProcessingStatus::from_str(&self.processing_status)
+                .unwrap_or(ProcessingStatus::Draft),
             current_queue_id: self.current_queue_id,
             assigned_to: self.assigned_to.map(UserId),
             document_id: self.document_id,

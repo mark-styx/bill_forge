@@ -134,19 +134,17 @@ fn test_approval_metrics_serialization() {
 
 #[test]
 fn test_vendor_metrics_structure() {
-    use billforge_api::routes::dashboard::{VendorMetrics, TopVendor};
+    use billforge_api::routes::dashboard::{TopVendor, VendorMetrics};
 
     let metrics = VendorMetrics {
         total_vendors: 50,
         new_this_month: 5,
-        top_vendors: vec![
-            TopVendor {
-                vendor_id: "vendor-1".to_string(),
-                vendor_name: "Acme Corp".to_string(),
-                invoice_count: 25,
-                total_amount: 150000,
-            },
-        ],
+        top_vendors: vec![TopVendor {
+            vendor_id: "vendor-1".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            invoice_count: 25,
+            total_amount: 150000,
+        }],
         concentration_percentage: 75.0,
     };
 
@@ -163,18 +161,16 @@ fn test_vendor_metrics_structure() {
 
 #[test]
 fn test_team_metrics_structure() {
-    use billforge_api::routes::dashboard::{TeamMetrics, TeamMemberStats};
+    use billforge_api::routes::dashboard::{TeamMemberStats, TeamMetrics};
 
     let metrics = TeamMetrics {
-        members: vec![
-            TeamMemberStats {
-                user_id: "user-1".to_string(),
-                user_name: "Alice Johnson".to_string(),
-                approvals_this_month: 45,
-                rejections_this_month: 3,
-                avg_response_time_hours: 2.5,
-            },
-        ],
+        members: vec![TeamMemberStats {
+            user_id: "user-1".to_string(),
+            user_name: "Alice Johnson".to_string(),
+            approvals_this_month: 45,
+            rejections_this_month: 3,
+            avg_response_time_hours: 2.5,
+        }],
         avg_approvals_per_member: 10.5,
         total_pending_actions: 15,
     };
@@ -192,7 +188,7 @@ fn test_team_metrics_structure() {
 #[test]
 fn test_dashboard_metrics_aggregation() {
     use billforge_api::routes::dashboard::{
-        DashboardMetrics, InvoiceMetrics, ApprovalMetrics, VendorMetrics, TeamMetrics,
+        ApprovalMetrics, DashboardMetrics, InvoiceMetrics, TeamMetrics, VendorMetrics,
     };
 
     let dashboard = DashboardMetrics {

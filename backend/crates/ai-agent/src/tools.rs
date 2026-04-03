@@ -39,7 +39,9 @@ impl Tool for InvoiceStatusTool {
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
+        let invoice_id: Uuid = args
+            .trim()
+            .parse()
             .context("Invalid invoice ID format. Please provide a valid UUID.")?;
 
         let row = sqlx::query(
@@ -86,7 +88,10 @@ impl Tool for InvoiceStatusTool {
                     approved_at.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "Not approved".to_string()),
                 ))
             }
-            None => Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => Ok(format!(
+                "Invoice {} not found in your organization.",
+                invoice_id
+            )),
         }
     }
 }
@@ -137,7 +142,10 @@ impl Tool for VendorInvoicesTool {
         .await?;
 
         if rows.is_empty() {
-            return Ok(format!("No invoices found for vendor matching '{}'.", vendor_name));
+            return Ok(format!(
+                "No invoices found for vendor matching '{}'.",
+                vendor_name
+            ));
         }
 
         let mut result = format!("Invoices from vendor matching '{}':\n\n", vendor_name);
@@ -184,7 +192,9 @@ impl Tool for ApprovalRequirementsTool {
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
+        let invoice_id: Uuid = args
+            .trim()
+            .parse()
             .context("Invalid invoice ID format. Please provide a valid UUID.")?;
 
         // Get invoice amount
@@ -259,7 +269,9 @@ impl Tool for ApprovalRequirementsTool {
                 approver_role,
                 approver_email.unwrap_or_else(|| "Not assigned".to_string()),
                 if status == "approved" {
-                    approved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string())
+                    approved_at
+                        .map(|t| t.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "N/A".to_string())
                 } else {
                     "Pending".to_string()
                 },
@@ -293,7 +305,9 @@ impl Tool for InvoiceSummaryTool {
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
+        let invoice_id: Uuid = args
+            .trim()
+            .parse()
             .context("Invalid invoice ID format. Please provide a valid UUID.")?;
 
         let invoice = sqlx::query(
@@ -345,7 +359,9 @@ impl Tool for InvoiceSummaryTool {
                     status,
                     description.unwrap_or_else(|| "No description".to_string()),
                     created_at.format("%Y-%m-%d"),
-                    approved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "Not approved".to_string()),
+                    approved_at
+                        .map(|t| t.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "Not approved".to_string()),
                 ))
             }
             None => Ok(format!("Invoice {} not found.", invoice_id)),
@@ -366,10 +382,22 @@ impl ToolRegistry {
 
     pub fn get_tool_descriptions(&self) -> String {
         let descriptions = vec![
-            ("get_invoice_status", "Get status of an invoice by ID. Args: invoice_id (UUID)"),
-            ("get_vendor_invoices", "Find all invoices from a vendor. Args: vendor_name"),
-            ("get_approval_requirements", "Check who needs to approve an invoice. Args: invoice_id (UUID)"),
-            ("summarize_invoice", "Generate a summary of an invoice. Args: invoice_id (UUID)"),
+            (
+                "get_invoice_status",
+                "Get status of an invoice by ID. Args: invoice_id (UUID)",
+            ),
+            (
+                "get_vendor_invoices",
+                "Find all invoices from a vendor. Args: vendor_name",
+            ),
+            (
+                "get_approval_requirements",
+                "Check who needs to approve an invoice. Args: invoice_id (UUID)",
+            ),
+            (
+                "summarize_invoice",
+                "Generate a summary of an invoice. Args: invoice_id (UUID)",
+            ),
         ];
 
         descriptions
@@ -387,16 +415,24 @@ impl ToolRegistry {
     ) -> Result<String> {
         match tool_name {
             "get_invoice_status" => {
-                InvoiceStatusTool::new(self.pool.clone()).execute(context, args).await
+                InvoiceStatusTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "get_vendor_invoices" => {
-                VendorInvoicesTool::new(self.pool.clone()).execute(context, args).await
+                VendorInvoicesTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "get_approval_requirements" => {
-                ApprovalRequirementsTool::new(self.pool.clone()).execute(context, args).await
+                ApprovalRequirementsTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "summarize_invoice" => {
-                InvoiceSummaryTool::new(self.pool.clone()).execute(context, args).await
+                InvoiceSummaryTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

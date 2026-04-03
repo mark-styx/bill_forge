@@ -81,10 +81,7 @@ pub async fn rate_limit_auth(
         .unwrap_or_else(|| "unknown".to_string());
 
     // Use extension-based rate limiter state
-    let state = request
-        .extensions()
-        .get::<RateLimiterState>()
-        .cloned();
+    let state = request.extensions().get::<RateLimiterState>().cloned();
 
     if let Some(state) = state {
         let mut buckets = state.buckets.lock().await;

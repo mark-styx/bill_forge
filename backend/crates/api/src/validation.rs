@@ -55,7 +55,13 @@ impl Validator {
         self
     }
 
-    pub fn required_string(&mut self, field: &str, value: &str, min_len: usize, max_len: usize) -> &mut Self {
+    pub fn required_string(
+        &mut self,
+        field: &str,
+        value: &str,
+        min_len: usize,
+        max_len: usize,
+    ) -> &mut Self {
         if value.is_empty() {
             self.add_error(field, "Field is required");
         } else if value.len() < min_len {
@@ -66,7 +72,12 @@ impl Validator {
         self
     }
 
-    pub fn optional_string(&mut self, field: &str, value: Option<&str>, max_len: usize) -> &mut Self {
+    pub fn optional_string(
+        &mut self,
+        field: &str,
+        value: Option<&str>,
+        max_len: usize,
+    ) -> &mut Self {
         if let Some(v) = value {
             if v.len() > max_len {
                 self.add_error(field, "Value is too long");
@@ -142,7 +153,10 @@ impl Default for Validator {
 }
 
 pub fn sanitize_string(input: &str) -> String {
-    input.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect()
+    input
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect()
 }
 
 pub fn sanitize_and_trim(input: &str) -> String {

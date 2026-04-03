@@ -31,10 +31,7 @@ async fn load_test_health_endpoint() {
             let client = client.clone();
             let handle = tokio::spawn(async move {
                 let req_start = Instant::now();
-                let result = client
-                    .get(format!("{}/health", BASE_URL))
-                    .send()
-                    .await;
+                let result = client.get(format!("{}/health", BASE_URL)).send().await;
                 let latency = req_start.elapsed();
 
                 match result {
@@ -70,8 +67,16 @@ async fn load_test_health_endpoint() {
 
     println!("\n📊 Load Test Results:");
     println!("  Total Time: {:.2?}", total_time);
-    println!("  Requests/sec: {:.2}", TOTAL_REQUESTS as f64 / total_time.as_secs_f64());
-    println!("  Errors: {}/{} ({:.1}%)", errors, TOTAL_REQUESTS, (errors as f64 / TOTAL_REQUESTS as f64) * 100.0);
+    println!(
+        "  Requests/sec: {:.2}",
+        TOTAL_REQUESTS as f64 / total_time.as_secs_f64()
+    );
+    println!(
+        "  Errors: {}/{} ({:.1}%)",
+        errors,
+        TOTAL_REQUESTS,
+        (errors as f64 / TOTAL_REQUESTS as f64) * 100.0
+    );
     println!("\n⏱️  Latency Statistics:");
     println!("  Min:    {:?}", min);
     println!("  Avg:    {:?}", avg_latency);
@@ -82,8 +87,16 @@ async fn load_test_health_endpoint() {
 
     // Verify SLA
     let success_rate = 1.0 - (errors as f64 / TOTAL_REQUESTS as f64);
-    assert!(success_rate > 0.95, "Success rate {:.1}% < 95%", success_rate * 100.0);
-    assert!(p95 < Duration::from_millis(200), "P95 latency {:?} > 200ms", p95);
+    assert!(
+        success_rate > 0.95,
+        "Success rate {:.1}% < 95%",
+        success_rate * 100.0
+    );
+    assert!(
+        p95 < Duration::from_millis(200),
+        "P95 latency {:?} > 200ms",
+        p95
+    );
 }
 
 #[tokio::test]
@@ -104,7 +117,11 @@ async fn load_test_liveness_endpoint() {
             .await
             .expect("Request failed");
 
-        assert!(resp.status().is_success(), "Unexpected status: {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "Unexpected status: {}",
+            resp.status()
+        );
         latencies.push(req_start.elapsed());
     }
 
@@ -112,12 +129,23 @@ async fn load_test_liveness_endpoint() {
     latencies.sort();
 
     println!("\n📊 Results:");
-    println!("  Total: {:.2?} ({:.0} req/s)", total_time, TOTAL_REQUESTS as f64 / total_time.as_secs_f64());
-    println!("  P95: {:?}", latencies[(latencies.len() as f64 * 0.95) as usize]);
+    println!(
+        "  Total: {:.2?} ({:.0} req/s)",
+        total_time,
+        TOTAL_REQUESTS as f64 / total_time.as_secs_f64()
+    );
+    println!(
+        "  P95: {:?}",
+        latencies[(latencies.len() as f64 * 0.95) as usize]
+    );
 
     // Verify P95 < 10ms
     let p95 = latencies[(latencies.len() as f64 * 0.95) as usize];
-    assert!(p95 < Duration::from_millis(10), "P95 latency {:?} > 10ms", p95);
+    assert!(
+        p95 < Duration::from_millis(10),
+        "P95 latency {:?} > 10ms",
+        p95
+    );
 }
 
 #[tokio::test]
@@ -167,7 +195,11 @@ async fn load_test_dashboard_metrics() {
         latencies.sort();
         let p95 = latencies[(latencies.len() as f64 * 0.95) as usize];
         println!("  P95: {:?}", p95);
-        assert!(p95 < Duration::from_millis(100), "P95 latency {:?} > 100ms", p95);
+        assert!(
+            p95 < Duration::from_millis(100),
+            "P95 latency {:?} > 100ms",
+            p95
+        );
     }
 }
 
@@ -211,5 +243,8 @@ async fn load_test_concurrent_requests() {
     println!("  Avg per request: {:.2?}", total_time / completed);
 
     assert_eq!(completed, 50, "Not all requests completed");
-    assert!(total_time < Duration::from_secs(5), "50 concurrent requests took >5s");
+    assert!(
+        total_time < Duration::from_secs(5),
+        "50 concurrent requests took >5s"
+    );
 }

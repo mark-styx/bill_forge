@@ -70,16 +70,11 @@ impl BillComClient {
             anyhow::bail!("Bill.com API request failed (HTTP {}): {}", status, body);
         }
 
-        serde_json::from_str(&body)
-            .context("Failed to parse Bill.com API response")
+        serde_json::from_str(&body).context("Failed to parse Bill.com API response")
     }
 
     /// Make a POST request to Bill.com API
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        resource: &str,
-        body: &B,
-    ) -> Result<T> {
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
         let url = self.build_url(resource);
 
         let response = self
@@ -100,11 +95,14 @@ impl BillComClient {
             .context("Failed to read Bill.com API response")?;
 
         if !status.is_success() {
-            anyhow::bail!("Bill.com API request failed (HTTP {}): {}", status, body_text);
+            anyhow::bail!(
+                "Bill.com API request failed (HTTP {}): {}",
+                status,
+                body_text
+            );
         }
 
-        serde_json::from_str(&body_text)
-            .context("Failed to parse Bill.com API response")
+        serde_json::from_str(&body_text).context("Failed to parse Bill.com API response")
     }
 
     // ──────────────────────────── Vendor Operations ────────────────────────────
@@ -115,10 +113,7 @@ impl BillComClient {
         page: i32,
         page_size: i32,
     ) -> Result<BillComListResponse<BillComVendor>> {
-        let resource = format!(
-            "vendors?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("vendors?page={}&pageSize={}", page, page_size);
 
         self.get(&resource).await
     }
@@ -146,10 +141,7 @@ impl BillComClient {
         page: i32,
         page_size: i32,
     ) -> Result<BillComListResponse<BillComBill>> {
-        let resource = format!(
-            "bills?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("bills?page={}&pageSize={}", page, page_size);
 
         self.get(&resource).await
     }
@@ -182,7 +174,9 @@ impl BillComClient {
     // ──────────────────────────── Funding Account Operations ────────────────────────────
 
     /// List funding accounts (bank accounts for payment disbursement)
-    pub async fn list_funding_accounts(&self) -> Result<BillComListResponse<BillComFundingAccount>> {
+    pub async fn list_funding_accounts(
+        &self,
+    ) -> Result<BillComListResponse<BillComFundingAccount>> {
         self.get("funding-accounts/banks").await
     }
 }

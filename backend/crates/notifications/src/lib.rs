@@ -3,19 +3,19 @@
 //! Provides multi-channel notifications (Slack, Microsoft Teams, Email)
 //! with actionable buttons and user preference management.
 
+mod notification_router;
 mod slack;
 mod teams;
-mod notification_router;
 
+pub use notification_router::{NotificationPreference, NotificationRouter};
 pub use slack::{SlackClient, SlackConfig, SlackError};
 pub use teams::{TeamsClient, TeamsConfig, TeamsError};
-pub use notification_router::{NotificationRouter, NotificationPreference};
 
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use chrono::{DateTime, Utc};
 use async_trait::async_trait;
 use billforge_core::UserId;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// A notification to be sent to a user
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,7 +162,10 @@ pub struct NotificationResult {
 #[async_trait]
 pub trait NotificationProvider: Send + Sync {
     /// Send a notification
-    async fn send(&self, notification: &Notification) -> Result<NotificationResult, NotificationError>;
+    async fn send(
+        &self,
+        notification: &Notification,
+    ) -> Result<NotificationResult, NotificationError>;
 
     /// Get the provider name
     fn provider_name(&self) -> &'static str;
@@ -212,8 +215,14 @@ mod tests {
             "Invoice Approval Required".to_string(),
             "Invoice #12345 from Acme Corp requires your approval".to_string(),
         )
-        .with_action(NotificationAction::new("Approve".to_string(), ActionType::Approve))
-        .with_action(NotificationAction::new("Reject".to_string(), ActionType::Reject))
+        .with_action(NotificationAction::new(
+            "Approve".to_string(),
+            ActionType::Approve,
+        ))
+        .with_action(NotificationAction::new(
+            "Reject".to_string(),
+            ActionType::Reject,
+        ))
         .with_priority(NotificationPriority::High);
 
         assert_eq!(notification.user_id, user_id);

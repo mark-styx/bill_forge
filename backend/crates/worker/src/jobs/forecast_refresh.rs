@@ -17,18 +17,20 @@ pub async fn refresh_forecasts(pg_manager: Arc<PgManager>) -> Result<()> {
 
     // Get all active tenants
     let metadata_pool = pg_manager.metadata();
-    let tenants: Vec<(String,)> = sqlx::query_as(
-        "SELECT id::text FROM tenants WHERE active = true",
-    )
-    .fetch_all(metadata_pool)
-    .await
-    .context("Failed to fetch active tenants")?;
+    let tenants: Vec<(String,)> =
+        sqlx::query_as("SELECT id::text FROM tenants WHERE active = true")
+            .fetch_all(metadata_pool)
+            .await
+            .context("Failed to fetch active tenants")?;
 
     info!("Processing {} active tenants", tenants.len());
 
     for (tenant_id_str,) in tenants {
         if let Err(e) = process_tenant_forecasts(pg_manager.clone(), &tenant_id_str).await {
-            warn!("Failed to process forecasts for tenant {}: {}", tenant_id_str, e);
+            warn!(
+                "Failed to process forecasts for tenant {}: {}",
+                tenant_id_str, e
+            );
         }
     }
 
@@ -37,17 +39,14 @@ pub async fn refresh_forecasts(pg_manager: Arc<PgManager>) -> Result<()> {
 }
 
 /// Process forecasts for a single tenant
-async fn process_tenant_forecasts(
-    pg_manager: Arc<PgManager>,
-    tenant_id_str: &str,
-) -> Result<()> {
+async fn process_tenant_forecasts(pg_manager: Arc<PgManager>, tenant_id_str: &str) -> Result<()> {
     info!("Processing forecasts for tenant {}", tenant_id_str);
 
-    let tenant_id: TenantId = tenant_id_str.parse()
-        .context("Invalid tenant ID format")?;
+    let tenant_id: TenantId = tenant_id_str.parse().context("Invalid tenant ID format")?;
     let pool = pg_manager.tenant(&tenant_id).await?;
 
-    let uuid_tenant_id: Uuid = tenant_id_str.parse()
+    let uuid_tenant_id: Uuid = tenant_id_str
+        .parse()
         .context("Invalid tenant UUID format")?;
     let service = PredictiveService::new((*pool).clone());
 

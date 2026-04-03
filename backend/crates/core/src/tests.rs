@@ -36,7 +36,10 @@ mod tenant_id_tests {
     fn test_tenant_id_display() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let tenant_id = TenantId::from_uuid(uuid);
-        assert_eq!(format!("{}", tenant_id), "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            format!("{}", tenant_id),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[test]
@@ -101,7 +104,10 @@ mod user_id_tests {
     fn test_user_id_display() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
         let user_id = UserId::from_uuid(uuid);
-        assert_eq!(format!("{}", user_id), "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(
+            format!("{}", user_id),
+            "550e8400-e29b-41d4-a716-446655440001"
+        );
     }
 
     #[test]
@@ -132,7 +138,10 @@ mod module_tests {
     #[test]
     fn test_module_display_name() {
         assert_eq!(Module::InvoiceCapture.display_name(), "Invoice Capture");
-        assert_eq!(Module::InvoiceProcessing.display_name(), "Invoice Processing");
+        assert_eq!(
+            Module::InvoiceProcessing.display_name(),
+            "Invoice Processing"
+        );
         assert_eq!(Module::VendorManagement.display_name(), "Vendor Management");
         assert_eq!(Module::Reporting.display_name(), "Reporting & Analytics");
     }
@@ -148,7 +157,12 @@ mod module_tests {
 
     #[test]
     fn test_all_modules_deserialize() {
-        let modules = ["invoice_capture", "invoice_processing", "vendor_management", "reporting"];
+        let modules = [
+            "invoice_capture",
+            "invoice_processing",
+            "vendor_management",
+            "reporting",
+        ];
         for m in modules {
             let json = format!("\"{}\"", m);
             let _: Module = serde_json::from_str(&json).unwrap();
@@ -303,31 +317,46 @@ mod pagination_tests {
 
     #[test]
     fn test_pagination_offset_page_1() {
-        let pagination = Pagination { page: 1, per_page: 25 };
+        let pagination = Pagination {
+            page: 1,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 0);
     }
 
     #[test]
     fn test_pagination_offset_page_2() {
-        let pagination = Pagination { page: 2, per_page: 25 };
+        let pagination = Pagination {
+            page: 2,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 25);
     }
 
     #[test]
     fn test_pagination_offset_page_5() {
-        let pagination = Pagination { page: 5, per_page: 10 };
+        let pagination = Pagination {
+            page: 5,
+            per_page: 10,
+        };
         assert_eq!(pagination.offset(), 40);
     }
 
     #[test]
     fn test_pagination_offset_page_0_treated_as_page_1() {
-        let pagination = Pagination { page: 0, per_page: 25 };
+        let pagination = Pagination {
+            page: 0,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 0); // saturating_sub prevents underflow
     }
 
     #[test]
     fn test_pagination_serde() {
-        let pagination = Pagination { page: 3, per_page: 50 };
+        let pagination = Pagination {
+            page: 3,
+            per_page: 50,
+        };
         let json = serde_json::to_string(&pagination).unwrap();
         let deserialized: Pagination = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.page, 3);
@@ -531,14 +560,37 @@ mod error_tests {
         assert_eq!(Error::TokenExpired.status_code(), 401);
         assert_eq!(Error::Forbidden("test".to_string()).status_code(), 403);
         assert_eq!(Error::CrossTenantAccess.status_code(), 403);
-        assert_eq!(Error::NotFound { resource_type: "Test".to_string(), id: "1".to_string() }.status_code(), 404);
+        assert_eq!(
+            Error::NotFound {
+                resource_type: "Test".to_string(),
+                id: "1".to_string()
+            }
+            .status_code(),
+            404
+        );
         assert_eq!(Error::TenantNotFound("test".to_string()).status_code(), 404);
         assert_eq!(Error::FileNotFound("test".to_string()).status_code(), 404);
-        assert_eq!(Error::AlreadyExists { resource_type: "Test".to_string() }.status_code(), 409);
+        assert_eq!(
+            Error::AlreadyExists {
+                resource_type: "Test".to_string()
+            }
+            .status_code(),
+            409
+        );
         assert_eq!(Error::Conflict("test".to_string()).status_code(), 409);
         assert_eq!(Error::Validation("test".to_string()).status_code(), 400);
-        assert_eq!(Error::InvalidInput { field: "email".to_string(), message: "invalid".to_string() }.status_code(), 400);
-        assert_eq!(Error::ModuleNotAvailable("test".to_string()).status_code(), 402);
+        assert_eq!(
+            Error::InvalidInput {
+                field: "email".to_string(),
+                message: "invalid".to_string()
+            }
+            .status_code(),
+            400
+        );
+        assert_eq!(
+            Error::ModuleNotAvailable("test".to_string()).status_code(),
+            402
+        );
         assert_eq!(Error::RateLimited { retry_after: 60 }.status_code(), 429);
         assert_eq!(Error::Internal("test".to_string()).status_code(), 500);
     }
@@ -546,11 +598,30 @@ mod error_tests {
     #[test]
     fn test_error_codes() {
         assert_eq!(Error::Unauthenticated.error_code(), "UNAUTHENTICATED");
-        assert_eq!(Error::Forbidden("test".to_string()).error_code(), "FORBIDDEN");
-        assert_eq!(Error::InvalidCredentials.error_code(), "INVALID_CREDENTIALS");
-        assert_eq!(Error::NotFound { resource_type: "T".to_string(), id: "1".to_string() }.error_code(), "NOT_FOUND");
-        assert_eq!(Error::Validation("test".to_string()).error_code(), "VALIDATION_ERROR");
-        assert_eq!(Error::RateLimited { retry_after: 60 }.error_code(), "RATE_LIMITED");
+        assert_eq!(
+            Error::Forbidden("test".to_string()).error_code(),
+            "FORBIDDEN"
+        );
+        assert_eq!(
+            Error::InvalidCredentials.error_code(),
+            "INVALID_CREDENTIALS"
+        );
+        assert_eq!(
+            Error::NotFound {
+                resource_type: "T".to_string(),
+                id: "1".to_string()
+            }
+            .error_code(),
+            "NOT_FOUND"
+        );
+        assert_eq!(
+            Error::Validation("test".to_string()).error_code(),
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(
+            Error::RateLimited { retry_after: 60 }.error_code(),
+            "RATE_LIMITED"
+        );
     }
 
     #[test]

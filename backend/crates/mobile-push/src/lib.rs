@@ -3,13 +3,13 @@
 //! Provides push notification support via Firebase Cloud Messaging (FCM) for Android
 //! and Apple Push Notification Service (APNS) for iOS.
 
-mod fcm;
 mod apns;
 mod device_token;
+mod fcm;
 
+pub use apns::{ApnsClient, ApnsConfig, ApnsEnvironment, ApnsError};
+pub use device_token::{validate_token, DevicePlatform, DeviceToken, TokenValidationError};
 pub use fcm::{FcmClient, FcmConfig, FcmError};
-pub use apns::{ApnsClient, ApnsConfig, ApnsError, ApnsEnvironment};
-pub use device_token::{DeviceToken, DevicePlatform, TokenValidationError, validate_token};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

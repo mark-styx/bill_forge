@@ -63,12 +63,12 @@ async fn upload_document(
         .file_name()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "document".to_string());
-    
+
     let content_type = field
         .content_type()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
-    
+
     let data = field
         .bytes()
         .await
@@ -79,20 +79,24 @@ async fn upload_document(
     if data.len() > MAX_SIZE {
         return Err(billforge_core::Error::Validation(
             "File too large. Maximum size is 50MB".to_string(),
-        ).into());
+        )
+        .into());
     }
 
     // Validate mime type
-    let allowed_types = ["application/pdf",
+    let allowed_types = [
+        "application/pdf",
         "image/png",
         "image/jpeg",
         "image/tiff",
-        "image/gif"];
+        "image/gif",
+    ];
     if !allowed_types.contains(&content_type.as_str()) {
         return Err(billforge_core::Error::Validation(format!(
             "File type not allowed. Allowed types: {}",
             allowed_types.join(", ")
-        )).into());
+        ))
+        .into());
     }
 
     // Upload to storage
@@ -166,12 +170,12 @@ async fn upload_invoice_document(
         .file_name()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "document".to_string());
-    
+
     let content_type = field
         .content_type()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
-    
+
     let data = field
         .bytes()
         .await
@@ -308,10 +312,7 @@ async fn delete_document(
         .map_err(|_| billforge_core::Error::Validation("Invalid document ID".to_string()))?;
 
     // Delete from storage
-    state
-        .storage
-        .delete(&tenant.tenant_id, document_id)
-        .await?;
+    state.storage.delete(&tenant.tenant_id, document_id).await?;
 
     // Delete from database
     let pool = state.db.tenant(&tenant.tenant_id).await?;

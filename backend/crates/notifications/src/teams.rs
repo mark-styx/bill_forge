@@ -4,8 +4,8 @@
 //! for rich formatting and actionable buttons.
 
 use crate::{
-    Notification, NotificationAction, NotificationChannel, NotificationError,
-    NotificationProvider, NotificationResult, ActionType,
+    ActionType, Notification, NotificationAction, NotificationChannel, NotificationError,
+    NotificationProvider, NotificationResult,
 };
 use async_trait::async_trait;
 use billforge_core::UserId;
@@ -218,7 +218,10 @@ impl TeamsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             warn!("Teams webhook failed with status {}: {}", status, body);
             return Err(TeamsError::Webhook(format!("Status {}: {}", status, body)));
         }
@@ -252,8 +255,14 @@ impl TeamsClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            warn!("Teams adaptive card failed with status {}: {}", status, body);
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            warn!(
+                "Teams adaptive card failed with status {}: {}",
+                status, body
+            );
             return Err(TeamsError::Webhook(format!("Status {}: {}", status, body)));
         }
 
@@ -323,7 +332,8 @@ impl TeamsClient {
                                 "notification_id": notification.id,
                                 "action_type": action.action_type,
                                 "payload": action.payload,
-                            })).ok(),
+                            }))
+                            .ok(),
                             headers: Some(vec![TeamsHeader {
                                 name: "Content-Type".to_string(),
                                 value: "application/json".to_string(),
@@ -380,26 +390,27 @@ impl TeamsClient {
         let actions: Vec<AdaptiveCardAction> = notification
             .actions
             .iter()
-            .filter_map(|action| {
-                match action.action_type {
-                    ActionType::View => {
-                        action.url.as_ref().map(|url| AdaptiveCardAction::ActionOpenUrl {
+            .filter_map(|action| match action.action_type {
+                ActionType::View => {
+                    action
+                        .url
+                        .as_ref()
+                        .map(|url| AdaptiveCardAction::ActionOpenUrl {
                             title: action.label.clone(),
                             url: url.clone(),
                         })
-                    }
-                    ActionType::Approve | ActionType::Reject => {
-                        Some(AdaptiveCardAction::ActionSubmit {
-                            title: action.label.clone(),
-                            data: serde_json::json!({
-                                "notification_id": notification.id,
-                                "action_type": action.action_type,
-                                "payload": action.payload,
-                            }),
-                        })
-                    }
-                    _ => None,
                 }
+                ActionType::Approve | ActionType::Reject => {
+                    Some(AdaptiveCardAction::ActionSubmit {
+                        title: action.label.clone(),
+                        data: serde_json::json!({
+                            "notification_id": notification.id,
+                            "action_type": action.action_type,
+                            "payload": action.payload,
+                        }),
+                    })
+                }
+                _ => None,
             })
             .collect();
 
@@ -422,13 +433,18 @@ impl TeamsClient {
 
 #[async_trait]
 impl NotificationProvider for TeamsClient {
-    async fn send(&self, notification: &Notification) -> Result<NotificationResult, NotificationError> {
+    async fn send(
+        &self,
+        notification: &Notification,
+    ) -> Result<NotificationResult, NotificationError> {
         // Placeholder - actual implementation would:
         // 1. Fetch user's Teams webhook URL from database
         // 2. Send using send_adaptive_card()
         // 3. Return result
 
-        Err(NotificationError::NotConfigured(notification.user_id.clone()))
+        Err(NotificationError::NotConfigured(
+            notification.user_id.clone(),
+        ))
     }
 
     fn provider_name(&self) -> &'static str {
@@ -459,8 +475,10 @@ mod tests {
             "Invoice Approval".to_string(),
             "Invoice #123 requires approval".to_string(),
         )
-        .with_action(NotificationAction::new("View".to_string(), ActionType::View)
-            .with_url("https://example.com/invoice/123".to_string()));
+        .with_action(
+            NotificationAction::new("View".to_string(), ActionType::View)
+                .with_url("https://example.com/invoice/123".to_string()),
+        );
 
         let payload = client.build_webhook_payload(&notification);
 
@@ -482,7 +500,10 @@ mod tests {
             "Test".to_string(),
             "Test message".to_string(),
         )
-        .with_action(NotificationAction::new("Approve".to_string(), ActionType::Approve));
+        .with_action(NotificationAction::new(
+            "Approve".to_string(),
+            ActionType::Approve,
+        ));
 
         let card = client.build_adaptive_card(&notification);
 
@@ -491,12 +512,10 @@ mod tests {
 
     #[test]
     fn test_validate_webhook_url() {
-        assert!(TeamsClient::validate_webhook_url(
-            "https://outlook.office.com/webhook/abc123"
-        ).is_ok());
+        assert!(
+            TeamsClient::validate_webhook_url("https://outlook.office.com/webhook/abc123").is_ok()
+        );
 
-        assert!(TeamsClient::validate_webhook_url(
-            "https://example.com/webhook"
-        ).is_err());
+        assert!(TeamsClient::validate_webhook_url("https://example.com/webhook").is_err());
     }
 }

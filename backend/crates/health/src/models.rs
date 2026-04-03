@@ -19,9 +19,9 @@ pub struct HealthScore {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthClassification {
-    AtRisk,        // score < 50
+    AtRisk,         // score < 50
     NeedsAttention, // 50-70
-    Healthy,       // 70+
+    Healthy,        // 70+
 }
 
 impl HealthClassification {

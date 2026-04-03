@@ -11,7 +11,10 @@ mod workflow_repo;
 
 pub use audit_repo::AuditRepositoryImpl;
 pub use invoice_repo::InvoiceRepositoryImpl;
-pub use metrics_repo::{MetricsRepositoryImpl, InvoiceMetrics, ApprovalMetrics, VendorMetrics, TopVendor, TeamMetrics, TeamMemberStats};
+pub use metrics_repo::{
+    ApprovalMetrics, InvoiceMetrics, MetricsRepositoryImpl, TeamMemberStats, TeamMetrics,
+    TopVendor, VendorMetrics,
+};
 pub use status_config_repo::InvoiceStatusConfigRepositoryImpl;
 pub use tax_document_repo::TaxDocumentRepositoryImpl;
 pub use user_repo::UserRepositoryImpl;

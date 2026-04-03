@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/", post(submit_feedback).get(list_feedback))
+    Router::new().route("/", post(submit_feedback).get(list_feedback))
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,8 +60,8 @@ async fn submit_feedback(
     let path = feedback_file_path();
 
     // Append as JSON line
-    let line = serde_json::to_string(&entry)
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let line =
+        serde_json::to_string(&entry).map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -79,7 +78,11 @@ async fn submit_feedback(
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    tracing::info!("Feedback saved from {}: {}", entry.user_email, entry.message);
+    tracing::info!(
+        "Feedback saved from {}: {}",
+        entry.user_email,
+        entry.message
+    );
 
     Ok(Json(entry))
 }

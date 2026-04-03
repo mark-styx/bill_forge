@@ -2,11 +2,7 @@
 //!
 //! Provides tools for comparing OCR providers, A/B testing, and fallback logic.
 
-use billforge_core::{
-    domain::OcrExtractionResult,
-    traits::OcrService,
-    Error, Result,
-};
+use billforge_core::{domain::OcrExtractionResult, traits::OcrService, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -118,16 +114,23 @@ impl OcrComparison {
     }
 
     /// Compare all providers on a single document
-    pub async fn compare(&self, document_bytes: &[u8], mime_type: &str) -> Result<OcrComparisonResult> {
+    pub async fn compare(
+        &self,
+        document_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<OcrComparisonResult> {
         if self.providers.is_empty() {
-            return Err(Error::Ocr("No OCR providers configured for comparison".to_string()));
+            return Err(Error::Ocr(
+                "No OCR providers configured for comparison".to_string(),
+            ));
         }
 
         let start = Instant::now();
         let mut provider_results = HashMap::new();
 
         // Run OCR on all providers concurrently
-        let futures: Vec<_> = self.providers
+        let futures: Vec<_> = self
+            .providers
             .iter()
             .map(|(provider_type, provider)| {
                 let provider_name = provider_type.as_str().to_string();
@@ -140,12 +143,7 @@ impl OcrComparison {
                     let result = provider.extract(&bytes, &mime).await;
                     let processing_time_ms = start.elapsed().as_millis() as u64;
 
-                    (
-                        provider_name,
-                        provider_clone,
-                        result,
-                        processing_time_ms,
-                    )
+                    (provider_name, provider_clone, result, processing_time_ms)
                 }
             })
             .collect();
@@ -165,7 +163,8 @@ impl OcrComparison {
                         processing_time_ms,
                         confidence,
                         &extraction_result,
-                    ).await;
+                    )
+                    .await;
 
                     ProviderResult {
                         provider: provider_name,
@@ -181,7 +180,8 @@ impl OcrComparison {
                     self.update_metrics_failure(
                         OcrProvider::from_str(&provider_name).unwrap_or(OcrProvider::Tesseract),
                         processing_time_ms,
-                    ).await;
+                    )
+                    .await;
 
                     ProviderResult {
                         provider: provider_name,
@@ -303,7 +303,10 @@ impl OcrComparison {
     }
 
     /// Calculate comparison metrics across providers
-    fn calculate_comparison_metrics(&self, results: &HashMap<String, ProviderResult>) -> ComparisonMetrics {
+    fn calculate_comparison_metrics(
+        &self,
+        results: &HashMap<String, ProviderResult>,
+    ) -> ComparisonMetrics {
         let successful_results: Vec<_> = results
             .values()
             .filter(|r| r.success && r.result.is_some())
@@ -412,14 +415,17 @@ impl OcrComparison {
     ) {
         let mut store = self.metrics_store.write().await;
 
-        let metrics = store.metrics.entry(provider).or_insert_with(|| AggregateMetrics {
-            total_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            total_processing_time_ms: 0,
-            avg_confidence: 0.0,
-            fields_extracted_count: HashMap::new(),
-        });
+        let metrics = store
+            .metrics
+            .entry(provider)
+            .or_insert_with(|| AggregateMetrics {
+                total_requests: 0,
+                successful_requests: 0,
+                failed_requests: 0,
+                total_processing_time_ms: 0,
+                avg_confidence: 0.0,
+                fields_extracted_count: HashMap::new(),
+            });
 
         metrics.total_requests += 1;
         if success {
@@ -433,13 +439,22 @@ impl OcrComparison {
 
         // Track field extraction counts
         if result.invoice_number.value.is_some() {
-            *metrics.fields_extracted_count.entry("invoice_number".to_string()).or_insert(0) += 1;
+            *metrics
+                .fields_extracted_count
+                .entry("invoice_number".to_string())
+                .or_insert(0) += 1;
         }
         if result.total_amount.value.is_some() {
-            *metrics.fields_extracted_count.entry("total_amount".to_string()).or_insert(0) += 1;
+            *metrics
+                .fields_extracted_count
+                .entry("total_amount".to_string())
+                .or_insert(0) += 1;
         }
         if result.vendor_name.value.is_some() {
-            *metrics.fields_extracted_count.entry("vendor_name".to_string()).or_insert(0) += 1;
+            *metrics
+                .fields_extracted_count
+                .entry("vendor_name".to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -447,14 +462,17 @@ impl OcrComparison {
     async fn update_metrics_failure(&self, provider: OcrProvider, processing_time_ms: u64) {
         let mut store = self.metrics_store.write().await;
 
-        let metrics = store.metrics.entry(provider).or_insert_with(|| AggregateMetrics {
-            total_requests: 0,
-            successful_requests: 0,
-            failed_requests: 0,
-            total_processing_time_ms: 0,
-            avg_confidence: 0.0,
-            fields_extracted_count: HashMap::new(),
-        });
+        let metrics = store
+            .metrics
+            .entry(provider)
+            .or_insert_with(|| AggregateMetrics {
+                total_requests: 0,
+                successful_requests: 0,
+                failed_requests: 0,
+                total_processing_time_ms: 0,
+                avg_confidence: 0.0,
+                fields_extracted_count: HashMap::new(),
+            });
 
         metrics.total_requests += 1;
         metrics.failed_requests += 1;
@@ -465,7 +483,8 @@ impl OcrComparison {
     pub async fn get_provider_metrics(&self) -> HashMap<OcrProvider, ProviderMetricsSnapshot> {
         let store = self.metrics_store.read().await;
 
-        store.metrics
+        store
+            .metrics
             .iter()
             .map(|(provider, metrics)| {
                 (
@@ -481,7 +500,8 @@ impl OcrComparison {
                         },
                         avg_confidence: metrics.avg_confidence,
                         success_rate: if metrics.total_requests > 0 {
-                            (metrics.successful_requests as f64 / metrics.total_requests as f64) * 100.0
+                            (metrics.successful_requests as f64 / metrics.total_requests as f64)
+                                * 100.0
                         } else {
                             0.0
                         },
@@ -529,7 +549,11 @@ impl OcrWithFallback {
     }
 
     /// Extract using primary, fall back if fails or too slow
-    pub async fn extract_with_fallback(&self, document_bytes: &[u8], mime_type: &str) -> Result<OcrExtractionResult> {
+    pub async fn extract_with_fallback(
+        &self,
+        document_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<OcrExtractionResult> {
         let start = Instant::now();
 
         // Try primary provider
@@ -569,10 +593,22 @@ mod tests {
 
     #[test]
     fn test_provider_from_str() {
-        assert_eq!(OcrProvider::from_str("tesseract"), Some(OcrProvider::Tesseract));
-        assert_eq!(OcrProvider::from_str("aws_textract"), Some(OcrProvider::AwsTextract));
-        assert_eq!(OcrProvider::from_str("textract"), Some(OcrProvider::AwsTextract));
-        assert_eq!(OcrProvider::from_str("google_vision"), Some(OcrProvider::GoogleVision));
+        assert_eq!(
+            OcrProvider::from_str("tesseract"),
+            Some(OcrProvider::Tesseract)
+        );
+        assert_eq!(
+            OcrProvider::from_str("aws_textract"),
+            Some(OcrProvider::AwsTextract)
+        );
+        assert_eq!(
+            OcrProvider::from_str("textract"),
+            Some(OcrProvider::AwsTextract)
+        );
+        assert_eq!(
+            OcrProvider::from_str("google_vision"),
+            Some(OcrProvider::GoogleVision)
+        );
         assert_eq!(OcrProvider::from_str("unknown"), None);
     }
 

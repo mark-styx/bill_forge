@@ -2,8 +2,8 @@
 
 use billforge_core::{
     domain::{
-        ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus,
-        RuleCondition, WorkflowRule, WorkflowRuleType,
+        ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus, RuleCondition,
+        WorkflowRule, WorkflowRuleType,
     },
     traits::{ApprovalRepository, InvoiceRepository, WorkflowRuleRepository},
     types::{TenantId, UserId},
@@ -96,7 +96,8 @@ impl WorkflowEngine {
         if !approvals_needed.is_empty() {
             // Create approval requests
             for rule in approvals_needed {
-                self.create_approval_request(tenant_id, invoice, &rule).await?;
+                self.create_approval_request(tenant_id, invoice, &rule)
+                    .await?;
             }
             return Ok(ProcessingStatus::PendingApproval);
         }
@@ -169,12 +170,18 @@ impl WorkflowEngine {
             .await?;
 
         // Check if any are rejected
-        if all_approvals.iter().any(|a| a.status == ApprovalStatus::Rejected) {
+        if all_approvals
+            .iter()
+            .any(|a| a.status == ApprovalStatus::Rejected)
+        {
             return Ok(ProcessingStatus::Rejected);
         }
 
         // Check if all are approved
-        if all_approvals.iter().all(|a| a.status == ApprovalStatus::Approved) {
+        if all_approvals
+            .iter()
+            .all(|a| a.status == ApprovalStatus::Approved)
+        {
             return Ok(ProcessingStatus::Approved);
         }
 

@@ -103,7 +103,11 @@ pub async fn continue_conversation_handler(
         conversation_id: Some(conversation_id),
     };
 
-    match state.agent.chat(request_with_conversation, tenant_id, user_id).await {
+    match state
+        .agent
+        .chat(request_with_conversation, tenant_id, user_id)
+        .await
+    {
         Ok(response) => Ok(Json(response)),
         Err(e) => {
             tracing::error!("Continue conversation error: {}", e);

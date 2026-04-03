@@ -1,6 +1,5 @@
 //! Database migration utilities
 
-
 /// Migration version tracking
 pub struct MigrationRunner {
     applied_migrations: Vec<String>,

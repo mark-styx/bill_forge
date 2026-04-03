@@ -16,9 +16,18 @@ use serde::{Deserialize, Serialize};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_settings).put(update_settings))
-        .route("/invoice-statuses", get(list_invoice_statuses).put(update_invoice_statuses))
-        .route("/invoice-statuses/seed-defaults", axum::routing::post(seed_default_statuses))
-        .route("/invoice-statuses/:status_key", delete(delete_invoice_status))
+        .route(
+            "/invoice-statuses",
+            get(list_invoice_statuses).put(update_invoice_statuses),
+        )
+        .route(
+            "/invoice-statuses/seed-defaults",
+            axum::routing::post(seed_default_statuses),
+        )
+        .route(
+            "/invoice-statuses/:status_key",
+            delete(delete_invoice_status),
+        )
 }
 
 #[derive(Debug, Serialize)]
@@ -57,10 +66,11 @@ async fn update_settings(
     TenantCtx(tenant): TenantCtx,
     Json(input): Json<UpdateSettingsInput>,
 ) -> Result<Json<SettingsResponse>, axum::http::StatusCode> {
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let database_url =
+        std::env::var("DATABASE_URL").map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let metadata_db = billforge_db::MetadataDatabase::new(&database_url).await
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut settings = tenant.settings.clone();
@@ -74,7 +84,9 @@ async fn update_settings(
         settings.default_currency = cur;
     }
 
-    metadata_db.update_tenant_settings(&tenant.tenant_id, &settings).await
+    metadata_db
+        .update_tenant_settings(&tenant.tenant_id, &settings)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(SettingsResponse {
@@ -99,11 +111,16 @@ async fn list_invoice_statuses(
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<ListStatusesQuery>,
 ) -> Result<Json<Vec<InvoiceStatusConfig>>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let repo = billforge_db::repositories::InvoiceStatusConfigRepositoryImpl::new(pool);
-    let statuses = repo.list(&tenant.tenant_id, query.category.as_deref()).await
+    let statuses = repo
+        .list(&tenant.tenant_id, query.category.as_deref())
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(statuses))
@@ -115,11 +132,16 @@ async fn update_invoice_statuses(
     TenantCtx(tenant): TenantCtx,
     Json(inputs): Json<Vec<InvoiceStatusConfigInput>>,
 ) -> Result<Json<Vec<InvoiceStatusConfig>>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let repo = billforge_db::repositories::InvoiceStatusConfigRepositoryImpl::new(pool);
-    let statuses = repo.upsert_batch(&tenant.tenant_id, inputs).await
+    let statuses = repo
+        .upsert_batch(&tenant.tenant_id, inputs)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(statuses))
@@ -130,14 +152,20 @@ async fn seed_default_statuses(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let repo = billforge_db::repositories::InvoiceStatusConfigRepositoryImpl::new(pool);
-    repo.seed_defaults(&tenant.tenant_id).await
+    repo.seed_defaults(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(serde_json::json!({ "message": "Default statuses seeded" })))
+    Ok(Json(
+        serde_json::json!({ "message": "Default statuses seeded" }),
+    ))
 }
 
 async fn delete_invoice_status(
@@ -146,11 +174,15 @@ async fn delete_invoice_status(
     TenantCtx(tenant): TenantCtx,
     Path(status_key): Path<String>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let repo = billforge_db::repositories::InvoiceStatusConfigRepositoryImpl::new(pool);
-    repo.delete(&tenant.tenant_id, &status_key).await
+    repo.delete(&tenant.tenant_id, &status_key)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(serde_json::json!({ "success": true })))

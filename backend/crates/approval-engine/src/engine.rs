@@ -83,8 +83,7 @@ impl ApprovalEngine {
             .into_iter()
             .filter(|l| {
                 amount_cents >= l.min_amount_cents
-                    && l.max_amount_cents
-                        .map_or(true, |max| amount_cents <= max)
+                    && l.max_amount_cents.map_or(true, |max| amount_cents <= max)
             })
             .collect();
 
@@ -133,12 +132,26 @@ impl ApprovalEngine {
 
         // 5. Create steps — for sequential: only first level; for parallel: all levels
         if policy.require_sequential {
-            self.create_steps_for_level(&mut tx, tenant_id, chain_id, &applicable_levels[0], &policy, initiated_by)
-                .await?;
+            self.create_steps_for_level(
+                &mut tx,
+                tenant_id,
+                chain_id,
+                &applicable_levels[0],
+                &policy,
+                initiated_by,
+            )
+            .await?;
         } else {
             for level in &applicable_levels {
-                self.create_steps_for_level(&mut tx, tenant_id, chain_id, level, &policy, initiated_by)
-                    .await?;
+                self.create_steps_for_level(
+                    &mut tx,
+                    tenant_id,
+                    chain_id,
+                    level,
+                    &policy,
+                    initiated_by,
+                )
+                .await?;
             }
         }
 
@@ -498,7 +511,9 @@ impl ApprovalEngine {
         let new_step = row_to_step(&new_step_row);
 
         // Get invoice ID before logging (avoid double mutable borrow)
-        let invoice_id = self.get_invoice_id_for_chain(&mut tx, &step.chain_id).await?;
+        let invoice_id = self
+            .get_invoice_id_for_chain(&mut tx, &step.chain_id)
+            .await?;
 
         // Log activity
         self.log_activity_tx(
@@ -573,7 +588,10 @@ impl ApprovalEngine {
             let mut tx = self.pool.begin().await?;
 
             // Get the chain to find the policy's escalation target
-            let chain = match self.get_chain_tx(&mut tx, tenant_id, &step.chain_id).await? {
+            let chain = match self
+                .get_chain_tx(&mut tx, tenant_id, &step.chain_id)
+                .await?
+            {
                 Some(c) => c,
                 None => continue,
             };
@@ -1065,14 +1083,12 @@ impl ApprovalEngine {
         let now = Utc::now();
 
         // Determine due_at from level timeout or policy default
-        let timeout_hours = level
-            .timeout_hours
-            .or(policy.escalation_timeout_hours);
+        let timeout_hours = level.timeout_hours.or(policy.escalation_timeout_hours);
         let due_at = timeout_hours.map(|h| now + chrono::Duration::hours(h as i64));
 
         // Get approver user IDs from the level configuration
-        let approver_ids: Vec<Uuid> = serde_json::from_value(level.approver_user_ids.clone())
-            .unwrap_or_default();
+        let approver_ids: Vec<Uuid> =
+            serde_json::from_value(level.approver_user_ids.clone()).unwrap_or_default();
 
         if approver_ids.is_empty() {
             // If no explicit users, we still create a step — the API layer
@@ -1168,8 +1184,15 @@ impl ApprovalEngine {
 
         if let Some(row) = level_row {
             let level = row_to_chain_level(&row);
-            self.create_steps_for_level(tx, tenant_id, chain.id, &level, policy, &chain.initiated_by)
-                .await?;
+            self.create_steps_for_level(
+                tx,
+                tenant_id,
+                chain.id,
+                &level,
+                policy,
+                &chain.initiated_by,
+            )
+            .await?;
         }
 
         Ok(())
@@ -1359,12 +1382,10 @@ impl ApprovalEngine {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         chain_id: &Uuid,
     ) -> Result<Uuid, ApprovalError> {
-        let row = sqlx::query(
-            "SELECT invoice_id FROM active_approval_chains WHERE id = $1",
-        )
-        .bind(chain_id)
-        .fetch_one(&mut **tx)
-        .await?;
+        let row = sqlx::query("SELECT invoice_id FROM active_approval_chains WHERE id = $1")
+            .bind(chain_id)
+            .fetch_one(&mut **tx)
+            .await?;
 
         Ok(row.get::<Uuid, _>("invoice_id"))
     }

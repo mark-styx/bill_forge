@@ -36,11 +36,23 @@ pub fn create_router(pool: PgPool) -> axum::Router {
 
     axum::Router::new()
         .route("/api/analytics/events", axum::routing::post(track_event))
-        .route("/api/analytics/usage/daily", axum::routing::get(get_daily_usage))
-        .route("/api/analytics/usage/weekly", axum::routing::get(get_weekly_usage))
-        .route("/api/analytics/usage/monthly", axum::routing::get(get_monthly_usage))
+        .route(
+            "/api/analytics/usage/daily",
+            axum::routing::get(get_daily_usage),
+        )
+        .route(
+            "/api/analytics/usage/weekly",
+            axum::routing::get(get_weekly_usage),
+        )
+        .route(
+            "/api/analytics/usage/monthly",
+            axum::routing::get(get_monthly_usage),
+        )
         .route("/api/analytics/usage", axum::routing::get(get_usage))
-        .route("/api/analytics/performance", axum::routing::get(get_performance))
+        .route(
+            "/api/analytics/performance",
+            axum::routing::get(get_performance),
+        )
         .route("/api/analytics/trends", axum::routing::get(get_trends))
         .with_state(state)
 }
@@ -91,10 +103,15 @@ pub async fn get_usage(
     Path(tenant_id): Path<String>,
     Query(query): Query<AnalyticsQuery>,
 ) -> Result<Json<UsageSummary>, ApiError> {
-    let start_date = query.start_date.unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(7));
+    let start_date = query
+        .start_date
+        .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(7));
     let end_date = query.end_date.unwrap_or_else(|| chrono::Utc::now());
 
-    let summary = state.service.get_usage_summary(&tenant_id, start_date, end_date).await?;
+    let summary = state
+        .service
+        .get_usage_summary(&tenant_id, start_date, end_date)
+        .await?;
     Ok(Json(summary))
 }
 
@@ -104,10 +121,15 @@ pub async fn get_performance(
     Path(tenant_id): Path<String>,
     Query(query): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<PerformanceMetric>>, ApiError> {
-    let start_date = query.start_date.unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(7));
+    let start_date = query
+        .start_date
+        .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(7));
     let end_date = query.end_date.unwrap_or_else(|| chrono::Utc::now());
 
-    let metrics = state.service.get_performance_metrics(&tenant_id, start_date, end_date).await?;
+    let metrics = state
+        .service
+        .get_performance_metrics(&tenant_id, start_date, end_date)
+        .await?;
     Ok(Json(metrics))
 }
 

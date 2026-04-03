@@ -41,9 +41,12 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    let tenant_id: TenantId = req.tenant_id.parse()
-        .map_err(|_| ApiError(billforge_core::Error::Validation("Invalid tenant ID".to_string())))?;
-    
+    let tenant_id: TenantId = req.tenant_id.parse().map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid tenant ID".to_string(),
+        ))
+    })?;
+
     let response = state
         .auth
         .login(LoginInput {
@@ -60,9 +63,12 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    let tenant_id: TenantId = req.tenant_id.parse()
-        .map_err(|_| ApiError(billforge_core::Error::Validation("Invalid tenant ID".to_string())))?;
-    
+    let tenant_id: TenantId = req.tenant_id.parse().map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid tenant ID".to_string(),
+        ))
+    })?;
+
     let response = state
         .auth
         .register(RegisterInput {

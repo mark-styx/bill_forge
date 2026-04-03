@@ -72,8 +72,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Load database URL
-    let database_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL must be set")?;
+    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
 
     // Connect to database
     info!("Connecting to database...");
@@ -179,7 +178,10 @@ async fn main() -> Result<()> {
 
     if let Some(backup_id) = backup_id {
         info!("Backup ID: {}", backup_id);
-        info!("To restore from backup, run: ./scripts/restore-backup.sh {}", backup_id);
+        info!(
+            "To restore from backup, run: ./scripts/restore-backup.sh {}",
+            backup_id
+        );
     }
 
     Ok(())
@@ -201,25 +203,30 @@ async fn list_migrations(pool: &PgPool) -> Result<()> {
     .context("Failed to create migrations table")?;
 
     // Get applied migrations
-    let applied: Vec<MigrationRecord> = sqlx::query_as(
-        "SELECT version, name, applied_at FROM _migrations ORDER BY version DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .context("Failed to fetch applied migrations")?;
+    let applied: Vec<MigrationRecord> =
+        sqlx::query_as("SELECT version, name, applied_at FROM _migrations ORDER BY version DESC")
+            .fetch_all(pool)
+            .await
+            .context("Failed to fetch applied migrations")?;
 
     // Load all migration files
     let all_migrations = load_migration_files()?;
 
     println!("\nMigration Status:");
-    println!("  {:<10} {:<40} {:<20} {}", "Version", "Name", "Status", "Applied At");
+    println!(
+        "  {:<10} {:<40} {:<20} {}",
+        "Version", "Name", "Status", "Applied At"
+    );
     println!("  {}", "-".repeat(90));
 
     for migration in all_migrations {
         let applied_record = applied.iter().find(|m| m.version == migration.version);
 
         let (status, applied_at) = match applied_record {
-            Some(record) => ("APPLIED", record.applied_at.format("%Y-%m-%d %H:%M:%S").to_string()),
+            Some(record) => (
+                "APPLIED",
+                record.applied_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+            ),
             None => ("PENDING", "-".to_string()),
         };
 
@@ -231,10 +238,7 @@ async fn list_migrations(pool: &PgPool) -> Result<()> {
 
         println!(
             "  {:<10} {:<40} {:<20} {}",
-            migration.version,
-            migration.name,
-            status_display,
-            applied_at
+            migration.version, migration.name, status_display, applied_at
         );
     }
 
@@ -258,19 +262,16 @@ async fn get_current_version(pool: &PgPool) -> Result<i32> {
     .await
     .context("Failed to create migrations table")?;
 
-    let result: Option<(i32,)> = sqlx::query_as(
-        "SELECT MAX(version) FROM _migrations",
-    )
-    .fetch_optional(pool)
-    .await
-    .context("Failed to get current version")?;
+    let result: Option<(i32,)> = sqlx::query_as("SELECT MAX(version) FROM _migrations")
+        .fetch_optional(pool)
+        .await
+        .context("Failed to get current version")?;
 
     Ok(result.map(|(v,)| v).unwrap_or(0))
 }
 
 fn load_migration_files() -> Result<Vec<MigrationFile>> {
-    let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../migrations");
+    let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
 
     if !migrations_dir.exists() {
         anyhow::bail!("Migrations directory not found: {:?}", migrations_dir);
@@ -310,7 +311,10 @@ fn load_migration_files() -> Result<Vec<MigrationFile>> {
         }
 
         if !down_path.exists() {
-            warn!("Missing down.sql for migration {} - cannot rollback", dir_name);
+            warn!(
+                "Missing down.sql for migration {} - cannot rollback",
+                dir_name
+            );
             continue;
         }
 
@@ -346,7 +350,10 @@ async fn plan_rollback(
     let mut rollback_plan: Vec<MigrationFile> = Vec::new();
 
     for applied_migration in applied {
-        if let Some(migration_file) = migrations.iter().find(|m| m.version == applied_migration.version) {
+        if let Some(migration_file) = migrations
+            .iter()
+            .find(|m| m.version == applied_migration.version)
+        {
             rollback_plan.push((*migration_file).clone());
         } else {
             anyhow::bail!(
@@ -364,11 +371,14 @@ async fn create_backup(tenant_id: &Option<String>) -> Result<String> {
     let backup_id = Uuid::new_v4().to_string();
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
 
-    let backup_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../scripts/backup.sh");
+    let backup_script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/backup.sh");
 
     if !backup_script.exists() {
-        warn!("Backup script not found at {:?}, skipping backup", backup_script);
+        warn!(
+            "Backup script not found at {:?}, skipping backup",
+            backup_script
+        );
         return Ok(backup_id);
     }
 
@@ -379,9 +389,7 @@ async fn create_backup(tenant_id: &Option<String>) -> Result<String> {
         cmd.arg("--tenant").arg(tenant);
     }
 
-    let status = cmd
-        .status()
-        .context("Failed to execute backup script")?;
+    let status = cmd.status().context("Failed to execute backup script")?;
 
     if !status.success() {
         anyhow::bail!("Backup script failed with status: {}", status);
@@ -398,7 +406,10 @@ async fn execute_rollback(
     let mut tx = pool.begin().await?;
 
     for migration in rollback_plan {
-        info!("Rolling back migration v{}: {}", migration.version, migration.name);
+        info!(
+            "Rolling back migration v{}: {}",
+            migration.version, migration.name
+        );
 
         // Read down.sql
         let down_sql = std::fs::read_to_string(&migration.down_path)

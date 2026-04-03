@@ -99,10 +99,7 @@ impl BillComAuth {
             .unwrap_or(&self.config.org_id)
             .to_string();
 
-        let user_id = parsed["userId"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let user_id = parsed["userId"].as_str().unwrap_or_default().to_string();
 
         tracing::info!(
             org_id = %org_id,

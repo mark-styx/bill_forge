@@ -94,7 +94,11 @@ impl QuickBooksClient {
     }
 
     /// Query vendors
-    pub async fn query_vendors(&self, start_position: i32, max_results: i32) -> Result<Vec<QBVendor>> {
+    pub async fn query_vendors(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBVendor>> {
         let query = format!(
             "SELECT * FROM Vendor STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
@@ -116,7 +120,11 @@ impl QuickBooksClient {
     }
 
     /// Query accounts
-    pub async fn query_accounts(&self, start_position: i32, max_results: i32) -> Result<Vec<QBAccount>> {
+    pub async fn query_accounts(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBAccount>> {
         let query = format!(
             "SELECT * FROM Account STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results

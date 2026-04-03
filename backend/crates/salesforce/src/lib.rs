@@ -20,5 +20,5 @@ pub mod oauth;
 pub mod types;
 
 pub use client::SalesforceClient;
-pub use oauth::{SalesforceOAuth, SalesforceOAuthConfig, SalesforceEnvironment};
+pub use oauth::{SalesforceEnvironment, SalesforceOAuth, SalesforceOAuthConfig};
 pub use types::*;

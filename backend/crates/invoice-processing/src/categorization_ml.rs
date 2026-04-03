@@ -5,12 +5,15 @@
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
 use anyhow::{Context, Result};
-use async_openai::{Client, types::{CreateEmbeddingRequest, EmbeddingInput}};
+use async_openai::{
+    types::{CreateEmbeddingRequest, EmbeddingInput},
+    Client,
+};
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
-use super::categorization::{CategorySuggestion, CategoryType, SuggestionSource, LineItemInput};
+use super::categorization::{CategorySuggestion, CategoryType, LineItemInput, SuggestionSource};
 
 /// ML-based categorizer using OpenAI embeddings
 pub struct MLCategorizer {
@@ -39,7 +42,10 @@ impl MLCategorizer {
         let config = async_openai::config::OpenAIConfig::new().with_api_key(openai_api_key);
         let openai_client = Client::with_config(config);
 
-        Self { pool, openai_client }
+        Self {
+            pool,
+            openai_client,
+        }
     }
 
     /// Generate embedding for text using OpenAI text-embedding-3-small
@@ -50,7 +56,8 @@ impl MLCategorizer {
             ..Default::default()
         };
 
-        let response = self.openai_client
+        let response = self
+            .openai_client
             .embeddings()
             .create(request)
             .await
@@ -129,12 +136,14 @@ impl MLCategorizer {
 
         Ok(rows
             .into_iter()
-            .map(|(value, similarity, description, usage_count)| SimilarityMatch {
-                category_type: category_type.clone(),
-                value,
-                similarity,
-                description,
-            })
+            .map(
+                |(value, similarity, description, usage_count)| SimilarityMatch {
+                    category_type: category_type.clone(),
+                    value,
+                    similarity,
+                    description,
+                },
+            )
             .collect())
     }
 
@@ -273,7 +282,8 @@ impl MLCategorizer {
         let cost_center = self.pick_best_suggestion(&suggestions, CategoryType::CostCenter);
 
         // 5. Calculate overall confidence
-        let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
+        let overall_confidence =
+            self.calculate_overall_confidence(&gl_code, &department, &cost_center);
 
         Ok(InvoiceCategorization {
             invoice_id: Uuid::nil(), // Will be set by caller
@@ -328,7 +338,11 @@ impl MLCategorizer {
     }
 
     /// Get cached vendor embedding
-    async fn get_vendor_embedding(&self, tenant_id: &str, vendor_id: Uuid) -> Result<Option<Vec<f32>>> {
+    async fn get_vendor_embedding(
+        &self,
+        tenant_id: &str,
+        vendor_id: Uuid,
+    ) -> Result<Option<Vec<f32>>> {
         let row = sqlx::query(
             r#"
             SELECT embedding_vector
@@ -406,7 +420,8 @@ mod tests {
         );
 
         // High similarity with description
-        let conf1 = categorizer.calculate_embedding_confidence(0.92, Some("Software subscriptions"));
+        let conf1 =
+            categorizer.calculate_embedding_confidence(0.92, Some("Software subscriptions"));
         assert!(conf1 > 0.85 && conf1 <= 0.95);
 
         // Medium similarity without description

@@ -1,7 +1,7 @@
 //! Subscription plan definitions
 
-use serde::{Deserialize, Serialize};
 use billforge_core::Module;
+use serde::{Deserialize, Serialize};
 
 /// Plan identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -346,7 +346,10 @@ mod tests {
     #[test]
     fn test_plan_id_from_str() {
         assert_eq!("free".parse::<PlanId>().unwrap(), PlanId::Free);
-        assert_eq!("PROFESSIONAL".parse::<PlanId>().unwrap(), PlanId::Professional);
+        assert_eq!(
+            "PROFESSIONAL".parse::<PlanId>().unwrap(),
+            PlanId::Professional
+        );
         assert!("invalid".parse::<PlanId>().is_err());
     }
 }

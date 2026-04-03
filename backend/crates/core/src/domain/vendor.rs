@@ -76,46 +76,46 @@ pub enum VendorType {
 pub struct Vendor {
     pub id: VendorId,
     pub tenant_id: TenantId,
-    
+
     // Basic information
     pub name: String,
     pub legal_name: Option<String>,
     pub vendor_type: VendorType,
     pub status: VendorStatus,
-    
+
     // Contact information
     pub email: Option<String>,
     pub phone: Option<String>,
     pub website: Option<String>,
-    
+
     // Address
     pub address: Option<VendorAddress>,
-    
+
     // Tax information
     pub tax_id: Option<String>,
     pub tax_id_type: Option<TaxIdType>,
     pub w9_on_file: bool,
     pub w9_received_date: Option<NaiveDate>,
-    
+
     // Payment information
     pub payment_terms: Option<String>,
     pub default_payment_method: Option<PaymentMethod>,
     pub bank_account: Option<BankAccount>,
-    
+
     // Internal tracking
     pub vendor_code: Option<String>,
     pub default_gl_code: Option<String>,
     pub default_department: Option<String>,
-    
+
     // Communication
     pub primary_contact: Option<VendorContact>,
     pub contacts: Vec<VendorContact>,
-    
+
     // Notes and metadata
     pub notes: Option<String>,
     pub tags: Vec<String>,
     pub custom_fields: serde_json::Value,
-    
+
     // Audit
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

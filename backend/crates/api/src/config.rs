@@ -3,7 +3,7 @@
 use anyhow::Result;
 use billforge_auth::JwtConfig;
 use billforge_email::EmailConfig;
-use billforge_mobile_push::{FcmConfig, ApnsConfig, ApnsEnvironment};
+use billforge_mobile_push::{ApnsConfig, ApnsEnvironment, FcmConfig};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -206,12 +206,12 @@ impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self> {
         let environment = Environment::from_str(
-            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string())
+            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()),
         );
 
         // Parse allowed origins from comma-separated list
-        let frontend_url = std::env::var("FRONTEND_URL")
-            .unwrap_or_else(|_| "http://localhost:3000".to_string());
+        let frontend_url =
+            std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
         let mut allowed_origins: Vec<String> = std::env::var("ALLOWED_ORIGINS")
             .unwrap_or_default()
@@ -269,12 +269,11 @@ impl Config {
         let quickbooks = if let Ok(client_id) = std::env::var("QUICKBOOKS_CLIENT_ID") {
             Some(QuickBooksConfig {
                 client_id,
-                client_secret: std::env::var("QUICKBOOKS_CLIENT_SECRET")
-                    .unwrap_or_default(),
+                client_secret: std::env::var("QUICKBOOKS_CLIENT_SECRET").unwrap_or_default(),
                 redirect_uri: std::env::var("QUICKBOOKS_REDIRECT_URI")
                     .unwrap_or_else(|_| format!("{}/api/v1/quickbooks/callback", frontend_url)),
                 environment: QuickBooksEnvironment::from_str(
-                    &std::env::var("QUICKBOOKS_ENVIRONMENT").unwrap_or_default()
+                    &std::env::var("QUICKBOOKS_ENVIRONMENT").unwrap_or_default(),
                 ),
             })
         } else {
@@ -285,12 +284,11 @@ impl Config {
         let xero = if let Ok(client_id) = std::env::var("XERO_CLIENT_ID") {
             Some(XeroConfig {
                 client_id,
-                client_secret: std::env::var("XERO_CLIENT_SECRET")
-                    .unwrap_or_default(),
+                client_secret: std::env::var("XERO_CLIENT_SECRET").unwrap_or_default(),
                 redirect_uri: std::env::var("XERO_REDIRECT_URI")
                     .unwrap_or_else(|_| format!("{}/api/v1/xero/callback", frontend_url)),
                 environment: XeroEnvironment::from_str(
-                    &std::env::var("XERO_ENVIRONMENT").unwrap_or_default()
+                    &std::env::var("XERO_ENVIRONMENT").unwrap_or_default(),
                 ),
             })
         } else {
@@ -308,12 +306,11 @@ impl Config {
         let salesforce = if let Ok(client_id) = std::env::var("SALESFORCE_CLIENT_ID") {
             Some(SalesforceConfig {
                 client_id,
-                client_secret: std::env::var("SALESFORCE_CLIENT_SECRET")
-                    .unwrap_or_default(),
+                client_secret: std::env::var("SALESFORCE_CLIENT_SECRET").unwrap_or_default(),
                 redirect_uri: std::env::var("SALESFORCE_REDIRECT_URI")
                     .unwrap_or_else(|_| format!("{}/api/v1/salesforce/callback", frontend_url)),
                 environment: SalesforceEnvironment::from_str(
-                    &std::env::var("SALESFORCE_ENVIRONMENT").unwrap_or_default()
+                    &std::env::var("SALESFORCE_ENVIRONMENT").unwrap_or_default(),
                 ),
             })
         } else {
@@ -324,14 +321,12 @@ impl Config {
         let workday = if let Ok(client_id) = std::env::var("WORKDAY_CLIENT_ID") {
             Some(WorkdayConfig {
                 client_id,
-                client_secret: std::env::var("WORKDAY_CLIENT_SECRET")
-                    .unwrap_or_default(),
+                client_secret: std::env::var("WORKDAY_CLIENT_SECRET").unwrap_or_default(),
                 tenant_url: std::env::var("WORKDAY_TENANT_URL")
                     .unwrap_or_else(|_| "https://impl.workday.com".to_string()),
-                tenant_name: std::env::var("WORKDAY_TENANT_NAME")
-                    .unwrap_or_default(),
+                tenant_name: std::env::var("WORKDAY_TENANT_NAME").unwrap_or_default(),
                 environment: WorkdayEnvironment::from_str(
-                    &std::env::var("WORKDAY_ENVIRONMENT").unwrap_or_default()
+                    &std::env::var("WORKDAY_ENVIRONMENT").unwrap_or_default(),
                 ),
             })
         } else {
@@ -347,9 +342,7 @@ impl Config {
 
         // Load FCM configuration (optional - only if FCM_API_KEY is set)
         let fcm = if let Ok(api_key) = std::env::var("FCM_API_KEY") {
-            Some(FcmConfig {
-                api_key,
-            })
+            Some(FcmConfig { api_key })
         } else {
             None
         };
@@ -357,15 +350,17 @@ impl Config {
         // Load APNS configuration (optional - only if APNS_KEY_ID is set)
         let apns = if let Ok(key_id) = std::env::var("APNS_KEY_ID") {
             Some(ApnsConfig {
-                environment: match std::env::var("APNS_ENVIRONMENT").unwrap_or_default().as_str() {
+                environment: match std::env::var("APNS_ENVIRONMENT")
+                    .unwrap_or_default()
+                    .as_str()
+                {
                     "production" => ApnsEnvironment::Production,
                     _ => ApnsEnvironment::Sandbox,
                 },
                 private_key_path: std::env::var("APNS_PRIVATE_KEY_PATH")
                     .unwrap_or_else(|_| "./AuthKey.p8".to_string()),
                 key_id,
-                team_id: std::env::var("APNS_TEAM_ID")
-                    .unwrap_or_default(),
+                team_id: std::env::var("APNS_TEAM_ID").unwrap_or_default(),
                 bundle_id: std::env::var("APNS_BUNDLE_ID")
                     .unwrap_or_else(|_| "com.billforge.mobile".to_string()),
             })
@@ -393,8 +388,7 @@ impl Config {
             frontend_url,
             storage_path: std::env::var("LOCAL_STORAGE_PATH")
                 .unwrap_or_else(|_| "./data/files".to_string()),
-            ocr_provider: std::env::var("OCR_PROVIDER")
-                .unwrap_or_else(|_| "tesseract".to_string()),
+            ocr_provider: std::env::var("OCR_PROVIDER").unwrap_or_else(|_| "tesseract".to_string()),
             allowed_origins,
             rate_limit_rpm: std::env::var("RATE_LIMIT_RPM")
                 .unwrap_or_else(|_| "100".to_string())
@@ -424,12 +418,30 @@ mod tests {
 
     #[test]
     fn test_environment_parsing() {
-        assert!(matches!(Environment::from_str("production"), Environment::Production));
-        assert!(matches!(Environment::from_str("prod"), Environment::Production));
-        assert!(matches!(Environment::from_str("staging"), Environment::Staging));
-        assert!(matches!(Environment::from_str("development"), Environment::Development));
-        assert!(matches!(Environment::from_str("dev"), Environment::Development));
-        assert!(matches!(Environment::from_str("unknown"), Environment::Development));
+        assert!(matches!(
+            Environment::from_str("production"),
+            Environment::Production
+        ));
+        assert!(matches!(
+            Environment::from_str("prod"),
+            Environment::Production
+        ));
+        assert!(matches!(
+            Environment::from_str("staging"),
+            Environment::Staging
+        ));
+        assert!(matches!(
+            Environment::from_str("development"),
+            Environment::Development
+        ));
+        assert!(matches!(
+            Environment::from_str("dev"),
+            Environment::Development
+        ));
+        assert!(matches!(
+            Environment::from_str("unknown"),
+            Environment::Development
+        ));
     }
 
     #[test]

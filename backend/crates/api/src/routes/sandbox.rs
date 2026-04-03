@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use billforge_core::{PersonaInfo, SandboxPersona, Module};
+use billforge_core::{Module, PersonaInfo, SandboxPersona};
 use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
@@ -27,14 +27,12 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// List all available sandbox personas
-async fn list_personas(
-    State(_state): State<AppState>,
-) -> ApiResult<Json<Vec<PersonaInfo>>> {
+async fn list_personas(State(_state): State<AppState>) -> ApiResult<Json<Vec<PersonaInfo>>> {
     let personas: Vec<PersonaInfo> = SandboxPersona::all()
         .into_iter()
         .map(|p| p.into())
         .collect();
-    
+
     Ok(Json(personas))
 }
 
@@ -46,7 +44,7 @@ async fn get_current_persona(
 ) -> ApiResult<Json<CurrentPersonaResponse>> {
     // Determine persona from enabled modules
     let persona = determine_persona_from_modules(&tenant.enabled_modules);
-    
+
     Ok(Json(CurrentPersonaResponse {
         persona: persona.into(),
         tenant_id: tenant.tenant_id.to_string(),
@@ -66,7 +64,7 @@ fn determine_persona_from_modules(modules: &[Module]) -> SandboxPersona {
     let has_capture = modules.contains(&Module::InvoiceCapture);
     let has_processing = modules.contains(&Module::InvoiceProcessing);
     let has_vendor = modules.contains(&Module::VendorManagement);
-    
+
     match (has_capture, has_processing, has_vendor) {
         (true, true, true) => SandboxPersona::FullPlatform,
         (true, false, false) => SandboxPersona::InvoiceOcrOnly,
@@ -103,35 +101,50 @@ async fn switch_persona(
             "Only administrators can switch personas".to_string(),
         )));
     }
-    
+
     // Parse persona
-    let persona = SandboxPersona::from_id(&req.persona_id)
-        .ok_or_else(|| ApiError(billforge_core::Error::Validation(
-            format!("Invalid persona ID: {}", req.persona_id),
-        )))?;
-    
+    let persona = SandboxPersona::from_id(&req.persona_id).ok_or_else(|| {
+        ApiError(billforge_core::Error::Validation(format!(
+            "Invalid persona ID: {}",
+            req.persona_id
+        )))
+    })?;
+
     // Update tenant modules
     let modules = persona.enabled_modules();
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|e| ApiError(billforge_core::Error::Database(format!("DATABASE_URL not set: {}", e))))?;
-    let metadata_db = billforge_db::MetadataDatabase::new(&database_url).await
-        .map_err(|e| ApiError(billforge_core::Error::Database(format!("Failed to create metadata database: {}", e))))?;
+    let database_url = std::env::var("DATABASE_URL").map_err(|e| {
+        ApiError(billforge_core::Error::Database(format!(
+            "DATABASE_URL not set: {}",
+            e
+        )))
+    })?;
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
+        .await
+        .map_err(|e| {
+            ApiError(billforge_core::Error::Database(format!(
+                "Failed to create metadata database: {}",
+                e
+            )))
+        })?;
     metadata_db
         .update_tenant_modules(&tenant.tenant_id, &modules)
         .await
         .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
-    
+
     tracing::info!(
         tenant_id = %tenant.tenant_id,
         persona = %persona.id(),
         user_id = %user.user_id,
         "Switched tenant persona"
     );
-    
+
     Ok(Json(SwitchPersonaResponse {
         success: true,
         persona: persona.into(),
-        message: format!("Successfully switched to {} persona", persona.display_name()),
+        message: format!(
+            "Successfully switched to {} persona",
+            persona.display_name()
+        ),
     }))
 }
 
@@ -178,7 +191,7 @@ async fn get_tenant_context(
 ) -> ApiResult<Json<TenantContextResponse>> {
     let persona = determine_persona_from_modules(&tenant.enabled_modules);
     let persona_info: PersonaInfo = persona.into();
-    
+
     let enabled_modules = vec![
         ModuleStatus {
             id: "invoice_capture".to_string(),
@@ -201,7 +214,7 @@ async fn get_tenant_context(
             enabled: true, // Always enabled
         },
     ];
-    
+
     let available_roles = vec![
         RoleStatus {
             id: "tenant_admin".to_string(),
@@ -234,14 +247,18 @@ async fn get_tenant_context(
             description: "Read-only access to reports".to_string(),
         },
     ];
-    
+
     Ok(Json(TenantContextResponse {
         tenant_id: tenant.tenant_id.to_string(),
         tenant_name: tenant.tenant_name.clone(),
         persona: persona_info,
         enabled_modules,
         available_roles,
-        reporting_sections: persona.reporting_sections().iter().map(|s| s.to_string()).collect(),
+        reporting_sections: persona
+            .reporting_sections()
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         settings: TenantSettingsResponse {
             logo_url: tenant.settings.logo_url.clone(),
             primary_color: tenant.settings.primary_color.clone(),

@@ -1,14 +1,14 @@
 //! BillForge API Server Entry Point
 
-use billforge_api::{routes, swagger_ui, AppState, Config};
 use axum::http::{HeaderName, HeaderValue, Method};
+use billforge_api::{routes, swagger_ui, AppState, Config};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
-use tower_http::compression::CompressionLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -76,7 +76,11 @@ async fn main() -> anyhow::Result<()> {
                 .layer(cors),
         );
 
-    tracing::info!("Swagger UI available at http://{}:{}/swagger-ui", config.host, config.port);
+    tracing::info!(
+        "Swagger UI available at http://{}:{}/swagger-ui",
+        config.host,
+        config.port
+    );
 
     // Start server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));

@@ -9,8 +9,8 @@ use axum::{
     Json, Router,
 };
 use billforge_ocr_pipeline::{
-    BatchProcessor, CreateOcrJobInput, OcrFieldCorrection, OcrJob, OcrJobStatus,
-    OcrPipeline, OcrProcessingStats, VendorAlias,
+    BatchProcessor, CreateOcrJobInput, OcrFieldCorrection, OcrJob, OcrJobStatus, OcrPipeline,
+    OcrProcessingStats, VendorAlias,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

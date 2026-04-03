@@ -6,8 +6,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::plans::{Plan, PlanId};
-use crate::subscription::{BillingCycle, Subscription, SubscriptionStatus};
 use crate::stripe::StripeClient;
+use crate::subscription::{BillingCycle, Subscription, SubscriptionStatus};
 
 /// Billing configuration
 #[derive(Debug, Clone)]
@@ -65,11 +65,7 @@ pub trait BillingServiceTrait: Send + Sync {
     ) -> Result<Subscription>;
 
     /// Upgrade/downgrade subscription
-    async fn change_plan(
-        &self,
-        tenant_id: &TenantId,
-        new_plan_id: PlanId,
-    ) -> Result<Subscription>;
+    async fn change_plan(&self, tenant_id: &TenantId, new_plan_id: PlanId) -> Result<Subscription>;
 
     /// Cancel subscription
     async fn cancel_subscription(&self, tenant_id: &TenantId) -> Result<Subscription>;
@@ -170,11 +166,7 @@ impl BillingServiceTrait for BillingService {
         Ok(subscription)
     }
 
-    async fn change_plan(
-        &self,
-        tenant_id: &TenantId,
-        new_plan_id: PlanId,
-    ) -> Result<Subscription> {
+    async fn change_plan(&self, tenant_id: &TenantId, new_plan_id: PlanId) -> Result<Subscription> {
         let mut subscriptions = self.subscriptions.write().await;
 
         let subscription = subscriptions

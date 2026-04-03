@@ -52,13 +52,11 @@ impl WinstonAgent {
 
         // Build messages for OpenAI
         let system_prompt = build_system_prompt(&context);
-        let mut messages = vec![
-            ChatCompletionRequestMessage::System(
-                ChatCompletionRequestSystemMessageArgs::default()
-                    .content(&system_prompt)
-                    .build()?,
-            ),
-        ];
+        let mut messages = vec![ChatCompletionRequestMessage::System(
+            ChatCompletionRequestSystemMessageArgs::default()
+                .content(&system_prompt)
+                .build()?,
+        )];
 
         // Add user message
         messages.push(ChatCompletionRequestMessage::User(
@@ -75,7 +73,10 @@ impl WinstonAgent {
             .max_tokens(1000u16)
             .build()?;
 
-        info!("Sending request to OpenAI for conversation {}", conversation_id);
+        info!(
+            "Sending request to OpenAI for conversation {}",
+            conversation_id
+        );
 
         // Create client and call OpenAI API
         let client = Client::new();
@@ -97,7 +98,10 @@ impl WinstonAgent {
             .clone()
             .context("No content in OpenAI response")?;
 
-        info!("Received response from OpenAI for conversation {}", conversation_id);
+        info!(
+            "Received response from OpenAI for conversation {}",
+            conversation_id
+        );
 
         // Create response message
         let assistant_message = Message {
@@ -125,7 +129,11 @@ impl WinstonAgent {
     }
 
     /// List user's conversations
-    pub async fn list_conversations(&self, tenant_id: &str, user_id: Uuid) -> Result<Vec<Conversation>> {
+    pub async fn list_conversations(
+        &self,
+        tenant_id: &str,
+        user_id: Uuid,
+    ) -> Result<Vec<Conversation>> {
         // In production, this would load from database
         // For now, return empty list
         warn!("Conversation listing not yet implemented");

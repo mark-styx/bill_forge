@@ -24,7 +24,9 @@ impl FcmClient {
     /// Create a new FCM client
     pub fn new(config: FcmConfig) -> Result<Self, FcmError> {
         if config.api_key.is_empty() {
-            return Err(FcmError::InvalidConfig("API key cannot be empty".to_string()));
+            return Err(FcmError::InvalidConfig(
+                "API key cannot be empty".to_string(),
+            ));
         }
 
         Ok(Self {
@@ -115,13 +117,17 @@ impl PushNotificationProvider for FcmClient {
         }
 
         let fcm_response: FcmResponse = response.json().await?;
-        info!("FCM notification sent successfully: {:?}", fcm_response.message_id);
+        info!(
+            "FCM notification sent successfully: {:?}",
+            fcm_response.message_id
+        );
 
         Ok(PushResult {
             success: fcm_response.success > 0,
             message_id: fcm_response.message_id,
             error_message: if fcm_response.success == 0 {
-                fcm_response.results
+                fcm_response
+                    .results
                     .and_then(|r| r.first().map(|r| r.error.clone()))
                     .unwrap_or(None)
             } else {

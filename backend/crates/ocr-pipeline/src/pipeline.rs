@@ -153,8 +153,9 @@ impl OcrPipeline {
         let processing_time_ms = start.elapsed().as_millis() as i64;
 
         // Serialize extraction result
-        let result_json = serde_json::to_value(&ocr_result)
-            .map_err(|e| PipelineError::Internal(format!("Failed to serialize OCR result: {}", e)))?;
+        let result_json = serde_json::to_value(&ocr_result).map_err(|e| {
+            PipelineError::Internal(format!("Failed to serialize OCR result: {}", e))
+        })?;
 
         // Vendor matching
         let vendor_match = if let Some(ref vendor_name) = ocr_result.vendor_name.value {

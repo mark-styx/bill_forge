@@ -45,9 +45,7 @@ mod jwt_tests {
         let user_id = UserId::new();
         let tenant_id = TenantId::new();
 
-        let token = service
-            .create_refresh_token(&user_id, &tenant_id)
-            .unwrap();
+        let token = service.create_refresh_token(&user_id, &tenant_id).unwrap();
 
         let claims = service.validate_refresh_token(&token).unwrap();
 
@@ -76,9 +74,7 @@ mod jwt_tests {
         let user_id = UserId::new();
         let tenant_id = TenantId::new();
 
-        let refresh_token = service
-            .create_refresh_token(&user_id, &tenant_id)
-            .unwrap();
+        let refresh_token = service.create_refresh_token(&user_id, &tenant_id).unwrap();
 
         let result = service.validate_access_token(&refresh_token);
         assert!(result.is_err());

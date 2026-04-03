@@ -10,7 +10,8 @@ use crate::{
     domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule},
     services::{EmailAction, EmailActionTokenService},
     traits::{ApprovalRepository, InvoiceRepository, UserRepository, WorkQueueRepository},
-    types::TenantId, Error, Result, UserId,
+    types::TenantId,
+    Error, Result, UserId,
 };
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -19,7 +20,13 @@ use uuid::Uuid;
 /// Email service trait (abstracted to avoid circular dependency)
 #[async_trait]
 pub trait EmailService: Send + Sync {
-    async fn send(&self, to: &str, subject: &str, html_body: &str, text_body: &str) -> crate::Result<()>;
+    async fn send(
+        &self,
+        to: &str,
+        subject: &str,
+        html_body: &str,
+        text_body: &str,
+    ) -> crate::Result<()>;
 }
 
 /// Email templates trait (abstracted to avoid circular dependency)
@@ -55,13 +62,14 @@ pub struct WorkflowService<
 }
 
 impl<
-    ES: EmailService,
-    ET: EmailTemplates,
-    UR: UserRepository,
-    IR: InvoiceRepository,
-    QR: WorkQueueRepository,
-    AR: ApprovalRepository,
-> WorkflowService<ES, ET, UR, IR, QR, AR> {
+        ES: EmailService,
+        ET: EmailTemplates,
+        UR: UserRepository,
+        IR: InvoiceRepository,
+        QR: WorkQueueRepository,
+        AR: ApprovalRepository,
+    > WorkflowService<ES, ET, UR, IR, QR, AR>
+{
     /// Create a new workflow service
     pub fn new(
         email_service: ES,
@@ -110,7 +118,8 @@ impl<
         };
 
         // Send approval email
-        self.send_approval_email(tenant_id, invoice, &approver, &request).await?;
+        self.send_approval_email(tenant_id, invoice, &approver, &request)
+            .await?;
 
         Ok(request)
     }
@@ -125,21 +134,29 @@ impl<
     ) -> Result<()> {
         // Get approver email(s) based on target type
         let approver_emails: Vec<String> = match approver {
-            ApprovalTarget::User(user_id) => {
-                self.user_repo.get_email_by_id(tenant_id, user_id).await?
-                    .into_iter()
-                    .collect()
-            }
+            ApprovalTarget::User(user_id) => self
+                .user_repo
+                .get_email_by_id(tenant_id, user_id)
+                .await?
+                .into_iter()
+                .collect(),
             ApprovalTarget::Role(role_name) => {
-                self.user_repo.get_emails_by_role(tenant_id, role_name).await?
+                self.user_repo
+                    .get_emails_by_role(tenant_id, role_name)
+                    .await?
             }
             ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
-                self.user_repo.get_emails_by_ids(tenant_id, user_ids).await?
+                self.user_repo
+                    .get_emails_by_ids(tenant_id, user_ids)
+                    .await?
             }
         };
 
         if approver_emails.is_empty() {
-            tracing::warn!("No approver emails found for approval request {}", request.id);
+            tracing::warn!(
+                "No approver emails found for approval request {}",
+                request.id
+            );
             return Ok(());
         }
 
@@ -150,59 +167,82 @@ impl<
                 // For role-based approvals, use a nil user ID (will be set when action is taken)
                 UserId(Uuid::nil())
             }
-            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
-                user_ids.first().cloned().unwrap_or_else(|| UserId(Uuid::nil()))
-            }
+            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => user_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| UserId(Uuid::nil())),
         };
 
         // Generate email action tokens
-        let approve_token = self.email_token_service.generate_token(
-            tenant_id,
-            &first_approver_id,
-            EmailAction::ApproveInvoice,
-            invoice.id.0,
-            "invoice",
-            serde_json::json!({ "approval_id": request.id }),
-        ).await?;
+        let approve_token = self
+            .email_token_service
+            .generate_token(
+                tenant_id,
+                &first_approver_id,
+                EmailAction::ApproveInvoice,
+                invoice.id.0,
+                "invoice",
+                serde_json::json!({ "approval_id": request.id }),
+            )
+            .await?;
 
-        let reject_token = self.email_token_service.generate_token(
-            tenant_id,
-            &first_approver_id,
-            EmailAction::RejectInvoice,
-            invoice.id.0,
-            "invoice",
-            serde_json::json!({ "approval_id": request.id }),
-        ).await?;
+        let reject_token = self
+            .email_token_service
+            .generate_token(
+                tenant_id,
+                &first_approver_id,
+                EmailAction::RejectInvoice,
+                invoice.id.0,
+                "invoice",
+                serde_json::json!({ "approval_id": request.id }),
+            )
+            .await?;
 
         // Generate action URLs
-        let approve_url = self.email_token_service.generate_action_url(
-            &self.app_url,
-            &approve_token,
-            "approve",
-        );
+        let approve_url =
+            self.email_token_service
+                .generate_action_url(&self.app_url, &approve_token, "approve");
 
-        let reject_url = self.email_token_service.generate_action_url(
-            &self.app_url,
-            &reject_token,
-            "reject",
-        );
+        let reject_url =
+            self.email_token_service
+                .generate_action_url(&self.app_url, &reject_token, "reject");
 
         let view_url = format!("{}/invoices/{}", self.app_url, invoice.id);
 
         // Prepare email content
-        let invoice_number = if invoice.invoice_number.is_empty() { "N/A" } else { &invoice.invoice_number };
-        let vendor_name = if invoice.vendor_name.is_empty() { "Unknown Vendor" } else { &invoice.vendor_name };
+        let invoice_number = if invoice.invoice_number.is_empty() {
+            "N/A"
+        } else {
+            &invoice.invoice_number
+        };
+        let vendor_name = if invoice.vendor_name.is_empty() {
+            "Unknown Vendor"
+        } else {
+            &invoice.vendor_name
+        };
         let amount = format!("${:.2}", invoice.total_amount.amount as f64 / 100.0);
 
         // Get the actual submitter name
-        let submitted_by = match self.user_repo.get_name_by_id(tenant_id, &invoice.created_by).await {
+        let submitted_by = match self
+            .user_repo
+            .get_name_by_id(tenant_id, &invoice.created_by)
+            .await
+        {
             Ok(Some(name)) => name,
             Ok(None) => {
-                tracing::warn!("User {} not found for invoice {}", invoice.created_by, invoice.id);
+                tracing::warn!(
+                    "User {} not found for invoice {}",
+                    invoice.created_by,
+                    invoice.id
+                );
                 "Unknown User".to_string()
             }
             Err(e) => {
-                tracing::warn!("Failed to get submitter name for invoice {}: {}", invoice.id, e);
+                tracing::warn!(
+                    "Failed to get submitter name for invoice {}: {}",
+                    invoice.id,
+                    e
+                );
                 "AP Team".to_string()
             }
         };
@@ -224,7 +264,11 @@ impl<
                 invoice_number, vendor_name
             );
 
-            if let Err(e) = self.email_service.send(&email, &subject, &html, &text).await {
+            if let Err(e) = self
+                .email_service
+                .send(&email, &subject, &html, &text)
+                .await
+            {
                 tracing::error!("Failed to send approval email to {}: {}", email, e);
             }
         }
@@ -281,27 +325,28 @@ impl<
 
         // Extract the field value from the invoice
         let field_value = match condition.field {
-            ConditionField::Amount => {
-                serde_json::to_value(invoice.total_amount.amount).ok()
-            }
-            ConditionField::VendorId => {
-                invoice.vendor_id.as_ref().and_then(|v| serde_json::to_value(v).ok())
-            }
+            ConditionField::Amount => serde_json::to_value(invoice.total_amount.amount).ok(),
+            ConditionField::VendorId => invoice
+                .vendor_id
+                .as_ref()
+                .and_then(|v| serde_json::to_value(v).ok()),
             ConditionField::VendorName => {
                 Some(serde_json::Value::String(invoice.vendor_name.clone()))
             }
-            ConditionField::Department => {
-                invoice.department.as_ref().map(|d| serde_json::Value::String(d.clone()))
-            }
-            ConditionField::GlCode => {
-                invoice.gl_code.as_ref().map(|g| serde_json::Value::String(g.clone()))
-            }
-            ConditionField::InvoiceDate => {
-                invoice.invoice_date.and_then(|d| serde_json::to_value(d.to_string()).ok())
-            }
-            ConditionField::DueDate => {
-                invoice.due_date.and_then(|d| serde_json::to_value(d.to_string()).ok())
-            }
+            ConditionField::Department => invoice
+                .department
+                .as_ref()
+                .map(|d| serde_json::Value::String(d.clone())),
+            ConditionField::GlCode => invoice
+                .gl_code
+                .as_ref()
+                .map(|g| serde_json::Value::String(g.clone())),
+            ConditionField::InvoiceDate => invoice
+                .invoice_date
+                .and_then(|d| serde_json::to_value(d.to_string()).ok()),
+            ConditionField::DueDate => invoice
+                .due_date
+                .and_then(|d| serde_json::to_value(d.to_string()).ok()),
             ConditionField::Tag => {
                 if invoice.tags.is_empty() {
                     None
@@ -329,9 +374,7 @@ impl<
                 // Field is null/missing
                 matches!(condition.operator, ConditionOperator::IsNull)
             }
-            Some(fv) => {
-                self.apply_operator(fv, &condition.operator, &condition.value)
-            }
+            Some(fv) => self.apply_operator(fv, &condition.operator, &condition.value),
         }
     }
 
@@ -348,16 +391,23 @@ impl<
             ConditionOperator::Equals => field_value == condition_value,
             ConditionOperator::NotEquals => field_value != condition_value,
             ConditionOperator::GreaterThan => {
-                self.compare_values(field_value, condition_value) == Some(std::cmp::Ordering::Greater)
+                self.compare_values(field_value, condition_value)
+                    == Some(std::cmp::Ordering::Greater)
             }
             ConditionOperator::GreaterThanOrEqual => {
-                matches!(self.compare_values(field_value, condition_value), Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal))
+                matches!(
+                    self.compare_values(field_value, condition_value),
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                )
             }
             ConditionOperator::LessThan => {
                 self.compare_values(field_value, condition_value) == Some(std::cmp::Ordering::Less)
             }
             ConditionOperator::LessThanOrEqual => {
-                matches!(self.compare_values(field_value, condition_value), Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
+                matches!(
+                    self.compare_values(field_value, condition_value),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                )
             }
             ConditionOperator::Contains => {
                 // String contains or array contains
@@ -365,28 +415,22 @@ impl<
                     (serde_json::Value::String(s), serde_json::Value::String(pattern)) => {
                         s.contains(pattern)
                     }
-                    (serde_json::Value::Array(arr), _) => {
-                        arr.contains(condition_value)
-                    }
+                    (serde_json::Value::Array(arr), _) => arr.contains(condition_value),
                     _ => false,
                 }
             }
-            ConditionOperator::StartsWith => {
-                match (field_value, condition_value) {
-                    (serde_json::Value::String(s), serde_json::Value::String(prefix)) => {
-                        s.starts_with(prefix)
-                    }
-                    _ => false,
+            ConditionOperator::StartsWith => match (field_value, condition_value) {
+                (serde_json::Value::String(s), serde_json::Value::String(prefix)) => {
+                    s.starts_with(prefix)
                 }
-            }
-            ConditionOperator::EndsWith => {
-                match (field_value, condition_value) {
-                    (serde_json::Value::String(s), serde_json::Value::String(suffix)) => {
-                        s.ends_with(suffix)
-                    }
-                    _ => false,
+                _ => false,
+            },
+            ConditionOperator::EndsWith => match (field_value, condition_value) {
+                (serde_json::Value::String(s), serde_json::Value::String(suffix)) => {
+                    s.ends_with(suffix)
                 }
-            }
+                _ => false,
+            },
             ConditionOperator::In => {
                 // Field value is in the condition value (which should be an array)
                 match condition_value {
@@ -405,11 +449,17 @@ impl<
                 // Condition value should be [min, max]
                 match condition_value {
                     serde_json::Value::Array(arr) if arr.len() == 2 => {
-                        let min_ok = self.compare_values(field_value, &arr[0])
-                            .map(|o| o == std::cmp::Ordering::Greater || o == std::cmp::Ordering::Equal)
+                        let min_ok = self
+                            .compare_values(field_value, &arr[0])
+                            .map(|o| {
+                                o == std::cmp::Ordering::Greater || o == std::cmp::Ordering::Equal
+                            })
                             .unwrap_or(false);
-                        let max_ok = self.compare_values(field_value, &arr[1])
-                            .map(|o| o == std::cmp::Ordering::Less || o == std::cmp::Ordering::Equal)
+                        let max_ok = self
+                            .compare_values(field_value, &arr[1])
+                            .map(|o| {
+                                o == std::cmp::Ordering::Less || o == std::cmp::Ordering::Equal
+                            })
                             .unwrap_or(false);
                         min_ok && max_ok
                     }
@@ -443,13 +493,9 @@ impl<
                 a_val.partial_cmp(&b_val)
             }
             // String comparison
-            (Value::String(a_str), Value::String(b_str)) => {
-                Some(a_str.cmp(b_str))
-            }
+            (Value::String(a_str), Value::String(b_str)) => Some(a_str.cmp(b_str)),
             // Boolean comparison
-            (Value::Bool(a_bool), Value::Bool(b_bool)) => {
-                Some(a_bool.cmp(b_bool))
-            }
+            (Value::Bool(a_bool), Value::Bool(b_bool)) => Some(a_bool.cmp(b_bool)),
             _ => None,
         }
     }
@@ -474,11 +520,17 @@ impl<
         match action.action_type {
             ActionType::RouteToQueue => {
                 // Extract queue ID from params
-                let queue_id: crate::domain::WorkQueueId = action.params
+                let queue_id: crate::domain::WorkQueueId = action
+                    .params
                     .get("queue_id")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Validation("RouteToQueue requires queue_id parameter".to_string()))
-                    .and_then(|s| s.parse().map_err(|_| Error::Validation("Invalid queue_id format".to_string())))?;
+                    .ok_or_else(|| {
+                        Error::Validation("RouteToQueue requires queue_id parameter".to_string())
+                    })
+                    .and_then(|s| {
+                        s.parse()
+                            .map_err(|_| Error::Validation("Invalid queue_id format".to_string()))
+                    })?;
 
                 // Route invoice to specified queue
                 self.queue_repo
@@ -494,38 +546,52 @@ impl<
             ActionType::RequireApproval | ActionType::RequireRoleApproval => {
                 // Extract approver target from params
                 let approver = if action.action_type == ActionType::RequireRoleApproval {
-                    let role = action.params
+                    let role = action
+                        .params
                         .get("role")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| Error::Validation("RequireRoleApproval requires role parameter".to_string()))?;
+                        .ok_or_else(|| {
+                            Error::Validation(
+                                "RequireRoleApproval requires role parameter".to_string(),
+                            )
+                        })?;
                     crate::domain::ApprovalTarget::Role(role.to_string())
                 } else {
                     // RequireApproval - can be user_id, user_ids, or role
                     if let Some(user_id) = action.params.get("user_id").and_then(|v| v.as_str()) {
-                        let uid = user_id.parse()
+                        let uid = user_id
+                            .parse()
                             .map_err(|_| Error::Validation("Invalid user_id format".to_string()))?;
                         crate::domain::ApprovalTarget::User(crate::UserId(uid))
-                    } else if let Some(user_ids) = action.params.get("user_ids").and_then(|v| v.as_array()) {
+                    } else if let Some(user_ids) =
+                        action.params.get("user_ids").and_then(|v| v.as_array())
+                    {
                         let ids: Result<Vec<_>> = user_ids
                             .iter()
                             .filter_map(|v| v.as_str())
                             .map(|s| {
-                                s.parse()
-                                    .map_err(|_| Error::Validation("Invalid user_id in user_ids".to_string()))
+                                s.parse().map_err(|_| {
+                                    Error::Validation("Invalid user_id in user_ids".to_string())
+                                })
                             })
                             .collect();
-                        crate::domain::ApprovalTarget::AnyOf(ids?.into_iter().map(crate::UserId).collect())
+                        crate::domain::ApprovalTarget::AnyOf(
+                            ids?.into_iter().map(crate::UserId).collect(),
+                        )
                     } else if let Some(role) = action.params.get("role").and_then(|v| v.as_str()) {
                         crate::domain::ApprovalTarget::Role(role.to_string())
                     } else {
                         return Err(Error::Validation(
-                            "RequireApproval requires user_id, user_ids, or role parameter".to_string()
+                            "RequireApproval requires user_id, user_ids, or role parameter"
+                                .to_string(),
                         ));
                     }
                 };
 
                 // Create approval request
-                let request = self.create_approval_request(tenant_id, invoice, approver, None).await?;
+                let request = self
+                    .create_approval_request(tenant_id, invoice, approver, None)
+                    .await?;
 
                 // Store in repository
                 self.approval_repo.create(tenant_id, request).await?;
@@ -535,7 +601,7 @@ impl<
                     .update(
                         tenant_id,
                         &invoice.id,
-                        serde_json::json!({ "processing_status": "pending_approval" })
+                        serde_json::json!({ "processing_status": "pending_approval" }),
                     )
                     .await?;
 
@@ -550,7 +616,7 @@ impl<
                     .update(
                         tenant_id,
                         &invoice.id,
-                        serde_json::json!({ "processing_status": "approved" })
+                        serde_json::json!({ "processing_status": "approved" }),
                     )
                     .await?;
 
@@ -561,13 +627,17 @@ impl<
             }
             ActionType::SendNotification => {
                 // Extract notification parameters
-                let to = action.params
+                let to = action
+                    .params
                     .get("to")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Validation("SendNotification requires 'to' parameter".to_string()))?;
+                    .ok_or_else(|| {
+                        Error::Validation("SendNotification requires 'to' parameter".to_string())
+                    })?;
 
                 let default_subject = format!("Invoice {} - Notification", invoice.invoice_number);
-                let subject = action.params
+                let subject = action
+                    .params
                     .get("subject")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&default_subject);
@@ -576,7 +646,8 @@ impl<
                     "Invoice {} from {} requires your attention.",
                     invoice.invoice_number, invoice.vendor_name
                 );
-                let body = action.params
+                let body = action
+                    .params
                     .get("body")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&default_body);
@@ -592,18 +663,23 @@ impl<
             }
             ActionType::SetField => {
                 // Extract field name and value from params
-                let field_name = action.params
+                let field_name = action
+                    .params
                     .get("field")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Validation("SetField requires 'field' parameter".to_string()))?;
+                    .ok_or_else(|| {
+                        Error::Validation("SetField requires 'field' parameter".to_string())
+                    })?;
 
-                let field_value = action.params
-                    .get("value")
-                    .ok_or_else(|| Error::Validation("SetField requires 'value' parameter".to_string()))?;
+                let field_value = action.params.get("value").ok_or_else(|| {
+                    Error::Validation("SetField requires 'value' parameter".to_string())
+                })?;
 
                 // Update invoice field
                 let updates = serde_json::json!({ field_name: field_value });
-                self.invoice_repo.update(tenant_id, &invoice.id, updates).await?;
+                self.invoice_repo
+                    .update(tenant_id, &invoice.id, updates)
+                    .await?;
 
                 tracing::info!(
                     invoice_id = %invoice.id,
@@ -613,17 +689,22 @@ impl<
             }
             ActionType::AddTag => {
                 // Extract tag from params
-                let tag = action.params
+                let tag = action
+                    .params
                     .get("tag")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Validation("AddTag requires 'tag' parameter".to_string()))?;
+                    .ok_or_else(|| {
+                        Error::Validation("AddTag requires 'tag' parameter".to_string())
+                    })?;
 
                 // Get current tags and add new one
                 let mut tags = invoice.tags.clone();
                 if !tags.contains(&tag.to_string()) {
                     tags.push(tag.to_string());
                     let updates = serde_json::json!({ "tags": tags });
-                    self.invoice_repo.update(tenant_id, &invoice.id, updates).await?;
+                    self.invoice_repo
+                        .update(tenant_id, &invoice.id, updates)
+                        .await?;
                 }
 
                 tracing::info!(
@@ -634,25 +715,32 @@ impl<
             }
             ActionType::Escalate => {
                 // Extract escalation parameters
-                let escalate_to = action.params
+                let escalate_to = action
+                    .params
                     .get("user_id")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::Validation("Escalate requires 'user_id' parameter".to_string()))?;
+                    .ok_or_else(|| {
+                        Error::Validation("Escalate requires 'user_id' parameter".to_string())
+                    })?;
 
-                let user_uuid: Uuid = escalate_to.parse()
+                let user_uuid: Uuid = escalate_to
+                    .parse()
                     .map_err(|_| Error::Validation("Invalid user_id format".to_string()))?;
 
                 let escalate_user_id = UserId(user_uuid);
 
                 // Find current queue item for invoice
-                match self.queue_repo.get_current_item_for_invoice(tenant_id, &invoice.id).await? {
+                match self
+                    .queue_repo
+                    .get_current_item_for_invoice(tenant_id, &invoice.id)
+                    .await?
+                {
                     Some(current_item) => {
                         // Reassign the queue item to the new user
-                        let reassigned_item = self.queue_repo.reassign_item(
-                            tenant_id,
-                            current_item.id,
-                            &escalate_user_id
-                        ).await?;
+                        let reassigned_item = self
+                            .queue_repo
+                            .reassign_item(tenant_id, current_item.id, &escalate_user_id)
+                            .await?;
 
                         tracing::info!(
                             invoice_id = %invoice.id,
@@ -681,18 +769,27 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ConditionField, ConditionOperator, Invoice, InvoiceId, RuleCondition, CaptureStatus, ProcessingStatus};
-    use crate::{UserId, Money, TenantId};
+    use crate::domain::{
+        CaptureStatus, ConditionField, ConditionOperator, Invoice, InvoiceId, ProcessingStatus,
+        RuleCondition,
+    };
+    use crate::{Money, TenantId, UserId};
     use chrono::Utc;
-    use uuid::Uuid;
     use serde_json::json;
+    use uuid::Uuid;
 
     // Mock EmailService for testing
     struct MockEmailService;
 
     #[async_trait]
     impl EmailService for MockEmailService {
-        async fn send(&self, _to: &str, _subject: &str, _html_body: &str, _text_body: &str) -> Result<()> {
+        async fn send(
+            &self,
+            _to: &str,
+            _subject: &str,
+            _html_body: &str,
+            _text_body: &str,
+        ) -> Result<()> {
             Ok(())
         }
     }
@@ -719,19 +816,35 @@ mod tests {
 
     #[async_trait]
     impl UserRepository for MockUserRepository {
-        async fn get_email_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
+        async fn get_email_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _user_id: &UserId,
+        ) -> Result<Option<String>> {
             Ok(Some("test@example.com".to_string()))
         }
 
-        async fn get_name_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
+        async fn get_name_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _user_id: &UserId,
+        ) -> Result<Option<String>> {
             Ok(Some("Test User".to_string()))
         }
 
-        async fn get_emails_by_ids(&self, _tenant_id: &TenantId, _user_ids: &[UserId]) -> Result<Vec<String>> {
+        async fn get_emails_by_ids(
+            &self,
+            _tenant_id: &TenantId,
+            _user_ids: &[UserId],
+        ) -> Result<Vec<String>> {
             Ok(vec!["test@example.com".to_string()])
         }
 
-        async fn get_emails_by_role(&self, _tenant_id: &TenantId, _role: &str) -> Result<Vec<String>> {
+        async fn get_emails_by_role(
+            &self,
+            _tenant_id: &TenantId,
+            _role: &str,
+        ) -> Result<Vec<String>> {
             Ok(vec!["test@example.com".to_string()])
         }
     }
@@ -750,7 +863,11 @@ mod tests {
             unimplemented!("Not used in tests")
         }
 
-        async fn get_by_id(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<Option<Invoice>> {
+        async fn get_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+        ) -> Result<Option<Invoice>> {
             Ok(None)
         }
 
@@ -773,7 +890,11 @@ mod tests {
             Ok(create_test_invoice())
         }
 
-        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<()> {
+        async fn delete(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -830,11 +951,18 @@ mod tests {
             unimplemented!("Not used in tests")
         }
 
-        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::WorkQueueId) -> Result<()> {
+        async fn delete(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkQueueId,
+        ) -> Result<()> {
             Ok(())
         }
 
-        async fn get_default(&self, _tenant_id: &TenantId) -> Result<Option<crate::domain::WorkQueue>> {
+        async fn get_default(
+            &self,
+            _tenant_id: &TenantId,
+        ) -> Result<Option<crate::domain::WorkQueue>> {
             Ok(None)
         }
 
@@ -884,7 +1012,12 @@ mod tests {
             unimplemented!("Not used in tests")
         }
 
-        async fn complete_item(&self, _tenant_id: &TenantId, _item_id: Uuid, _action: &str) -> Result<()> {
+        async fn complete_item(
+            &self,
+            _tenant_id: &TenantId,
+            _item_id: Uuid,
+            _action: &str,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -910,7 +1043,11 @@ mod tests {
             })
         }
 
-        async fn count_items(&self, _tenant_id: &TenantId, _queue_id: &crate::domain::WorkQueueId) -> Result<i64> {
+        async fn count_items(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+        ) -> Result<i64> {
             Ok(0)
         }
 
@@ -1022,7 +1159,6 @@ mod tests {
         }
     }
 
-
     fn create_test_invoice() -> Invoice {
         Invoice {
             id: InvoiceId::new(),
@@ -1033,9 +1169,18 @@ mod tests {
             invoice_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 6).unwrap()),
             due_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap()),
             po_number: None,
-            subtotal: Some(Money { amount: 10000, currency: "USD".to_string() }),
-            tax_amount: Some(Money { amount: 800, currency: "USD".to_string() }),
-            total_amount: Money { amount: 10800, currency: "USD".to_string() },
+            subtotal: Some(Money {
+                amount: 10000,
+                currency: "USD".to_string(),
+            }),
+            tax_amount: Some(Money {
+                amount: 800,
+                currency: "USD".to_string(),
+            }),
+            total_amount: Money {
+                amount: 10800,
+                currency: "USD".to_string(),
+            },
             currency: "USD".to_string(),
             line_items: vec![],
             capture_status: CaptureStatus::Reviewed,
@@ -1081,86 +1226,102 @@ mod tests {
                     ConditionField::Amount => {
                         serde_json::to_value(invoice.total_amount.amount).ok()
                     }
-                    ConditionField::Department => {
-                        invoice.department.as_ref().map(|d| serde_json::Value::String(d.clone()))
-                    }
-                    ConditionField::GlCode => {
-                        invoice.gl_code.as_ref().map(|g| serde_json::Value::String(g.clone()))
-                    }
+                    ConditionField::Department => invoice
+                        .department
+                        .as_ref()
+                        .map(|d| serde_json::Value::String(d.clone())),
+                    ConditionField::GlCode => invoice
+                        .gl_code
+                        .as_ref()
+                        .map(|g| serde_json::Value::String(g.clone())),
                     _ => None,
                 };
 
                 match &field_value {
                     None => matches!(condition.operator, ConditionOperator::IsNull),
-                    Some(fv) => {
-                        match condition.operator {
-                            ConditionOperator::Equals => fv == &condition.value,
-                            ConditionOperator::NotEquals => fv != &condition.value,
-                            ConditionOperator::GreaterThan => {
-                                if let (serde_json::Value::Number(a), serde_json::Value::Number(b)) = (fv, &condition.value) {
-                                    a.as_f64().unwrap_or(0.0) > b.as_f64().unwrap_or(0.0)
-                                } else {
-                                    false
-                                }
+                    Some(fv) => match condition.operator {
+                        ConditionOperator::Equals => fv == &condition.value,
+                        ConditionOperator::NotEquals => fv != &condition.value,
+                        ConditionOperator::GreaterThan => {
+                            if let (serde_json::Value::Number(a), serde_json::Value::Number(b)) =
+                                (fv, &condition.value)
+                            {
+                                a.as_f64().unwrap_or(0.0) > b.as_f64().unwrap_or(0.0)
+                            } else {
+                                false
                             }
-                            ConditionOperator::LessThanOrEqual => {
-                                if let (serde_json::Value::Number(a), serde_json::Value::Number(b)) = (fv, &condition.value) {
-                                    a.as_f64().unwrap_or(0.0) <= b.as_f64().unwrap_or(0.0)
-                                } else {
-                                    false
-                                }
+                        }
+                        ConditionOperator::LessThanOrEqual => {
+                            if let (serde_json::Value::Number(a), serde_json::Value::Number(b)) =
+                                (fv, &condition.value)
+                            {
+                                a.as_f64().unwrap_or(0.0) <= b.as_f64().unwrap_or(0.0)
+                            } else {
+                                false
                             }
-                            ConditionOperator::Contains => {
-                                if let (serde_json::Value::String(s), serde_json::Value::String(pattern)) = (fv, &condition.value) {
-                                    s.contains(pattern)
-                                } else {
-                                    false
-                                }
+                        }
+                        ConditionOperator::Contains => {
+                            if let (
+                                serde_json::Value::String(s),
+                                serde_json::Value::String(pattern),
+                            ) = (fv, &condition.value)
+                            {
+                                s.contains(pattern)
+                            } else {
+                                false
                             }
-                            ConditionOperator::StartsWith => {
-                                if let (serde_json::Value::String(s), serde_json::Value::String(prefix)) = (fv, &condition.value) {
-                                    s.starts_with(prefix)
-                                } else {
-                                    false
-                                }
+                        }
+                        ConditionOperator::StartsWith => {
+                            if let (
+                                serde_json::Value::String(s),
+                                serde_json::Value::String(prefix),
+                            ) = (fv, &condition.value)
+                            {
+                                s.starts_with(prefix)
+                            } else {
+                                false
                             }
-                            ConditionOperator::EndsWith => {
-                                if let (serde_json::Value::String(s), serde_json::Value::String(suffix)) = (fv, &condition.value) {
-                                    s.ends_with(suffix)
-                                } else {
-                                    false
-                                }
+                        }
+                        ConditionOperator::EndsWith => {
+                            if let (
+                                serde_json::Value::String(s),
+                                serde_json::Value::String(suffix),
+                            ) = (fv, &condition.value)
+                            {
+                                s.ends_with(suffix)
+                            } else {
+                                false
                             }
-                            ConditionOperator::In => {
-                                if let serde_json::Value::Array(arr) = &condition.value {
-                                    arr.contains(fv)
-                                } else {
-                                    false
-                                }
+                        }
+                        ConditionOperator::In => {
+                            if let serde_json::Value::Array(arr) = &condition.value {
+                                arr.contains(fv)
+                            } else {
+                                false
                             }
-                            ConditionOperator::Between => {
-                                if let serde_json::Value::Array(arr) = &condition.value {
-                                    if arr.len() == 2 {
-                                        if let serde_json::Value::Number(a) = fv {
-                                            let val = a.as_f64().unwrap_or(0.0);
-                                            let min = arr[0].as_f64().unwrap_or(0.0);
-                                            let max = arr[1].as_f64().unwrap_or(0.0);
-                                            val >= min && val <= max
-                                        } else {
-                                            false
-                                        }
+                        }
+                        ConditionOperator::Between => {
+                            if let serde_json::Value::Array(arr) = &condition.value {
+                                if arr.len() == 2 {
+                                    if let serde_json::Value::Number(a) = fv {
+                                        let val = a.as_f64().unwrap_or(0.0);
+                                        let min = arr[0].as_f64().unwrap_or(0.0);
+                                        let max = arr[1].as_f64().unwrap_or(0.0);
+                                        val >= min && val <= max
                                     } else {
                                         false
                                     }
                                 } else {
                                     false
                                 }
+                            } else {
+                                false
                             }
-                            ConditionOperator::IsNull => false,
-                            ConditionOperator::IsNotNull => true,
-                            _ => false,
                         }
-                    }
+                        ConditionOperator::IsNull => false,
+                        ConditionOperator::IsNotNull => true,
+                        _ => false,
+                    },
                 }
             }
         }
@@ -1237,21 +1398,27 @@ mod tests {
                 let field_value = serde_json::Value::String(invoice.vendor_name.clone());
                 match condition.operator {
                     ConditionOperator::Contains => {
-                        if let (serde_json::Value::String(s), serde_json::Value::String(pattern)) = (&field_value, &condition.value) {
+                        if let (serde_json::Value::String(s), serde_json::Value::String(pattern)) =
+                            (&field_value, &condition.value)
+                        {
                             s.contains(pattern)
                         } else {
                             false
                         }
                     }
                     ConditionOperator::StartsWith => {
-                        if let (serde_json::Value::String(s), serde_json::Value::String(prefix)) = (&field_value, &condition.value) {
+                        if let (serde_json::Value::String(s), serde_json::Value::String(prefix)) =
+                            (&field_value, &condition.value)
+                        {
                             s.starts_with(prefix)
                         } else {
                             false
                         }
                     }
                     ConditionOperator::EndsWith => {
-                        if let (serde_json::Value::String(s), serde_json::Value::String(suffix)) = (&field_value, &condition.value) {
+                        if let (serde_json::Value::String(s), serde_json::Value::String(suffix)) =
+                            (&field_value, &condition.value)
+                        {
                             s.ends_with(suffix)
                         } else {
                             false

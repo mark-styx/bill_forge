@@ -1,34 +1,34 @@
 //! API routes
 
+pub mod approval_chains;
 mod audit;
 mod auth;
+pub mod bill_com;
 pub mod dashboard;
 mod documents;
+pub mod email_actions;
+mod export;
+mod feedback;
 mod health;
 mod invoices;
-mod vendors;
-mod workflows;
-mod reports;
-mod export;
-mod sandbox;
-pub mod email_actions;
+pub mod mobile;
+pub mod notifications;
+pub mod ocr_pipeline;
+pub mod predictive;
 pub mod quickbooks;
-pub mod xero;
+mod reports;
 pub mod sage_intacct;
 pub mod salesforce;
-pub mod workday;
-pub mod bill_com;
-pub mod notifications;
-pub mod predictive;
-pub mod mobile;
-pub mod ocr_pipeline;
-pub mod approval_chains;
+mod sandbox;
 mod settings;
-mod feedback;
+mod vendors;
+pub mod workday;
+mod workflows;
+pub mod xero;
 
+use crate::metrics;
 use crate::middleware::{rate_limit_auth, RateLimiterState};
 use crate::state::AppState;
-use crate::metrics;
 use axum::{middleware, routing::get, Extension, Router};
 
 /// Create the main API router
@@ -67,9 +67,12 @@ async fn landing_page() -> axum::response::Html<String> {
 fn api_routes() -> Router<AppState> {
     Router::new()
         // Authentication (rate limited: 20 requests per 60 seconds per source IP)
-        .nest("/auth", auth::routes()
-            .layer(middleware::from_fn(rate_limit_auth))
-            .layer(Extension(RateLimiterState::new(20, 60))))
+        .nest(
+            "/auth",
+            auth::routes()
+                .layer(middleware::from_fn(rate_limit_auth))
+                .layer(Extension(RateLimiterState::new(20, 60))),
+        )
         // Invoice Capture module
         .nest("/invoices", invoices::routes())
         // Vendor Management module

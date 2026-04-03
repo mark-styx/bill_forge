@@ -2,16 +2,16 @@
 //!
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
-use sqlx::PgPool;
-use uuid::Uuid;
 use anyhow::Result;
+use billforge_core::TenantId;
 use billforge_invoice_processing::{
     categorization::{CategoryType, LineItemInput},
-    MLCategorizer,
     embedding_cache::EmbeddingCache,
     feedback_loop::FeedbackLearning,
+    MLCategorizer,
 };
-use billforge_core::TenantId;
+use sqlx::PgPool;
+use uuid::Uuid;
 
 /// Helper to set up test tenant and data
 async fn setup_test_tenant(pool: &PgPool) -> TenantId {
@@ -290,11 +290,18 @@ async fn test_feedback_learning_analyze(pool: PgPool) -> Result<()> {
     let insights = learning.analyze_feedback(&tenant_id_str, 7).await?;
 
     // Verify insights
-    assert!(insights.category_adjustments.len() > 0, "Should have category adjustments");
-    assert!(insights.confidence_calibration.total_samples >= 2, "Should have feedback samples");
+    assert!(
+        insights.category_adjustments.len() > 0,
+        "Should have category adjustments"
+    );
+    assert!(
+        insights.confidence_calibration.total_samples >= 2,
+        "Should have feedback samples"
+    );
 
     // Check that the adjustment pattern was detected
-    let gl_adjustments: Vec<_> = insights.category_adjustments
+    let gl_adjustments: Vec<_> = insights
+        .category_adjustments
         .iter()
         .filter(|a| a.category_type == CategoryType::GlCode)
         .collect();
@@ -333,7 +340,10 @@ async fn test_feedback_accuracy_metrics(pool: PgPool) -> Result<()> {
     let tenant_id_str = tenant_id.as_str();
     let metrics = learning.get_accuracy_metrics(&tenant_id_str, 7).await?;
 
-    assert_eq!(metrics.total_suggestions, 10, "Should have 10 total suggestions");
+    assert_eq!(
+        metrics.total_suggestions, 10,
+        "Should have 10 total suggestions"
+    );
     assert_eq!(metrics.accepted_suggestions, 8, "Should have 8 accepted");
     assert_eq!(metrics.corrected_suggestions, 2, "Should have 2 corrected");
 
@@ -444,7 +454,10 @@ async fn test_daily_metrics_update(pool: PgPool) -> Result<()> {
     .await?;
 
     assert_eq!(total, 5, "Should have 5 total suggestions");
-    assert_eq!(accepted, 5, "All 5 should be accepted (suggested = correct)");
+    assert_eq!(
+        accepted, 5,
+        "All 5 should be accepted (suggested = correct)"
+    );
 
     Ok(())
 }

@@ -11,4 +11,6 @@ mod tests;
 
 pub use jwt::{Claims, JwtConfig, JwtService};
 pub use password::PasswordService;
-pub use service::{AuthResponse, AuthService, LoginInput, RegisterInput, UserInfo, TenantInfo, TenantSettingsInfo};
+pub use service::{
+    AuthResponse, AuthService, LoginInput, RegisterInput, TenantInfo, TenantSettingsInfo, UserInfo,
+};

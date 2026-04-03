@@ -64,7 +64,10 @@ impl SageIntacctAuth {
 
     /// Establish a new API session
     pub async fn get_session(&self) -> Result<SageIntacctSession> {
-        let entity_login = self.config.entity_id.as_ref()
+        let entity_login = self
+            .config
+            .entity_id
+            .as_ref()
             .map(|id| format!("<locationid>{}</locationid>", id))
             .unwrap_or_default();
 

@@ -12,8 +12,8 @@
 use anyhow::Result;
 use tracing::info;
 
-mod jobs;
 mod config;
+mod jobs;
 mod scheduler;
 
 #[tokio::main]
@@ -22,8 +22,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     // Determine mode from environment
-    let mode = std::env::var("WORKER_MODE")
-        .unwrap_or_else(|_| "worker".to_string());
+    let mode = std::env::var("WORKER_MODE").unwrap_or_else(|_| "worker".to_string());
 
     info!("Starting BillForge Background Service (mode: {})", mode);
 

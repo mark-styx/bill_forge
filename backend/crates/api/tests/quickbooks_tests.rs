@@ -107,7 +107,7 @@ fn test_quickbooks_tokens_structure() {
 
 #[test]
 fn test_quickbooks_oauth_config() {
-    use billforge_quickbooks::oauth::{QuickBooksOAuthConfig, QuickBooksEnvironment};
+    use billforge_quickbooks::oauth::{QuickBooksEnvironment, QuickBooksOAuthConfig};
 
     let config = QuickBooksOAuthConfig {
         client_id: "test_client".to_string(),

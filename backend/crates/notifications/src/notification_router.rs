@@ -6,12 +6,14 @@
 use crate::{
     slack::{SlackClient, SlackConfig, SlackError},
     teams::{TeamsClient, TeamsConfig, TeamsError},
-    Notification, NotificationChannel, NotificationError, NotificationProvider,
-    NotificationResult, NotificationPriority,
+    Notification, NotificationChannel, NotificationError, NotificationPriority,
+    NotificationProvider, NotificationResult,
 };
 use async_trait::async_trait;
 use billforge_core::UserId;
-use billforge_mobile_push::{FcmClient, FcmConfig, FcmError, ApnsClient, ApnsConfig, ApnsError, PushNotificationProvider};
+use billforge_mobile_push::{
+    ApnsClient, ApnsConfig, ApnsError, FcmClient, FcmConfig, FcmError, PushNotificationProvider,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -117,7 +119,10 @@ impl NotificationRouter {
 
         // Check quiet hours
         if self.is_quiet_hours(preferences) {
-            info!("Quiet hours for user {}, skipping notification", notification.user_id);
+            info!(
+                "Quiet hours for user {}, skipping notification",
+                notification.user_id
+            );
             return Ok(DeliveryResult {
                 notification_id: notification.id,
                 user_id: notification.user_id.clone(),
@@ -190,7 +195,9 @@ impl NotificationRouter {
 
             // Check if notification type is in the list (empty list = all types)
             if !channel_pref.notification_types.is_empty()
-                && !channel_pref.notification_types.contains(&notification.notification_type)
+                && !channel_pref
+                    .notification_types
+                    .contains(&notification.notification_type)
             {
                 continue;
             }
@@ -246,7 +253,9 @@ impl NotificationRouter {
                         success: false,
                         channel,
                         external_id: None,
-                        error_message: Some("No push notification providers configured".to_string()),
+                        error_message: Some(
+                            "No push notification providers configured".to_string(),
+                        ),
                     });
                 }
             }

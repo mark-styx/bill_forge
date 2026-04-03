@@ -69,7 +69,8 @@ impl AvailabilityManager {
 
     /// Register a calendar integration
     pub fn register_calendar(&mut self, name: &str, integration: Box<dyn CalendarIntegration>) {
-        self.calendar_integrations.insert(name.to_string(), integration);
+        self.calendar_integrations
+            .insert(name.to_string(), integration);
     }
 
     /// Check current availability status for a user
@@ -81,9 +82,9 @@ impl AvailabilityManager {
         let now = Utc::now();
 
         // Check explicit availability records first
-        let active_record = availability_records.iter().find(|a| {
-            a.start_at <= now && a.end_at > now
-        });
+        let active_record = availability_records
+            .iter()
+            .find(|a| a.start_at <= now && a.end_at > now);
 
         if let Some(record) = active_record {
             return record.status;
@@ -107,7 +108,10 @@ impl AvailabilityManager {
             .calendar_integrations
             .get(calendar_source)
             .ok_or_else(|| {
-                Error::Validation(format!("Calendar integration '{}' not found", calendar_source))
+                Error::Validation(format!(
+                    "Calendar integration '{}' not found",
+                    calendar_source
+                ))
             })?;
 
         if !calendar.is_connected(user_id).await? {
@@ -190,9 +194,9 @@ impl AvailabilityManager {
         let now = Utc::now();
 
         // Check for active unavailability
-        let active_blocker = availability_records.iter().find(|a| {
-            a.user_id == *user_id && a.start_at <= now && a.end_at > now
-        });
+        let active_blocker = availability_records
+            .iter()
+            .find(|a| a.user_id == *user_id && a.start_at <= now && a.end_at > now);
 
         if let Some(blocker) = active_blocker {
             return match blocker.status {
@@ -220,11 +224,9 @@ impl AvailabilityManager {
         working_hours: &WorkingHoursConfig,
     ) -> AvailabilityPrediction {
         // Check scheduled unavailability
-        let scheduled_blocker = availability_records.iter().find(|a| {
-            a.user_id == *user_id
-                && a.start_at <= target_time
-                && a.end_at > target_time
-        });
+        let scheduled_blocker = availability_records
+            .iter()
+            .find(|a| a.user_id == *user_id && a.start_at <= target_time && a.end_at > target_time);
 
         let status = if let Some(blocker) = scheduled_blocker {
             blocker.status

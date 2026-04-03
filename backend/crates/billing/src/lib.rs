@@ -7,10 +7,10 @@
 #![allow(unused_variables)]
 
 pub mod plans;
-pub mod subscription;
 pub mod service;
 pub mod stripe;
+pub mod subscription;
 
 pub use plans::{Plan, PlanFeatures, PlanId, PlanTier};
-pub use subscription::{Subscription, SubscriptionStatus, BillingCycle};
-pub use service::{BillingService, BillingConfig};
+pub use service::{BillingConfig, BillingService};
+pub use subscription::{BillingCycle, Subscription, SubscriptionStatus};

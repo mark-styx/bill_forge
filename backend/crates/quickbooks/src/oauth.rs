@@ -76,11 +76,7 @@ impl QuickBooksOAuth {
     }
 
     /// Exchange authorization code for tokens
-    pub async fn exchange_code(
-        &self,
-        code: &str,
-        realm_id: &str,
-    ) -> Result<QBTokens> {
+    pub async fn exchange_code(&self, code: &str, realm_id: &str) -> Result<QBTokens> {
         let response = self
             .http_client
             .post(self.config.environment.token_url())
