@@ -9,42 +9,89 @@ const invoiceUploadTime = new Trend('invoice_upload_time');
 const approvalTime = new Trend('approval_time');
 const dashboardLoadTime = new Trend('dashboard_load_time');
 
-// Test configuration
-export let options = {
-    stages: [
-        // Ramp-up: 0 → 50 users over 1 minute
-        { duration: '1m', target: 50 },
-        // Stay at 50 users for 3 minutes
-        { duration: '3m', target: 50 },
-        // Ramp-up: 50 → 100 users over 1 minute
-        { duration: '1m', target: 100 },
-        // Stay at 100 users for 5 minutes
-        { duration: '5m', target: 100 },
-        // Ramp-up: 100 → 200 users over 2 minutes
-        { duration: '2m', target: 200 },
-        // Stay at 200 users for 5 minutes
-        { duration: '5m', target: 200 },
-        // Ramp-down: 200 → 0 users over 1 minute
-        { duration: '1m', target: 0 },
-    ],
-    thresholds: {
-        // Overall error rate must be < 1%
-        errors: ['rate<0.01'],
-        // P95 latency must be < 500ms
-        api_latency: ['p(95)<500'],
-        // P99 latency must be < 1000ms
-        api_latency: ['p(99)<1000'],
-        // Invoice upload P95 < 2s
-        invoice_upload_time: ['p(95)<2000'],
-        // Approval actions P95 < 300ms
-        approval_time: ['p(95)<300'],
-        // Dashboard load P95 < 800ms
-        dashboard_load_time: ['p(95)<800'],
-        // HTTP requests
-        http_req_duration: ['p(95)<500', 'p(99)<1000'],
-        http_req_failed: ['rate<0.01'],
+// ---------------------------------------------------------------------------
+// Scenario helpers - shared thresholds applied across all scenarios
+// ---------------------------------------------------------------------------
+const sharedThresholds = {
+    // Overall error rate must be < 1%
+    errors: ['rate<0.01'],
+    // P95 read latency < 300ms, P99 < 800ms
+    api_latency: ['p(95)<300', 'p(99)<800'],
+    // Invoice upload P95 < 1.5s
+    invoice_upload_time: ['p(95)<1500'],
+    // Approval actions P95 < 300ms
+    approval_time: ['p(95)<300'],
+    // Dashboard load P95 < 800ms
+    dashboard_load_time: ['p(95)<800'],
+    // HTTP requests
+    http_req_duration: ['p(95)<500', 'p(99)<1000'],
+    http_req_failed: ['rate<0.01'],
+};
+
+// ---------------------------------------------------------------------------
+// 5,000 invoices/month throughput model
+//
+// 5000 / 30 days / 8 business hours / 60 min = ~0.35 uploads/sec sustained
+// With 3x peak multiplier = ~1.04 uploads/sec
+// Correlated read traffic (list/search) ~3x upload rate = ~3.1 reads/sec
+// Approval traffic ~0.5x upload rate = ~0.5/sec
+// ---------------------------------------------------------------------------
+const TARGET_UPLOAD_RPS = 1.04;   // 3x peak multiplier of sustained rate
+const TARGET_READ_RPS = 3.1;      // correlated read traffic
+const TARGET_APPROVAL_RPS = 0.5;  // approval actions
+
+// ---------------------------------------------------------------------------
+// Scenarios
+// ---------------------------------------------------------------------------
+// Default: run the 5K/month sustained throughput model.
+// Override with: k6 run -e SCENARIO=ocr_stress  or  --scenarioName
+// ---------------------------------------------------------------------------
+const scenarios = {
+    // Sustained 5K/month throughput using arrival-rate (not VU-based)
+    monthly_5k_throughput: {
+        executor: 'constant-arrival-rate',
+        rate: TARGET_UPLOAD_RPS + TARGET_READ_RPS + TARGET_APPROVAL_RPS,
+        timeUnit: '1s',
+        duration: '10m',
+        preAllocatedVUs: 20,
+        maxVUs: 50,
+        gracefulStop: '30s',
+        exec: 'sustainedTraffic',
+    },
+    // Stress test: hammer upload→OCR path at 2x peak to find ceiling
+    ocr_pipeline_stress: {
+        executor: 'constant-arrival-rate',
+        rate: TARGET_UPLOAD_RPS * 2,   // ~2.08 uploads/sec
+        timeUnit: '1s',
+        duration: '5m',
+        preAllocatedVUs: 10,
+        maxVUs: 40,
+        gracefulStop: '30s',
+        exec: 'ocrPipelineStress',
+    },
+    // Legacy VU-ramp scenario (kept for backward compat with run-performance-tests.sh)
+    vu_ramp: {
+        executor: 'ramping-vus',
+        startVUs: 0,
+        stages: [
+            { duration: '1m', target: 50 },
+            { duration: '3m', target: 50 },
+            { duration: '1m', target: 100 },
+            { duration: '5m', target: 100 },
+            { duration: '2m', target: 200 },
+            { duration: '5m', target: 200 },
+            { duration: '1m', target: 0 },
+        ],
+        gracefulRampDown: '30s',
     },
 };
+
+// Select scenario via environment variable; default runs all
+const scenarioName = __ENV.SCENARIO || '';
+
+export let options = scenarioName
+    ? { scenarios: { [scenarioName]: scenarios[scenarioName] }, thresholds: sharedThresholds }
+    : { scenarios, thresholds: sharedThresholds };
 
 // Configuration from environment
 const BASE_URL = __ENV.API_URL || 'http://localhost:8000';
@@ -57,6 +104,34 @@ const headers = {
     'Content-Type': 'application/json',
     'X-Tenant-ID': TENANT_ID,
 };
+
+// ---------------------------------------------------------------------------
+// Scenario entry points
+// ---------------------------------------------------------------------------
+
+// Sustained 5K/month traffic mix (arrival-rate driven)
+export function sustainedTraffic() {
+    const roll = Math.random();
+    const uploadShare = TARGET_UPLOAD_RPS / (TARGET_UPLOAD_RPS + TARGET_READ_RPS + TARGET_APPROVAL_RPS);
+    const readShare = TARGET_READ_RPS / (TARGET_UPLOAD_RPS + TARGET_READ_RPS + TARGET_APPROVAL_RPS);
+
+    if (roll < uploadShare) {
+        testInvoiceUpload();
+    } else if (roll < uploadShare + readShare) {
+        testInvoiceList();
+    } else {
+        testApprovalWorkflow();
+    }
+}
+
+// OCR pipeline stress - uploads only at 2x peak rate
+export function ocrPipelineStress() {
+    testInvoiceUpload();
+}
+
+// ---------------------------------------------------------------------------
+// Setup / Teardown / Default
+// ---------------------------------------------------------------------------
 
 // Setup function (runs once per VU)
 export function setup() {
@@ -74,7 +149,7 @@ export function teardown() {
     console.log('Load test completed');
 }
 
-// Main test function (runs in a loop for each VU)
+// Main test function (runs in a loop for each VU) - used by vu_ramp scenario
 export default function () {
     // Randomly select a test scenario
     const scenario = Math.random();
@@ -98,6 +173,41 @@ export default function () {
 
     // Think time between requests (1-3 seconds)
     sleep(Math.random() * 2 + 1);
+}
+
+// ---------------------------------------------------------------------------
+// handleSummary - write JSON results for baseline comparison
+// ---------------------------------------------------------------------------
+export function handleSummary(data) {
+    const resultsDir = __ENV.RESULTS_DIR || 'tests/performance/results';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const jsonPath = `${resultsDir}/run-${timestamp}.json`;
+
+    return {
+        [jsonPath]: JSON.stringify(data, null, 2),
+        stdout: textSummary(data, { indent: ' ', enableColors: true }),
+    };
+}
+
+function textSummary(data, opts) {
+    // Minimal plaintext summary (k6 ships its own but handleSummary needs raw text)
+    const lines = [];
+    lines.push('\n=== Load Test Summary ===\n');
+
+    for (const [name, scenario] of Object.entries(data.scenarios || {})) {
+        lines.push(`Scenario: ${name}`);
+        lines.push(`  Duration: ${scenario.state?.testRunDurationMs || 'N/A'}ms`);
+    }
+
+    const metrics = data.metrics || {};
+    for (const [metric, val] of Object.entries(metrics)) {
+        if (val.values) {
+            lines.push(`Metric: ${metric}  p(95)=${val.values['p(95)'] !== undefined ? val.values['p(95)'].toFixed(2) : 'N/A'}  avg=${val.values.avg !== undefined ? val.values.avg.toFixed(2) : 'N/A'}`);
+        }
+    }
+
+    lines.push('\nResults written to: ' + (data.resultsPath || 'N/A'));
+    return lines.join('\n');
 }
 
 // Test: Invoice list and search

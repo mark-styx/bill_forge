@@ -1,6 +1,9 @@
 # Prometheus Alerting Rules for BillForge
 #
-# These alerts monitor system health, performance, and business metrics
+# These alerts monitor system health, performance, and business metrics.
+# Calibrated for 5,000 invoices/month sustained throughput (~4.64 total RPS peak).
+#
+# Runbook: docs/runbooks/on-call-operations.md
 
 groups:
   - name: billforge_critical
@@ -12,29 +15,58 @@ groups:
           rate(billforge_http_requests_total{status=~"5.."}[5m])
           /
           rate(billforge_http_requests_total[5m])
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "API error rate elevated above 1%"
+          description: "API error rate is {{ $value | humanizePercentage }} (warning threshold: 1%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apihigherrorrate"
+
+      - alert: APIHighErrorRate
+        expr: |
+          rate(billforge_http_requests_total{status=~"5.."}[5m])
+          /
+          rate(billforge_http_requests_total[5m])
           > 0.05
         for: 5m
         labels:
           severity: critical
           service: api
         annotations:
-          summary: "High API error rate detected"
-          description: "API error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
-          runbook_url: "https://docs.billforge.io/runbooks/api-errors"
+          summary: "API error rate critically high above 5%"
+          description: "API error rate is {{ $value | humanizePercentage }} (critical threshold: 5%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apihigherrorrate"
 
       - alert: APIHighLatency
         expr: |
           histogram_quantile(0.95,
             sum(rate(billforge_http_request_duration_seconds_bucket[5m])) by (le)
-          ) > 5
-        for: 10m
+          ) > 1
+        for: 5m
         labels:
           severity: warning
           service: api
         annotations:
-          summary: "API P95 latency is high"
-          description: "P95 latency is {{ $value | humanizeDuration }} (threshold: 5s)"
-          runbook_url: "https://docs.billforge.io/runbooks/api-latency"
+          summary: "API P95 latency is elevated"
+          description: "P95 latency is {{ $value | humanizeDuration }} (warning threshold: 1s)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apihighlatency"
+
+      - alert: APIHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(billforge_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "API P95 latency is critically high"
+          description: "P95 latency is {{ $value | humanizeDuration }} (critical threshold: 2s)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apihighlatency"
 
       - alert: APIDown
         expr: up{job="billforge-api"} == 0
@@ -45,19 +77,19 @@ groups:
         annotations:
           summary: "API service is down"
           description: "API instance {{ $labels.instance }} is unreachable"
-          runbook_url: "https://docs.billforge.io/runbooks/api-down"
+          runbook_url: "docs/runbooks/on-call-operations.md#apidown"
 
       # Worker Health
       - alert: WorkerQueueBacklog
-        expr: redis_llen{key="billforge:jobs:queue"} > 100
+        expr: redis_llen{key="billforge:jobs:queue"} > 50
         for: 10m
         labels:
           severity: warning
           service: worker
         annotations:
           summary: "Job queue backlog detected"
-          description: "Job queue has {{ $value }} pending jobs (threshold: 100)"
-          runbook_url: "https://docs.billforge.io/runbooks/queue-backlog"
+          description: "Job queue has {{ $value }} pending jobs (threshold: 50)"
+          runbook_url: "docs/runbooks/on-call-operations.md#workerqueuebacklog"
 
       - alert: WorkerHighFailureRate
         expr: |
@@ -72,6 +104,7 @@ groups:
         annotations:
           summary: "High job failure rate"
           description: "Job failure rate is {{ $value | humanizePercentage }} (threshold: 10%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#workerhighfailurerate"
 
       - alert: WorkerDown
         expr: up{job="billforge-worker"} == 0
@@ -82,6 +115,37 @@ groups:
         annotations:
           summary: "Worker service is down"
           description: "Worker instance {{ $labels.instance }} is unreachable"
+          runbook_url: "docs/runbooks/on-call-operations.md#workerdown"
+
+      # OCR Pipeline
+      - alert: OCRProcessingLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(billforge_ocr_processing_duration_seconds_bucket[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: ocr
+        annotations:
+          summary: "OCR processing latency is high"
+          description: "OCR P95 latency is {{ $value | humanizeDuration }} (threshold: 30s)"
+          runbook_url: "docs/runbooks/on-call-operations.md#ocrprocessinglatency"
+
+      - alert: OCRProviderErrors
+        expr: |
+          rate(billforge_ocr_provider_errors_total[10m])
+          /
+          rate(billforge_ocr_requests_total[10m])
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: ocr
+        annotations:
+          summary: "OCR provider error rate is elevated"
+          description: "OCR provider failure rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#ocrprovidererrors"
 
   - name: billforge_database
     interval: 1m
@@ -100,7 +164,7 @@ groups:
         annotations:
           summary: "PostgreSQL connection pool near capacity"
           description: "Using {{ $value | humanizePercentage }} of max connections"
-          runbook_url: "https://docs.billforge.io/runbooks/postgres-connections"
+          runbook_url: "docs/runbooks/on-call-operations.md#postgresqltoomanyconnections"
 
       - alert: PostgreSQLReplicationLag
         expr: pg_replication_lag > 10
@@ -111,6 +175,7 @@ groups:
         annotations:
           summary: "PostgreSQL replication lag detected"
           description: "Replication lag is {{ $value }} seconds (threshold: 10s)"
+          runbook_url: "docs/runbooks/on-call-operations.md#postgresqlreplicationlag"
 
       - alert: PostgreSQLDiskSpaceLow
         expr: |
@@ -123,6 +188,7 @@ groups:
         annotations:
           summary: "PostgreSQL disk space running low"
           description: "Database disk usage is {{ $value | humanizePercentage }}"
+          runbook_url: "docs/runbooks/on-call-operations.md#postgresqldiskspacelow"
 
       # Redis
       - alert: RedisMemoryHigh
@@ -138,6 +204,7 @@ groups:
         annotations:
           summary: "Redis memory usage is high"
           description: "Redis memory usage is {{ $value | humanizePercentage }}"
+          runbook_url: "docs/runbooks/on-call-operations.md#redismemoryhigh"
 
       - alert: RedisDown
         expr: up{job="redis"} == 0
@@ -148,6 +215,7 @@ groups:
         annotations:
           summary: "Redis is down"
           description: "Redis instance {{ $labels.instance }} is unreachable"
+          runbook_url: "docs/runbooks/on-call-operations.md#redisdown"
 
   - name: billforge_business
     interval: 5m
@@ -164,6 +232,7 @@ groups:
         annotations:
           summary: "OCR confidence scores are low"
           description: "Average OCR confidence is {{ $value | humanizePercentage }} (threshold: 75%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#lowocrconfidence"
 
       - alert: InvoiceProcessingBacklog
         expr: |
@@ -177,6 +246,7 @@ groups:
         annotations:
           summary: "Invoice processing backlog growing"
           description: "Pending invoices exceeds hourly processing capacity"
+          runbook_url: "docs/runbooks/on-call-operations.md#invoiceprocessingbacklog"
 
       - alert: ApprovalSLABreach
         expr: |
@@ -190,6 +260,7 @@ groups:
         annotations:
           summary: "Approval SLA at risk"
           description: "P95 approval cycle time is {{ $value }} hours (SLA: 48h)"
+          runbook_url: "docs/runbooks/on-call-operations.md#approvalslabreach"
 
   - name: billforge_infrastructure
     interval: 1m
@@ -205,6 +276,7 @@ groups:
         annotations:
           summary: "Container CPU usage is high"
           description: "Container {{ $labels.name }} CPU usage is {{ $value | humanizePercentage }}"
+          runbook_url: "docs/runbooks/on-call-operations.md#containerhighcpu"
 
       - alert: ContainerHighMemory
         expr: |
@@ -218,6 +290,7 @@ groups:
         annotations:
           summary: "Container memory usage is high"
           description: "Container {{ $labels.name }} memory usage is {{ $value | humanizePercentage }}"
+          runbook_url: "docs/runbooks/on-call-operations.md#containerhighmemory"
 
       - alert: ContainerRestartingFrequently
         expr: |
@@ -229,6 +302,7 @@ groups:
         annotations:
           summary: "Container is restarting frequently"
           description: "Container {{ $labels.name }} restarted {{ $value }} times in the last hour"
+          runbook_url: "docs/runbooks/on-call-operations.md#containerrestartingfrequently"
 
       # Disk
       - alert: DiskSpaceLow
@@ -243,6 +317,7 @@ groups:
         annotations:
           summary: "Disk space running low"
           description: "Disk {{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full"
+          runbook_url: "docs/runbooks/on-call-operations.md#diskspacelow"
 
       # Network
       - alert: HighNetworkTraffic
@@ -255,3 +330,4 @@ groups:
         annotations:
           summary: "High network traffic detected"
           description: "Network traffic is {{ $value | humanize }}B/s"
+          runbook_url: "docs/runbooks/on-call-operations.md#highnetworktraffic"
