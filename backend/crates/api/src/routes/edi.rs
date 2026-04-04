@@ -25,11 +25,13 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use billforge_core::domain::{CreatePurchaseOrderInput, PurchaseOrderId, ReceivingLineItem};
 use billforge_core::types::{TenantId, UserId};
-use billforge_db::repositories::InvoiceRepositoryImpl;
-use billforge_core::traits::InvoiceRepository;
+use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
+use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_edi::{
-    verify_webhook_signature, EdiDocumentType, EdiInvoice, EdiMapper, EdiWebhookPayload,
+    verify_webhook_signature, EdiDocumentType, EdiInvoice, EdiMapper, EdiPurchaseOrder,
+    EdiShipNotice, EdiWebhookPayload,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -298,6 +300,112 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
+            // 8. If invoice references a PO, attempt automatic 3-way matching
+            let mut match_result_json = serde_json::Value::Null;
+            if let Some(ref po_number) = edi_invoice.po_number {
+                let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
+                if let Ok(Some(po)) = po_repo.find_by_po_number(&tenant_id, po_number).await {
+                    use billforge_edi::matching::{InvoiceLineForMatch, MatchEngine};
+                    use billforge_core::domain::MatchTolerances;
+
+                    // Load receiving records for this PO
+                    let recv_rows = sqlx::query_as::<_, (Uuid, i32, f32, f32, Option<String>)>(
+                        r#"SELECT rl.id, rl.po_line_number, rl.quantity_received, rl.quantity_damaged, rl.product_id
+                           FROM receiving_line_items rl
+                           JOIN receiving_records rr ON rl.receiving_id = rr.id
+                           WHERE rr.po_id = $1"#,
+                    )
+                    .bind(po.id.0)
+                    .fetch_all(&*tenant_pool)
+                    .await;
+
+                    let recv_rows = match recv_rows {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            tracing::warn!("Failed to load receiving records for auto-match: {}", e);
+                            vec![]
+                        }
+                    };
+
+                    let receiving_lines: Vec<billforge_core::domain::ReceivingLineItem> = recv_rows
+                        .iter()
+                        .map(|r| billforge_core::domain::ReceivingLineItem {
+                            id: r.0,
+                            po_line_number: r.1 as u32,
+                            quantity_received: r.2 as f64,
+                            quantity_damaged: r.3 as f64,
+                            product_id: r.4.clone(),
+                        })
+                        .collect();
+
+                    let invoice_lines: Vec<InvoiceLineForMatch> = edi_invoice
+                        .line_items
+                        .iter()
+                        .map(|li| InvoiceLineForMatch {
+                            line_number: li.line_number,
+                            quantity: li.quantity,
+                            unit_price_cents: li.unit_price_cents,
+                            product_id: li.product_id.clone(),
+                        })
+                        .collect();
+
+                    let tolerances = MatchTolerances::default();
+                    let match_output = MatchEngine::run(
+                        &po.line_items, &receiving_lines, &invoice_lines, &tolerances,
+                    );
+
+                    let details = serde_json::to_value(&match_output).unwrap_or_default();
+                    let match_id = Uuid::new_v4();
+
+                    let match_stored = sqlx::query(
+                        r#"INSERT INTO match_results (id, tenant_id, invoice_id, po_id, match_type, price_variance_pct, quantity_variance_pct, details)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                    )
+                    .bind(match_id)
+                    .bind(tenant_uuid)
+                    .bind(invoice.id.0)
+                    .bind(po.id.0)
+                    .bind(match_output.match_type.as_str())
+                    .bind(match_output.overall_price_variance_pct as f32)
+                    .bind(match_output.overall_quantity_variance_pct as f32)
+                    .bind(&details)
+                    .execute(&*tenant_pool)
+                    .await;
+
+                    if let Err(e) = &match_stored {
+                        tracing::warn!("Failed to store match result: {}", e);
+                    }
+
+                    // Only report match and auto-approve if the result was persisted
+                    if match_stored.is_ok() {
+                        if match_output.match_type == billforge_core::domain::MatchType::Full
+                            && invoice.total_amount.amount <= tolerances.auto_approve_below_cents
+                        {
+                            if let Err(e) = sqlx::query(
+                                "UPDATE invoices SET processing_status = 'approved', updated_at = NOW() WHERE id = $1",
+                            )
+                            .bind(invoice.id.0)
+                            .execute(&*tenant_pool)
+                            .await
+                            {
+                                tracing::warn!("Failed to auto-approve matched invoice: {}", e);
+                            } else {
+                                tracing::info!(
+                                    invoice_id = %invoice.id,
+                                    po_id = %po.id,
+                                    "EDI invoice auto-approved via 3-way match"
+                                );
+                            }
+                        }
+
+                        match_result_json = serde_json::json!({
+                            "match_type": match_output.match_type.as_str(),
+                            "match_id": match_id,
+                        });
+                    }
+                }
+            }
+
             tracing::info!(
                 invoice_id = %invoice.id,
                 invoice_number = %invoice.invoice_number,
@@ -311,6 +419,365 @@ async fn webhook_inbound(
                 "invoice_number": invoice.invoice_number,
                 "invoice_id": invoice.id.0,
                 "edi_document_id": doc_id,
+                "match_result": match_result_json,
+            })))
+        }
+        EdiDocumentType::PurchaseOrder850 => {
+            let edi_po: EdiPurchaseOrder = serde_json::from_value(payload.payload.clone())
+                .map_err(|e| {
+                    tracing::error!("Failed to parse EDI purchase order: {}", e);
+                    axum::http::StatusCode::BAD_REQUEST
+                })?;
+
+            tracing::info!(
+                po_number = %edi_po.po_number,
+                "Processing inbound EDI 850 purchase order"
+            );
+
+            // Tenant lookup + signature verification (same pattern as 810)
+            let metadata_pool = state.db.metadata();
+            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
+            )
+            .bind(&edi_po.receiver_id)
+            .fetch_optional(&*metadata_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant from receiver_id: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let tenant_uuid = tenant_uuid.ok_or_else(|| {
+                tracing::warn!(receiver_id = %edi_po.receiver_id, "No tenant for EDI receiver_id");
+                axum::http::StatusCode::NOT_FOUND
+            })?;
+
+            let tenant_id = TenantId::from_uuid(tenant_uuid);
+            let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+                tracing::error!("Failed to get tenant pool: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Verify signature
+            let webhook_secret: Option<String> = sqlx::query_scalar(
+                "SELECT webhook_secret FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch webhook secret: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            if let Some(secret) = &webhook_secret {
+                if !secret.is_empty() && !signature.is_empty() {
+                    if !verify_webhook_signature(&body, signature, secret) {
+                        tracing::warn!("EDI webhook signature verification failed");
+                        return Err(axum::http::StatusCode::UNAUTHORIZED);
+                    }
+                }
+            }
+
+            // Store EDI document
+            let doc_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO edi_documents (id, tenant_id, document_type, direction, interchange_control, sender_id, receiver_id, status, raw_payload, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', $8, NOW())"#,
+            )
+            .bind(doc_id)
+            .bind(tenant_uuid)
+            .bind("purchase_order_850")
+            .bind("inbound")
+            .bind(&edi_po.interchange_control)
+            .bind(&edi_po.sender_id)
+            .bind(&edi_po.receiver_id)
+            .bind(&payload.payload)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Look up vendor by sender_id
+            let vendor_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT vendor_id FROM edi_trading_partners WHERE tenant_id = $1 AND edi_id = $2 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .bind(&edi_po.sender_id)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up trading partner: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .flatten();
+
+            let vendor_id = vendor_id.ok_or_else(|| {
+                tracing::warn!(sender_id = %edi_po.sender_id, "No vendor mapping for EDI sender");
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY
+            })?;
+
+            // Map to BillForge PO and create
+            let po_input = EdiMapper::purchase_order_from_edi(&edi_po, vendor_id)
+                .map_err(|e| {
+                    tracing::error!("Failed to map EDI purchase order: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            let admin_user_id: Uuid = sqlx::query_scalar(
+                "SELECT id FROM users WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant admin: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .ok_or_else(|| {
+                tracing::error!("No active users for tenant {}", tenant_uuid);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let created_by = UserId::from_uuid(admin_user_id);
+            let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
+            let po = po_repo.create(&tenant_id, po_input, &created_by)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to create purchase order from EDI: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            // Update EDI document: mapped, link po_id
+            sqlx::query(
+                "UPDATE edi_documents SET status = 'mapped', po_id = $1, processed_at = NOW() WHERE id = $2",
+            )
+            .bind(po.id.0)
+            .bind(doc_id)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tracing::info!(
+                po_id = %po.id,
+                po_number = %po.po_number,
+                edi_doc_id = %doc_id,
+                "EDI 850 purchase order created"
+            );
+
+            Ok(Json(serde_json::json!({
+                "status": "accepted",
+                "document_type": "purchase_order_850",
+                "po_number": po.po_number,
+                "po_id": po.id.0,
+                "edi_document_id": doc_id,
+            })))
+        }
+        EdiDocumentType::ShipNotice856 => {
+            let edi_asn: EdiShipNotice = serde_json::from_value(payload.payload.clone())
+                .map_err(|e| {
+                    tracing::error!("Failed to parse EDI ship notice: {}", e);
+                    axum::http::StatusCode::BAD_REQUEST
+                })?;
+
+            tracing::info!(
+                shipment_id = %edi_asn.shipment_id,
+                po_number = %edi_asn.po_number,
+                "Processing inbound EDI 856 ship notice"
+            );
+
+            // Tenant lookup + signature verification
+            let metadata_pool = state.db.metadata();
+            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
+            )
+            .bind(&edi_asn.receiver_id)
+            .fetch_optional(&*metadata_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let tenant_uuid = tenant_uuid.ok_or_else(|| {
+                tracing::warn!(receiver_id = %edi_asn.receiver_id, "No tenant for EDI receiver_id");
+                axum::http::StatusCode::NOT_FOUND
+            })?;
+
+            let tenant_id = TenantId::from_uuid(tenant_uuid);
+            let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+                tracing::error!("Failed to get tenant pool: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Verify signature
+            let webhook_secret: Option<String> = sqlx::query_scalar(
+                "SELECT webhook_secret FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch webhook secret: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            if let Some(secret) = &webhook_secret {
+                if !secret.is_empty() && !signature.is_empty() {
+                    if !verify_webhook_signature(&body, signature, secret) {
+                        tracing::warn!("EDI webhook signature verification failed");
+                        return Err(axum::http::StatusCode::UNAUTHORIZED);
+                    }
+                }
+            }
+
+            // Store EDI document
+            let doc_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO edi_documents (id, tenant_id, document_type, direction, interchange_control, sender_id, receiver_id, status, raw_payload, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', $8, NOW())"#,
+            )
+            .bind(doc_id)
+            .bind(tenant_uuid)
+            .bind("ship_notice_856")
+            .bind("inbound")
+            .bind(&edi_asn.interchange_control)
+            .bind(&edi_asn.sender_id)
+            .bind(&edi_asn.receiver_id)
+            .bind(&payload.payload)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Find matching PO by po_number
+            let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
+            let po = po_repo.find_by_po_number(&tenant_id, &edi_asn.po_number)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to look up PO: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            let po = po.ok_or_else(|| {
+                tracing::warn!(po_number = %edi_asn.po_number, "No PO found for ASN");
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY
+            })?;
+
+            // Create receiving record
+            let recv_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO receiving_records (id, tenant_id, po_id, received_date, edi_document_id, created_at)
+                   VALUES ($1, $2, $3, $4, $5, NOW())"#,
+            )
+            .bind(recv_id)
+            .bind(tenant_uuid)
+            .bind(po.id.0)
+            .bind(edi_asn.ship_date)
+            .bind(doc_id)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to create receiving record: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Insert receiving line items and update PO received quantities
+            let recv_lines = EdiMapper::receiving_lines_from_asn(&edi_asn);
+            for line in &recv_lines {
+                sqlx::query(
+                    r#"INSERT INTO receiving_line_items (id, receiving_id, po_line_number, quantity_received, quantity_damaged, product_id)
+                       VALUES ($1, $2, $3, $4, $5, $6)"#,
+                )
+                .bind(line.id)
+                .bind(recv_id)
+                .bind(line.po_line_number as i32)
+                .bind(line.quantity_received as f32)
+                .bind(line.quantity_damaged as f32)
+                .bind(&line.product_id)
+                .execute(&*tenant_pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to insert receiving line item: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+                // Update PO line received quantity
+                po_repo.update_received_quantities(
+                    &tenant_id, &po.id, line.po_line_number, line.quantity_received
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to update PO received qty: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            }
+
+            // Check if all PO lines are fulfilled
+            let unfulfilled: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM po_line_items WHERE po_id = $1 AND received_quantity < quantity",
+            )
+            .bind(po.id.0)
+            .fetch_one(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to check PO fulfillment: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let new_status = if unfulfilled == 0 {
+                "fulfilled"
+            } else {
+                "partially_fulfilled"
+            };
+
+            sqlx::query(
+                "UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE id = $2",
+            )
+            .bind(new_status)
+            .bind(po.id.0)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update PO status: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Update EDI document: mapped, link po_id
+            sqlx::query(
+                "UPDATE edi_documents SET status = 'mapped', po_id = $1, processed_at = NOW() WHERE id = $2",
+            )
+            .bind(po.id.0)
+            .bind(doc_id)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tracing::info!(
+                recv_id = %recv_id,
+                po_id = %po.id,
+                lines = recv_lines.len(),
+                new_status = %new_status,
+                "EDI 856 ship notice processed"
+            );
+
+            Ok(Json(serde_json::json!({
+                "status": "accepted",
+                "document_type": "ship_notice_856",
+                "receiving_id": recv_id,
+                "po_id": po.id.0,
+                "po_status": new_status,
+                "edi_document_id": doc_id,
             })))
         }
         EdiDocumentType::FunctionalAck997 => {
@@ -319,13 +786,6 @@ async fn webhook_inbound(
             Ok(Json(serde_json::json!({
                 "status": "accepted",
                 "document_type": "functional_ack_997",
-            })))
-        }
-        _ => {
-            tracing::warn!(doc_type = %payload.document_type, "Unsupported EDI document type");
-            Ok(Json(serde_json::json!({
-                "status": "ignored",
-                "reason": "unsupported document type",
             })))
         }
     }

@@ -4,6 +4,7 @@ use crate::domain::*;
 use crate::error::Result;
 use crate::types::*;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Repository for invoice operations
@@ -161,6 +162,29 @@ pub trait ApprovalRepository: Send + Sync {
     async fn list_pending_for_user(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Vec<ApprovalRequest>>;
     async fn respond(&self, tenant_id: &TenantId, id: Uuid, status: ApprovalStatus, comments: Option<String>, user_id: &UserId) -> Result<ApprovalRequest>;
     async fn cancel_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<()>;
+}
+
+/// Repository for purchase order operations
+#[async_trait]
+pub trait PurchaseOrderRepository: Send + Sync {
+    async fn create(&self, tenant_id: &TenantId, input: CreatePurchaseOrderInput, created_by: &UserId) -> Result<PurchaseOrder>;
+    async fn get_by_id(&self, tenant_id: &TenantId, id: &PurchaseOrderId) -> Result<Option<PurchaseOrder>>;
+    async fn find_by_po_number(&self, tenant_id: &TenantId, po_number: &str) -> Result<Option<PurchaseOrder>>;
+    async fn list(&self, tenant_id: &TenantId, filters: &POFilters, pagination: &Pagination) -> Result<PaginatedResponse<PurchaseOrder>>;
+    async fn update_status(&self, tenant_id: &TenantId, id: &PurchaseOrderId, status: POStatus) -> Result<()>;
+    async fn update_received_quantities(&self, tenant_id: &TenantId, po_id: &PurchaseOrderId, line_number: u32, received_qty: f64) -> Result<()>;
+    async fn update_invoiced_quantities(&self, tenant_id: &TenantId, po_id: &PurchaseOrderId, line_number: u32, invoiced_qty: f64) -> Result<()>;
+    async fn delete(&self, tenant_id: &TenantId, id: &PurchaseOrderId) -> Result<()>;
+}
+
+/// Filters for querying purchase orders
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct POFilters {
+    pub vendor_id: Option<Uuid>,
+    pub status: Option<POStatus>,
+    pub date_from: Option<chrono::NaiveDate>,
+    pub date_to: Option<chrono::NaiveDate>,
+    pub search: Option<String>,
 }
 
 /// OCR service interface

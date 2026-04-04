@@ -5,6 +5,8 @@
 //!
 //! Supported document types:
 //! - X12 810 (Invoice) - inbound, maps to BillForge invoices
+//! - X12 850 (Purchase Order) - inbound, creates purchase orders
+//! - X12 856 (Advance Ship Notice) - inbound, creates receiving records
 //! - X12 997 (Functional Acknowledgment) - inbound/outbound
 //!
 //! BillForge does NOT parse raw X12. The middleware handles:
@@ -16,11 +18,13 @@
 pub mod client;
 pub mod config;
 pub mod mapper;
+pub mod matching;
 pub mod types;
 pub mod webhook;
 
 pub use client::EdiClient;
 pub use config::EdiConfig;
 pub use mapper::EdiMapper;
+pub use matching::MatchEngine;
 pub use types::*;
 pub use webhook::verify_webhook_signature;

@@ -31,6 +31,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     // Additional tenant-specific tables (work queues, workflow rules, etc.)
     run_workflow_migrations(pool).await?;
     run_vendor_statement_migrations(pool).await?;
+    run_purchase_order_migrations(pool).await?;
 
     Ok(())
 }
@@ -378,6 +379,16 @@ async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await
     .map_err(|e| Error::Migration(format!("Failed to run vendor statement migrations: {}", e)))?;
+
+    Ok(())
+}
+
+/// Run purchase order and 3-way matching migrations
+pub async fn run_purchase_order_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!("../../../migrations/065_create_purchase_orders.sql"))
+        .execute(pool)
+        .await
+        .map_err(|e| Error::Migration(format!("Failed to run purchase order migrations: {}", e)))?;
 
     Ok(())
 }

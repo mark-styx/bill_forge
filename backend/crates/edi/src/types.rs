@@ -183,6 +183,114 @@ pub struct EdiCharge {
     pub description: Option<String>,
 }
 
+// ──────────────────────────── 850 Purchase Order ────────────────────────────
+
+/// EDI Purchase Order (normalized from X12 850)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiPurchaseOrder {
+    /// ISA sender qualifier + ID
+    pub sender_id: String,
+    /// ISA receiver qualifier + ID
+    pub receiver_id: String,
+    /// Interchange control number (ICN)
+    pub interchange_control: String,
+    /// Group control number
+    pub group_control: Option<String>,
+    /// Purchase order number (BEG03)
+    pub po_number: String,
+    /// PO date (BEG05)
+    pub po_date: NaiveDate,
+    /// Expected delivery date (DTM)
+    pub expected_delivery: Option<NaiveDate>,
+    /// Buyer/ordering party (N1*BY)
+    pub buyer: EdiParty,
+    /// Ship-to party (N1*ST)
+    pub ship_to: Option<EdiParty>,
+    /// Vendor/supplier party (N1*SE or N1*VN)
+    pub vendor: Option<EdiParty>,
+    /// PO line items (PO1 segments)
+    #[serde(default)]
+    pub line_items: Vec<EdiPOLineItem>,
+    /// Total PO amount in cents (CTT or calculated)
+    pub total_amount_cents: i64,
+    /// Currency code
+    pub currency: String,
+    /// Payment terms
+    pub terms: Option<EdiPaymentTerms>,
+    /// Shipping instructions
+    pub shipping_instructions: Option<String>,
+    /// Notes/comments (MSG segments)
+    pub notes: Option<String>,
+}
+
+/// EDI PO line item (PO1 segment)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiPOLineItem {
+    /// Line number (PO1-01)
+    pub line_number: u32,
+    /// Quantity ordered (PO1-02)
+    pub quantity: f64,
+    /// Unit of measure (PO1-03): EA, CS, LB, etc.
+    pub unit_of_measure: String,
+    /// Unit price in cents (PO1-04)
+    pub unit_price_cents: i64,
+    /// Product/service ID qualifier (PO1-06): UP=UPC, SK=SKU, VP=Vendor Part
+    pub product_id_qualifier: Option<String>,
+    /// Product/service ID (PO1-07)
+    pub product_id: Option<String>,
+    /// Description (PID segment)
+    pub description: String,
+    /// Line total in cents
+    pub total_cents: i64,
+}
+
+// ──────────────────────────── 856 Ship Notice ────────────────────────────
+
+/// EDI Advance Ship Notice (normalized from X12 856)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiShipNotice {
+    /// ISA sender qualifier + ID
+    pub sender_id: String,
+    /// ISA receiver qualifier + ID
+    pub receiver_id: String,
+    /// Interchange control number
+    pub interchange_control: String,
+    /// Shipment ID (BSN02)
+    pub shipment_id: String,
+    /// Ship date (BSN03)
+    pub ship_date: NaiveDate,
+    /// Expected delivery date (DTM)
+    pub expected_delivery: Option<NaiveDate>,
+    /// Referenced PO number
+    pub po_number: String,
+    /// Carrier name
+    pub carrier: Option<String>,
+    /// Tracking number
+    pub tracking_number: Option<String>,
+    /// Ship-from party
+    pub ship_from: Option<EdiParty>,
+    /// Ship-to party
+    pub ship_to: Option<EdiParty>,
+    /// Shipped line items
+    #[serde(default)]
+    pub line_items: Vec<EdiShipLineItem>,
+}
+
+/// Shipped line item in an ASN
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiShipLineItem {
+    /// PO line number reference
+    pub po_line_number: u32,
+    /// Quantity shipped
+    pub quantity_shipped: f64,
+    /// Unit of measure
+    pub unit_of_measure: String,
+    /// Product ID
+    pub product_id: Option<String>,
+    /// Description
+    pub description: String,
+}
+
 // ──────────────────────────── 997 Functional Ack ────────────────────────────
 
 /// Functional acknowledgment (X12 997)
