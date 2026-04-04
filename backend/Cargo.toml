@@ -24,6 +24,7 @@ members = [
     "crates/health",
     "crates/notifications",
     "crates/mobile-push",
+    "crates/edi",
 ]
 
 [workspace.package]

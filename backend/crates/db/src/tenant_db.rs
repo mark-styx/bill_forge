@@ -206,6 +206,60 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);
         CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
+
+        -- EDI connections
+        CREATE TABLE IF NOT EXISTS edi_connections (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL UNIQUE,
+            provider VARCHAR(50) NOT NULL,
+            api_key_encrypted TEXT NOT NULL,
+            webhook_secret TEXT NOT NULL,
+            api_base_url TEXT,
+            our_isa_qualifier VARCHAR(10),
+            our_isa_id VARCHAR(50),
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- EDI documents (inbound and outbound)
+        CREATE TABLE IF NOT EXISTS edi_documents (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            document_type VARCHAR(20) NOT NULL,
+            direction VARCHAR(10) NOT NULL,
+            interchange_control VARCHAR(50),
+            sender_id VARCHAR(50),
+            receiver_id VARCHAR(50),
+            status VARCHAR(20) NOT NULL DEFAULT 'received',
+            invoice_id UUID REFERENCES invoices(id),
+            raw_payload JSONB NOT NULL,
+            mapped_data JSONB,
+            error_message TEXT,
+            ack_status VARCHAR(20),
+            ack_received_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            processed_at TIMESTAMPTZ
+        );
+
+        -- EDI trading partners
+        CREATE TABLE IF NOT EXISTS edi_trading_partners (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            edi_qualifier VARCHAR(10),
+            edi_id VARCHAR(50) NOT NULL,
+            vendor_id UUID REFERENCES vendors(id),
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            settings JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, edi_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_edi_documents_tenant ON edi_documents(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_edi_documents_status ON edi_documents(tenant_id, status);
+        CREATE INDEX IF NOT EXISTS idx_edi_partners_tenant ON edi_trading_partners(tenant_id);
         "#,
     )
     .execute(pool)

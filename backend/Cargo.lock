@@ -906,6 +906,7 @@ dependencies = [
  "billforge-billing",
  "billforge-core",
  "billforge-db",
+ "billforge-edi",
  "billforge-email",
  "billforge-invoice-capture",
  "billforge-invoice-processing",
@@ -1039,6 +1040,25 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "billforge-edi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "billforge-core",
+ "chrono",
+ "hex",
+ "hmac",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

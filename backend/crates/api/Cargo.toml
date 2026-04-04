@@ -24,6 +24,7 @@ billforge-sage-intacct = { path = "../sage-intacct" }
 billforge-salesforce = { path = "../salesforce" }
 billforge-workday = { path = "../workday" }
 billforge-bill-com = { path = "../bill-com" }
+billforge-edi = { path = "../edi" }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
 billforge-analytics = { path = "../analytics" }

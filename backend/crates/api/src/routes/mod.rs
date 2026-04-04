@@ -18,6 +18,7 @@ pub mod sage_intacct;
 pub mod salesforce;
 pub mod workday;
 pub mod bill_com;
+pub mod edi;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
@@ -98,6 +99,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/workday", workday::routes())
         // Bill.com AP payments integration
         .nest("/bill-com", bill_com::routes())
+        // EDI (Electronic Data Interchange)
+        .nest("/edi", edi::routes())
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)

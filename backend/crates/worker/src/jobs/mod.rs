@@ -40,6 +40,7 @@ pub enum JobType {
     RoutingOptimization,
     ForecastRefresh,
     AnomalyDetection,
+    EdiProcessInbound,
 }
 
 impl std::fmt::Display for JobType {
@@ -56,6 +57,7 @@ impl std::fmt::Display for JobType {
             JobType::RoutingOptimization => write!(f, "RoutingOptimization"),
             JobType::ForecastRefresh => write!(f, "ForecastRefresh"),
             JobType::AnomalyDetection => write!(f, "AnomalyDetection"),
+            JobType::EdiProcessInbound => write!(f, "EdiProcessInbound"),
         }
     }
 }
@@ -168,6 +170,12 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::AnomalyDetection => {
             anomaly_detection::detect_anomalies(config.pg_manager.clone()).await
+        }
+        JobType::EdiProcessInbound => {
+            // EDI inbound processing is handled inline in the webhook handler for now.
+            // This job type is reserved for async/retry processing of EDI documents.
+            info!("EDI inbound processing job - payload: {}", job.payload);
+            Ok(())
         }
     }
 }
