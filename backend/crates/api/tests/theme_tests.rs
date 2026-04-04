@@ -39,9 +39,27 @@ fn test_organization_branding_round_trip() {
     // Verify camelCase field names match the frontend TypeScript interface
     assert!(json.contains("brandName"), "expected camelCase field brandName");
     assert!(json.contains("logoUrl"), "expected camelCase field logoUrl");
+    // customCSS must use uppercase CSS to match the frontend interface
+    assert!(json.contains("customCSS"), "expected field customCSS (uppercase CSS)");
     let back: OrganizationBranding = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.brand_name, "BillForge");
     assert!(back.logo_url.is_none());
+}
+
+#[test]
+fn test_organization_branding_custom_css_round_trip() {
+    let branding = OrganizationBranding {
+        custom_css: Some("body { color: red; }".into()),
+        ..OrganizationBranding::default()
+    };
+    // Serialize → JSON must use "customCSS" key
+    let json = serde_json::to_string(&branding).expect("serialize");
+    assert!(json.contains("\"customCSS\":\"body { color: red; }\""));
+    // Deserialize from frontend-shaped JSON
+    let input = r#"{ "brandName": "Test", "customCSS": "h1 { font-size: 2rem; }" }"#;
+    let back: OrganizationBranding = serde_json::from_str(input).expect("deserialize");
+    assert_eq!(back.brand_name, "Test");
+    assert_eq!(back.custom_css.as_deref(), Some("h1 { font-size: 2rem; }"));
 }
 
 #[test]
@@ -91,13 +109,14 @@ fn test_organization_theme_full_round_trip() {
 fn test_create_organization_theme_input_deserialize() {
     let json = r#"{
         "preset_id": "midnight",
-        "branding": { "brandName": "Acme" },
+        "branding": { "brandName": "Acme", "customCSS": "body { margin: 0; }" },
         "enabled_for_all_users": true,
         "allow_user_override": false
     }"#;
     let input: CreateOrganizationThemeInput = serde_json::from_str(json).expect("deserialize");
     assert_eq!(input.preset_id, "midnight");
     assert_eq!(input.branding.brand_name, "Acme");
+    assert_eq!(input.branding.custom_css.as_deref(), Some("body { margin: 0; }"));
     assert!(input.enabled_for_all_users.unwrap());
     assert!(input.custom_colors.is_none());
 }

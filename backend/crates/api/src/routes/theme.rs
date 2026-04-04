@@ -47,6 +47,7 @@ pub struct OrganizationBranding {
     pub favicon_url: Option<String>,
     pub brand_name: String,
     pub brand_gradient: Option<String>,
+    #[serde(rename = "customCSS")]
     pub custom_css: Option<String>,
 }
 
