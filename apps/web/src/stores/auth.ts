@@ -65,7 +65,7 @@ interface AuthState {
 
   // Actions
   login: (tenantId: string, email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
   hasRole: (role: string) => boolean;
   hasModule: (module: string) => boolean;
@@ -142,8 +142,10 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      logout: () => {
+      logout: async () => {
+        // Clear local state immediately
         api.setToken(null);
+        api.setRefreshToken(null);
         set({
           user: null,
           tenant: null,
@@ -152,6 +154,12 @@ export const useAuthStore = create<AuthState>()(
           refreshToken: null,
           isAuthenticated: false,
         });
+        // Best-effort call to backend to revoke refresh tokens
+        try {
+          await authApi.logout();
+        } catch {
+          // Ignore - local state already cleared
+        }
       },
 
       setTokens: (access: string, refresh: string) => {

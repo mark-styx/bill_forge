@@ -159,6 +159,11 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    /// Get the configured refresh token expiry in days
+    pub fn refresh_token_expiry_days(&self) -> i64 {
+        self.config.refresh_token_expiry_days
+    }
+
     /// Validate and decode a refresh token
     pub fn validate_refresh_token(&self, token: &str) -> Result<Claims> {
         let validation = Validation::default();

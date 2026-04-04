@@ -4,7 +4,9 @@ use crate::jwt::{JwtConfig, JwtService};
 use crate::password::PasswordService;
 use billforge_core::{Error, Result, Role, TenantContext, TenantId, UserContext, UserId};
 use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase};
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// Authentication service
@@ -21,6 +23,28 @@ impl AuthService {
             password_service: PasswordService::new(),
             metadata_db,
         }
+    }
+
+    /// Hash a token (e.g. refresh token JWT) for database storage using SHA-256
+    fn hash_token(token: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Compute the expiry datetime for a new refresh token
+    fn refresh_token_expiry(&self) -> chrono::DateTime<Utc> {
+        Utc::now() + Duration::days(self.jwt_service.refresh_token_expiry_days())
+    }
+
+    /// Store a refresh token hash in the database
+    async fn store_refresh_token_hash(&self, user_id: &UserId, refresh_token: &str) -> Result<()> {
+        let hash = Self::hash_token(refresh_token);
+        let expires_at = self.refresh_token_expiry();
+        self.metadata_db
+            .store_refresh_token(user_id, &hash, expires_at)
+            .await?;
+        Ok(())
     }
 
     /// Register a new user
@@ -81,6 +105,7 @@ impl AuthService {
         let refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
+        self.store_refresh_token_hash(&user_id, &refresh_token).await?;
 
         Ok(AuthResponse {
             access_token,
@@ -162,6 +187,7 @@ impl AuthService {
             &admin_roles,
         )?;
         let refresh_token = self.jwt_service.create_refresh_token(&user_id, &tenant_id)?;
+        self.store_refresh_token_hash(&user_id, &refresh_token).await?;
 
         Ok(AuthResponse {
             access_token,
@@ -239,6 +265,7 @@ impl AuthService {
         let refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
+        self.store_refresh_token_hash(&user_id, &refresh_token).await?;
 
         Ok(AuthResponse {
             access_token,
@@ -269,9 +296,24 @@ impl AuthService {
 
     /// Refresh access token using refresh token
     pub async fn refresh(&self, refresh_token: &str) -> Result<AuthResponse> {
-        // Validate refresh token
+        // Validate refresh token (cryptographic check)
         let claims = self.jwt_service.validate_refresh_token(refresh_token)?;
         let user_id = claims.user_id()?;
+
+        // Check revocation status in DB
+        let old_hash = Self::hash_token(refresh_token);
+        let stored_user_id = self
+            .metadata_db
+            .validate_refresh_token(&old_hash)
+            .await?
+            .ok_or_else(|| {
+                Error::InvalidToken("Refresh token has been revoked".to_string())
+            })?;
+
+        // Verify the token belongs to the claimed user
+        if stored_user_id != user_id {
+            return Err(Error::InvalidToken("Refresh token user mismatch".to_string()));
+        }
 
         // Get user
         let user = self
@@ -308,6 +350,15 @@ impl AuthService {
         let new_refresh_token = self
             .jwt_service
             .create_refresh_token(&user_id, &tenant_id)?;
+
+        // Revoke old refresh token (token rotation)
+        self.metadata_db
+            .revoke_refresh_token(&old_hash)
+            .await?;
+
+        // Store new refresh token hash
+        self.store_refresh_token_hash(&user_id, &new_refresh_token)
+            .await?;
 
         Ok(AuthResponse {
             access_token,

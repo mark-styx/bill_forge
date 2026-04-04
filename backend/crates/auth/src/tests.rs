@@ -284,6 +284,54 @@ mod password_tests {
 }
 
 // ============================================================================
+// Token Hash Tests
+// ============================================================================
+
+#[cfg(test)]
+mod token_hash_tests {
+    use sha2::{Digest, Sha256};
+
+    /// Mirrors the private `hash_token` in service.rs
+    fn hash_token(token: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    #[test]
+    fn test_hash_token_deterministic() {
+        let input = "my-refresh-token-value";
+        let hash1 = hash_token(input);
+        let hash2 = hash_token(input);
+        assert_eq!(hash1, hash2, "Same input must produce the same hash");
+    }
+
+    #[test]
+    fn test_hash_token_different_inputs() {
+        let hash_a = hash_token("token-alpha");
+        let hash_b = hash_token("token-beta");
+        assert_ne!(hash_a, hash_b, "Different inputs must produce different hashes");
+    }
+
+    #[test]
+    fn test_hash_token_length() {
+        // SHA-256 produces 32 bytes = 64 hex characters
+        let hash = hash_token("some-token");
+        assert_eq!(hash.len(), 64, "SHA-256 hex output must be 64 characters");
+    }
+
+    #[test]
+    fn test_hash_token_empty_input() {
+        let hash = hash_token("");
+        // SHA-256 of empty string is a well-known constant
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+}
+
+// ============================================================================
 // Token Type Tests
 // ============================================================================
 
