@@ -25,7 +25,9 @@ pub mod predictive;
 pub mod mobile;
 mod settings;
 mod feedback;
-mod theme;
+pub mod theme;
+pub mod ai;
+pub mod billing;
 
 use crate::middleware::{rate_limit_auth, RateLimiterState};
 use crate::state::AppState;
@@ -121,4 +123,8 @@ fn api_routes() -> Router<AppState> {
         .nest("/user/theme", theme::user_routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
+        // AI Assistant (Winston)
+        .nest("/ai", ai::routes())
+        // Billing & Subscription
+        .nest("/billing", billing::routes())
 }

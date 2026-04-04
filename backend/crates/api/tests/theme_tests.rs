@@ -91,7 +91,7 @@ fn test_organization_theme_full_round_trip() {
 fn test_create_organization_theme_input_deserialize() {
     let json = r#"{
         "preset_id": "midnight",
-        "branding": { "brand_name": "Acme" },
+        "branding": { "brandName": "Acme" },
         "enabled_for_all_users": true,
         "allow_user_override": false
     }"#;
@@ -159,5 +159,5 @@ fn test_effective_theme_serialization() {
     assert!(val["user_preference"].is_null());
     assert!(val["effective_colors"].is_object());
     assert_eq!(val["effective_mode"], "system");
-    assert!(val["can_override"].is_bool());
+    assert!(val["can_override"].is_boolean());
 }

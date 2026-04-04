@@ -7,7 +7,7 @@ use crate::extractors::{AuthUser, TenantCtx};
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -151,7 +151,7 @@ async fn get_org_theme(
     let now = chrono::Utc::now().to_rfc3339();
     Json(OrganizationTheme {
         id: uuid::Uuid::nil().to_string(),
-        tenant_id: tenant.tenant_id.clone(),
+        tenant_id: tenant.tenant_id.to_string(),
         preset_id: "default".into(),
         custom_colors: None,
         branding: OrganizationBranding::default(),
@@ -169,11 +169,12 @@ async fn create_org_theme(
     TenantCtx(tenant): TenantCtx,
     Json(input): Json<CreateOrganizationThemeInput>,
 ) -> Json<OrganizationTheme> {
+    let tenant_id = tenant.tenant_id.to_string();
     let _ = (user, tenant);
     let now = chrono::Utc::now().to_rfc3339();
     Json(OrganizationTheme {
         id: uuid::Uuid::new_v4().to_string(),
-        tenant_id: tenant.tenant_id.clone(),
+        tenant_id,
         preset_id: input.preset_id,
         custom_colors: input.custom_colors,
         branding: input.branding,
@@ -191,11 +192,12 @@ async fn update_org_theme(
     TenantCtx(tenant): TenantCtx,
     Json(input): Json<CreateOrganizationThemeInput>,
 ) -> Json<OrganizationTheme> {
+    let tenant_id = tenant.tenant_id.to_string();
     let _ = (user, tenant);
     let now = chrono::Utc::now().to_rfc3339();
     Json(OrganizationTheme {
         id: uuid::Uuid::new_v4().to_string(),
-        tenant_id: tenant.tenant_id.clone(),
+        tenant_id,
         preset_id: input.preset_id,
         custom_colors: input.custom_colors,
         branding: input.branding,
@@ -277,7 +279,7 @@ async fn get_user_theme(
     let now = chrono::Utc::now().to_rfc3339();
     Json(UserThemePreference {
         id: uuid::Uuid::nil().to_string(),
-        user_id: user.user_id.clone(),
+        user_id: user.user_id.to_string(),
         preset_id: "default".into(),
         custom_colors: None,
         mode: "system".into(),
@@ -294,7 +296,7 @@ async fn create_user_theme(
     let now = chrono::Utc::now().to_rfc3339();
     Json(UserThemePreference {
         id: uuid::Uuid::new_v4().to_string(),
-        user_id: user.user_id.clone(),
+        user_id: user.user_id.to_string(),
         preset_id: input.preset_id,
         custom_colors: input.custom_colors,
         mode: input.mode,
@@ -311,7 +313,7 @@ async fn update_user_theme(
     let now = chrono::Utc::now().to_rfc3339();
     Json(UserThemePreference {
         id: uuid::Uuid::new_v4().to_string(),
-        user_id: user.user_id.clone(),
+        user_id: user.user_id.to_string(),
         preset_id: input.preset_id,
         custom_colors: input.custom_colors,
         mode: input.mode,
