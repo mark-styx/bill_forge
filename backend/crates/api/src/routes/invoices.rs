@@ -584,16 +584,13 @@ async fn submit_for_processing(
     // Filter to active rules only
     let _active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
 
-    // Process invoice through workflow engine (with template support)
+    // Process invoice through workflow engine
     use std::sync::Arc;
-    let template_repo = Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
-        as Arc<dyn billforge_core::traits::WorkflowTemplateRepository>;
-    let engine = billforge_invoice_processing::WorkflowEngine::with_templates(
+    let engine = billforge_invoice_processing::WorkflowEngine::new(
         Arc::new(invoice_repo) as Arc<dyn billforge_core::traits::InvoiceRepository>,
         Arc::new(workflow_repo) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
         Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
             as Arc<dyn billforge_core::traits::ApprovalRepository>,
-        template_repo,
     );
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
