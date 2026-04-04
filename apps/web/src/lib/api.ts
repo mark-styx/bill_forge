@@ -561,27 +561,48 @@ export const documentsApi = {
 
 // Types
 export interface InvoiceLineItem {
+  id: string;
+  line_number: number;
   description: string;
   quantity?: number;
   unit_price?: { amount: number; currency: string };
-  total_price?: { amount: number; currency: string };
+  amount: { amount: number; currency: string };
+  gl_code?: string;
+  department?: string;
+  project?: string;
 }
 
 export interface Invoice {
   id: string;
+  tenant_id: string;
   vendor_id?: string;
   vendor_name: string;
   invoice_number: string;
   invoice_date?: string;
   due_date?: string;
   po_number?: string;
+  subtotal?: { amount: number; currency: string };
+  tax_amount?: { amount: number; currency: string };
   total_amount: { amount: number; currency: string };
+  currency: string;
+  line_items: InvoiceLineItem[];
   capture_status: string;
   processing_status: string;
-  ocr_confidence?: number; // 0.0-1.0 scale (Sprint 3)
+  current_queue_id?: string;
+  assigned_to?: string;
+  document_id: string;
+  supporting_documents?: string[];
+  ocr_confidence?: number;
+  categorization_confidence?: number;
+  department?: string;
+  gl_code?: string;
+  cost_center?: string;
+  notes?: string;
+  tags: string[];
+  custom_fields?: Record<string, unknown>;
+  created_by?: string;
   created_at: string;
-  description?: string;
-  line_items?: InvoiceLineItem[];
+  updated_at: string;
 }
 
 export interface CreateInvoiceInput {
@@ -590,14 +611,54 @@ export interface CreateInvoiceInput {
   total_amount: { amount: number; currency: string };
 }
 
+export interface VendorContact {
+  id: string;
+  name: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+  is_primary: boolean;
+}
+
 export interface Vendor {
   id: string;
+  tenant_id: string;
   name: string;
   legal_name?: string;
   vendor_type: string;
   status: string;
   email?: string;
   phone?: string;
+  website?: string;
+  address?: {
+    line1: string;
+    line2?: string;
+    city: string;
+    state?: string;
+    postal_code: string;
+    country: string;
+  };
+  tax_id?: string;
+  tax_id_type?: string;
+  w9_on_file: boolean;
+  w9_received_date?: string;
+  payment_terms?: string;
+  default_payment_method?: string;
+  bank_account?: {
+    bank_name: string;
+    account_type: string;
+    account_last_four: string;
+  };
+  vendor_code?: string;
+  default_gl_code?: string;
+  default_department?: string;
+  primary_contact?: VendorContact;
+  contacts: VendorContact[];
+  notes?: string;
+  tags: string[];
+  custom_fields?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CreateVendorInput {

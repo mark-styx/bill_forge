@@ -275,14 +275,14 @@ export default function ApprovalDetailPage() {
               </div>
 
               {/* Description / Notes */}
-              {(approval.notes || invoice?.description) && (
+              {(approval.notes || invoice?.notes) && (
                 <div className="mt-6 pt-6 border-t border-border">
                   <label className="text-xs text-muted-foreground flex items-center gap-1.5 mb-2">
                     <MessageSquare className="w-3.5 h-3.5" />
                     Notes
                   </label>
                   <div className="p-4 bg-secondary/50 rounded-xl text-sm text-foreground">
-                    {approval.notes || invoice?.description || 'No notes provided'}
+                    {approval.notes || invoice?.notes || 'No notes provided'}
                   </div>
                 </div>
               )}
@@ -327,7 +327,7 @@ export default function ApprovalDetailPage() {
                           ${((item.unit_price?.amount || 0) / 100).toFixed(2)}
                         </td>
                         <td className="text-right font-medium text-foreground">
-                          ${((item.total_price?.amount || 0) / 100).toFixed(2)}
+                          ${((item.amount?.amount || 0) / 100).toFixed(2)}
                         </td>
                       </tr>
                     ))}
