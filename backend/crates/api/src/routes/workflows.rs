@@ -16,12 +16,14 @@ use billforge_core::{
         CreateWorkflowTemplateInput, WorkflowTemplate,
         ApprovalDelegation, CreateApprovalDelegationInput,
         ApprovalLimit, CreateApprovalLimitInput,
+        detect_delegation_cycle,
     },
     traits::{InvoiceRepository, WorkflowRuleRepository, WorkQueueRepository, AssignmentRuleRepository, WorkflowTemplateRepository, ApprovalDelegationRepository, ApprovalLimitRepository},
     types::Pagination,
 };
 use billforge_email::EmailTemplates;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -83,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/invoices/:id/move-to-queue", post(move_to_queue))
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ListRulesQuery {
     pub rule_type: Option<String>,
@@ -90,8 +93,8 @@ pub struct ListRulesQuery {
 
 async fn list_rules(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
-    Query(query): Query<ListRulesQuery>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+    Query(_query): Query<ListRulesQuery>,
 ) -> ApiResult<Json<Vec<WorkflowRule>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
@@ -101,7 +104,7 @@ async fn list_rules(
 
 async fn get_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<WorkflowRule>> {
     let rule_id = id.parse()
@@ -120,7 +123,7 @@ async fn get_rule(
 
 async fn create_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateWorkflowRuleInput>,
 ) -> ApiResult<Json<WorkflowRule>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -131,7 +134,7 @@ async fn create_rule(
 
 async fn update_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateWorkflowRuleInput>,
 ) -> ApiResult<Json<WorkflowRule>> {
@@ -146,7 +149,7 @@ async fn update_rule(
 
 async fn delete_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let rule_id = id.parse()
@@ -160,7 +163,7 @@ async fn delete_rule(
 
 async fn activate_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let rule_id = id.parse()
@@ -174,7 +177,7 @@ async fn activate_rule(
 
 async fn deactivate_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let rule_id = id.parse()
@@ -192,7 +195,7 @@ async fn deactivate_rule(
 
 async fn list_queues(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<WorkQueue>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool);
@@ -202,7 +205,7 @@ async fn list_queues(
 
 async fn get_queue(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<WorkQueue>> {
     let queue_id = id.parse()
@@ -221,7 +224,7 @@ async fn get_queue(
 
 async fn create_queue(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateWorkQueueInput>,
 ) -> ApiResult<Json<WorkQueue>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -232,7 +235,7 @@ async fn create_queue(
 
 async fn update_queue(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateWorkQueueInput>,
 ) -> ApiResult<Json<WorkQueue>> {
@@ -247,7 +250,7 @@ async fn update_queue(
 
 async fn delete_queue(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let queue_id = id.parse()
@@ -267,7 +270,7 @@ pub struct QueueItemsQuery {
 
 async fn list_queue_items(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Query(query): Query<QueueItemsQuery>,
 ) -> ApiResult<Json<Vec<QueueItem>>> {
@@ -288,7 +291,7 @@ async fn list_queue_items(
 async fn claim_item(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
-    Path((queue_id, item_id)): Path<(String, String)>,
+    Path((_queue_id, item_id)): Path<(String, String)>,
 ) -> ApiResult<Json<QueueItem>> {
     let item_uuid = uuid::Uuid::parse_str(&item_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid item ID".to_string()))?;
@@ -306,8 +309,8 @@ pub struct CompleteItemInput {
 
 async fn complete_item(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
-    Path((queue_id, item_id)): Path<(String, String)>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+    Path((_queue_id, item_id)): Path<(String, String)>,
     Json(input): Json<CompleteItemInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let item_uuid = uuid::Uuid::parse_str(&item_id)
@@ -325,7 +328,7 @@ async fn complete_item(
 
 async fn list_assignment_rules(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<AssignmentRule>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool);
@@ -335,7 +338,7 @@ async fn list_assignment_rules(
 
 async fn get_assignment_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<AssignmentRule>> {
     let rule_id = id.parse()
@@ -354,7 +357,7 @@ async fn get_assignment_rule(
 
 async fn create_assignment_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateAssignmentRuleInput>,
 ) -> ApiResult<Json<AssignmentRule>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -365,7 +368,7 @@ async fn create_assignment_rule(
 
 async fn update_assignment_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateAssignmentRuleInput>,
 ) -> ApiResult<Json<AssignmentRule>> {
@@ -380,7 +383,7 @@ async fn update_assignment_rule(
 
 async fn delete_assignment_rule(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let rule_id = id.parse()
@@ -410,7 +413,7 @@ pub struct PendingApprovalResponse {
 
 async fn list_pending_approvals(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<PendingApprovalResponse>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
@@ -467,7 +470,7 @@ async fn list_pending_approvals(
 
 async fn get_approval(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let approval_id = id.parse::<uuid::Uuid>()
@@ -564,13 +567,15 @@ async fn approve(
     // Get approval request and invoice details
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Get approval request and related invoice
+    // Get approval request and related invoice (including vendor_id and department for limit checks)
     #[derive(sqlx::FromRow)]
     struct ApprovalInfo {
         invoice_id: uuid::Uuid,
         invoice_number: String,
         vendor_name: String,
         total_amount_cents: i64,
+        vendor_id: Option<uuid::Uuid>,
+        department: Option<String>,
         submitter_email: Option<String>,
     }
 
@@ -580,6 +585,8 @@ async fn approve(
             i.invoice_number,
             COALESCE(i.vendor_name, 'Unknown') as vendor_name,
             COALESCE(i.total_amount_cents, 0) as total_amount_cents,
+            i.vendor_id,
+            i.department,
             (SELECT email FROM users WHERE id = i.created_by LIMIT 1) as submitter_email
         FROM approval_requests ar
         JOIN invoices i ON ar.invoice_id = i.id
@@ -591,27 +598,103 @@ async fn approve(
     .map_err(|e| billforge_core::Error::Database(format!("Database error: {}", e)))?
     .ok_or_else(|| billforge_core::Error::Database("Approval request not found".to_string()))?;
 
-    // Update approval request status
-    sqlx::query(
-        "UPDATE approval_requests SET status = 'approved', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3"
+    // Enforce approval limits for the approving user
+    #[derive(sqlx::FromRow)]
+    struct ApprovalLimitRow {
+        max_amount_cents: i64,
+        vendor_restrictions: Option<serde_json::Value>,
+        department_restrictions: Option<serde_json::Value>,
+    }
+
+    let limit = sqlx::query_as::<_, ApprovalLimitRow>(
+        "SELECT max_amount_cents, vendor_restrictions, department_restrictions \
+         FROM approval_limits WHERE user_id = $1 AND tenant_id = $2"
+    )
+    .bind(user.user_id.as_uuid())
+    .bind(*tenant.tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to check approval limits: {}", e)))?;
+
+    if let Some(limit) = limit {
+        if info.total_amount_cents > limit.max_amount_cents {
+            return Err(billforge_core::Error::Forbidden(
+                format!("Invoice amount ${:.2} exceeds your approval limit of ${:.2}",
+                    info.total_amount_cents as f64 / 100.0,
+                    limit.max_amount_cents as f64 / 100.0)
+            ).into());
+        }
+        // Check vendor restrictions if set
+        if let Some(ref vendor_restr) = limit.vendor_restrictions {
+            if let Some(invoice_vendor_id) = info.vendor_id {
+                let allowed_vendors: Vec<uuid::Uuid> = match vendor_restr {
+                    serde_json::Value::Array(arr) => {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().and_then(|s| uuid::Uuid::parse_str(s).ok()))
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                if !allowed_vendors.is_empty() && !allowed_vendors.contains(&invoice_vendor_id) {
+                    return Err(billforge_core::Error::Forbidden(
+                        "You are not authorized to approve invoices from this vendor".to_string(),
+                    ).into());
+                }
+            }
+        }
+        // Check department restrictions if set
+        if let Some(ref dept_restr) = limit.department_restrictions {
+            if let Some(ref invoice_dept) = info.department {
+                let allowed_depts: Vec<String> = match dept_restr {
+                    serde_json::Value::Array(arr) => {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                if !allowed_depts.is_empty() && !allowed_depts.contains(invoice_dept) {
+                    return Err(billforge_core::Error::Forbidden(
+                        "You are not authorized to approve invoices for this department".to_string(),
+                    ).into());
+                }
+            }
+        }
+    }
+
+    // Update approval request and invoice status in a transaction
+    let mut tx = pool.begin().await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to begin transaction: {}", e)))?;
+
+    // Update approval request status (only if still pending)
+    let updated = sqlx::query_scalar::<_, uuid::Uuid>(
+        "UPDATE approval_requests SET status = 'approved', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3 AND status = 'pending' RETURNING id"
     )
     .bind(user.user_id.as_uuid())
     .bind(&input.comments)
     .bind(approval_id)
-    .execute(&*pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Update invoice processing status
-    let invoice_id_typed = billforge_core::InvoiceId(info.invoice_id);
+    if updated.is_none() {
+        tx.rollback().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+        return Err(billforge_core::Error::Conflict(
+            "Approval request has already been processed".to_string(),
+        ).into());
+    }
 
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    invoice_repo.update_processing_status(
-        &tenant.tenant_id,
-        &invoice_id_typed,
-        billforge_core::domain::ProcessingStatus::Approved,
-    ).await?;
+    // Update invoice processing status
+    sqlx::query("UPDATE invoices SET processing_status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3")
+        .bind(billforge_core::domain::ProcessingStatus::Approved.as_str())
+        .bind(info.invoice_id)
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+
+    tx.commit().await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
 
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
@@ -684,27 +767,39 @@ async fn reject(
     .map_err(|e| billforge_core::Error::Database(format!("Database error: {}", e)))?
     .ok_or_else(|| billforge_core::Error::Database("Approval request not found".to_string()))?;
 
-    // Update approval request status
-    sqlx::query(
-        "UPDATE approval_requests SET status = 'rejected', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3"
+    // Update approval request and invoice status in a transaction
+    let mut tx = pool.begin().await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to begin transaction: {}", e)))?;
+
+    // Update approval request status (only if still pending)
+    let updated = sqlx::query_scalar::<_, uuid::Uuid>(
+        "UPDATE approval_requests SET status = 'rejected', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3 AND status = 'pending' RETURNING id"
     )
     .bind(user.user_id.as_uuid())
     .bind(&reason)
     .bind(approval_id)
-    .execute(&*pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Update invoice processing status
-    let invoice_id_typed = billforge_core::InvoiceId(info.invoice_id);
+    if updated.is_none() {
+        tx.rollback().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+        return Err(billforge_core::Error::Conflict(
+            "Approval request has already been processed".to_string(),
+        ).into());
+    }
 
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    invoice_repo.update_processing_status(
-        &tenant.tenant_id,
-        &invoice_id_typed,
-        billforge_core::domain::ProcessingStatus::Rejected,
-    ).await?;
+    // Update invoice processing status
+    sqlx::query("UPDATE invoices SET processing_status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3")
+        .bind(billforge_core::domain::ProcessingStatus::Rejected.as_str())
+        .bind(info.invoice_id)
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+
+    tx.commit().await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
 
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
@@ -744,7 +839,7 @@ async fn reject(
 
 async fn list_templates(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<WorkflowTemplate>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
@@ -754,7 +849,7 @@ async fn list_templates(
 
 async fn get_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<WorkflowTemplate>> {
     let template_id = id.parse()
@@ -773,7 +868,7 @@ async fn get_template(
 
 async fn create_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateWorkflowTemplateInput>,
 ) -> ApiResult<Json<WorkflowTemplate>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -784,7 +879,7 @@ async fn create_template(
 
 async fn update_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateWorkflowTemplateInput>,
 ) -> ApiResult<Json<WorkflowTemplate>> {
@@ -799,7 +894,7 @@ async fn update_template(
 
 async fn delete_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let template_id = id.parse()
@@ -813,7 +908,7 @@ async fn delete_template(
 
 async fn activate_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let template_id = id.parse()
@@ -827,7 +922,7 @@ async fn activate_template(
 
 async fn deactivate_template(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let template_id = id.parse()
@@ -845,7 +940,7 @@ async fn deactivate_template(
 
 async fn bulk_operation(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<BulkOperationInput>,
 ) -> ApiResult<Json<BulkOperationResult>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -899,6 +994,7 @@ async fn bulk_operation(
     }))
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub struct HoldInput {
     pub reason: String,
@@ -906,9 +1002,9 @@ pub struct HoldInput {
 
 async fn put_on_hold(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
-    Json(input): Json<HoldInput>,
+    Json(_input): Json<HoldInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
@@ -926,7 +1022,7 @@ async fn put_on_hold(
 
 async fn release_from_hold(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -945,7 +1041,7 @@ async fn release_from_hold(
 
 async fn void_invoice(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -964,7 +1060,7 @@ async fn void_invoice(
 
 async fn mark_ready_for_payment(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -989,7 +1085,7 @@ pub struct MoveToQueueInput {
 
 async fn move_to_queue(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<MoveToQueueInput>,
 ) -> ApiResult<Json<QueueItem>> {
@@ -1018,9 +1114,95 @@ async fn move_to_queue(
 // Approval Delegation Handlers
 // ============================================================================
 
+/// Validates a delegation creation/update request:
+/// 1. Basic field checks (UUID validity, non-self, date order)
+/// 2. Both users exist in the tenant
+/// 3. No circular delegation chain would be formed
+async fn validate_delegation_input(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::types::TenantId,
+    input: &CreateApprovalDelegationInput,
+    exclude_delegation_id: Option<Uuid>,
+) -> crate::error::ApiResult<()> {
+    // 1. Basic validation (UUIDs, self-delegation, date order)
+    input.validate_basic()?;
+
+    let delegator_uuid = Uuid::parse_str(&input.delegator_id)
+        .map_err(|_| billforge_core::Error::Validation("Invalid delegator_id".to_string()))?;
+    let delegate_uuid = Uuid::parse_str(&input.delegate_id)
+        .map_err(|_| billforge_core::Error::Validation("Invalid delegate_id".to_string()))?;
+    let tenant_uuid = *tenant_id.as_uuid();
+
+    // 2. Verify both users exist in the tenant
+    let delegator_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)"
+    )
+    .bind(delegator_uuid)
+    .bind(tenant_uuid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to verify delegator: {}", e)))?;
+
+    if !delegator_exists {
+        return Err(billforge_core::Error::Validation(
+            "Delegator user not found in tenant".to_string(),
+        ).into());
+    }
+
+    let delegate_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)"
+    )
+    .bind(delegate_uuid)
+    .bind(tenant_uuid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to verify delegate: {}", e)))?;
+
+    if !delegate_exists {
+        return Err(billforge_core::Error::Validation(
+            "Delegate user not found in tenant".to_string(),
+        ).into());
+    }
+
+    // 3. Circular chain detection
+    let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(
+        std::sync::Arc::new(pool.clone()),
+    );
+    let delegations = billforge_core::traits::ApprovalDelegationRepository::list(&repo, tenant_id).await?;
+
+    let active: Vec<ApprovalDelegation> = delegations
+        .into_iter()
+        .filter(|d| {
+            d.is_active && exclude_delegation_id.map_or(true, |exclude| d.id != exclude)
+        })
+        .collect();
+
+    let delegator_user_id = billforge_core::types::UserId::from_uuid(delegator_uuid);
+    let delegate_user_id = billforge_core::types::UserId::from_uuid(delegate_uuid);
+
+    if let Some(cycle) = detect_delegation_cycle(
+        &active,
+        &delegator_user_id,
+        &delegate_user_id,
+        input.start_date,
+        input.end_date,
+    ) {
+        let path_str = cycle
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(billforge_core::Error::Validation(
+            format!("Circular delegation chain detected: {} -> {}", path_str, delegator_user_id),
+        ).into());
+    }
+
+    Ok(())
+}
+
 async fn list_delegations(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<ApprovalDelegation>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
@@ -1030,7 +1212,7 @@ async fn list_delegations(
 
 async fn get_delegation(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ApprovalDelegation>> {
     let delegation_id = id.parse::<uuid::Uuid>()
@@ -1049,10 +1231,11 @@ async fn get_delegation(
 
 async fn create_delegation(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateApprovalDelegationInput>,
 ) -> ApiResult<Json<ApprovalDelegation>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
+    validate_delegation_input(&pool, &tenant.tenant_id, &input, None).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
     let delegation = ApprovalDelegationRepository::create(&repo, &tenant.tenant_id, input).await?;
     Ok(Json(delegation))
@@ -1060,7 +1243,7 @@ async fn create_delegation(
 
 async fn update_delegation(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateApprovalDelegationInput>,
 ) -> ApiResult<Json<ApprovalDelegation>> {
@@ -1068,6 +1251,7 @@ async fn update_delegation(
         .map_err(|_| billforge_core::Error::Validation("Invalid delegation ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
+    validate_delegation_input(&pool, &tenant.tenant_id, &input, Some(delegation_id)).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
     let delegation = ApprovalDelegationRepository::update(&repo, &tenant.tenant_id, delegation_id, input).await?;
     Ok(Json(delegation))
@@ -1075,7 +1259,7 @@ async fn update_delegation(
 
 async fn delete_delegation(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let delegation_id = id.parse::<uuid::Uuid>()
@@ -1093,7 +1277,7 @@ async fn delete_delegation(
 
 async fn list_approval_limits(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<Json<Vec<ApprovalLimit>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool);
@@ -1103,7 +1287,7 @@ async fn list_approval_limits(
 
 async fn get_approval_limit(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ApprovalLimit>> {
     let limit_id = id.parse::<uuid::Uuid>()
@@ -1122,7 +1306,7 @@ async fn get_approval_limit(
 
 async fn create_approval_limit(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Json(input): Json<CreateApprovalLimitInput>,
 ) -> ApiResult<Json<ApprovalLimit>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -1133,7 +1317,7 @@ async fn create_approval_limit(
 
 async fn update_approval_limit(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
     Json(input): Json<CreateApprovalLimitInput>,
 ) -> ApiResult<Json<ApprovalLimit>> {
@@ -1148,7 +1332,7 @@ async fn update_approval_limit(
 
 async fn delete_approval_limit(
     State(state): State<AppState>,
-    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let limit_id = id.parse::<uuid::Uuid>()

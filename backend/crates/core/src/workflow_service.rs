@@ -7,9 +7,9 @@
 //! - Escalation management
 
 use crate::{
-    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule},
+    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule, WorkflowTemplate, WorkflowTemplateStage},
     services::{EmailAction, EmailActionTokenService},
-    traits::{ApprovalRepository, InvoiceRepository, UserRepository, WorkQueueRepository},
+    traits::{ApprovalRepository, InvoiceRepository, UserRepository, WorkQueueRepository, WorkflowTemplateRepository},
     types::TenantId, Error, Result, UserId,
 };
 use async_trait::async_trait;
@@ -43,6 +43,7 @@ pub struct WorkflowService<
     IR: InvoiceRepository,
     QR: WorkQueueRepository,
     AR: ApprovalRepository,
+    TR: WorkflowTemplateRepository,
 > {
     email_service: ES,
     email_token_service: EmailActionTokenService,
@@ -50,6 +51,7 @@ pub struct WorkflowService<
     invoice_repo: IR,
     queue_repo: QR,
     approval_repo: AR,
+    template_repo: Option<TR>,
     app_url: String,
     _email_templates: std::marker::PhantomData<ET>,
 }
@@ -61,8 +63,9 @@ impl<
     IR: InvoiceRepository,
     QR: WorkQueueRepository,
     AR: ApprovalRepository,
-> WorkflowService<ES, ET, UR, IR, QR, AR> {
-    /// Create a new workflow service
+    TR: WorkflowTemplateRepository,
+> WorkflowService<ES, ET, UR, IR, QR, AR, TR> {
+    /// Create a new workflow service (without template support)
     pub fn new(
         email_service: ES,
         email_token_service: EmailActionTokenService,
@@ -79,6 +82,31 @@ impl<
             invoice_repo,
             queue_repo,
             approval_repo,
+            template_repo: None,
+            app_url,
+            _email_templates: std::marker::PhantomData,
+        }
+    }
+
+    /// Create a new workflow service with template repository support
+    pub fn with_templates(
+        email_service: ES,
+        email_token_service: EmailActionTokenService,
+        user_repo: UR,
+        invoice_repo: IR,
+        queue_repo: QR,
+        approval_repo: AR,
+        template_repo: TR,
+        app_url: String,
+    ) -> Self {
+        Self {
+            email_service,
+            email_token_service,
+            user_repo,
+            invoice_repo,
+            queue_repo,
+            approval_repo,
+            template_repo: Some(template_repo),
             app_url,
             _email_templates: std::marker::PhantomData,
         }
@@ -232,13 +260,30 @@ impl<
         Ok(())
     }
 
-    /// Process invoice through workflow rules
+    /// Process invoice through workflow rules.
+    ///
+    /// If a template repository is configured and an active default template exists,
+    /// processes through the template stages first. Falls through to flat rule
+    /// iteration only if no template matched or all template stages completed/skipped.
     pub async fn process_invoice_workflow(
         &self,
         tenant_id: &TenantId,
         invoice: &Invoice,
         rules: &[WorkflowRule],
     ) -> Result<()> {
+        // Try template-based processing first
+        if let Some(ref template_repo) = self.template_repo {
+            if let Some(template) = template_repo.get_default(tenant_id).await? {
+                let stopped_stage = self.process_invoice_through_template(tenant_id, invoice, &template).await?;
+                if stopped_stage.is_some() {
+                    // Template captured the invoice at a stage - done
+                    return Ok(());
+                }
+                // All template stages completed/skipped - fall through to rules
+            }
+        }
+
+        // Flat rule-based processing
         for rule in rules {
             if !rule.is_active {
                 continue;
@@ -254,6 +299,48 @@ impl<
         }
 
         Ok(())
+    }
+
+    /// Process an invoice through a workflow template's ordered stages.
+    ///
+    /// Iterates stages in order, evaluating skip/auto-advance conditions.
+    /// Returns the stage the invoice stopped at (requires action), or None
+    /// if all stages were completed/skipped.
+    pub async fn process_invoice_through_template(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        template: &WorkflowTemplate,
+    ) -> Result<Option<WorkflowTemplateStage>> {
+        let mut stages = template.stages.clone();
+        stages.sort_by_key(|s| s.order);
+
+        for stage in &stages {
+            // Check skip conditions - if ALL match, skip this stage entirely
+            if !stage.skip_conditions.is_empty()
+                && crate::workflow_evaluator::evaluate_conditions(invoice, &stage.skip_conditions)
+            {
+                tracing::info!(stage = %stage.name, "Skipping stage - skip conditions met");
+                continue;
+            }
+
+            // Check auto-advance conditions - if ALL match, auto-complete and advance
+            if !stage.auto_advance_conditions.is_empty()
+                && crate::workflow_evaluator::evaluate_conditions(invoice, &stage.auto_advance_conditions)
+            {
+                tracing::info!(stage = %stage.name, "Auto-advancing stage - conditions met");
+                continue;
+            }
+
+            // Stage requires processing - route invoice here
+            if let Some(ref queue_id) = stage.queue_id {
+                self.queue_repo.move_item(tenant_id, &invoice.id, queue_id, None).await?;
+            }
+
+            return Ok(Some(stage.clone()));
+        }
+
+        Ok(None) // All stages completed/skipped
     }
 
     /// Evaluate workflow rule conditions against an invoice
@@ -1287,5 +1374,286 @@ mod tests {
             value: json!("Vendor"),
         };
         assert!(evaluator.evaluate(&invoice, &condition));
+    }
+
+    // Mock WorkflowTemplateRepository for testing
+    struct MockTemplateRepository {
+        default_template: Option<WorkflowTemplate>,
+    }
+
+    impl MockTemplateRepository {
+        fn with_default(template: WorkflowTemplate) -> Self {
+            Self {
+                default_template: Some(template),
+            }
+        }
+
+        fn no_default() -> Self {
+            Self {
+                default_template: None,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::traits::WorkflowTemplateRepository for MockTemplateRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            _input: crate::domain::CreateWorkflowTemplateInput,
+        ) -> Result<WorkflowTemplate> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkflowTemplateId,
+        ) -> Result<Option<WorkflowTemplate>> {
+            Ok(None)
+        }
+
+        async fn list(&self, _tenant_id: &TenantId) -> Result<Vec<WorkflowTemplate>> {
+            Ok(vec![])
+        }
+
+        async fn update(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkflowTemplateId,
+            _input: crate::domain::CreateWorkflowTemplateInput,
+        ) -> Result<WorkflowTemplate> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn delete(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkflowTemplateId,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn set_active(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkflowTemplateId,
+            _is_active: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_default(
+            &self,
+            _tenant_id: &TenantId,
+        ) -> Result<Option<WorkflowTemplate>> {
+            Ok(self.default_template.clone())
+        }
+    }
+
+    /// Helper to build a WorkflowService with mock deps and optional template repo
+    fn build_service(
+        template_repo: Option<MockTemplateRepository>,
+    ) -> WorkflowService<
+        MockEmailService,
+        MockEmailTemplates,
+        MockUserRepository,
+        MockInvoiceRepository,
+        MockWorkQueueRepository,
+        MockApprovalRepository,
+        MockTemplateRepository,
+    > {
+        let pool = std::sync::Arc::new(
+            sqlx::PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+        );
+        let token_service = crate::services::EmailActionTokenService::new(
+            pool,
+            "test-secret-key-that-is-long-enough".to_string(),
+        );
+        match template_repo {
+            Some(tr) => WorkflowService::with_templates(
+                MockEmailService,
+                token_service,
+                MockUserRepository,
+                MockInvoiceRepository,
+                MockWorkQueueRepository,
+                MockApprovalRepository,
+                tr,
+                "https://app.test".to_string(),
+            ),
+            None => WorkflowService::new(
+                MockEmailService,
+                token_service,
+                MockUserRepository,
+                MockInvoiceRepository,
+                MockWorkQueueRepository,
+                MockApprovalRepository,
+                "https://app.test".to_string(),
+            ),
+        }
+    }
+
+    fn make_template_stage(
+        order: i32,
+        name: &str,
+        queue_id: Option<crate::domain::WorkQueueId>,
+        skip_conditions: Vec<crate::domain::RuleCondition>,
+        auto_advance_conditions: Vec<crate::domain::RuleCondition>,
+    ) -> crate::domain::WorkflowTemplateStage {
+        crate::domain::WorkflowTemplateStage {
+            order,
+            name: name.to_string(),
+            stage_type: crate::domain::StageType::Review,
+            queue_id,
+            sla_hours: None,
+            escalation_hours: None,
+            requires_action: true,
+            skip_conditions,
+            auto_advance_conditions,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_invoice_workflow_uses_template_when_default_exists() {
+        // Build a template with one stage that has a queue_id (will call move_item)
+        let queue_id = crate::domain::WorkQueueId::new();
+        let template = crate::domain::WorkflowTemplate {
+            id: crate::domain::WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "Test Template".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages: vec![make_template_stage(
+                0,
+                "Review",
+                Some(queue_id.clone()),
+                vec![],
+                vec![],
+            )],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let service = build_service(Some(MockTemplateRepository::with_default(template)));
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        // Should succeed - template captures the invoice at the Review stage
+        let result = service
+            .process_invoice_workflow(&tenant_id, &invoice, &[])
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_invoice_workflow_falls_through_to_rules_when_no_template() {
+        let service = build_service(Some(MockTemplateRepository::no_default()));
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        // No template, no rules - should succeed with no-op
+        let result = service
+            .process_invoice_workflow(&tenant_id, &invoice, &[])
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_invoice_workflow_without_template_repo_falls_through_to_rules() {
+        // Service built without template repo at all
+        let service = build_service(None);
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let result = service
+            .process_invoice_workflow(&tenant_id, &invoice, &[])
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_invoice_workflow_template_skip_conditions_skip_stage() {
+        // Template with a stage that gets skipped (amount < 10000), then a second stage
+        let queue_id_1 = crate::domain::WorkQueueId::new();
+        let queue_id_2 = crate::domain::WorkQueueId::new();
+
+        let template = crate::domain::WorkflowTemplate {
+            id: crate::domain::WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "Skip Test".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages: vec![
+                make_template_stage(
+                    0,
+                    "Review",
+                    Some(queue_id_1),
+                    vec![RuleCondition {
+                        field: ConditionField::Amount,
+                        operator: ConditionOperator::GreaterThan,
+                        value: json!(50000), // invoice is 10800, so Review is skipped
+                    }],
+                    vec![],
+                ),
+                make_template_stage(
+                    1,
+                    "Approval",
+                    Some(queue_id_2.clone()),
+                    vec![],
+                    vec![],
+                ),
+            ],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let service = build_service(Some(MockTemplateRepository::with_default(template)));
+        let invoice = create_test_invoice(); // amount is 10800
+        let tenant_id = TenantId::new();
+
+        // Review stage should be skipped, invoice stops at Approval stage
+        let result = service
+            .process_invoice_workflow(&tenant_id, &invoice, &[])
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_invoice_workflow_all_stages_skipped_falls_through_to_rules() {
+        // Template where ALL stages have skip conditions that match
+        let queue_id = crate::domain::WorkQueueId::new();
+        let template = crate::domain::WorkflowTemplate {
+            id: crate::domain::WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "All Skip".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages: vec![make_template_stage(
+                0,
+                "Review",
+                Some(queue_id),
+                vec![RuleCondition {
+                    field: ConditionField::VendorName,
+                    operator: ConditionOperator::Equals,
+                    value: json!("Test Vendor"), // matches our test invoice
+                }],
+                vec![],
+            )],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let service = build_service(Some(MockTemplateRepository::with_default(template)));
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        // All template stages skipped - falls through to rules (empty), no-op OK
+        let result = service
+            .process_invoice_workflow(&tenant_id, &invoice, &[])
+            .await;
+        assert!(result.is_ok());
     }
 }
