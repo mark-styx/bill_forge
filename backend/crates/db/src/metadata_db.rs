@@ -27,6 +27,12 @@ impl MetadataDatabase {
             .await
             .map_err(|e| Error::Migration(format!("Failed to run metadata migrations: {}", e)))?;
 
+        // EDI receiver ID -> tenant mapping for webhook tenant lookup
+        sqlx::raw_sql(include_str!("../../../migrations/064_create_edi_receiver_map.sql"))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Migration(format!("Failed to run EDI receiver map migration: {}", e)))?;
+
         Ok(())
     }
 

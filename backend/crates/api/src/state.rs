@@ -65,6 +65,10 @@ impl AppState {
         // Initialize sandbox data if needed
         Self::init_sandbox(&db, &auth, &audit).await?;
 
+        // Backfill EDI receiver mappings for any tenants that connected
+        // before the edi_receiver_map table existed
+        Self::backfill_edi_receiver_map(&db).await;
+
         Ok(Self {
             db,
             auth,
@@ -537,8 +541,71 @@ impl AppState {
             .ok();
         }
 
-        tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, and {} approval requests", 
+        tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, and {} approval requests",
             queues.len(), assignment_rules.len(), vendors.len(), invoices.len(), line_items.len(), approval_requests.len());
         Ok(())
+    }
+
+    /// Backfill edi_receiver_map for tenants that connected EDI before
+    /// the metadata mapping table existed. Runs once at startup, best-effort.
+    async fn backfill_edi_receiver_map(db: &Arc<DatabaseManager>) {
+        let metadata_pool = db.metadata();
+
+        // Get all tenant IDs from metadata
+        let tenant_ids: Vec<(uuid::Uuid,)> = match sqlx::query_as(
+            "SELECT id FROM tenants WHERE is_active = true",
+        )
+        .fetch_all(&*metadata_pool)
+        .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("EDI receiver map backfill: failed to list tenants: {}", e);
+                return;
+            }
+        };
+
+        let mut backfilled = 0u32;
+        for (tenant_uuid,) in &tenant_ids {
+            let tenant_id = TenantId::from_uuid(*tenant_uuid);
+            let tenant_pool = match db.tenant(&tenant_id).await {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            // Check if this tenant has an active EDI connection with an ISA ID
+            let row: Option<(String,)> = sqlx::query_as(
+                "SELECT our_isa_id FROM edi_connections WHERE tenant_id = $1 AND is_active = true AND our_isa_id IS NOT NULL AND our_isa_id != ''",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .unwrap_or(None);
+
+            if let Some((isa_id,)) = row {
+                // Insert if not already present
+                let result = sqlx::query(
+                    r#"INSERT INTO edi_receiver_map (id, receiver_id, tenant_id, created_at)
+                       VALUES ($1, $2, $3, NOW())
+                       ON CONFLICT (receiver_id) DO NOTHING"#,
+                )
+                .bind(uuid::Uuid::new_v4())
+                .bind(&isa_id)
+                .bind(tenant_uuid)
+                .execute(&*metadata_pool)
+                .await;
+
+                if let Ok(r) = result {
+                    if r.rows_affected() > 0 {
+                        backfilled += 1;
+                        tracing::info!("Backfilled EDI receiver mapping: {} -> {}", isa_id, tenant_uuid);
+                    }
+                }
+            }
+        }
+
+        if backfilled > 0 {
+            tracing::info!("EDI receiver map backfill complete: {} mappings added", backfilled);
+        }
     }
 }

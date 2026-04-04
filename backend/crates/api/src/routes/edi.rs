@@ -25,12 +25,15 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use billforge_core::types::{TenantId, UserId};
+use billforge_db::repositories::InvoiceRepositoryImpl;
+use billforge_core::traits::InvoiceRepository;
 use billforge_edi::{
-    verify_webhook_signature, EdiConfig, EdiDocumentStatus, EdiDocumentType, EdiDirection,
-    EdiInvoice, EdiMapper, EdiWebhookPayload,
+    verify_webhook_signature, EdiDocumentType, EdiInvoice, EdiMapper, EdiWebhookPayload,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -100,13 +103,19 @@ pub struct ListDocumentsQuery {
 ///
 /// This endpoint does NOT use JWT auth. Instead, it verifies the webhook
 /// signature using HMAC-SHA256 with the configured webhook secret.
+///
+/// Flow:
+/// 1. Parse payload to extract receiver_id
+/// 2. Look up tenant from receiver_id via metadata DB
+/// 3. Verify HMAC signature against tenant's stored webhook_secret
+/// 4. Store EDI document record (status: processing)
+/// 5. For 810 invoices: look up trading partner, map to invoice, create in DB
+/// 6. Update EDI document (status: mapped, link invoice_id)
 async fn webhook_inbound(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    // For now, accept all webhooks in development
-    // In production, verify signature against stored webhook_secret per tenant
     let signature = headers
         .get("x-webhook-signature")
         .and_then(|v| v.to_str().ok())
@@ -141,20 +150,172 @@ async fn webhook_inbound(
                 "Processing inbound EDI 810 invoice"
             );
 
-            // TODO: Look up tenant from receiver_id or webhook config
-            // TODO: Look up trading partner to find vendor_id
-            // TODO: Create invoice via repository
-            // TODO: Store EDI document record
+            // 1. Look up tenant from receiver_id
+            let metadata_pool = state.db.metadata();
+            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
+            )
+            .bind(&edi_invoice.receiver_id)
+            .fetch_optional(&*metadata_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant from receiver_id: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let tenant_uuid = tenant_uuid.ok_or_else(|| {
+                tracing::warn!(
+                    receiver_id = %edi_invoice.receiver_id,
+                    "No tenant found for EDI receiver_id"
+                );
+                axum::http::StatusCode::NOT_FOUND
+            })?;
+
+            let tenant_id = TenantId::from_uuid(tenant_uuid);
+            let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+                tracing::error!("Failed to get tenant pool: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // 2. Verify webhook signature against stored secret
+            let webhook_secret: Option<String> = sqlx::query_scalar(
+                "SELECT webhook_secret FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch webhook secret: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            if let Some(secret) = &webhook_secret {
+                if !secret.is_empty() && !signature.is_empty() {
+                    if !verify_webhook_signature(&body, signature, secret) {
+                        tracing::warn!("EDI webhook signature verification failed");
+                        return Err(axum::http::StatusCode::UNAUTHORIZED);
+                    }
+                    tracing::debug!("EDI webhook signature verified");
+                }
+            }
+
+            // 3. Store EDI document record (status: processing)
+            let doc_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO edi_documents (id, tenant_id, document_type, direction, interchange_control, sender_id, receiver_id, status, raw_payload, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', $8, NOW())"#,
+            )
+            .bind(doc_id)
+            .bind(tenant_uuid)
+            .bind("invoice_810")
+            .bind("inbound")
+            .bind(&edi_invoice.interchange_control)
+            .bind(&edi_invoice.sender_id)
+            .bind(&edi_invoice.receiver_id)
+            .bind(&payload.payload)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // 4. Look up trading partner by sender_id to find vendor_id
+            let vendor_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT vendor_id FROM edi_trading_partners WHERE tenant_id = $1 AND edi_id = $2 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .bind(&edi_invoice.sender_id)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up trading partner: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // 5. Map EDI invoice to BillForge invoice and create it
+            // Use a separate document_id (not the edi_documents row ID) since
+            // document_id is used for blob storage references elsewhere.
+            let invoice_doc_id = Uuid::new_v4();
+            let invoice_input = EdiMapper::invoice_from_edi(&edi_invoice, vendor_id, invoice_doc_id)
+                .map_err(|e| {
+                    tracing::error!("Failed to map EDI invoice: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            let mapped_data = serde_json::to_value(&invoice_input).ok();
+
+            // Find the tenant's admin user for created_by (FK to users.id)
+            let admin_user_id: Uuid = sqlx::query_scalar(
+                "SELECT id FROM users WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant admin user: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .ok_or_else(|| {
+                tracing::error!("No active users found for tenant {}", tenant_uuid);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let created_by = UserId::from_uuid(admin_user_id);
+            let invoice_repo = InvoiceRepositoryImpl::new(Arc::clone(&tenant_pool));
+
+            let invoice = invoice_repo.create(&tenant_id, invoice_input, &created_by)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to create invoice from EDI: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            // 6. Update EDI document: status -> mapped, link invoice_id
+            sqlx::query(
+                r#"UPDATE edi_documents SET status = 'mapped', invoice_id = $1, mapped_data = $2, processed_at = NOW() WHERE id = $3"#,
+            )
+            .bind(invoice.id.0)
+            .bind(&mapped_data)
+            .bind(doc_id)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update EDI document status: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // 7. Submit invoice into workflow: EDI data is fully structured,
+            // so skip capture (OCR) and go straight to processing/submitted
+            sqlx::query(
+                "UPDATE invoices SET capture_status = 'reviewed', processing_status = 'submitted', updated_at = NOW() WHERE id = $1",
+            )
+            .bind(invoice.id.0)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to submit EDI invoice to workflow: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tracing::info!(
+                invoice_id = %invoice.id,
+                invoice_number = %invoice.invoice_number,
+                edi_doc_id = %doc_id,
+                "EDI 810 invoice created successfully"
+            );
 
             Ok(Json(serde_json::json!({
                 "status": "accepted",
                 "document_type": "invoice_810",
-                "invoice_number": edi_invoice.invoice_number,
+                "invoice_number": invoice.invoice_number,
+                "invoice_id": invoice.id.0,
+                "edi_document_id": doc_id,
             })))
         }
         EdiDocumentType::FunctionalAck997 => {
             tracing::info!("Received EDI 997 functional acknowledgment");
-            // TODO: Update ack status on the original outbound document
+            // Phase 3 will implement full 997 ack tracking
             Ok(Json(serde_json::json!({
                 "status": "accepted",
                 "document_type": "functional_ack_997",
@@ -181,6 +342,8 @@ async fn edi_connect(
     let pool = state.db.tenant(&tenant.tenant_id).await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let isa_id = req.our_isa_id.as_deref().unwrap_or("");
+
     // Store EDI configuration for this tenant
     sqlx::query(
         r#"INSERT INTO edi_connections (id, tenant_id, provider, api_key_encrypted, webhook_secret, api_base_url, our_isa_qualifier, our_isa_id, is_active, created_at, updated_at)
@@ -197,13 +360,43 @@ async fn edi_connect(
     .bind(&req.webhook_secret)
     .bind(req.api_base_url.as_deref().unwrap_or("https://core.us.stedi.com/2023-08-01"))
     .bind(req.our_isa_qualifier.as_deref().unwrap_or("ZZ"))
-    .bind(req.our_isa_id.as_deref().unwrap_or(""))
+    .bind(isa_id)
     .execute(&*pool)
     .await
     .map_err(|e| {
         tracing::error!("Failed to save EDI connection: {}", e);
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    // Register receiver ID in metadata DB for webhook tenant lookup.
+    // First remove any stale mapping for this tenant (ISA ID may have changed),
+    // then insert the new one.
+    let metadata_pool = state.db.metadata();
+    sqlx::query("DELETE FROM edi_receiver_map WHERE tenant_id = $1")
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&*metadata_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to clear old EDI receiver mapping: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !isa_id.is_empty() {
+        sqlx::query(
+            r#"INSERT INTO edi_receiver_map (id, receiver_id, tenant_id, created_at)
+               VALUES ($1, $2, $3, NOW())
+               ON CONFLICT (receiver_id) DO UPDATE SET tenant_id = $3"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(isa_id)
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&*metadata_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to register EDI receiver mapping: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
 
     Ok(Json(serde_json::json!({
         "connected": true,
@@ -224,6 +417,17 @@ async fn edi_disconnect(
         .execute(&*pool)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Remove receiver mapping from metadata DB
+    let metadata_pool = state.db.metadata();
+    sqlx::query("DELETE FROM edi_receiver_map WHERE tenant_id = $1")
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&*metadata_pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to remove EDI receiver mapping: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(serde_json::json!({ "connected": false })))
 }
