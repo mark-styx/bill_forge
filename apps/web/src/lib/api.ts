@@ -11,6 +11,31 @@ interface ApiResponse<T> {
   };
 }
 
+export interface ApiErrorBody {
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+    field_errors?: Record<string, string[]>;
+  };
+}
+
+export class ApiClientError extends Error {
+  status: number;
+  code: string;
+  body: ApiErrorBody | null;
+  fieldErrors: Record<string, string[]> | undefined;
+
+  constructor(status: number, body: ApiErrorBody | null) {
+    super(body?.error?.message ?? `API error ${status}`);
+    this.name = 'ApiClientError';
+    this.status = status;
+    this.code = body?.error?.code ?? 'UNKNOWN';
+    this.body = body;
+    this.fieldErrors = body?.error?.field_errors ?? undefined;
+  }
+}
+
 class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -130,15 +155,18 @@ class ApiClient {
         if (this.onLogout) {
           this.onLogout();
         }
-        throw new Error('Session expired. Please login again.');
+        throw new ApiClientError(401, { error: { code: 'SESSION_EXPIRED', message: 'Session expired. Please login again.' } });
       }
     }
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        error: { code: 'UNKNOWN', message: 'An error occurred' },
-      }));
-      throw new Error(error.error?.message || 'Request failed');
+      let errorBody: ApiErrorBody | null = null;
+      try {
+        errorBody = await response.json();
+      } catch {
+        // non-JSON error body
+      }
+      throw new ApiClientError(response.status, errorBody);
     }
 
     // Handle empty responses
@@ -174,10 +202,13 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        error: { code: 'UNKNOWN', message: 'Upload failed' },
-      }));
-      throw new Error(error.error?.message || 'Upload failed');
+      let errorBody: ApiErrorBody | null = null;
+      try {
+        errorBody = await response.json();
+      } catch {
+        // non-JSON error body
+      }
+      throw new ApiClientError(response.status, errorBody);
     }
 
     return response.json();
@@ -849,6 +880,19 @@ export const feedbackApi = {
 
   list: () => api.get<FeedbackEntry[]>('/api/v1/feedback'),
 };
+
+// Integration Status API
+export interface IntegrationStatusResponse {
+  connected: boolean;
+  company_id?: string;
+  company_name?: string;
+  last_sync_at?: string;
+  sync_enabled?: boolean;
+}
+
+export async function getIntegrationStatus(statusEndpoint: string): Promise<IntegrationStatusResponse> {
+  return api.get<IntegrationStatusResponse>(statusEndpoint);
+}
 
 // Invoice Status Config Types
 export interface InvoiceStatusConfig {

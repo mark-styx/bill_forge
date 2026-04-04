@@ -1,22 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Cable,
   CheckCircle2,
   XCircle,
   ArrowRight,
-  RefreshCw,
   ExternalLink,
   Shield,
   Zap,
-  Building2,
   Users,
-  FileText,
   Globe,
   Database,
   BarChart3,
+  Loader2,
 } from 'lucide-react';
+import { api, getIntegrationStatus, IntegrationStatusResponse } from '@/lib/api';
 
 type IntegrationStatus = 'connected' | 'disconnected' | 'available';
 type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'all';
@@ -227,12 +226,16 @@ function StatusBadge({ status }: { status: IntegrationStatus }) {
   );
 }
 
-function IntegrationCard({ integration, onConnect, onDisconnect }: {
+function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect }: {
   integration: Integration;
+  liveStatus?: IntegrationStatusResponse;
   onConnect: (id: string) => void;
   onDisconnect: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  const displayStatus = liveStatus?.connected ? 'connected' as IntegrationStatus : 'disconnected' as IntegrationStatus;
+  const lastSync = liveStatus?.last_sync_at;
 
   return (
     <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
@@ -244,11 +247,16 @@ function IntegrationCard({ integration, onConnect, onDisconnect }: {
               <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
                 {integration.name}
               </h3>
-              <StatusBadge status={integration.status} />
+              <StatusBadge status={displayStatus} />
             </div>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
               {integration.description}
             </p>
+            {lastSync && (
+              <p className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">
+                Last synced: {new Date(lastSync).toLocaleString()}
+              </p>
+            )}
           </div>
         </div>
 
@@ -318,7 +326,7 @@ function IntegrationCard({ integration, onConnect, onDisconnect }: {
               Docs
             </a>
           )}
-          {integration.status === 'connected' ? (
+          {displayStatus === 'connected' ? (
             <button
               onClick={() => onDisconnect(integration.id)}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
@@ -343,6 +351,36 @@ function IntegrationCard({ integration, onConnect, onDisconnect }: {
 export default function IntegrationsPage() {
   const [filter, setFilter] = useState<IntegrationCategory>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [statuses, setStatuses] = useState<Record<string, IntegrationStatusResponse>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchStatuses() {
+      const results = await Promise.allSettled(
+        integrations.map(i =>
+          getIntegrationStatus(i.endpoints.status).then(r => [i.id, r] as const)
+        )
+      );
+      const map: Record<string, IntegrationStatusResponse> = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled') map[r.value[0]] = r.value[1];
+      }
+      setStatuses(map);
+      setLoading(false);
+    }
+    fetchStatuses();
+  }, []);
+
+  const fetchSingleStatus = async (integrationId: string) => {
+    const integration = integrations.find(i => i.id === integrationId);
+    if (!integration) return;
+    try {
+      const result = await getIntegrationStatus(integration.endpoints.status);
+      setStatuses(prev => ({ ...prev, [integrationId]: result }));
+    } catch {
+      // keep existing status on error
+    }
+  };
 
   const filteredIntegrations = integrations.filter((integration) => {
     const matchesCategory = filter === 'all' || integration.category === filter;
@@ -352,7 +390,7 @@ export default function IntegrationsPage() {
     return matchesCategory && matchesSearch;
   });
 
-  const connectedCount = integrations.filter((i) => i.status === 'connected').length;
+  const connectedCount = integrations.filter((i) => statuses[i.id]?.connected).length;
 
   const handleConnect = (integrationId: string) => {
     const integration = integrations.find((i) => i.id === integrationId);
@@ -374,9 +412,8 @@ export default function IntegrationsPage() {
 
     if (confirm(`Disconnect ${integration.name}? Sync will stop and mappings will be preserved.`)) {
       try {
-        await fetch(integration.endpoints.disconnect, { method: 'POST' });
-        // Refresh status
-        window.location.reload();
+        await api.post(integration.endpoints.disconnect);
+        await fetchSingleStatus(integrationId);
       } catch {
         alert('Failed to disconnect. Please try again.');
       }
@@ -435,16 +472,23 @@ export default function IntegrationsPage() {
       </div>
 
       {/* Integration Cards */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-8 w-8 text-zinc-400 animate-spin" />
+        </div>
+      ) : (
       <div className="grid gap-4">
         {filteredIntegrations.map((integration) => (
           <IntegrationCard
             key={integration.id}
             integration={integration}
+            liveStatus={statuses[integration.id]}
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
           />
         ))}
       </div>
+      )}
 
       {filteredIntegrations.length === 0 && (
         <div className="text-center py-16">
