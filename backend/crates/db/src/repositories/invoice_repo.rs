@@ -248,6 +248,8 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             let has_cost_center = obj.contains_key("cost_center");
             let notes = obj.get("notes").and_then(|v| v.as_str()).map(String::from);
             let has_notes = obj.contains_key("notes");
+            let categorization_confidence = obj.get("categorization_confidence").and_then(|v| v.as_f64()).map(|f| f as f32);
+            let has_categorization_confidence = obj.contains_key("categorization_confidence");
             let total_amount_cents = obj.get("total_amount")
                 .and_then(|v| v.as_object())
                 .and_then(|o| o.get("amount"))
@@ -268,6 +270,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                 OptStr(Option<String>),
                 OptDate(Option<NaiveDate>),
                 I64(i64),
+                OptF32(Option<f32>),
             }
             let mut bind_vals: Vec<BindVal> = Vec::new();
 
@@ -316,6 +319,11 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                 bind_vals.push(BindVal::OptStr(notes));
                 param_idx += 1;
             }
+            if has_categorization_confidence {
+                set_parts.push(format!("categorization_confidence = ${}", param_idx));
+                bind_vals.push(BindVal::OptF32(categorization_confidence));
+                param_idx += 1;
+            }
             if let Some(amount) = total_amount_cents {
                 set_parts.push(format!("total_amount_cents = ${}", param_idx));
                 bind_vals.push(BindVal::I64(amount));
@@ -341,6 +349,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
                         BindVal::OptStr(s) => query = query.bind(s),
                         BindVal::OptDate(d) => query = query.bind(d),
                         BindVal::I64(n) => query = query.bind(n),
+                        BindVal::OptF32(f) => query = query.bind(f),
                     }
                 }
                 query = query.bind(id.0).bind(*tenant_id.as_uuid());

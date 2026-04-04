@@ -9,12 +9,13 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{CreateInvoiceInput, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus},
+    domain::{CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus},
     traits::InvoiceRepository,
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// UUID of the OCR Error Queue (from seed data)
@@ -43,6 +44,21 @@ pub struct ListInvoicesQuery {
     pub search: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/invoices",
+    tag = "Invoices",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+        ("status" = Option<String>, Query, description = "Filter by status")
+    ),
+    responses(
+        (status = 200, description = "List of invoices"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn list_invoices(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -68,6 +84,19 @@ async fn list_invoices(
     Ok(Json(invoices))
 }
 
+#[utoipa::path(
+    get,
+    path = "/invoices/{id}",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    responses(
+        (status = 200, description = "Invoice details"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn get_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -87,6 +116,17 @@ async fn get_invoice(
     Ok(Json(invoice))
 }
 
+#[utoipa::path(
+    post,
+    path = "/invoices",
+    tag = "Invoices",
+    request_body = String,
+    responses(
+        (status = 200, description = "Invoice created"),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn create_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
@@ -99,6 +139,19 @@ async fn create_invoice(
     Ok(Json(invoice))
 }
 
+#[utoipa::path(
+    put,
+    path = "/invoices/{id}",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    responses(
+        (status = 200, description = "Invoice updated"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn update_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -115,6 +168,19 @@ async fn update_invoice(
     Ok(Json(invoice))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/invoices/{id}",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    responses(
+        (status = 200, description = "Invoice deleted"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn delete_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -130,13 +196,23 @@ async fn delete_invoice(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct UploadResponse {
     pub invoice_id: String,
     pub document_id: String,
     pub message: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/invoices/upload",
+    tag = "Invoices",
+    responses(
+        (status = 200, description = "Invoice uploaded and processed", body = UploadResponse),
+        (status = 400, description = "Invalid upload"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn upload_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
@@ -210,6 +286,17 @@ async fn upload_invoice(
                     }
                 };
 
+            // Extract structured OCR fields (line items, subtotal, tax, currency)
+            let (line_items, subtotal, tax_amount, currency) = match &ocr_result {
+                Ok(result) => (
+                    ocr_line_items_to_input(&result.line_items),
+                    result.subtotal.value.map(Money::usd),
+                    result.tax_amount.value.map(Money::usd),
+                    result.currency.value.clone().unwrap_or_else(|| "USD".to_string()),
+                ),
+                Err(_) => (vec![], None, None, "USD".to_string()),
+            };
+
             // Build notes with OCR error if applicable
             let notes = match ocr_error {
                 Some(err) => Some(format!("Uploaded file: {}. OCR Error: {}", file_name, err)),
@@ -224,11 +311,11 @@ async fn upload_invoice(
                 invoice_date,
                 due_date,
                 po_number,
-                subtotal: None,
-                tax_amount: None,
+                subtotal,
+                tax_amount,
                 total_amount,
-                currency: "USD".to_string(),
-                line_items: vec![],
+                currency,
+                line_items,
                 document_id,
                 ocr_confidence,
                 notes,
@@ -312,9 +399,22 @@ async fn upload_invoice(
     Err(billforge_core::Error::Validation("No file provided".to_string()).into())
 }
 
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/ocr",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    responses(
+        (status = 200, description = "OCR reprocessing completed"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn rerun_ocr(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -344,9 +444,22 @@ async fn rerun_ocr(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/submit",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    responses(
+        (status = 200, description = "Invoice submitted for processing"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn submit_for_processing(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -370,6 +483,96 @@ async fn submit_for_processing(
     ).await?;
     invoice.processing_status = ProcessingStatus::Submitted;
 
+    // Run auto-categorization if fields not already set
+    if invoice.gl_code.is_none() && invoice.department.is_none() && invoice.cost_center.is_none() {
+        let cat_engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+        let line_items: Vec<billforge_invoice_processing::categorization::LineItemInput> = invoice.line_items.iter().map(|li| {
+            billforge_invoice_processing::categorization::LineItemInput {
+                description: li.description.clone(),
+                quantity: li.quantity,
+                amount: li.amount.amount as f64 / 100.0,
+            }
+        }).collect();
+        let total = invoice.total_amount.amount as f64 / 100.0;
+        let tenant_id_str = tenant.tenant_id.to_string();
+
+        // Try ML-based categorization first if OpenAI API key is available,
+        // then fall back to rule-based engine
+        let cat_result = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
+            let ml_categorizer = billforge_invoice_processing::MLCategorizer::new(
+                (*pool).clone(),
+                openai_api_key,
+            );
+            match ml_categorizer
+                .suggest_categories_ml(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
+            {
+                Ok(ml_result) => {
+                    tracing::info!(
+                        invoice_id = %invoice_id,
+                        confidence = ml_result.overall_confidence,
+                        "ML auto-categorization succeeded"
+                    );
+                    Ok(ml_result)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        "ML auto-categorization failed, falling back to rule-based"
+                    );
+                    cat_engine.suggest_categories(
+                        &tenant_id_str,
+                        invoice.vendor_id,
+                        &invoice.vendor_name,
+                        &line_items,
+                        total,
+                    ).await
+                }
+            }
+        } else {
+            cat_engine.suggest_categories(
+                &tenant_id_str,
+                invoice.vendor_id,
+                &invoice.vendor_name,
+                &line_items,
+                total,
+            ).await
+        };
+
+        match cat_result {
+            Ok(categorization) => {
+                let updates = serde_json::json!({
+                    "gl_code": categorization.gl_code.as_ref().map(|s| &s.value),
+                    "department": categorization.department.as_ref().map(|s| &s.value),
+                    "cost_center": categorization.cost_center.as_ref().map(|s| &s.value),
+                    "categorization_confidence": categorization.overall_confidence,
+                });
+                if let Err(e) = invoice_repo.update(&tenant.tenant_id, &invoice_id, updates).await {
+                    tracing::warn!(invoice_id = %invoice_id, error = %e, "Failed to persist auto-categorization");
+                } else {
+                    // Re-fetch so the workflow engine sees populated fields
+                    if let Some(refetched) = invoice_repo.get_by_id(&tenant.tenant_id, &invoice_id).await? {
+                        invoice = refetched;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Auto-categorization failed, continuing without"
+                );
+            }
+        }
+    }
+
     // Get workflow rules for processing
     let workflow_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
     let rules = billforge_core::traits::WorkflowRuleRepository::list(
@@ -379,15 +582,18 @@ async fn submit_for_processing(
     ).await?;
 
     // Filter to active rules only
-    let active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
+    let _active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
 
-    // Process invoice through workflow engine
+    // Process invoice through workflow engine (with template support)
     use std::sync::Arc;
-    let engine = billforge_invoice_processing::WorkflowEngine::new(
+    let template_repo = Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
+        as Arc<dyn billforge_core::traits::WorkflowTemplateRepository>;
+    let engine = billforge_invoice_processing::WorkflowEngine::with_templates(
         Arc::new(invoice_repo) as Arc<dyn billforge_core::traits::InvoiceRepository>,
         Arc::new(workflow_repo) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
         Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
             as Arc<dyn billforge_core::traits::ApprovalRepository>,
+        template_repo,
     );
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
@@ -415,6 +621,20 @@ pub struct SuggestCategoriesRequest {
     pub total_amount: f64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/suggest-categories",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    request_body = String,
+    responses(
+        (status = 200, description = "Category suggestions returned"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn suggest_categories(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -491,4 +711,20 @@ async fn suggest_categories(
     };
 
     Ok(Json(categorization))
+}
+
+/// Convert OCR-extracted line items into CreateLineItemInput values.
+fn ocr_line_items_to_input(items: &[ExtractedLineItem]) -> Vec<CreateLineItemInput> {
+    items
+        .iter()
+        .map(|item| CreateLineItemInput {
+            description: item.description.value.clone().unwrap_or_default(),
+            quantity: item.quantity.value,
+            unit_price: item.unit_price.value.map(Money::usd),
+            amount: Money::usd(item.amount.value.unwrap_or(0.0)),
+            gl_code: None,
+            department: None,
+            project: None,
+        })
+        .collect()
 }
