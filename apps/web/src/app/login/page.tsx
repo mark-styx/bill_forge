@@ -185,6 +185,14 @@ export default function LoginPage() {
               </button>
             </form>
 
+            {/* Create account link */}
+            <div className="text-center text-sm text-slate-400">
+              New to BillForge?{' '}
+              <a href="/onboard" className="text-blue-400 hover:text-blue-300 font-medium">
+                Create an account
+              </a>
+            </div>
+
             {/* Security note */}
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
               <Lock className="w-3.5 h-3.5" />

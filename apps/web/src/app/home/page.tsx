@@ -416,7 +416,7 @@ export default function LandingPage() {
                       </li>
                     ))}
                   </ul>
-                  <Link href="/login" className="block">
+                  <Link href="/onboard" className="block">
                     {plan.popular ? (
                       <GradientButton gradient="primary" className="w-full">
                         {plan.cta}
@@ -469,7 +469,7 @@ export default function LandingPage() {
                     <ArrowRight className="ml-2 h-5 w-5" />
                   </Button>
                 </Link>
-                <Link href="/login">
+                <Link href="/onboard">
                   <Button
                     size="lg"
                     variant="outline"

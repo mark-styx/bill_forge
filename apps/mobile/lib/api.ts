@@ -232,4 +232,13 @@ export const api = {
       `/api/v1/mobile/sync/invoices?last_sync_at=${encodeURIComponent(lastSyncAt)}`,
     );
   },
+
+  /** POST /api/v1/auth/logout - Revoke server-side refresh tokens */
+  async logout(): Promise<void> {
+    try {
+      await request<{ success: boolean }>('/api/v1/auth/logout', { method: 'POST' });
+    } catch {
+      // Best-effort: if the server is unreachable, local logout still proceeds
+    }
+  },
 };

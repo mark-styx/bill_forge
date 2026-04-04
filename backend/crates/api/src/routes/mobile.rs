@@ -6,6 +6,7 @@ mod sync;
 pub use dto::*;
 pub use sync::*;
 
+use crate::error::ApiError;
 use crate::extractors::{AuthUser, TenantCtx};
 use crate::state::AppState;
 use crate::ApiResult;
@@ -533,25 +534,39 @@ async fn approve_invoice(
 ) -> ApiResult<Json<serde_json::Value>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Update approval request
-    sqlx::query!(
-        r#"
-        UPDATE approval_requests
+    // Update approval request (scoped to the current user)
+    let result = sqlx::query(
+        r#"UPDATE approval_requests
         SET status = 'approved', responded_at = NOW(), comments = $3
-        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4
-        "#,
-        tenant.tenant_id.0,
-        id,
-        payload.comment,
-        user.user_id.0.to_string(),
+        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4"#,
     )
+    .bind(tenant.tenant_id.0)
+    .bind(id)
+    .bind(&payload.comment)
+    .bind(user.user_id.0.to_string())
     .execute(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Update invoice status
-    // TODO: Get invoice_id from approval_requests
-    // TODO: Update invoice status to 'approved'
+    // Only update invoice if the approval request was actually modified (authorization check)
+    if result.rows_affected() == 0 {
+        return Err(ApiError(billforge_core::Error::NotFound {
+            resource_type: "ApprovalRequest".to_string(),
+            id: id.to_string(),
+        }));
+    }
+
+    sqlx::query(
+        r#"UPDATE invoices SET processing_status = 'approved', updated_at = NOW()
+        WHERE tenant_id = $1 AND id = (
+            SELECT (invoice_id::uuid) FROM approval_requests WHERE id = $2
+        )"#,
+    )
+    .bind(tenant.tenant_id.0)
+    .bind(id)
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

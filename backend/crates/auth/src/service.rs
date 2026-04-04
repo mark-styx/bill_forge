@@ -109,6 +109,87 @@ impl AuthService {
         })
     }
 
+    /// Provision a new tenant with an admin user (self-service signup)
+    pub async fn provision(&self, input: ProvisionInput) -> Result<AuthResponse> {
+        // Validate password strength
+        self.password_service.validate_password_strength(&input.admin_password)?;
+
+        // Create a new tenant
+        let tenant_id = TenantId::new();
+        self.metadata_db.create_tenant(&tenant_id, &input.company_name).await?;
+
+        // Set tenant settings
+        let settings = billforge_core::TenantSettings {
+            logo_url: None,
+            primary_color: None,
+            company_name: input.company_name.clone(),
+            timezone: input.timezone.unwrap_or_else(|| "UTC".to_string()),
+            default_currency: input.default_currency.unwrap_or_else(|| "USD".to_string()),
+            features: Default::default(),
+        };
+        self.metadata_db.update_tenant_settings(&tenant_id, &settings).await?;
+
+        // Enable default modules
+        let default_modules = vec![
+            billforge_core::Module::InvoiceCapture,
+            billforge_core::Module::InvoiceProcessing,
+            billforge_core::Module::VendorManagement,
+            billforge_core::Module::Reporting,
+        ];
+        self.metadata_db.update_tenant_modules(&tenant_id, &default_modules).await?;
+
+        // Create admin user with all roles
+        let password_hash = self.password_service.hash(&input.admin_password)?;
+        let admin_roles = vec![Role::TenantAdmin, Role::ApUser, Role::Approver, Role::VendorManager];
+        let user = self.metadata_db.create_user(&CreateUserInput {
+            tenant_id: tenant_id.clone(),
+            email: input.admin_email.clone(),
+            password_hash,
+            name: input.admin_name.clone(),
+            roles: admin_roles.clone(),
+        }).await?;
+
+        // Get the freshly created tenant
+        let tenant = self.metadata_db.get_tenant(&tenant_id).await?
+            .ok_or_else(|| Error::TenantNotFound(tenant_id.as_str()))?;
+
+        // Generate tokens
+        let user_id = UserId(user.id);
+        let access_token = self.jwt_service.create_access_token(
+            &user_id,
+            &tenant_id,
+            &user.email,
+            &admin_roles,
+        )?;
+        let refresh_token = self.jwt_service.create_refresh_token(&user_id, &tenant_id)?;
+
+        Ok(AuthResponse {
+            access_token,
+            refresh_token,
+            user: UserInfo {
+                id: UserId(user.id),
+                tenant_id: TenantId::from_uuid(user.tenant_id),
+                email: user.email,
+                name: user.name,
+                roles: admin_roles,
+            },
+            tenant: TenantInfo {
+                id: TenantId::from_uuid(tenant.id),
+                name: tenant.name,
+                enabled_modules: tenant.enabled_modules.as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                }).unwrap_or_default(),
+                settings: TenantSettingsInfo {
+                    logo_url: None,
+                    primary_color: None,
+                    company_name: input.company_name,
+                    timezone: settings.timezone,
+                    default_currency: settings.default_currency,
+                },
+            },
+        })
+    }
+
     /// Login with email and password
     pub async fn login(&self, input: LoginInput) -> Result<AuthResponse> {
         // Find user
@@ -291,6 +372,17 @@ impl AuthService {
     pub async fn logout(&self, user_id: &UserId) -> Result<()> {
         self.metadata_db.revoke_all_user_tokens(user_id).await
     }
+}
+
+/// Self-service tenant provisioning input
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvisionInput {
+    pub company_name: String,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub admin_name: String,
+    pub timezone: Option<String>,
+    pub default_currency: Option<String>,
 }
 
 /// Registration input

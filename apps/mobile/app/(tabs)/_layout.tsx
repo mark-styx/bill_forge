@@ -2,11 +2,11 @@ import { Redirect, Tabs } from 'expo-router';
 import { View, Text, StyleSheet } from 'react-native';
 import { useAppStore } from '../../lib/store';
 
-function TabBarIcon({ name, focused }: { name: 'inbox' | 'chart'; focused: boolean }) {
+function TabBarIcon({ name, focused }: { name: 'inbox' | 'chart' | 'gear'; focused: boolean }) {
   // Minimal text-based icons (no icon library dependency for MVP)
-  const label = name === 'inbox' ? '🔔' : '📊';
+  const labels = { inbox: '🔔', chart: '📊', gear: '⚙️' };
   return (
-    <Text style={[styles.icon, focused && styles.iconFocused]}>{label}</Text>
+    <Text style={[styles.icon, focused && styles.iconFocused]}>{labels[name]}</Text>
   );
 }
 
@@ -39,6 +39,13 @@ export default function TabLayout() {
         options={{
           title: 'Dashboard',
           tabBarIcon: ({ focused }) => <TabBarIcon name="chart" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ focused }) => <TabBarIcon name="gear" focused={focused} />,
         }}
       />
       <Tabs.Screen

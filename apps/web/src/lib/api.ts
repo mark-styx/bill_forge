@@ -216,6 +216,16 @@ export const authApi = {
   }) =>
     api.post<AuthResponseData>('/api/v1/auth/register', data),
 
+  provision: (data: {
+    company_name: string;
+    admin_email: string;
+    admin_password: string;
+    admin_name: string;
+    timezone?: string;
+    default_currency?: string;
+  }) =>
+    api.post<AuthResponseData>('/api/v1/auth/provision', data),
+
   refresh: (refresh_token: string) =>
     api.post<AuthResponseData>('/api/v1/auth/refresh', { refresh_token }),
 

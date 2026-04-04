@@ -50,6 +50,11 @@ impl DatabaseManager {
         self.pg_manager.delete_tenant(tenant_id).await
     }
 
+    /// Run migrations on a tenant database
+    pub async fn run_tenant_migrations(&self, pool: &PgPool) -> Result<()> {
+        self.pg_manager.run_tenant_migrations(pool).await
+    }
+
     /// Close all connections (for graceful shutdown)
     pub async fn close(&self) {
         // PgManager doesn't have an explicit close method yet

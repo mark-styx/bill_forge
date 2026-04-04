@@ -75,7 +75,7 @@ interface AuthState {
 }
 
 // Helper function to set up API callbacks (avoids duplication)
-function setupApiCallbacks() {
+export function setupApiCallbacks() {
   api.setTokenRefreshCallback((access, refresh) => {
     const store = useAuthStore.getState();
     store.setTokens(access, refresh);
