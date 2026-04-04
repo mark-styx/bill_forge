@@ -209,6 +209,7 @@ async fn seed_vendors(pool: &PgPool, tenant_id: &TenantId) -> Vec<Uuid> {
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_ml_categorization_without_api_key(pool: PgPool) -> sqlx::Result<()> {
     // Test that categorization works even without OpenAI API key
     // (will fall back to rule-based)
@@ -225,6 +226,7 @@ async fn test_ml_categorization_without_api_key(pool: PgPool) -> sqlx::Result<()
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_embedding_cache_refresh(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     seed_gl_codes(&pool, &tenant_id).await;
@@ -252,6 +254,7 @@ async fn test_embedding_cache_refresh(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_feedback_learning_analyze(pool: PgPool) -> Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     let schema_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
@@ -305,6 +308,7 @@ async fn test_feedback_learning_analyze(pool: PgPool) -> Result<()> {
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_feedback_accuracy_metrics(pool: PgPool) -> Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     let schema_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
@@ -344,6 +348,7 @@ async fn test_feedback_accuracy_metrics(pool: PgPool) -> Result<()> {
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_vendor_embedding_storage(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     let vendor_ids = seed_vendors(&pool, &tenant_id).await;
@@ -381,6 +386,7 @@ async fn test_vendor_embedding_storage(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_similarity_search_with_pgvector(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     seed_gl_codes(&pool, &tenant_id).await;
@@ -400,6 +406,7 @@ async fn test_similarity_search_with_pgvector(pool: PgPool) -> sqlx::Result<()> 
 }
 
 #[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
 async fn test_daily_metrics_update(pool: PgPool) -> Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     let schema_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
