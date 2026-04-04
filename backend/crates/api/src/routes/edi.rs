@@ -30,8 +30,9 @@ use billforge_core::types::{TenantId, UserId};
 use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
 use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_edi::{
-    verify_webhook_signature, EdiDocumentType, EdiInvoice, EdiMapper, EdiPurchaseOrder,
-    EdiShipNotice, EdiWebhookPayload,
+    verify_webhook_signature, EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper,
+    EdiPurchaseOrder, EdiShipNotice, EdiWebhookPayload, process_inbound_ack,
+    OutboundEdiService, EdiClient, EdiConfig, check_ack_timeouts,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,10 @@ pub fn routes() -> Router<AppState> {
         // Documents
         .route("/documents", get(list_documents))
         .route("/documents/:id", get(get_document))
+        // Outbound
+        .route("/send-remittance/:invoice_id", post(send_remittance))
+        .route("/outbound", get(list_outbound))
+        .route("/ack-timeouts", get(get_ack_timeouts))
         // Trading partners
         .route("/partners", get(list_partners).post(create_partner))
         .route("/partners/:id", put(update_partner).delete(delete_partner))
@@ -780,12 +785,121 @@ async fn webhook_inbound(
                 "edi_document_id": doc_id,
             })))
         }
+        EdiDocumentType::Remittance820 => {
+            // 820 is outbound-only, receiving one inbound is unexpected
+            tracing::warn!("Received unexpected inbound 820 remittance");
+            Ok(Json(serde_json::json!({
+                "status": "accepted",
+                "document_type": "remittance_820",
+                "note": "820 is outbound-only, document logged but not processed",
+            })))
+        }
         EdiDocumentType::FunctionalAck997 => {
-            tracing::info!("Received EDI 997 functional acknowledgment");
-            // Phase 3 will implement full 997 ack tracking
+            let ack: EdiFunctionalAck = serde_json::from_value(payload.payload.clone())
+                .map_err(|e| {
+                    tracing::error!("Failed to parse EDI 997 ack: {}", e);
+                    axum::http::StatusCode::BAD_REQUEST
+                })?;
+
+            tracing::info!(
+                group_control = %ack.group_control,
+                status = ?ack.status,
+                "Processing inbound EDI 997 functional acknowledgment"
+            );
+
+            // The 997's receiver_id is our ISA ID (we sent the original doc).
+            // Use it to look up the tenant, same as 810/850/856 handlers.
+            let metadata_pool = state.db.metadata();
+            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
+            )
+            .bind(&ack.receiver_id)
+            .fetch_optional(&*metadata_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to look up tenant for 997: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            let tenant_uuid = tenant_uuid.ok_or_else(|| {
+                tracing::warn!(
+                    receiver_id = %ack.receiver_id,
+                    "No tenant found for inbound 997 receiver_id"
+                );
+                axum::http::StatusCode::NOT_FOUND
+            })?;
+
+            let tenant_id = TenantId::from_uuid(tenant_uuid);
+            let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+                tracing::error!("Failed to get tenant pool: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Verify webhook signature (same pattern as 810/850/856)
+            let webhook_secret: Option<String> = sqlx::query_scalar(
+                "SELECT webhook_secret FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
+            )
+            .bind(tenant_uuid)
+            .fetch_optional(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch webhook secret: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            if let Some(secret) = &webhook_secret {
+                if !secret.is_empty() && !signature.is_empty() {
+                    if !verify_webhook_signature(&body, signature, secret) {
+                        tracing::warn!("EDI 997 webhook signature verification failed");
+                        return Err(axum::http::StatusCode::UNAUTHORIZED);
+                    }
+                }
+            }
+
+            // Store the inbound 997 document
+            let doc_id = Uuid::new_v4();
+            sqlx::query(
+                r#"INSERT INTO edi_documents
+                   (id, tenant_id, document_type, direction, group_control, status, raw_payload, created_at)
+                   VALUES ($1, $2, 'functional_ack_997', 'inbound', $3, 'processing', $4, NOW())"#,
+            )
+            .bind(doc_id)
+            .bind(tenant_uuid)
+            .bind(&ack.group_control)
+            .bind(&payload.payload)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store inbound 997: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // Process the ack - find and update the matching outbound document
+            let matched_doc_id = process_inbound_ack(&tenant_pool, tenant_uuid, &ack)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to process inbound 997: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+
+            // Update the 997 document status
+            sqlx::query(
+                "UPDATE edi_documents SET status = 'mapped', processed_at = NOW() WHERE id = $1",
+            )
+            .bind(doc_id)
+            .execute(&*tenant_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update 997 document status: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
             Ok(Json(serde_json::json!({
                 "status": "accepted",
                 "document_type": "functional_ack_997",
+                "ack_status": format!("{:?}", ack.status),
+                "matched_document_id": matched_doc_id,
+                "edi_document_id": doc_id,
             })))
         }
     }
@@ -1034,6 +1148,222 @@ async fn get_document(
         }))),
         None => Err(axum::http::StatusCode::NOT_FOUND.into()),
     }
+}
+
+// ──────────────────────────── Outbound ────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SendRemittanceRequest {
+    pub payment_reference: String,
+    pub payment_method: Option<String>,
+}
+
+/// Send an 820 Payment Remittance Advice for a paid invoice.
+///
+/// The invoice must be in "paid" status and have an associated vendor
+/// with a trading partner mapping (edi_trading_partners.vendor_id).
+async fn send_remittance(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Path(invoice_id): Path<Uuid>,
+    Json(req): Json<SendRemittanceRequest>,
+) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+    let tenant_uuid = *tenant.tenant_id.as_uuid();
+    let pool = state.db.tenant(&tenant.tenant_id).await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Load the invoice
+    let invoice_repo = InvoiceRepositoryImpl::new(Arc::clone(&pool));
+    let invoice = invoice_repo
+        .get_by_id(
+            &tenant.tenant_id,
+            &billforge_core::domain::InvoiceId(invoice_id),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to load invoice: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(axum::http::StatusCode::NOT_FOUND)?;
+
+    // Verify invoice is paid
+    if invoice.processing_status != billforge_core::domain::ProcessingStatus::Paid {
+        return Err(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // Find the trading partner for this vendor
+    let vendor_id = invoice.vendor_id.ok_or_else(|| {
+        tracing::warn!("Invoice has no vendor_id, cannot send remittance");
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    })?;
+
+    let partner_edi_id: Option<String> = sqlx::query_scalar(
+        "SELECT edi_id FROM edi_trading_partners WHERE tenant_id = $1 AND vendor_id = $2 AND is_active = true LIMIT 1",
+    )
+    .bind(tenant_uuid)
+    .bind(vendor_id)
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to look up trading partner: {}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let receiver_id = partner_edi_id.ok_or_else(|| {
+        tracing::warn!(vendor_id = %vendor_id, "No trading partner for vendor");
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    })?;
+
+    // Load EDI connection config
+    let conn_row: Option<(String, String, String, Option<String>, Option<String>, Option<String>, i32)> =
+        sqlx::query_as(
+            r#"SELECT api_key_encrypted, webhook_secret, provider,
+                      our_isa_qualifier, our_isa_id, api_base_url, ack_timeout_hours
+               FROM edi_connections
+               WHERE tenant_id = $1 AND is_active = true"#,
+        )
+        .bind(tenant_uuid)
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to load EDI connection: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let (api_key, webhook_secret, provider_str, isa_qualifier, isa_id, api_base_url, ack_timeout_hours) =
+        conn_row.ok_or_else(|| {
+            tracing::warn!("No active EDI connection for tenant");
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        })?;
+
+    let sender_id = isa_id.unwrap_or_default();
+    let provider = match provider_str.as_str() {
+        "stedi" => billforge_edi::config::EdiProvider::Stedi,
+        "orderful" => billforge_edi::config::EdiProvider::Orderful,
+        "sps_commerce" => billforge_edi::config::EdiProvider::SpsCommerce,
+        _ => billforge_edi::config::EdiProvider::Custom,
+    };
+    let config = EdiConfig {
+        api_key,
+        webhook_secret,
+        provider,
+        api_base_url: api_base_url.unwrap_or_else(|| "https://core.us.stedi.com/2023-08-01".to_string()),
+        our_isa_qualifier: isa_qualifier.unwrap_or_else(|| "ZZ".to_string()),
+        our_isa_id: sender_id.clone(),
+    };
+
+    let client = EdiClient::new(config);
+    let service = OutboundEdiService::new(client);
+
+    let payment_method = req.payment_method.as_deref().unwrap_or("ACH");
+
+    let doc_id = service
+        .send_remittance(
+            &pool,
+            tenant_uuid,
+            &invoice,
+            &sender_id,
+            &receiver_id,
+            &req.payment_reference,
+            payment_method,
+            "BillForge",
+            ack_timeout_hours,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send remittance: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "sent",
+        "edi_document_id": doc_id,
+        "invoice_id": invoice_id,
+        "receiver_id": receiver_id,
+    })))
+}
+
+/// List outbound EDI documents with ack status
+async fn list_outbound(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Query(query): Query<ListDocumentsQuery>,
+) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+    let pool = state.db.tenant(&tenant.tenant_id).await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let page = query.page.unwrap_or(1);
+    let per_page = query.per_page.unwrap_or(25).min(100);
+    let offset = ((page - 1) * per_page) as i32;
+
+    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>, String, Option<Uuid>, Option<String>, Option<String>, i32, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)>(
+        r#"SELECT id, document_type, sender_id, receiver_id, status, invoice_id,
+                  ack_status, middleware_id, ack_retry_count,
+                  created_at, processed_at, ack_received_at
+           FROM edi_documents
+           WHERE tenant_id = $1 AND direction = 'outbound'
+           ORDER BY created_at DESC
+           LIMIT $2 OFFSET $3"#,
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(per_page as i32)
+    .bind(offset)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let documents: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.0,
+                "document_type": r.1,
+                "sender_id": r.2,
+                "receiver_id": r.3,
+                "status": r.4,
+                "invoice_id": r.5,
+                "ack_status": r.6,
+                "middleware_id": r.7,
+                "retry_count": r.8,
+                "created_at": r.9,
+                "processed_at": r.10,
+                "ack_received_at": r.11,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "data": documents,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+        }
+    })))
+}
+
+/// Check for outbound documents with overdue ack responses
+async fn get_ack_timeouts(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+    let tenant_uuid = *tenant.tenant_id.as_uuid();
+    let pool = state.db.tenant(&tenant.tenant_id).await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let timed_out = check_ack_timeouts(&pool, tenant_uuid)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to check ack timeouts: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "timed_out_count": timed_out.len(),
+        "document_ids": timed_out,
+    })))
 }
 
 // ──────────────────────────── Trading Partners ────────────────────────────

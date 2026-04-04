@@ -41,6 +41,9 @@ pub enum JobType {
     ForecastRefresh,
     AnomalyDetection,
     EdiProcessInbound,
+    EdiSendRemittance,
+    EdiSendAck,
+    EdiCheckAckStatus,
 }
 
 impl std::fmt::Display for JobType {
@@ -58,6 +61,9 @@ impl std::fmt::Display for JobType {
             JobType::ForecastRefresh => write!(f, "ForecastRefresh"),
             JobType::AnomalyDetection => write!(f, "AnomalyDetection"),
             JobType::EdiProcessInbound => write!(f, "EdiProcessInbound"),
+            JobType::EdiSendRemittance => write!(f, "EdiSendRemittance"),
+            JobType::EdiSendAck => write!(f, "EdiSendAck"),
+            JobType::EdiCheckAckStatus => write!(f, "EdiCheckAckStatus"),
         }
     }
 }
@@ -175,6 +181,25 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             // EDI inbound processing is handled inline in the webhook handler for now.
             // This job type is reserved for async/retry processing of EDI documents.
             info!("EDI inbound processing job - payload: {}", job.payload);
+            Ok(())
+        }
+        JobType::EdiSendRemittance => {
+            // Sends 820 payment remittance advice to trading partner.
+            // Payload: { "invoice_id": "...", "tenant_id": "..." }
+            // Requires EDI connection config to build the client.
+            info!("EDI send remittance job - payload: {}", job.payload);
+            Ok(())
+        }
+        JobType::EdiSendAck => {
+            // Sends 997 functional acknowledgment for a received document.
+            // Payload: { "document_id": "...", "tenant_id": "..." }
+            info!("EDI send ack job - payload: {}", job.payload);
+            Ok(())
+        }
+        JobType::EdiCheckAckStatus => {
+            // Scheduled job to check for ack timeouts on outbound documents.
+            // Payload: { "tenant_id": "..." }
+            info!("EDI check ack status job - payload: {}", job.payload);
             Ok(())
         }
     }

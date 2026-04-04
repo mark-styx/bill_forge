@@ -16,6 +16,9 @@ pub enum EdiDocumentType {
     /// X12 810 - Invoice
     #[serde(rename = "invoice_810")]
     Invoice810,
+    /// X12 820 - Payment/Remittance Advice
+    #[serde(rename = "remittance_820")]
+    Remittance820,
     /// X12 850 - Purchase Order
     #[serde(rename = "purchase_order_850")]
     PurchaseOrder850,
@@ -31,6 +34,7 @@ impl std::fmt::Display for EdiDocumentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invoice810 => write!(f, "invoice_810"),
+            Self::Remittance820 => write!(f, "remittance_820"),
             Self::PurchaseOrder850 => write!(f, "purchase_order_850"),
             Self::ShipNotice856 => write!(f, "ship_notice_856"),
             Self::FunctionalAck997 => write!(f, "functional_ack_997"),
@@ -291,11 +295,68 @@ pub struct EdiShipLineItem {
     pub description: String,
 }
 
+// ──────────────────────────── 820 Payment Remittance ────────────────────────────
+
+/// EDI Payment/Remittance Advice (outbound X12 820)
+///
+/// Sent to trading partners after payment is issued to inform them
+/// which invoices were paid and how much.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiRemittanceAdvice {
+    /// Our ISA sender ID
+    pub sender_id: String,
+    /// Trading partner ISA receiver ID
+    pub receiver_id: String,
+    /// Interchange control number
+    pub interchange_control: String,
+    /// Group control number
+    pub group_control: String,
+    /// Payment reference number (check/ACH/wire ref)
+    pub payment_reference: String,
+    /// Payment date
+    pub payment_date: NaiveDate,
+    /// Payment method: CHK, ACH, WIR
+    pub payment_method: String,
+    /// Total payment amount in cents
+    pub total_amount_cents: i64,
+    /// Currency code
+    pub currency: String,
+    /// Payer (our company)
+    pub payer: EdiParty,
+    /// Payee (the vendor/trading partner)
+    pub payee: EdiParty,
+    /// Invoice references included in this payment
+    pub invoice_references: Vec<EdiRemittanceDetail>,
+}
+
+/// Detail line in a remittance advice (one per invoice paid)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdiRemittanceDetail {
+    /// Invoice number being paid
+    pub invoice_number: String,
+    /// Invoice date
+    pub invoice_date: Option<NaiveDate>,
+    /// Gross invoice amount in cents
+    pub gross_amount_cents: i64,
+    /// Discount taken in cents
+    pub discount_cents: i64,
+    /// Net amount paid in cents
+    pub net_amount_cents: i64,
+    /// PO number reference
+    pub po_number: Option<String>,
+}
+
 // ──────────────────────────── 997 Functional Ack ────────────────────────────
 
 /// Functional acknowledgment (X12 997)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdiFunctionalAck {
+    /// ISA sender (the partner sending the ack)
+    #[serde(default)]
+    pub sender_id: String,
+    /// ISA receiver (us, the original sender of the acknowledged doc)
+    #[serde(default)]
+    pub receiver_id: String,
     /// Acknowledged group control number
     pub group_control: String,
     /// Acknowledged transaction set control number

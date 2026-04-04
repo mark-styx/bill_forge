@@ -32,6 +32,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_workflow_migrations(pool).await?;
     run_vendor_statement_migrations(pool).await?;
     run_purchase_order_migrations(pool).await?;
+    run_edi_outbound_migrations(pool).await?;
 
     Ok(())
 }
@@ -389,6 +390,23 @@ pub async fn run_purchase_order_migrations(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await
         .map_err(|e| Error::Migration(format!("Failed to run purchase order migrations: {}", e)))?;
+
+    Ok(())
+}
+
+/// Run EDI outbound and ack tracking migrations
+pub async fn run_edi_outbound_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/066_edi_outbound_ack_tracking.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run EDI outbound/ack migrations: {}",
+            e
+        ))
+    })?;
 
     Ok(())
 }

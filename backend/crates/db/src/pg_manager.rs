@@ -213,6 +213,11 @@ impl PgManager {
                 .map_err(|e| Error::Database(format!("Failed to run migration {}: {}", name, e)))?;
         }
 
+        // Run additional migration groups (idempotent, uses IF NOT EXISTS)
+        crate::tenant_db::run_workflow_migrations(pool).await?;
+        crate::tenant_db::run_purchase_order_migrations(pool).await?;
+        crate::tenant_db::run_edi_outbound_migrations(pool).await?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }
