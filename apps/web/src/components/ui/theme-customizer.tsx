@@ -141,8 +141,8 @@ export function ThemeCustomizer({
     setIsSaving(true);
     try {
       await onSave({
-        presetId,
-        customColors: customColors || undefined,
+        preset_id: presetId,
+        custom_colors: customColors || undefined,
         branding: { brandName: organizationName },
       });
       toast.success('Theme saved successfully');
