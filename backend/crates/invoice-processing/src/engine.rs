@@ -58,8 +58,8 @@ impl WorkflowEngine {
             if confidence >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD {
                 // Check that all required categorization fields are populated
                 let has_complete_categorization = invoice.gl_code.is_some()
-                    || invoice.department.is_some()
-                    || invoice.cost_center.is_some();
+                    && invoice.department.is_some()
+                    && invoice.cost_center.is_some();
 
                 if has_complete_categorization {
                     tracing::info!(
