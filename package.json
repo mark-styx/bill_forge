@@ -16,6 +16,10 @@
     "sandbox:start": "docker-compose -f docker/docker-compose.sandbox.yml up -d && pnpm sandbox:seed && pnpm dev",
     "sandbox:seed": "cd sandbox && pnpm seed",
     "sandbox:reset": "docker-compose -f docker/docker-compose.sandbox.yml down -v && pnpm sandbox:start",
+    "mobile:dev": "pnpm --filter @billforge/mobile start",
+    "mobile:ios": "pnpm --filter @billforge/mobile ios",
+    "mobile:android": "pnpm --filter @billforge/mobile android",
+    "mobile:test": "pnpm --filter @billforge/mobile test:run",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules backend/target"
   },
   "devDependencies": {

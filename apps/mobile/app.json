@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "BillForge",
+    "slug": "billforge",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "billforge",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.billforge.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSUserNotificationsUsageDescription": "BillForge sends notifications when invoices need your approval."
+      }
+    },
+    "android": {
+      "package": "com.billforge.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png"
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    }
+  }
+}
