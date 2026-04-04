@@ -220,7 +220,7 @@ jobs:
       - name: Run tests
         run: pnpm -r test:run
 
-  # Security audit
+  # Security audit - blocks CI on P1 (critical/high) findings
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -233,11 +233,6 @@ jobs:
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
-
-      - name: Run cargo audit
-        working-directory: backend
-        run: cargo audit
-        continue-on-error: true  # Some transitive deps (rsa, protobuf) have no fix available yet
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -252,9 +247,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run npm audit
-        run: pnpm audit --audit-level=high
-        continue-on-error: true
+      - name: Run consolidated security audit
+        run: bash scripts/security-audit.sh
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: security-audit-report.json
+          retention-days: 30
 
   # Docker build test
   docker-build:
