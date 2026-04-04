@@ -119,7 +119,7 @@ services:
       api:
         condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080/api
+      NEXT_PUBLIC_API_URL: http://api:8080
 
 volumes:
   postgres_data:

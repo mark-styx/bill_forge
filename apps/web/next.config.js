@@ -1,9 +1,14 @@
 /** @type {import('next').NextConfig} */
+const imageDomains = ['localhost'];
+// Allow LAN IP for image loading when running on the network
+if (process.env.LAN_HOST) {
+  imageDomains.push(process.env.LAN_HOST);
+}
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   images: {
-    domains: ['localhost'],
+    domains: imageDomains,
   },
   async rewrites() {
     return [

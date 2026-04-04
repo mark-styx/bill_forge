@@ -39,7 +39,7 @@ impl VendorRepository for VendorRepositoryImpl {
         .bind(&input.name)
         .bind(serde_json::to_value(&input.vendor_type).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "business".to_string()))
         .bind(&input.tax_id)
-        .bind(sqlx::types::Json(&input.address))
+        .bind(input.address.as_ref().map(|a| sqlx::types::Json(a)))
         .bind(&input.email)
         .bind(&input.phone)
         .bind(&input.payment_terms)

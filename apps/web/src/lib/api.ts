@@ -1,4 +1,6 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+// Use empty string for relative URLs so requests go through Next.js rewrite proxy.
+// This ensures LAN/remote access works (browser won't try to hit localhost:8080).
+const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
 interface ApiResponse<T> {
   data?: T;

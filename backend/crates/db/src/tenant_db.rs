@@ -150,6 +150,50 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         ALTER TABLE vendors ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
         ALTER TABLE vendors ADD COLUMN IF NOT EXISTS address_line1 TEXT;
 
+        -- Invoice status config
+        CREATE TABLE IF NOT EXISTS invoice_status_config (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            status_key VARCHAR(50) NOT NULL,
+            display_label VARCHAR(100) NOT NULL,
+            color VARCHAR(50) NOT NULL DEFAULT 'gray',
+            bg_color VARCHAR(50) NOT NULL DEFAULT 'bg-secondary',
+            text_color VARCHAR(50) NOT NULL DEFAULT 'text-muted-foreground',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_terminal BOOLEAN NOT NULL DEFAULT false,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            category VARCHAR(20) NOT NULL DEFAULT 'processing',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, status_key)
+        );
+
+        -- Approval delegations
+        CREATE TABLE IF NOT EXISTS approval_delegations (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            delegator_id UUID NOT NULL REFERENCES users(id),
+            delegate_id UUID NOT NULL REFERENCES users(id),
+            start_date TIMESTAMPTZ NOT NULL,
+            end_date TIMESTAMPTZ NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT true,
+            conditions JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Approval limits
+        CREATE TABLE IF NOT EXISTS approval_limits (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            user_id UUID NOT NULL REFERENCES users(id),
+            max_amount_cents BIGINT NOT NULL,
+            currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+            vendor_restrictions JSONB,
+            department_restrictions JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_workflow_rules_tenant ON workflow_rules(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_work_queues_tenant ON work_queues(tenant_id);
@@ -161,6 +205,7 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);
+        CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
         "#,
     )
     .execute(pool)

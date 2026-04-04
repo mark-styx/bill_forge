@@ -1072,6 +1072,10 @@ export const useThemeStore = create<ThemeState>()(
       setMode: (mode) => {
         set({ mode });
         applyMode(mode);
+        // Sync with next-themes so its SSR script picks up the correct value on refresh
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('theme', mode);
+        }
       },
 
       setPreset: (presetId) => {
@@ -1175,6 +1179,10 @@ export const useThemeStore = create<ThemeState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           applyMode(state.mode);
+          // Keep next-themes in sync so its SSR script reads the correct mode on refresh
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('theme', state.mode);
+          }
 
           // Apply organization theme if active, otherwise user theme
           let colors: ThemeColors;
