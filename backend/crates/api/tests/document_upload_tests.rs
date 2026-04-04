@@ -21,6 +21,62 @@ async fn get_pool() -> sqlx::PgPool {
         .expect("Failed to connect to database")
 }
 
+/// Ensure a fixture invoice exists for the sandbox tenant.
+/// Creates the user and invoice if they don't already exist.
+/// Handles concurrent test runs by using ON CONFLICT DO NOTHING.
+async fn ensure_fixture_invoice(pool: &sqlx::PgPool) -> Uuid {
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
+
+    // Check if an invoice already exists for this tenant
+    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+    {
+        return id;
+    }
+
+    // Ensure the fixture user exists (needed for FK constraints)
+    sqlx::query(
+        "INSERT INTO users (id, tenant_id, email, password_hash, name)
+         VALUES ($1, $2, 'sandbox-test@example.com', '', 'Sandbox Test User')
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .expect("Failed to create fixture user");
+
+    // Create the fixture invoice (handle race with other parallel tests)
+    let invoice_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO invoices (id, tenant_id, vendor_name, invoice_number, total_amount_cents, document_id, created_by)
+         VALUES ($1, $2, 'Test Vendor', 'FIXTURE-001', 10000, $3, $4)
+         ON CONFLICT (tenant_id, invoice_number) DO NOTHING",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .bind(Uuid::new_v4())
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("Failed to create fixture invoice");
+
+    // Re-fetch in case another test won the race
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM invoices WHERE tenant_id = $1 AND invoice_number = 'FIXTURE-001'",
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .expect("Fixture invoice should exist")
+}
+
 /// Test that inserting a document WITH tenant_id succeeds (the fixed query).
 #[tokio::test]
 async fn test_document_insert_with_tenant_id_succeeds() {
@@ -30,11 +86,7 @@ async fn test_document_insert_with_tenant_id_succeeds() {
     let document_id = Uuid::new_v4();
 
     // Get a real invoice ID for FK constraint
-    let invoice_id: Uuid = sqlx::query_scalar("SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1")
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .expect("Need at least one invoice in the database to test uploads");
+    let invoice_id = ensure_fixture_invoice(&pool).await;
 
     // This is the EXACT query from the fixed upload_invoice handler in invoices.rs
     let result = sqlx::query(
@@ -78,15 +130,10 @@ async fn test_document_insert_with_tenant_id_succeeds() {
 #[tokio::test]
 async fn test_document_insert_without_tenant_id_fails() {
     let pool = get_pool().await;
-    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
     let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
     let document_id = Uuid::new_v4();
 
-    let invoice_id: Uuid = sqlx::query_scalar("SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1")
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .expect("Need at least one invoice");
+    let invoice_id = ensure_fixture_invoice(&pool).await;
 
     // This is what the OLD broken query looked like (missing tenant_id)
     let result = sqlx::query(
@@ -120,11 +167,7 @@ async fn test_storage_document_insert_with_tenant_id() {
     let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
     let document_id = Uuid::new_v4();
 
-    let invoice_id: Uuid = sqlx::query_scalar("SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1")
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .expect("Need at least one invoice");
+    let invoice_id = ensure_fixture_invoice(&pool).await;
 
     // This is the query from storage.rs (was already correct, verify it works)
     let result = sqlx::query(
@@ -174,11 +217,7 @@ async fn test_multiple_documents_per_invoice() {
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
     let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
 
-    let invoice_id: Uuid = sqlx::query_scalar("SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1")
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .expect("Need at least one invoice");
+    let invoice_id = ensure_fixture_invoice(&pool).await;
 
     let mut doc_ids = Vec::new();
 
