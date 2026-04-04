@@ -25,6 +25,7 @@ pub mod predictive;
 pub mod mobile;
 mod settings;
 mod feedback;
+mod theme;
 
 use crate::middleware::{rate_limit_auth, RateLimiterState};
 use crate::state::AppState;
@@ -114,6 +115,10 @@ fn api_routes() -> Router<AppState> {
         .nest("/settings", settings::routes())
         // User feedback
         .nest("/feedback", feedback::routes())
+        // Organization theme
+        .nest("/organization/theme", theme::org_routes())
+        // User theme preferences
+        .nest("/user/theme", theme::user_routes())
         // Email actions (approve/reject via email)
         .nest("/actions", email_actions::routes())
 }
