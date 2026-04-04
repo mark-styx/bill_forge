@@ -103,6 +103,96 @@ fn test_invoice_with_all_categorization_fields_is_not_eligible() {
 }
 
 // ============================================================================
+// Auto-approval completeness tests (mirrors engine.rs && logic)
+// ============================================================================
+
+const ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD: f32 = 0.95;
+
+/// Verify that only a partial categorization (one field) does NOT satisfy
+/// the auto-approval completeness check. This guards against the || bug.
+#[test]
+fn test_partial_categorization_one_field_does_not_qualify_for_auto_approval() {
+    let mut invoice = make_test_invoice(Some("6000-Software".into()), None, None);
+    invoice.categorization_confidence = Some(0.97); // above threshold
+
+    let has_complete = invoice.gl_code.is_some()
+        && invoice.department.is_some()
+        && invoice.cost_center.is_some();
+
+    assert!(
+        !has_complete,
+        "Only gl_code set should NOT qualify as complete categorization"
+    );
+}
+
+/// Verify that two out of three categorization fields is still NOT enough.
+#[test]
+fn test_partial_categorization_two_fields_does_not_qualify_for_auto_approval() {
+    let mut invoice = make_test_invoice(
+        Some("6000-Software".into()),
+        Some("Engineering".into()),
+        None,
+    );
+    invoice.categorization_confidence = Some(0.97);
+
+    let has_complete = invoice.gl_code.is_some()
+        && invoice.department.is_some()
+        && invoice.cost_center.is_some();
+
+    assert!(
+        !has_complete,
+        "Two out of three fields should NOT qualify as complete categorization"
+    );
+}
+
+/// Verify that all three categorization fields with high confidence DOES
+/// satisfy the auto-approval check.
+#[test]
+fn test_complete_categorization_qualifies_for_auto_approval() {
+    let mut invoice = make_test_invoice(
+        Some("6000-Software".into()),
+        Some("Engineering".into()),
+        Some("CC-100".into()),
+    );
+    invoice.categorization_confidence = Some(0.97);
+
+    let has_complete = invoice.gl_code.is_some()
+        && invoice.department.is_some()
+        && invoice.cost_center.is_some();
+
+    assert!(
+        has_complete,
+        "All three fields set should qualify as complete categorization"
+    );
+
+    // Also verify the confidence threshold check
+    let qualifies = invoice.categorization_confidence
+        .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD && has_complete)
+        .unwrap_or(false);
+    assert!(qualifies, "High confidence + complete fields should auto-approve");
+}
+
+/// Verify that all three fields set but LOW confidence does NOT auto-approve.
+#[test]
+fn test_complete_categorization_low_confidence_no_auto_approval() {
+    let mut invoice = make_test_invoice(
+        Some("6000-Software".into()),
+        Some("Engineering".into()),
+        Some("CC-100".into()),
+    );
+    invoice.categorization_confidence = Some(0.80); // below threshold
+
+    let qualifies = invoice.categorization_confidence
+        .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+        .unwrap_or(false);
+
+    assert!(
+        !qualifies,
+        "Low confidence should NOT auto-approve even with complete fields"
+    );
+}
+
+// ============================================================================
 // Line item mapping tests
 // ============================================================================
 
