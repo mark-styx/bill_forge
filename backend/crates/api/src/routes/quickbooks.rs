@@ -209,8 +209,7 @@ async fn quickbooks_callback(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch OAuth state for tenant {}", tenant_id.as_str());
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     let is_valid = stored_state
         .map(|(token, expires_at)| token == params.state && expires_at > Utc::now())
@@ -334,8 +333,7 @@ async fn quickbooks_disconnect(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch connection for disconnect");
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     if let Some((refresh_token,)) = connection {
         // Revoke token with QuickBooks
@@ -397,8 +395,7 @@ async fn quickbooks_status(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch connection status");
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     let status = if let Some((company_id, company_name, sync_enabled, last_sync_at)) = connection {
         QuickBooksStatus {
@@ -481,7 +478,7 @@ async fn sync_vendors(
     // Sync each vendor
     for qb_vendor in all_vendors {
         // Check if vendor already exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
+        let existing: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
             "SELECT v.id FROM vendors v
              INNER JOIN quickbooks_vendor_mappings m ON m.billforge_vendor_id = v.id
              WHERE m.tenant_id = $1 AND m.quickbooks_vendor_id = $2"
@@ -493,8 +490,7 @@ async fn sync_vendors(
         .map_err(|e| {
             error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to look up vendor mapping");
             billforge_core::Error::Internal(format!("Database error: {}", e))
-        })?
-        .flatten();
+        })?;
 
         if let Some((vendor_id,)) = existing {
             // Update existing vendor
@@ -760,8 +756,7 @@ async fn export_invoice_to_quickbooks(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch invoice for export");
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     let (vendor_name, invoice_number, total_cents, due_date, po_number) = invoice
         .ok_or_else(|| billforge_core::Error::NotFound {
@@ -782,8 +777,7 @@ async fn export_invoice_to_quickbooks(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch vendor mapping for export");
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     let quickbooks_vendor_id = vendor_mapping
         .map(|(id,)| id)
@@ -989,8 +983,7 @@ async fn get_authenticated_qb_client(
     .map_err(|e| {
         error!(error = %e, "Failed to fetch QuickBooks connection for token refresh");
         billforge_core::Error::Internal(format!("Database error: {}", e))
-    })?
-    .flatten();
+    })?;
 
     let (company_id, mut access_token, refresh_token_val, token_expires_at) = connection
         .ok_or_else(|| billforge_core::Error::Validation(
