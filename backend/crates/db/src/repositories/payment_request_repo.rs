@@ -66,6 +66,29 @@ impl PaymentRequestRepositoryImpl {
             )));
         }
 
+        // Check if any invoice is already in an active (draft/submitted) payment request
+        let already_claimed: Vec<(Uuid,)> = sqlx::query_as(
+            r#"SELECT pri.invoice_id
+               FROM payment_request_items pri
+               JOIN payment_requests pr ON pr.id = pri.payment_request_id
+               WHERE pri.invoice_id = ANY($1)
+                 AND pr.tenant_id = $2
+                 AND pr.status IN ('draft', 'submitted')"#,
+        )
+        .bind(invoice_ids)
+        .bind(tenant_id.as_uuid())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to check for claimed invoices: {}", e)))?;
+
+        if !already_claimed.is_empty() {
+            let claimed_ids: Vec<Uuid> = already_claimed.into_iter().map(|(id,)| id).collect();
+            return Err(Error::Validation(format!(
+                "Some invoices are already in an active payment request: {:?}",
+                claimed_ids
+            )));
+        }
+
         // Compute aggregates
         let total_amount_cents: i64 = invoices.iter().map(|i| i.total_amount_cents).sum();
         let invoice_count = invoices.len() as i32;
@@ -245,6 +268,31 @@ impl PaymentRequestRepositoryImpl {
             return Err(Error::Validation(format!(
                 "Some invoices are already in this payment request: {:?}",
                 already_added.into_iter().collect::<Vec<_>>()
+            )));
+        }
+
+        // Check if any invoice is already in another active (draft/submitted) payment request
+        let already_claimed: Vec<(Uuid,)> = sqlx::query_as(
+            r#"SELECT pri.invoice_id
+               FROM payment_request_items pri
+               JOIN payment_requests pr ON pr.id = pri.payment_request_id
+               WHERE pri.invoice_id = ANY($1)
+                 AND pr.tenant_id = $2
+                 AND pr.id != $3
+                 AND pr.status IN ('draft', 'submitted')"#,
+        )
+        .bind(invoice_ids)
+        .bind(tenant_id.as_uuid())
+        .bind(request_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to check for claimed invoices: {}", e)))?;
+
+        if !already_claimed.is_empty() {
+            let claimed_ids: Vec<Uuid> = already_claimed.into_iter().map(|(id,)| id).collect();
+            return Err(Error::Validation(format!(
+                "Some invoices are already in another active payment request: {:?}",
+                claimed_ids
             )));
         }
 
@@ -485,13 +533,24 @@ impl PaymentRequestRepositoryImpl {
             }
         }
 
-        // Update invoice processing_status to 'payment_submitted' within same transaction
-        sqlx::query(
+        // Fetch the expected invoice count from the payment request
+        let invoice_count: (i32,) = sqlx::query_as(
+            "SELECT invoice_count FROM payment_requests WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to fetch invoice count: {}", e)))?;
+
+        // Update invoice processing_status to 'payment_submitted' within same transaction.
+        // Only update invoices that are still in 'ready_for_payment' status to prevent
+        // double-counting when two payment requests include the same invoice.
+        let invoice_result = sqlx::query(
             r#"UPDATE invoices
                SET processing_status = 'payment_submitted', updated_at = $1
                WHERE id IN (
                    SELECT invoice_id FROM payment_request_items WHERE payment_request_id = $2
-               ) AND tenant_id = $3"#,
+               ) AND tenant_id = $3 AND processing_status = 'ready_for_payment'"#,
         )
         .bind(now)
         .bind(id)
@@ -499,6 +558,17 @@ impl PaymentRequestRepositoryImpl {
         .execute(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to update invoice statuses: {}", e)))?;
+
+        // Verify all invoices were still in ready_for_payment status.
+        // If fewer were updated than expected, another request already claimed them.
+        if invoice_result.rows_affected() != invoice_count.0 as u64 {
+            return Err(Error::Validation(format!(
+                "Could not submit: only {} of {} invoices are still in ready_for_payment status. \
+                 Another payment request may have already claimed some invoices.",
+                invoice_result.rows_affected(),
+                invoice_count.0
+            )));
+        }
 
         tx.commit().await.map_err(|e| {
             Error::Database(format!("Failed to commit submit transaction: {}", e))
