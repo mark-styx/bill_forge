@@ -252,12 +252,13 @@ async fn quickbooks_callback(
         },
     );
 
-    let company_info = client.get_company_info().await
-        .map_err(|e| {
+    let company_info = match client.get_company_info().await {
+        Ok(info) => Some(info),
+        Err(e) => {
             warn!(error = %e, "Failed to fetch company info from QuickBooks — using defaults");
-            e
-        })
-        .ok();
+            None
+        }
+    };
     let company_name = company_info
         .and_then(|info| info.get("CompanyName")?.as_str().map(|s| s.to_string()));
 
@@ -921,6 +922,8 @@ async fn update_account_mappings(
     Json(mappings): Json<Vec<AccountMapping>>,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let total = mappings.len() as u64;
+    let mut errors = 0u64;
 
     for mapping in mappings {
         if let Err(e) = sqlx::query(
@@ -935,10 +938,17 @@ async fn update_account_mappings(
         .await
         {
             error!(error = %e, account_id = %mapping.quickbooks_account_id, "Failed to update account mapping");
+            errors += 1;
         }
     }
 
-    Ok(Json(serde_json::json!({ "status": "updated" })))
+    if errors == total && total > 0 {
+        return Err(billforge_core::Error::Internal(
+            "All account mapping updates failed".to_string()
+        ).into());
+    }
+
+    Ok(Json(serde_json::json!({ "status": "updated", "errors": errors })))
 }
 
 /// Build a QuickBooksOAuth instance from the app's QuickBooks config.

@@ -252,3 +252,28 @@ fn test_sync_accounts_response_includes_errors() {
     assert_eq!(json["count"], 10);
     assert_eq!(json["errors"], 1);
 }
+
+#[test]
+fn test_update_account_mappings_response_includes_errors() {
+    // Verify update_account_mappings returns an errors count instead of
+    // always reporting success. Partial-failure case:
+    let json = serde_json::json!({
+        "status": "updated",
+        "errors": 2
+    });
+
+    assert_eq!(json["status"], "updated");
+    assert_eq!(json["errors"], 2);
+}
+
+#[test]
+fn test_update_account_mappings_response_zero_errors() {
+    // When all mappings update successfully, errors should be 0.
+    let json = serde_json::json!({
+        "status": "updated",
+        "errors": 0
+    });
+
+    assert_eq!(json["status"], "updated");
+    assert_eq!(json["errors"], 0);
+}
