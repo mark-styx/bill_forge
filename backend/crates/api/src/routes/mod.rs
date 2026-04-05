@@ -20,6 +20,7 @@ pub mod workday;
 pub mod bill_com;
 pub mod edi;
 pub mod purchase_orders;
+pub mod payment_requests;
 pub mod vendor_statements;
 pub mod notifications;
 pub mod predictive;
@@ -130,4 +131,6 @@ fn api_routes() -> Router<AppState> {
         .nest("/billing", billing::routes())
         // Vendor Statement Reconciliation
         .merge(vendor_statements::routes())
+        // Payment Requests
+        .nest("/payment-requests", payment_requests::routes())
 }

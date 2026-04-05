@@ -24,9 +24,9 @@ BillForge is a comprehensive accounts payable automation platform that helps bus
 
 All API endpoints (except /health) require authentication using JWT Bearer tokens.
 
-1. Obtain tokens via POST /api/auth/login
+1. Obtain tokens via POST /api/v1/auth/login
 2. Include the access token in the Authorization header: `Authorization: Bearer <token>`
-3. Refresh tokens before expiry using POST /api/auth/refresh
+3. Refresh tokens before expiry using POST /api/v1/auth/refresh
 
 ## Multi-Tenancy
 
@@ -41,7 +41,7 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         )
     ),
     servers(
-        (url = "/api", description = "API Server")
+        (url = "/api/v1", description = "API Server")
     ),
     tags(
         (name = "Authentication", description = "User authentication and token management"),
@@ -52,9 +52,27 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         (name = "Health", description = "System health and monitoring"),
         (name = "Dashboard", description = "Dashboard metrics and KPIs"),
         (name = "QuickBooks", description = "QuickBooks Online integration"),
-        (name = "Xero", description = "Xero accounting integration")
+        (name = "Xero", description = "Xero accounting integration"),
+        (name = "Payment Requests", description = "Payment request batching and submission")
     ),
     paths(
+        // Authentication endpoints
+        crate::routes::auth::login,
+        crate::routes::auth::register,
+        crate::routes::auth::provision,
+        crate::routes::auth::refresh,
+        crate::routes::auth::logout,
+        crate::routes::auth::me,
+        // Invoice endpoints
+        crate::routes::invoices::list_invoices,
+        crate::routes::invoices::create_invoice,
+        crate::routes::invoices::upload_invoice,
+        crate::routes::invoices::get_invoice,
+        crate::routes::invoices::update_invoice,
+        crate::routes::invoices::delete_invoice,
+        crate::routes::invoices::rerun_ocr,
+        crate::routes::invoices::submit_for_processing,
+        crate::routes::invoices::suggest_categories,
         // Dashboard endpoints
         crate::routes::dashboard::get_dashboard_metrics,
         crate::routes::dashboard::get_invoice_metrics,
@@ -96,6 +114,8 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
             HealthResponse,
             ErrorResponse,
             PaginationInfo,
+            crate::routes::auth::MeResponse,
+            crate::routes::invoices::UploadResponse,
         )
     )
 )]
