@@ -1,11 +1,11 @@
 //! API routes
 
 mod audit;
-mod auth;
+pub mod auth;
 pub mod dashboard;
 mod documents;
 mod health;
-mod invoices;
+pub mod invoices;
 mod vendors;
 mod workflows;
 mod reports;
@@ -20,6 +20,7 @@ pub mod workday;
 pub mod bill_com;
 pub mod edi;
 pub mod purchase_orders;
+pub mod vendor_statements;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
@@ -127,4 +128,6 @@ fn api_routes() -> Router<AppState> {
         .nest("/ai", ai::routes())
         // Billing & Subscription
         .nest("/billing", billing::routes())
+        // Vendor Statement Reconciliation
+        .merge(vendor_statements::routes())
 }
