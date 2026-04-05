@@ -1,7 +1,7 @@
 //! Vendor statement repository implementation
 
 use billforge_core::{
-    domain::{self, vendor_statement::MatchResult, *},
+    domain::{vendor_statement::MatchResult, *},
     types::TenantId,
     Error, Result,
 };
@@ -19,7 +19,7 @@ impl VendorStatementRepositoryImpl {
         Self { pool }
     }
 
-    /// Create a new vendor statement with line items, returning the statement.
+    /// Create a new vendor statement with line items in a single transaction.
     pub async fn create_statement(
         &self,
         tenant_id: &TenantId,
@@ -30,6 +30,10 @@ impl VendorStatementRepositoryImpl {
         let now = Utc::now();
         let currency = input.currency.unwrap_or_else(|| "USD".to_string());
         let status = StatementStatus::Pending.as_str();
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            Error::Database(format!("Failed to begin transaction: {}", e))
+        })?;
 
         sqlx::query(
             r#"INSERT INTO vendor_statements
@@ -53,11 +57,11 @@ impl VendorStatementRepositoryImpl {
         .bind(created_by)
         .bind(now)
         .bind(now)
-        .execute(&*self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to create vendor statement: {}", e)))?;
 
-        // Insert line items
+        // Insert line items within the same transaction
         for line in &input.lines {
             let line_id = Uuid::new_v4();
             let line_type = line.line_type.unwrap_or(LineType::Invoice).as_str();
@@ -78,10 +82,14 @@ impl VendorStatementRepositoryImpl {
             .bind(line_type)
             .bind(now)
             .bind(now)
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| Error::Database(format!("Failed to create statement line: {}", e)))?;
         }
+
+        tx.commit().await.map_err(|e| {
+            Error::Database(format!("Failed to commit statement transaction: {}", e))
+        })?;
 
         Ok(VendorStatement {
             id: VendorStatementId(id),
@@ -233,9 +241,10 @@ impl VendorStatementRepositoryImpl {
         Ok(rows.into_iter().map(|r| r.into_domain()).collect())
     }
 
-    /// Update a line's match status and linked invoice.
+    /// Update a line's match status and linked invoice, scoped to tenant.
     pub async fn update_line_match(
         &self,
+        tenant_id: &TenantId,
         line_id: Uuid,
         matched_invoice_id: Option<Uuid>,
         variance_cents: i64,
@@ -243,7 +252,7 @@ impl VendorStatementRepositoryImpl {
         matched_by: &str,
     ) -> Result<()> {
         let now = Utc::now();
-        sqlx::query(
+        let result = sqlx::query(
             r#"UPDATE vendor_statement_lines
                SET matched_invoice_id = $1,
                    variance_cents = $2,
@@ -251,7 +260,7 @@ impl VendorStatementRepositoryImpl {
                    matched_by = $4,
                    matched_at = $5,
                    updated_at = $6
-               WHERE id = $7"#,
+               WHERE id = $7 AND tenant_id = $8"#,
         )
         .bind(matched_invoice_id)
         .bind(variance_cents)
@@ -260,16 +269,25 @@ impl VendorStatementRepositoryImpl {
         .bind(now)
         .bind(now)
         .bind(line_id)
+        .bind(tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update line match: {}", e)))?;
 
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                resource_type: "StatementLine".to_string(),
+                id: line_id.to_string(),
+            });
+        }
+
         Ok(())
     }
 
-    /// Update statement status (e.g. to reconciled).
+    /// Update statement status (e.g. to reconciled), scoped to tenant.
     pub async fn update_statement_status(
         &self,
+        tenant_id: &TenantId,
         id: Uuid,
         status: &StatementStatus,
         reconciled_by: Option<Uuid>,
@@ -277,19 +295,27 @@ impl VendorStatementRepositoryImpl {
         let now = Utc::now();
         let reconciled_at = if *status == StatementStatus::Reconciled { Some(now) } else { None };
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"UPDATE vendor_statements
                SET status = $1, reconciled_by = $2, reconciled_at = $3, updated_at = $4
-               WHERE id = $5"#,
+               WHERE id = $5 AND tenant_id = $6"#,
         )
         .bind(status.as_str())
         .bind(reconciled_by)
         .bind(reconciled_at)
         .bind(now)
         .bind(id)
+        .bind(tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update statement status: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                resource_type: "VendorStatement".to_string(),
+                id: id.to_string(),
+            });
+        }
 
         Ok(())
     }
@@ -332,11 +358,12 @@ impl VendorStatementRepositoryImpl {
             .collect())
     }
 
-    /// Apply match results to the database.
-    pub async fn apply_match_results(&self, results: &[MatchResult]) -> Result<()> {
+    /// Apply match results to the database, scoped to tenant.
+    pub async fn apply_match_results(&self, tenant_id: &TenantId, results: &[MatchResult]) -> Result<()> {
         for result in results {
             if result.confidence != MatchConfidence::NoMatch {
                 self.update_line_match(
+                    tenant_id,
                     result.line_id,
                     result.matched_invoice_id,
                     result.variance_cents,

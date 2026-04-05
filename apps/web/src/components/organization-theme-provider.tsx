@@ -35,7 +35,7 @@ interface OrganizationThemeProviderProps {
 
 export function OrganizationThemeProvider({ children }: OrganizationThemeProviderProps) {
   const { tenant } = useAuthStore();
-  const { getCurrentColors, presetId } = useThemeStore();
+  const { getCurrentColors } = useThemeStore();
   const [isOrgThemeActive, setIsOrgThemeActive] = useState(false);
   const [organizationTheme, setOrganizationTheme] = useState<OrganizationTheme | null>(null);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
@@ -67,13 +67,6 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
     window.dispatchEvent(new CustomEvent('org-theme-change', { detail: { colors } }));
   }, []);
 
-  // Restore original colors
-  const restoreOriginalColors = useCallback(() => {
-    if (originalColors) {
-      applyColorsToRoot(originalColors);
-    }
-  }, [originalColors, applyColorsToRoot]);
-
   // Apply organization theme
   const applyOrganizationTheme = useCallback((theme: OrganizationTheme) => {
     // Save current colors before applying org theme
@@ -84,7 +77,7 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
     setOrganizationTheme(theme);
     setIsOrgThemeActive(true);
 
-    const colors = theme.customColors || themePresets.find((p) => p.id === theme.presetId)?.colors;
+    const colors = theme.custom_colors || themePresets.find((p) => p.id === theme.preset_id)?.colors;
     if (colors) {
       applyColorsToRoot(colors);
     }
@@ -107,8 +100,8 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
     const newTheme = { ...organizationTheme, ...updates };
     setOrganizationTheme(newTheme);
 
-    if (updates.customColors || updates.presetId) {
-      const colors = newTheme.customColors || themePresets.find((p) => p.id === newTheme.presetId)?.colors;
+    if (updates.custom_colors || updates.preset_id) {
+      const colors = newTheme.custom_colors || themePresets.find((p) => p.id === newTheme.preset_id)?.colors;
       if (colors) {
         applyColorsToRoot(colors);
       }
@@ -132,8 +125,8 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
     setPreviewColors(null);
 
     if (isOrgThemeActive && organizationTheme) {
-      const orgColors = organizationTheme.customColors ||
-        themePresets.find((p) => p.id === organizationTheme.presetId)?.colors;
+      const orgColors = organizationTheme.custom_colors ||
+        themePresets.find((p) => p.id === organizationTheme.preset_id)?.colors;
       if (orgColors) {
         applyColorsToRoot(orgColors);
       }
@@ -156,11 +149,11 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
   // Get effective gradient CSS
   const getEffectiveGradient = useCallback(() => {
     const colors = previewColors ||
-      (isOrgThemeActive && organizationTheme?.customColors) ||
-      (isOrgThemeActive && themePresets.find((p) => p.id === organizationTheme?.presetId)?.colors) ||
+      (isOrgThemeActive && organizationTheme?.custom_colors) ||
+      (isOrgThemeActive && themePresets.find((p) => p.id === organizationTheme?.preset_id)?.colors) ||
       getCurrentColors();
 
-    const gradientConfig: GradientConfig = organizationTheme?.gradientConfig || {
+    const gradientConfig: GradientConfig = organizationTheme?.gradient_config || {
       enabled: true,
       type: 'linear',
       angle: 135,
@@ -172,8 +165,8 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
   // Get brand gradient for headers/banners
   const getBrandGradient = useCallback(() => {
     const colors = previewColors ||
-      (isOrgThemeActive && organizationTheme?.customColors) ||
-      (isOrgThemeActive && themePresets.find((p) => p.id === organizationTheme?.presetId)?.colors) ||
+      (isOrgThemeActive && organizationTheme?.custom_colors) ||
+      (isOrgThemeActive && themePresets.find((p) => p.id === organizationTheme?.preset_id)?.colors) ||
       getCurrentColors();
 
     return `linear-gradient(135deg, hsl(${colors.primary}), hsl(${colors.accent}))`;
@@ -202,8 +195,8 @@ export function OrganizationThemeProvider({ children }: OrganizationThemeProvide
       if (isPreviewMode && previewColors) {
         applyColorsToRoot(previewColors);
       } else if (isOrgThemeActive && organizationTheme) {
-        const colors = organizationTheme.customColors ||
-          themePresets.find((p) => p.id === organizationTheme.presetId)?.colors;
+        const colors = organizationTheme.custom_colors ||
+          themePresets.find((p) => p.id === organizationTheme.preset_id)?.colors;
         if (colors) {
           applyColorsToRoot(colors);
         }

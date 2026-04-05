@@ -4,15 +4,13 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { invoicesApi, workflowsApi, vendorsApi, documentsApi, DocumentMetadata } from '@/lib/api';
+import { invoicesApi, workflowsApi, vendorsApi, documentsApi, DocumentMetadata, InvoiceLineItem } from '@/lib/api';
 import { toast } from 'sonner';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
+import { LineItemsGrid } from '@/components/ui/line-items-grid';
 import {
   ArrowLeft,
   FileText,
-  DollarSign,
-  Calendar,
-  Building,
   Edit,
   Send,
   CheckCircle,
@@ -24,9 +22,7 @@ import {
   X,
   Layers,
   User,
-  Tag,
   Briefcase,
-  Hash,
   Eye,
   Upload,
   Download,
@@ -52,6 +48,7 @@ export default function InvoiceDetailPage() {
   const [showQuickAddVendor, setShowQuickAddVendor] = useState(false);
   const [quickAddVendorName, setQuickAddVendorName] = useState('');
   const [quickAddVendorType, setQuickAddVendorType] = useState('business');
+  const [editedLineItems, setEditedLineItems] = useState<InvoiceLineItem[] | null>(null);
 
   const { data: invoice, isLoading } = useQuery({
     queryKey: ['invoice', id],
@@ -150,6 +147,7 @@ export default function InvoiceDetailPage() {
       toast.success('Invoice updated successfully');
       setIsEditing(false);
       setEditedFields({});
+      setEditedLineItems(null);
     },
     onError: (error: any) => {
       toast.error(error.message || 'Failed to update invoice');
@@ -258,12 +256,16 @@ export default function InvoiceDetailPage() {
   };
 
   const handleSave = () => {
-    updateInvoice.mutate(editedFields);
+    updateInvoice.mutate({
+      ...editedFields,
+      ...(editedLineItems ? { line_items: editedLineItems } : {}),
+    });
   };
 
   const handleCancel = () => {
     setIsEditing(false);
     setEditedFields({});
+    setEditedLineItems(null);
   };
 
   const currentQueue = queues?.find((q: any) => q.id === (invoice as any).current_queue_id);
@@ -673,13 +675,13 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.department ?? (invoice as any).department ?? ''}
+                    value={editedFields.department ?? invoice.department ?? ''}
                     onChange={(e) => handleFieldChange('department', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. Operations"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).department || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{invoice.department || 'Not set'}</p>
                 )}
               </div>
 
@@ -691,13 +693,13 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.gl_code ?? (invoice as any).gl_code ?? ''}
+                    value={editedFields.gl_code ?? invoice.gl_code ?? ''}
                     onChange={(e) => handleFieldChange('gl_code', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. 6000-100"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).gl_code || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{invoice.gl_code || 'Not set'}</p>
                 )}
               </div>
 
@@ -709,17 +711,24 @@ export default function InvoiceDetailPage() {
                 {isEditing ? (
                   <input
                     type="text"
-                    value={editedFields.cost_center ?? (invoice as any).cost_center ?? ''}
+                    value={editedFields.cost_center ?? invoice.cost_center ?? ''}
                     onChange={(e) => handleFieldChange('cost_center', e.target.value)}
                     className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g. CC-001"
                   />
                 ) : (
-                  <p className="font-medium text-slate-900 dark:text-white">{(invoice as any).cost_center || 'Not set'}</p>
+                  <p className="font-medium text-slate-900 dark:text-white">{invoice.cost_center || 'Not set'}</p>
                 )}
               </div>
             </div>
           </div>
+
+          {/* Line Items Card */}
+          <LineItemsGrid
+            items={editedLineItems ?? invoice.line_items}
+            isEditing={isEditing}
+            onChange={setEditedLineItems}
+          />
 
           {/* Notes Card */}
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
