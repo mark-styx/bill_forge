@@ -301,30 +301,23 @@ impl CategorizationEngine {
         Ok(Some(best.clone()))
     }
 
-    /// Calculate overall confidence score
+    /// Calculate overall confidence score.
+    ///
+    /// Uses a fixed denominator of 3 so missing fields contribute 0.0 to the
+    /// average. This ensures incomplete categorizations (e.g. 1-of-3 fields
+    /// at 0.98 confidence) produce a low overall score (0.327) that cannot
+    /// reach the 0.95 auto-approval threshold.
     fn calculate_overall_confidence(
         &self,
         gl_code: &Option<CategorySuggestion>,
         department: &Option<CategorySuggestion>,
         cost_center: &Option<CategorySuggestion>,
     ) -> f32 {
-        let mut scores = Vec::new();
+        let gl_score = gl_code.as_ref().map_or(0.0, |s| s.confidence);
+        let dept_score = department.as_ref().map_or(0.0, |s| s.confidence);
+        let cc_score = cost_center.as_ref().map_or(0.0, |s| s.confidence);
 
-        if let Some(gl) = gl_code {
-            scores.push(gl.confidence);
-        }
-        if let Some(dept) = department {
-            scores.push(dept.confidence);
-        }
-        if let Some(cc) = cost_center {
-            scores.push(cc.confidence);
-        }
-
-        if scores.is_empty() {
-            0.0
-        } else {
-            scores.iter().sum::<f32>() / scores.len() as f32
-        }
+        (gl_score + dept_score + cc_score) / 3.0
     }
 }
 

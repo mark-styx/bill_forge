@@ -301,30 +301,23 @@ impl MLCategorizer {
             .cloned()
     }
 
-    /// Calculate overall confidence score
+    /// Calculate overall confidence score.
+    ///
+    /// Uses a fixed denominator of 3 so missing fields contribute 0.0 to the
+    /// average. This ensures incomplete categorizations (e.g. 1-of-3 fields
+    /// at 0.98 confidence) produce a low overall score (0.327) that cannot
+    /// reach the 0.95 auto-approval threshold.
     fn calculate_overall_confidence(
         &self,
         gl_code: &Option<CategorySuggestion>,
         department: &Option<CategorySuggestion>,
         cost_center: &Option<CategorySuggestion>,
     ) -> f32 {
-        let mut scores = Vec::new();
+        let gl_score = gl_code.as_ref().map_or(0.0, |s| s.confidence);
+        let dept_score = department.as_ref().map_or(0.0, |s| s.confidence);
+        let cc_score = cost_center.as_ref().map_or(0.0, |s| s.confidence);
 
-        if let Some(gl) = gl_code {
-            scores.push(gl.confidence);
-        }
-        if let Some(dept) = department {
-            scores.push(dept.confidence);
-        }
-        if let Some(cc) = cost_center {
-            scores.push(cc.confidence);
-        }
-
-        if scores.is_empty() {
-            0.0
-        } else {
-            scores.iter().sum::<f32>() / scores.len() as f32
-        }
+        (gl_score + dept_score + cc_score) / 3.0
     }
 
     /// Get cached vendor embedding
@@ -416,5 +409,116 @@ mod tests {
         // Low similarity
         let conf3 = categorizer.calculate_embedding_confidence(0.30, None);
         assert!(conf3 < 0.5);
+    }
+
+    // ========================================================================
+    // Confidence calculation tests: missing fields penalize overall score
+    // ========================================================================
+
+    fn make_suggestion(confidence: f32) -> CategorySuggestion {
+        CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "6000-Software".to_string(),
+            confidence,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        }
+    }
+
+    #[test]
+    fn test_overall_confidence_all_fields_present() {
+        let categorizer = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let gl = Some(make_suggestion(0.97));
+        let dept = Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.96,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+        let cc = Some(CategorySuggestion {
+            category_type: CategoryType::CostCenter,
+            value: "CC-100".to_string(),
+            confidence: 0.95,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+
+        let overall = categorizer.calculate_overall_confidence(&gl, &dept, &cc);
+        assert!(
+            overall >= 0.95,
+            "All fields present at 0.95+ should yield overall >= 0.95, got {overall}"
+        );
+    }
+
+    #[test]
+    fn test_overall_confidence_one_field_missing() {
+        let categorizer = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let gl = Some(make_suggestion(0.98));
+        let dept = Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.98,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+        let cc: Option<CategorySuggestion> = None;
+
+        let overall = categorizer.calculate_overall_confidence(&gl, &dept, &cc);
+        // (0.98 + 0.98 + 0.0) / 3.0 ≈ 0.653
+        assert!(
+            overall < 0.70,
+            "2 of 3 fields at 0.98 should yield ~0.653, got {overall}"
+        );
+        assert!(
+            overall < 0.95,
+            "Incomplete categorization must not reach 0.95 threshold, got {overall}"
+        );
+    }
+
+    #[test]
+    fn test_overall_confidence_two_fields_missing() {
+        let categorizer = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let gl = Some(make_suggestion(0.98));
+        let dept: Option<CategorySuggestion> = None;
+        let cc: Option<CategorySuggestion> = None;
+
+        let overall = categorizer.calculate_overall_confidence(&gl, &dept, &cc);
+        // (0.98 + 0.0 + 0.0) / 3.0 ≈ 0.327
+        let expected = 0.98_f32 / 3.0;
+        assert!(
+            (overall - expected).abs() < 0.01,
+            "1 of 3 fields at 0.98 should yield ~0.327, got {overall}"
+        );
+        assert!(
+            overall < 0.95,
+            "Incomplete categorization must not reach 0.95 threshold, got {overall}"
+        );
+    }
+
+    #[test]
+    fn test_overall_confidence_no_fields() {
+        let categorizer = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let overall = categorizer.calculate_overall_confidence(&None, &None, &None);
+        assert!(
+            overall == 0.0,
+            "No fields should yield 0.0, got {overall}"
+        );
     }
 }

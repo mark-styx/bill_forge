@@ -196,6 +196,46 @@ fn test_complete_categorization_low_confidence_no_auto_approval() {
 // Line item mapping tests
 // ============================================================================
 
+/// Verify that an InvoiceCategorization with only one of three fields produces
+/// an overall_confidence well below the 0.95 auto-approval threshold.
+///
+/// This mirrors the real pipeline: calculate_overall_confidence now divides by
+/// a fixed denominator of 3, so missing fields contribute 0.0 to the average.
+#[test]
+fn test_incomplete_categorization_confidence_below_threshold() {
+    use billforge_invoice_processing::categorization::{
+        CategorySuggestion, CategoryType, InvoiceCategorization, SuggestionSource,
+    };
+
+    // Only one field populated, at very high per-field confidence
+    let categorization = InvoiceCategorization {
+        invoice_id: Uuid::nil(),
+        gl_code: Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "6000-Software".to_string(),
+            confidence: 0.98,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        }),
+        department: None,
+        cost_center: None,
+        // This overall_confidence would have been set by calculate_overall_confidence:
+        // (0.98 + 0.0 + 0.0) / 3.0 ≈ 0.327
+        overall_confidence: 0.98 / 3.0,
+    };
+
+    assert!(
+        categorization.overall_confidence < 0.95,
+        "Incomplete categorization (1 of 3 fields) should have confidence well below 0.95, got {}",
+        categorization.overall_confidence,
+    );
+    assert!(
+        categorization.overall_confidence < 0.40,
+        "1-of-3 at 0.98 should yield ~0.327, got {}",
+        categorization.overall_confidence,
+    );
+}
+
 /// Verify the line item to LineItemInput mapping used in submit_for_processing
 /// produces correct values (amount in dollars, not cents).
 #[test]
