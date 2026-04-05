@@ -307,7 +307,14 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             "SELECT * FROM work_queues WHERE tenant_id = $1 AND queue_type = $2 LIMIT 1"
         )
         .bind(*tenant_id.as_uuid())
-        .bind(format!("{:?}", queue_type).to_lowercase())
+        .bind(match queue_type {
+            QueueType::Review => "review",
+            QueueType::Approval => "approval",
+            QueueType::Exception => "exception",
+            QueueType::OcrError => "ocr_error",
+            QueueType::Payment => "payment",
+            QueueType::Custom => "custom",
+        })
         .fetch_optional(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get work queue by type: {}", e)))?;
@@ -482,16 +489,18 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
     async fn claim_item(&self, tenant_id: &TenantId, item_id: Uuid, user_id: &UserId) -> Result<QueueItem> {
         let now = Utc::now();
 
-        sqlx::query("UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3")
+        sqlx::query("UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(user_id.0)
             .bind(now)
             .bind(item_id)
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to claim item: {}", e)))?;
 
-        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1")
+        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2")
             .bind(item_id)
+            .bind(*tenant_id.as_uuid())
             .fetch_one(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to get claimed item: {}", e)))?;
@@ -502,13 +511,21 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
     async fn complete_item(&self, tenant_id: &TenantId, item_id: Uuid, action: &str) -> Result<()> {
         let now = Utc::now();
 
-        sqlx::query("UPDATE queue_items SET completed_at = $1, completion_action = $2 WHERE id = $3")
+        let result = sqlx::query("UPDATE queue_items SET completed_at = $1, completion_action = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(now)
             .bind(action)
             .bind(item_id)
+            .bind(*tenant_id.as_uuid())
             .execute(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to complete item: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                resource_type: "QueueItem".to_string(),
+                id: item_id.to_string(),
+            });
+        }
 
         Ok(())
     }
@@ -532,7 +549,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
     async fn reassign_item(&self, tenant_id: &TenantId, item_id: Uuid, assigned_to: &UserId) -> Result<QueueItem> {
         let now = Utc::now();
 
-        sqlx::query("UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+        let update_result = sqlx::query("UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(assigned_to.0)
             .bind(now)
             .bind(item_id)
@@ -541,8 +558,16 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             .await
             .map_err(|e| Error::Database(format!("Failed to reassign item: {}", e)))?;
 
-        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1")
+        if update_result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                resource_type: "QueueItem".to_string(),
+                id: item_id.to_string(),
+            });
+        }
+
+        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2")
             .bind(item_id)
+            .bind(*tenant_id.as_uuid())
             .fetch_one(&*self.pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to get reassigned item: {}", e)))?;
@@ -1024,6 +1049,7 @@ impl WorkQueueRow {
                 "review" => QueueType::Review,
                 "approval" => QueueType::Approval,
                 "exception" => QueueType::Exception,
+                "ocr_error" => QueueType::OcrError,
                 "payment" => QueueType::Payment,
                 "custom" => QueueType::Custom,
                 _ => QueueType::Review,
