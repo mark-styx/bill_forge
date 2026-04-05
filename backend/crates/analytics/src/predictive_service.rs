@@ -369,8 +369,12 @@ impl PredictiveService {
                     self.calculate_actual_spend_for_vendor(pool, tenant_id, &entity_id, &forecast_date)
                         .await?
                 }
-                _ => {
-                    warn!("Unknown entity type: {}", entity_type);
+                "\"Department\"" | "Department" => {
+                    self.calculate_actual_spend_for_department(pool, tenant_id, &entity_id, &forecast_date)
+                        .await?
+                }
+                other => {
+                    warn!("Unsupported entity type for accuracy calculation: {}", other);
                     continue;
                 }
             };
@@ -474,6 +478,37 @@ impl PredictiveService {
         .fetch_one(pool)
         .await
         .context("Failed to calculate actual spend")?;
+
+        let actual_spend: f64 = row.try_get("actual_spend").unwrap_or(0.0);
+        Ok(actual_spend)
+    }
+
+    /// Helper: Calculate actual spend for a department over a forecast period
+    async fn calculate_actual_spend_for_department(
+        &self,
+        pool: &PgPool,
+        tenant_id: Uuid,
+        department: &str,
+        forecast_date: &DateTime<Utc>,
+    ) -> Result<f64> {
+        // Calculate 30 days of actual spend from forecast date
+        let row = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(total_amount_cents), 0)::float as actual_spend
+            FROM invoices
+            WHERE tenant_id = $1
+                AND department = $2
+                AND created_at >= $3
+                AND created_at < $3 + INTERVAL '30 days'
+                AND status != 'rejected'
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(department)
+        .bind(forecast_date)
+        .fetch_one(pool)
+        .await
+        .context("Failed to calculate actual department spend")?;
 
         let actual_spend: f64 = row.try_get("actual_spend").unwrap_or(0.0);
         Ok(actual_spend)

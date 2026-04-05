@@ -23,16 +23,23 @@ use uuid::Uuid;
 pub async fn run_routing_optimization(pg_manager: std::sync::Arc<billforge_db::PgManager>) -> Result<()> {
     info!("Starting routing optimization job");
 
-    // Get connection pool
-    let pool = pg_manager.metadata();
+    // Get metadata pool for listing tenants
+    let metadata_pool = pg_manager.metadata();
 
     // Get all active tenants
-    let tenants = get_active_tenants(&pool).await?;
+    let tenants = get_active_tenants(metadata_pool).await?;
 
     info!("Processing {} tenants for routing optimization", tenants.len());
 
     for tenant_id in tenants {
-        if let Err(e) = optimize_tenant_routing(&pool, &tenant_id).await {
+        let tenant_pool = match pg_manager.tenant(&tenant_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to get pool for tenant {}: {}", tenant_id, e);
+                continue;
+            }
+        };
+        if let Err(e) = optimize_tenant_routing(&tenant_pool, &tenant_id).await {
             warn!(
                 "Failed to optimize routing for tenant {}: {}",
                 tenant_id, e

@@ -645,3 +645,284 @@ async fn test_user_list_excludes_other_tenant() {
 
     teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
 }
+
+// ===========================================================================
+// Queue item claim/complete tenant isolation tests
+// ===========================================================================
+
+/// Claiming a queue item with the wrong tenant_id should affect 0 rows.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_claim_item_cross_tenant_blocked() {
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("qi-claim").await;
+
+    let vendor_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let invoice_id = Uuid::new_v4();
+    let queue_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+
+    // Seed prerequisites + a queue item under tenant A
+    seed_vendor(&pool_a, &tenant_a, vendor_id).await;
+    seed_user(&pool_a, &tenant_a, user_id).await;
+    seed_invoice(&pool_a, &tenant_a, invoice_id, vendor_id, user_id).await;
+
+    sqlx::query(
+        "INSERT INTO work_queues (id, tenant_id, name, queue_type)
+         VALUES ($1, $2, 'Test Queue', 'approval')",
+    )
+    .bind(queue_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("seed work queue");
+
+    sqlx::query(
+        "INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, assigned_to, status, priority, entered_at)
+         VALUES ($1, $2, $3, $4, NULL, 'pending', 0, NOW())",
+    )
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .bind(queue_id)
+    .bind(invoice_id)
+    .execute(&pool_a)
+    .await
+    .expect("seed queue item");
+
+    // Cross-tenant claim attempt with tenant B
+    let result = sqlx::query(
+        "UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(user_id)
+    .bind(chrono::Utc::now())
+    .bind(item_id)
+    .bind(*tenant_b.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 0,
+        "Cross-tenant claim should affect 0 rows"
+    );
+
+    // Verify the item is still unclaimed
+    let claimed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT claimed_at FROM queue_items WHERE id = $1",
+    )
+    .bind(item_id)
+    .fetch_one(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert!(
+        claimed_at.is_none(),
+        "Item should remain unclaimed after cross-tenant attempt"
+    );
+
+    // Same-tenant claim should succeed
+    let result = sqlx::query(
+        "UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(user_id)
+    .bind(chrono::Utc::now())
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 1,
+        "Same-tenant claim should affect 1 row"
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
+
+/// Completing a queue item with the wrong tenant_id should affect 0 rows.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_complete_item_cross_tenant_blocked() {
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("qi-complete").await;
+
+    let vendor_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let invoice_id = Uuid::new_v4();
+    let queue_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+
+    // Seed prerequisites + a claimed queue item under tenant A
+    seed_vendor(&pool_a, &tenant_a, vendor_id).await;
+    seed_user(&pool_a, &tenant_a, user_id).await;
+    seed_invoice(&pool_a, &tenant_a, invoice_id, vendor_id, user_id).await;
+
+    sqlx::query(
+        "INSERT INTO work_queues (id, tenant_id, name, queue_type)
+         VALUES ($1, $2, 'Test Queue', 'approval')",
+    )
+    .bind(queue_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("seed work queue");
+
+    sqlx::query(
+        "INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, assigned_to, status, priority, entered_at, claimed_at)
+         VALUES ($1, $2, $3, $4, $5, 'claimed', 0, NOW(), NOW())",
+    )
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .bind(queue_id)
+    .bind(invoice_id)
+    .bind(user_id)
+    .execute(&pool_a)
+    .await
+    .expect("seed claimed queue item");
+
+    // Cross-tenant complete attempt with tenant B
+    let result = sqlx::query(
+        "UPDATE queue_items SET completed_at = $1, completion_action = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(chrono::Utc::now())
+    .bind("approve")
+    .bind(item_id)
+    .bind(*tenant_b.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 0,
+        "Cross-tenant complete should affect 0 rows"
+    );
+
+    // Verify the item is still incomplete
+    let completed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT completed_at FROM queue_items WHERE id = $1",
+    )
+    .bind(item_id)
+    .fetch_one(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert!(
+        completed_at.is_none(),
+        "Item should remain incomplete after cross-tenant attempt"
+    );
+
+    // Same-tenant complete should succeed
+    let result = sqlx::query(
+        "UPDATE queue_items SET completed_at = $1, completion_action = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(chrono::Utc::now())
+    .bind("approve")
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 1,
+        "Same-tenant complete should affect 1 row"
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
+
+/// Reassigning a queue item with the wrong tenant_id should affect 0 rows.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_reassign_item_cross_tenant_blocked() {
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("qi-reassign").await;
+
+    let vendor_id = Uuid::new_v4();
+    let user_id_a = Uuid::new_v4();
+    let user_id_b = Uuid::new_v4();
+    let invoice_id = Uuid::new_v4();
+    let queue_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+
+    // Seed prerequisites + a queue item under tenant A
+    seed_vendor(&pool_a, &tenant_a, vendor_id).await;
+    seed_user(&pool_a, &tenant_a, user_id_a).await;
+    seed_user(&pool_a, &tenant_a, user_id_b).await;
+    seed_invoice(&pool_a, &tenant_a, invoice_id, vendor_id, user_id_a).await;
+
+    sqlx::query(
+        "INSERT INTO work_queues (id, tenant_id, name, queue_type)
+         VALUES ($1, $2, 'Test Queue', 'approval')",
+    )
+    .bind(queue_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("seed work queue");
+
+    sqlx::query(
+        "INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, assigned_to, status, priority, entered_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW())",
+    )
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .bind(queue_id)
+    .bind(invoice_id)
+    .bind(user_id_a)
+    .execute(&pool_a)
+    .await
+    .expect("seed queue item");
+
+    // Cross-tenant reassign attempt with tenant B
+    let result = sqlx::query(
+        "UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(user_id_b)
+    .bind(chrono::Utc::now())
+    .bind(item_id)
+    .bind(*tenant_b.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 0,
+        "Cross-tenant reassign should affect 0 rows"
+    );
+
+    // Verify the item's assigned_to is unchanged
+    let current_assigned: Option<Uuid> = sqlx::query_scalar(
+        "SELECT assigned_to FROM queue_items WHERE id = $1",
+    )
+    .bind(item_id)
+    .fetch_one(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        current_assigned, Some(user_id_a),
+        "Item should still be assigned to user_id_a after cross-tenant attempt"
+    );
+
+    // Same-tenant reassign should succeed
+    let result = sqlx::query(
+        "UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(user_id_b)
+    .bind(chrono::Utc::now())
+    .bind(item_id)
+    .bind(*tenant_a.as_uuid())
+    .execute(&pool_a)
+    .await
+    .expect("query executed");
+
+    assert_eq!(
+        result.rows_affected(), 1,
+        "Same-tenant reassign should affect 1 row"
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}

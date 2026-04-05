@@ -47,7 +47,7 @@ impl std::str::FromStr for TenantId {
 }
 
 /// Unique identifier for a user
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UserId(pub Uuid);
 
@@ -255,7 +255,7 @@ pub struct PaginationMeta {
 }
 
 /// Money amount with currency
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Money {
     /// Amount in smallest currency unit (cents for USD)
     pub amount: i64,

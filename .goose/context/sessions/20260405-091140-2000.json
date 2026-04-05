@@ -1,0 +1,23 @@
+{
+  "session_id": "20260405-091140-2000",
+  "started_at": "2026-04-05T09:11:40.860132Z",
+  "ended_at": "2026-04-05T09:11:40.860132Z",
+  "summary": "Completed the fix for integration routes silently swallowing persistence and partner failures via .ok() in quickbooks.rs. The file had already been partially fixed in a prior session (23 of 24 .ok() calls). This session:\n\n1. Fixed the last remaining .ok() on get_company_info() (line 260) - replaced `.map_err(|e| { warn!(...); e }).ok()` with an explicit `match` that logs a warning and returns None (Category C: optional enrichment).\n\n2. Fixed the review gap in update_account_mappings: added error counter that tracks failed mapping updates. Returns 500 if ALL updates fail, otherwise includes `errors` count in the response JSON instead of always returning `{\"status\": \"updated\"}`.\n\n3. Added 2 new tests: test_update_account_mappings_response_includes_errors (partial failure) and test_update_account_mappings_response_zero_errors (success case).\n\nVerification: grep confirms 0 .ok() calls remaining, 0 .unwrap() calls introduced. Both files pass syntax checks. Commit ad566231 on branch fix/qb-ok-silence.",
+  "files_modified": [
+    "backend/crates/api/src/routes/quickbooks.rs",
+    "backend/crates/api/tests/quickbooks_tests.rs"
+  ],
+  "decisions_made": [
+    "update_account_mappings returns Internal (500) error when ALL mappings fail, but partial failures are reported via errors field in response",
+    "get_company_info failure is non-blocking (Category C) - logs warning and proceeds without company name"
+  ],
+  "open_questions": [
+    "xero.rs has identical .ok() pattern and needs the same fix as a follow-up PR",
+    "edi.rs has 3 instances, other integration files (bill_com.rs, salesforce.rs, etc.) have 20-23 instances each"
+  ],
+  "next_steps": [
+    "Apply identical .ok() removal pattern to xero.rs (follow-up PR)",
+    "Run SQLX_OFFLINE=true cargo build && cargo test to verify full compilation",
+    "Consider same fix for edi.rs, bill_com.rs, salesforce.rs, sage_intacct.rs, workday.rs"
+  ]
+}

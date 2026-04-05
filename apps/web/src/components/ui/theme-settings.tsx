@@ -22,7 +22,6 @@ import {
   EyeOff,
   Check,
   Copy,
-  AlertCircle,
   Building2,
   Palette,
   Image,
@@ -47,9 +46,7 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
     clearCustomColors,
     organizationTheme,
     setOrganizationTheme,
-    clearOrganizationTheme,
     getCurrentColors,
-    isOrgThemeActive,
   } = useThemeStore();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -127,11 +124,11 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
 
         // Update local state
         setOrganizationTheme({
-          presetId: selectedPresetId,
-          customColors: useCustomColors ? colors : undefined,
+          preset_id: selectedPresetId,
+          custom_colors: useCustomColors ? colors : undefined,
           branding: { brandName },
-          enabledForAllUsers: true,
-          allowUserOverride: true,
+          enabled_for_all_users: true,
+          allow_user_override: true,
         });
 
         toast.success('Organization theme saved');
@@ -165,12 +162,12 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
 
   const handleExport = () => {
     const config = exportThemeConfig({
-      presetId: selectedPresetId,
-      customColors: useCustomColors ? colors : null,
+      preset_id: selectedPresetId,
+      custom_colors: useCustomColors ? colors : null,
       organizationTheme: mode === 'organization'
         ? {
-            presetId: selectedPresetId,
-            customColors: useCustomColors ? colors : undefined,
+            preset_id: selectedPresetId,
+            custom_colors: useCustomColors ? colors : undefined,
             branding: { brandName },
           }
         : null,
@@ -199,18 +196,18 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
       const imported = importThemeConfig(content);
 
       if (imported) {
-        setSelectedPresetId(imported.presetId);
-        if (imported.customColors) {
-          setColors(imported.customColors);
+        setSelectedPresetId(imported.preset_id);
+        if (imported.custom_colors) {
+          setColors(imported.custom_colors);
           setUseCustomColors(true);
         } else {
-          const preset = themePresets.find((p) => p.id === imported.presetId);
+          const preset = themePresets.find((p) => p.id === imported.preset_id);
           if (preset) {
             setColors(preset.colors);
           }
           setUseCustomColors(false);
         }
-        previewColors(imported.customColors || colors);
+        previewColors(imported.custom_colors || colors);
         toast.success('Theme imported');
       } else {
         toast.error('Invalid theme file');
@@ -229,9 +226,8 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
     if (!file) return;
 
     try {
-      const result = await organizationThemeApi.uploadLogo(file, 'logo');
+      await organizationThemeApi.uploadLogo(file, 'logo');
       toast.success('Logo uploaded');
-      // Update branding state with new logo URL
     } catch (error) {
       toast.error('Failed to upload logo');
     }
@@ -348,6 +344,7 @@ export function ThemeSettings({ mode, onSave, showAdvanced = true }: ThemeSettin
                     size="sm"
                     onClick={() => logoInputRef.current?.click()}
                   >
+                    {/* eslint-disable-next-line jsx-a11y/alt-text */}
                     <Image className="w-4 h-4 mr-2" />
                     Upload Logo
                   </Button>

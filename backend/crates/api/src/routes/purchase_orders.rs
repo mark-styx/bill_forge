@@ -14,7 +14,7 @@ use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use billforge_core::domain::*;
@@ -225,9 +225,10 @@ async fn run_match(
         r#"SELECT rl.id, rl.po_line_number, rl.quantity_received, rl.quantity_damaged, rl.product_id
            FROM receiving_line_items rl
            JOIN receiving_records rr ON rl.receiving_id = rr.id
-           WHERE rr.po_id = $1"#,
+           WHERE rr.po_id = $1 AND rr.tenant_id = $2"#,
     )
     .bind(po_uuid)
+    .bind(*tenant.tenant_id.as_uuid())
     .fetch_all(&*pool)
     .await
     .map_err(|e| {
@@ -294,8 +295,21 @@ async fn run_match(
     })?;
 
     // 8. If full match and under auto-approve threshold, auto-approve
+    //    (unless pending approval_requests exist - must not bypass workflow)
+    let pending_approvals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM approval_requests WHERE invoice_id = $1 AND status = 'pending'"
+    )
+    .bind(req.invoice_id)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to check pending approval_requests for invoice {}: {}", req.invoice_id, e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
     if match_output.match_type == MatchType::Full
         && invoice.total_amount.amount <= tolerances.auto_approve_below_cents
+        && pending_approvals == 0
     {
         sqlx::query(
             "UPDATE invoices SET processing_status = 'approved', updated_at = NOW() WHERE id = $1",
@@ -312,6 +326,15 @@ async fn run_match(
             invoice_id = %req.invoice_id,
             po_id = %po_uuid,
             "Invoice auto-approved via 3-way match"
+        );
+    } else if match_output.match_type == MatchType::Full
+        && invoice.total_amount.amount <= tolerances.auto_approve_below_cents
+        && pending_approvals > 0
+    {
+        tracing::warn!(
+            invoice_id = %req.invoice_id,
+            pending_approvals = pending_approvals,
+            "Skipping auto-approve for invoice with pending approval requests"
         );
     }
 

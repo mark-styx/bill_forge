@@ -1,0 +1,17 @@
+{
+  "id": "20260404-152437-7000",
+  "memory_type": "decision",
+  "content": "Implemented retry-with-backoff for Xero integration client. Added ClientError enum (TokenExpired, RateLimited, ApiError, Transport), execute_with_retry method with max 3 attempts, exponential backoff with jitter, RwLock<String> for interior-mutable access_token, and with_token_refresher builder for 401 handling. Pattern is designed to be copyable to the other 11 integration clients. All 6 wiremock integration tests pass. Backward compatible - public API unchanged, with_token_refresher is opt-in.",
+  "summary": "Xero client retry/backoff pattern for 401/429/5xx",
+  "tags": [
+    "xero",
+    "retry",
+    "backoff",
+    "integration-clients",
+    "resilience"
+  ],
+  "relevance": 0.7,
+  "created_at": "2026-04-04T15:24:37.494606Z",
+  "updated_at": "2026-04-04T15:24:37.494606Z",
+  "recall_count": 0
+}

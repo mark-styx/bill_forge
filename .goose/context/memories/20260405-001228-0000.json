@@ -1,0 +1,17 @@
+{
+  "id": "20260405-001228-0000",
+  "memory_type": "error",
+  "content": "Bug: submit_for_processing() in invoices.rs ran ML categorization and workflow engine but never assigned the invoice to a workflow queue (no queue_items row, no current_queue_id update). Fixed by adding queue lookup + move_item + SQL update after the workflow engine returns final_status. Mapping: Approved/ReadyForPayment→Payment queue, PendingApproval→Approval queue, Rejected/Voided/Paid→no queue (terminal), default→Review queue. Non-fatal: if no queue exists for tenant, logs warning and continues.",
+  "summary": "Fixed ML category suggestions never reaching workflow state",
+  "tags": [
+    "invoices",
+    "workflow",
+    "queue",
+    "ml-categorization",
+    "bug-fix"
+  ],
+  "relevance": 0.9,
+  "created_at": "2026-04-05T00:12:28.592399Z",
+  "updated_at": "2026-04-05T00:12:28.592399Z",
+  "recall_count": 0
+}

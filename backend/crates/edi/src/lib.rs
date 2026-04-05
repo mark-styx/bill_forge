@@ -30,4 +30,4 @@ pub use mapper::EdiMapper;
 pub use matching::MatchEngine;
 pub use outbound::{OutboundEdiService, check_ack_timeouts, process_inbound_ack};
 pub use types::*;
-pub use webhook::verify_webhook_signature;
+pub use webhook::{check_replay_nonce, validate_timestamp_freshness, verify_webhook_signature};

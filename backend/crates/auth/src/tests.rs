@@ -295,7 +295,7 @@ mod token_hash_tests {
     fn hash_token(token: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        hex::encode(hasher.finalize())
+        crate::service::hex::encode(&hasher.finalize())
     }
 
     #[test]

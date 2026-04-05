@@ -1,0 +1,18 @@
+{
+  "session_id": "20260404-144117-8000",
+  "started_at": "2026-04-04T14:41:17.039638Z",
+  "ended_at": "2026-04-04T14:41:17.039638Z",
+  "summary": "Fixed the logout refresh token security bug. The key change was reordering the frontend logout() to call authApi.logout() BEFORE clearing api.setToken(null), ensuring the backend receives a valid Authorization header to revoke refresh tokens. Backend changes (hash_token, DB storage, revocation checks, token rotation) and tests were already in place from a prior session.",
+  "files_modified": [
+    "apps/web/src/stores/auth.ts"
+  ],
+  "decisions_made": [
+    "Moved authApi.logout() call before api.setToken(null) in frontend logout() to fix the review gap where the backend POST would be sent without an auth header"
+  ],
+  "open_questions": [],
+  "next_steps": [
+    "Run SQLX_OFFLINE=true cargo test to verify backend compilation and unit tests pass",
+    "Run npx next build to verify frontend compilation",
+    "Merge branch fix/logout-revoke-refresh-token after verification"
+  ]
+}

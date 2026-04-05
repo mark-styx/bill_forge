@@ -14,6 +14,7 @@ billforge-db = { path = "../db" }
 billforge-auth = { path = "../auth" }
 billforge-email = { path = "../email" }
 billforge-billing = { path = "../billing" }
+billforge-ai-agent = { path = "../ai-agent" }
 billforge-invoice-capture = { path = "../invoice-capture" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-vendor-mgmt = { path = "../vendor-mgmt" }
@@ -55,6 +56,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 validator = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
 
 # Validation
 regex = "1.10"

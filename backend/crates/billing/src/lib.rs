@@ -13,4 +13,4 @@ pub mod stripe;
 
 pub use plans::{Plan, PlanFeatures, PlanId, PlanTier};
 pub use subscription::{Subscription, SubscriptionStatus, BillingCycle};
-pub use service::{BillingService, BillingConfig};
+pub use service::{BillingService, BillingConfig, BillingServiceTrait};

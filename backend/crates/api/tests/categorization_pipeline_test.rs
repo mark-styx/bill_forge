@@ -10,7 +10,7 @@
 //! without database dependencies.
 
 use billforge_core::domain::{
-    CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, InvoiceLineItem,
+    CaptureStatus, Invoice, InvoiceLineItem,
     ProcessingStatus,
 };
 use billforge_core::types::{Money, TenantId, UserId};
@@ -28,11 +28,11 @@ use uuid::Uuid;
 fn test_invoice_without_categorization_fields_is_eligible() {
     let invoice = make_test_invoice(None, None, None);
 
-    // This mirrors the condition in submit_for_processing:
-    //   if invoice.gl_code.is_none() && invoice.department.is_none() && invoice.cost_center.is_none()
+    // This mirrors the updated condition in submit_for_processing:
+    //   if invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none()
     let eligible = invoice.gl_code.is_none()
-        && invoice.department.is_none()
-        && invoice.cost_center.is_none();
+        || invoice.department.is_none()
+        || invoice.cost_center.is_none();
 
     assert!(
         eligible,
@@ -40,47 +40,59 @@ fn test_invoice_without_categorization_fields_is_eligible() {
     );
 }
 
-/// Verify that an invoice with ANY pre-set categorization field is NOT eligible
-/// for auto-categorization (we must not overwrite user-provided values).
+/// Verify that an invoice with gl_code set but other fields missing IS eligible
+/// for auto-categorization (missing fields should be filled).
 #[test]
-fn test_invoice_with_gl_code_is_not_eligible() {
+fn test_invoice_with_partial_fields_is_eligible() {
+    // Only gl_code set - still eligible because department and cost_center are missing
     let invoice = make_test_invoice(Some("6000-Software".into()), None, None);
 
     let eligible = invoice.gl_code.is_none()
-        && invoice.department.is_none()
-        && invoice.cost_center.is_none();
+        || invoice.department.is_none()
+        || invoice.cost_center.is_none();
 
     assert!(
-        !eligible,
-        "Invoice with gl_code set should NOT be eligible for auto-categorization"
+        eligible,
+        "Invoice with gl_code set but other fields missing SHOULD be eligible for auto-categorization"
     );
 }
 
+/// Verify that an invoice with two of three fields set IS still eligible
+/// (one field remains to be categorized).
 #[test]
-fn test_invoice_with_department_is_not_eligible() {
-    let invoice = make_test_invoice(None, Some("Engineering".into()), None);
+fn test_invoice_with_two_fields_set_is_eligible() {
+    let invoice = make_test_invoice(
+        Some("6000-Software".into()),
+        Some("Engineering".into()),
+        None,
+    );
 
     let eligible = invoice.gl_code.is_none()
-        && invoice.department.is_none()
-        && invoice.cost_center.is_none();
+        || invoice.department.is_none()
+        || invoice.cost_center.is_none();
 
     assert!(
-        !eligible,
-        "Invoice with department set should NOT be eligible for auto-categorization"
+        eligible,
+        "Invoice with two fields set but one missing SHOULD be eligible"
     );
 }
 
+/// Verify that an invoice with all three fields set is NOT eligible.
 #[test]
-fn test_invoice_with_cost_center_is_not_eligible() {
-    let invoice = make_test_invoice(None, None, Some("CC-100".into()));
+fn test_all_fields_set_skips_categorization() {
+    let invoice = make_test_invoice(
+        Some("6000-Software".into()),
+        Some("Engineering".into()),
+        Some("CC-100".into()),
+    );
 
     let eligible = invoice.gl_code.is_none()
-        && invoice.department.is_none()
-        && invoice.cost_center.is_none();
+        || invoice.department.is_none()
+        || invoice.cost_center.is_none();
 
     assert!(
         !eligible,
-        "Invoice with cost_center set should NOT be eligible for auto-categorization"
+        "Invoice with all three fields set should NOT be eligible - nothing to categorize"
     );
 }
 
@@ -93,13 +105,88 @@ fn test_invoice_with_all_categorization_fields_is_not_eligible() {
     );
 
     let eligible = invoice.gl_code.is_none()
-        && invoice.department.is_none()
-        && invoice.cost_center.is_none();
+        || invoice.department.is_none()
+        || invoice.cost_center.is_none();
 
     assert!(
         !eligible,
         "Invoice with all categorization fields set should NOT be eligible"
     );
+}
+
+// ============================================================================
+// Partial categorization field preservation tests
+// ============================================================================
+
+/// Verify that the update JSON only includes keys for fields that were NOT
+/// already set. This mirrors the conditional JSON building in invoices.rs.
+#[test]
+fn test_partial_categorization_preserves_existing_fields() {
+    use billforge_invoice_processing::categorization::{
+        CategorySuggestion, CategoryType, InvoiceCategorization, SuggestionSource,
+    };
+
+    // Invoice already has gl_code set
+    let had_gl_code = true;
+    let had_department = false;
+    let had_cost_center = false;
+
+    // Categorization suggests all three fields
+    let categorization = InvoiceCategorization {
+        invoice_id: Uuid::nil(),
+        gl_code: Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "9999-Overwrite".to_string(),
+            confidence: 0.90,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        }),
+        department: Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.85,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        }),
+        cost_center: Some(CategorySuggestion {
+            category_type: CategoryType::CostCenter,
+            value: "CC-100".to_string(),
+            confidence: 0.80,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        }),
+        overall_confidence: 0.85,
+    };
+
+    // Build updates using the same logic as the fixed invoices.rs
+    let mut updates = serde_json::json!({
+        "categorization_confidence": categorization.overall_confidence,
+    });
+    if !had_gl_code {
+        updates["gl_code"] = serde_json::json!(
+            categorization.gl_code.as_ref().map(|s| &s.value)
+        );
+    }
+    if !had_department {
+        updates["department"] = serde_json::json!(
+            categorization.department.as_ref().map(|s| &s.value)
+        );
+    }
+    if !had_cost_center {
+        updates["cost_center"] = serde_json::json!(
+            categorization.cost_center.as_ref().map(|s| &s.value)
+        );
+    }
+
+    // gl_code should NOT be in the updates (it was already set)
+    assert!(
+        !updates.as_object().unwrap().contains_key("gl_code"),
+        "gl_code should not be in updates when it was already set"
+    );
+    // department and cost_center SHOULD be in the updates
+    assert_eq!(updates["department"], "Engineering");
+    assert_eq!(updates["cost_center"], "CC-100");
+    assert!((updates["categorization_confidence"].as_f64().unwrap() - 0.85).abs() < 0.001);
 }
 
 // ============================================================================
@@ -343,8 +430,6 @@ fn test_categorization_update_json_empty_suggestions() {
 
 #[cfg(test)]
 mod http_integration {
-    use super::*;
-
     // These tests are #[ignore] by default because they require a running
     // PostgreSQL database with a seeded sandbox tenant. Run with:
     //   SQLX_OFFLINE=true cargo test --package billforge-api --test categorization_pipeline_test -- --ignored

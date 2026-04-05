@@ -1,0 +1,34 @@
+{
+  "session_id": "20260404-214944-0000",
+  "started_at": "2026-04-04T21:49:44.770218Z",
+  "ended_at": "2026-04-04T21:49:44.770218Z",
+  "summary": "Fixed TS DTO drift from Rust domain types. The 3 core entity types (Invoice, InvoiceLineItem, Vendor) in api.ts were already aligned with Rust. Made `created_by` and `supporting_documents` required (matching Rust's non-Option types). OrganizationBranding in api.ts correctly uses camelCase (matching Rust's `#[serde(rename_all = \"camelCase\")]`).\n\nThe critical fix was `stores/auth.ts` OrganizationTheme type - was using camelCase (`presetId`, `customColors`, `gradientConfig`, `enabledForAllUsers`, `allowUserOverride`) but Rust OrganizationTheme has no `rename_all` attribute, so it serializes as snake_case. Fixed all field names to snake_case. Also fixed `stores/theme.ts` OrganizationThemeConfig similarly.\n\nUpdated all consumers: organization-theme-provider.tsx, organization-theme-settings.tsx, theme-settings.tsx, settings/page.tsx, settings/theme/page.tsx. The importThemeConfig function now handles both old camelCase and new snake_case keys for backward compatibility with persisted localStorage data.\n\nUpdated dto-alignment.test.ts with correct OrganizationBranding camelCase test and Invoice samples including required `created_by`/`supporting_documents`.\n\nStashed unrelated changes to home/page.tsx before committing.",
+  "files_modified": [
+    "apps/web/src/lib/api.ts",
+    "apps/web/src/stores/auth.ts",
+    "apps/web/src/stores/theme.ts",
+    "apps/web/src/components/organization-theme-provider.tsx",
+    "apps/web/src/components/ui/organization-theme-settings.tsx",
+    "apps/web/src/components/ui/theme-settings.tsx",
+    "apps/web/src/app/(dashboard)/settings/page.tsx",
+    "apps/web/src/app/(dashboard)/settings/theme/page.tsx",
+    "apps/web/src/lib/__tests__/dto-alignment.test.ts"
+  ],
+  "decisions_made": [
+    "OrganizationBranding in api.ts stays camelCase because Rust uses rename_all = camelCase",
+    "auth.ts OrganizationTheme fixed to snake_case matching Rust serialization",
+    "theme.ts OrganizationThemeConfig fixed to snake_case matching Rust serialization",
+    "Branding sub-object in auth.ts stays camelCase (wraps OrganizationBranding which uses camelCase)",
+    "importThemeConfig accepts both old camelCase and new snake_case for backward compatibility",
+    "ThemeState internal fields (presetId, customColors) left as camelCase - store-internal, not DTOs"
+  ],
+  "open_questions": [
+    "Need build verification: `cd apps/web && npx next build` should pass",
+    "DTO alignment test needs to be run"
+  ],
+  "next_steps": [
+    "Commit the changes",
+    "Run `cd apps/web && npx next build` to verify no TS type errors",
+    "Run dto-alignment test with vitest"
+  ]
+}

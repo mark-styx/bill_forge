@@ -204,7 +204,7 @@ impl EmailActionTokenService {
     fn hash_token(&self, token: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        hex::encode(hasher.finalize())
+        hex::encode(&hasher.finalize())
     }
 }
 

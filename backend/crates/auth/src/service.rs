@@ -29,7 +29,7 @@ impl AuthService {
     fn hash_token(token: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
-        hex::encode(hasher.finalize())
+        hex::encode(&hasher.finalize())
     }
 
     /// Compute the expiry datetime for a new refresh token
@@ -659,7 +659,7 @@ impl AuthService {
 }
 
 // Helper for hex encoding (would normally use the `hex` crate)
-mod hex {
+pub(crate) mod hex {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
     pub fn encode(bytes: &[u8]) -> String {

@@ -34,11 +34,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     () =>
       new QueryClient({
         queryCache: new QueryCache({
-          onError: (error, query) => {
-            // Only show toast for background refetch errors
-            if (query.state.data !== undefined) {
-              toast.error(parseError(error));
-            }
+          onError: (error) => {
+            toast.error(parseError(error));
           },
         }),
         mutationCache: new MutationCache({

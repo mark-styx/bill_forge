@@ -7,6 +7,7 @@ use axum::{extract::State, routing::post, Json, Router};
 use billforge_auth::{AuthResponse, LoginInput, ProvisionInput, RegisterInput};
 use billforge_core::TenantId;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -18,14 +19,14 @@ pub fn routes() -> Router<AppState> {
         .route("/me", post(me))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub tenant_id: String,
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterRequest {
     pub tenant_id: String,
     pub email: String,
@@ -33,11 +34,22 @@ pub struct RegisterRequest {
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/login",
+    tag = "Authentication",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful"),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Invalid credentials")
+    )
+)]
 async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -57,7 +69,7 @@ async fn login(
     Ok(Json(response))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ProvisionRequest {
     pub company_name: String,
     pub admin_email: String,
@@ -67,6 +79,16 @@ pub struct ProvisionRequest {
     pub default_currency: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/provision",
+    tag = "Authentication",
+    request_body = ProvisionRequest,
+    responses(
+        (status = 200, description = "Tenant provisioned successfully"),
+        (status = 400, description = "Invalid request")
+    )
+)]
 async fn provision(
     State(state): State<AppState>,
     Json(req): Json<ProvisionRequest>,
@@ -116,6 +138,16 @@ async fn provision(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/register",
+    tag = "Authentication",
+    request_body = RegisterRequest,
+    responses(
+        (status = 200, description = "Registration successful"),
+        (status = 400, description = "Invalid request")
+    )
+)]
 async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
@@ -137,6 +169,16 @@ async fn register(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/refresh",
+    tag = "Authentication",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Token refreshed"),
+        (status = 401, description = "Invalid refresh token")
+    )
+)]
 async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshRequest>,
@@ -145,6 +187,15 @@ async fn refresh(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/logout",
+    tag = "Authentication",
+    responses(
+        (status = 200, description = "Logged out successfully"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn logout(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -153,7 +204,7 @@ async fn logout(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MeResponse {
     pub user_id: String,
     pub tenant_id: String,
@@ -161,6 +212,15 @@ pub struct MeResponse {
     pub roles: Vec<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/auth/me",
+    tag = "Authentication",
+    responses(
+        (status = 200, description = "Current user info", body = MeResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 async fn me(AuthUser(user): AuthUser) -> ApiResult<Json<MeResponse>> {
     Ok(Json(MeResponse {
         user_id: user.user_id.0.to_string(),

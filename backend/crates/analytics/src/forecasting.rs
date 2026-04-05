@@ -3,7 +3,7 @@
 //! Provides forecasting models for spend prediction, invoice volume, and approval times.
 
 use crate::predictive_models::*;
-use chrono::{Duration, Utc, Datelike};
+use chrono::{Utc, Datelike};
 use tracing::{debug, info};
 
 /// Naive Forecasting Model (baseline)
@@ -91,6 +91,7 @@ impl NaiveForecaster {
         variance > (overall_mean * 0.1).powi(2)
     }
 
+    #[allow(dead_code)]
     fn calculate_confidence_interval(&self, data: &TimeSeries, forecast_value: f64) -> (f64, f64) {
         // Calculate standard deviation
         let mean = data.points.iter().map(|p| p.value).sum::<f64>() / data.points.len() as f64;
@@ -123,7 +124,7 @@ impl ForecastingModel for NaiveForecaster {
         Ok(())
     }
 
-    async fn forecast(&self, horizon: ForecastHorizon) -> PredictiveResult<Forecast> {
+    async fn forecast(&self, _horizon: ForecastHorizon) -> PredictiveResult<Forecast> {
         // For this simplified implementation, we'll need the data to be stored
         // In production, this would use stored model parameters
         Err(PredictiveError::PredictionFailed(
@@ -151,6 +152,7 @@ struct ArimaStatistics {
     trend_slope: f64,
     seasonality_detected: bool,
     seasonal_period: Option<u32>, // Days
+    seasonal_indices: Vec<f64>,   // Per-period-position adjustment values
     residual_std: f64,
 }
 
@@ -197,13 +199,32 @@ impl ArimaForecaster {
         // Detect seasonality using autocorrelation
         let (seasonality_detected, seasonal_period) = self.detect_seasonality_autocorr(&detrended);
 
-        // Calculate residual standard deviation
+        // Calculate seasonal indices and residual standard deviation
         let mean = sum_y / n;
-        let residual_std = if seasonality_detected {
-            // Remove seasonal component before calculating residual
-            self.calculate_seasonal_residual_std(&detrended, seasonal_period.unwrap_or(7))
+        let (seasonal_indices, residual_std) = if seasonality_detected {
+            let period = seasonal_period.unwrap_or(7) as usize;
+            let mut seasonal_sums = vec![0.0; period];
+            let mut seasonal_counts = vec![0usize; period];
+            for (i, &value) in detrended.iter().enumerate() {
+                let pos = i % period;
+                seasonal_sums[pos] += value;
+                seasonal_counts[pos] += 1;
+            }
+            let indices: Vec<f64> = seasonal_sums
+                .iter()
+                .zip(seasonal_counts.iter())
+                .map(|(s, c)| if *c > 0 { s / *c as f64 } else { 0.0 })
+                .collect();
+            let residuals: Vec<f64> = detrended
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| v - indices[i % period])
+                .collect();
+            let residual_variance =
+                residuals.iter().map(|x| x.powi(2)).sum::<f64>() / residuals.len() as f64;
+            (indices, residual_variance.sqrt())
         } else {
-            (detrended.iter().map(|x| x.powi(2)).sum::<f64>() / n).sqrt()
+            (vec![], (detrended.iter().map(|x| x.powi(2)).sum::<f64>() / n).sqrt())
         };
 
         debug!(
@@ -216,6 +237,7 @@ impl ArimaForecaster {
             trend_slope,
             seasonality_detected,
             seasonal_period,
+            seasonal_indices,
             residual_std,
         })
     }
@@ -265,35 +287,6 @@ impl ArimaForecaster {
         sum / (variance * (n - lag) as f64)
     }
 
-    fn calculate_seasonal_residual_std(&self, detrended: &[f64], period: u32) -> f64 {
-        // Group by seasonal position
-        let period = period as usize;
-        let mut seasonal_avgs = vec![0.0; period];
-        let mut seasonal_counts = vec![0; period];
-
-        for (i, &value) in detrended.iter().enumerate() {
-            let pos = i % period;
-            seasonal_avgs[pos] += value;
-            seasonal_counts[pos] += 1;
-        }
-
-        // Average seasonal values
-        for i in 0..period {
-            if seasonal_counts[i] > 0 {
-                seasonal_avgs[i] /= seasonal_counts[i] as f64;
-            }
-        }
-
-        // Calculate residual after removing seasonal component
-        let residuals: Vec<f64> = detrended
-            .iter()
-            .enumerate()
-            .map(|(i, &value)| value - seasonal_avgs[i % period])
-            .collect();
-
-        let residual_variance = residuals.iter().map(|x| x.powi(2)).sum::<f64>() / residuals.len() as f64;
-        residual_variance.sqrt()
-    }
 }
 
 impl Default for ArimaForecaster {
@@ -335,9 +328,11 @@ impl ForecastingModel for ArimaForecaster {
             let period = stats.seasonal_period.unwrap_or(7) as usize;
             let position = (data.points.len() + forecast_days as usize) % period;
 
-            // Simplified: use mean of that seasonal position from historical data
-            // In production, would use stored seasonal indices
-            0.0 // Placeholder for seasonal adjustment
+            if position < stats.seasonal_indices.len() {
+                stats.seasonal_indices[position]
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
@@ -345,23 +340,14 @@ impl ForecastingModel for ArimaForecaster {
         let predicted_value = trend_forecast + seasonal_adjustment;
 
         // Calculate confidence interval
-        // Widen interval based on forecast horizon and residual variance
-        let confidence_multiplier = match horizon {
-            ForecastHorizon::Days30 => 1.5,
-            ForecastHorizon::Days60 => 2.0,
-            ForecastHorizon::Days90 => 2.5,
-        };
+        // Scale confidence interval width with sqrt of horizon days.
+        // Uncertainty in cumulative forecasts grows proportionally to sqrt(time).
+        // Base: 1.96 * residual_std for 95% CI at 1-day horizon.
+        let horizon_days = horizon.days() as f64;
+        let margin = stats.residual_std * 1.96 * (horizon_days / 30.0).sqrt();
 
-        let margin = stats.residual_std * confidence_multiplier * 1.96;
-
-        // Ensure we always have a meaningful confidence interval
-        // Use at least 5% margin if residual variance is too small
-        let min_margin = predicted_value * 0.05;
-        let margin = if margin < min_margin {
-            min_margin
-        } else {
-            margin
-        };
+        // Floor: at least 5% of predicted value to avoid degenerate zero-width intervals
+        let margin = margin.max(predicted_value.abs() * 0.05);
 
         // Ensure confidence interval is valid (lower < predicted < upper)
         // Also ensure we don't have negative spend, but preserve the interval relationship
@@ -397,6 +383,8 @@ impl ForecastingModel for ArimaForecaster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use chrono::Duration;
 
     fn create_test_timeseries() -> TimeSeries {
         let now = Utc::now();
@@ -479,5 +467,98 @@ mod tests {
 
         let detected = forecaster.detect_weekly_seasonality(&points);
         assert!(detected);
+    }
+
+    #[tokio::test]
+    async fn test_arima_seasonal_adjustment_applied() {
+        // Create data with strong weekly seasonality: weekday=1000, weekend=100
+        let now = Utc::now();
+        let points: Vec<TimeSeriesPoint> = (0..60)
+            .map(|i| TimeSeriesPoint {
+                timestamp: now - Duration::days(60 - i),
+                value: if i % 7 < 5 { 1000.0 } else { 100.0 },
+            })
+            .collect();
+        let data = TimeSeries {
+            entity_id: "seasonal_vendor".to_string(),
+            entity_type: EntityType::Vendor,
+            metric_name: "spend".to_string(),
+            points,
+        };
+
+        let mut forecaster = ArimaForecaster::new();
+        forecaster.fit(&data).await.unwrap();
+
+        // Check that seasonal indices were computed and are non-trivial
+        let stats = forecaster.statistics.as_ref().unwrap();
+        assert!(stats.seasonality_detected, "seasonality should be detected");
+        assert!(!stats.seasonal_indices.is_empty(), "seasonal indices should be stored");
+
+        // Forecast and verify seasonal adjustment is nonzero for at least one horizon
+        let f30 = forecaster.forecast(ForecastHorizon::Days30).await.unwrap();
+        let f31 = forecaster.forecast(ForecastHorizon::Days60).await.unwrap();
+        // The two forecasts hit different seasonal positions, so predicted values differ
+        assert_ne!(
+            f30.predicted_value, f31.predicted_value,
+            "forecasts at different seasonal positions should differ (seasonal adjustment applied)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confidence_interval_widens_with_horizon() {
+        let mut forecaster = ArimaForecaster::new();
+        let data = create_test_timeseries();
+        forecaster.fit(&data).await.unwrap();
+
+        let f30 = forecaster.forecast(ForecastHorizon::Days30).await.unwrap();
+        let f60 = forecaster.forecast(ForecastHorizon::Days60).await.unwrap();
+        let f90 = forecaster.forecast(ForecastHorizon::Days90).await.unwrap();
+
+        let width30 = f30.confidence_upper - f30.confidence_lower;
+        let width60 = f60.confidence_upper - f60.confidence_lower;
+        let width90 = f90.confidence_upper - f90.confidence_lower;
+
+        assert!(
+            width60 > width30,
+            "60-day interval ({}) should be wider than 30-day ({})",
+            width60, width30
+        );
+        assert!(
+            width90 > width60,
+            "90-day interval ({}) should be wider than 60-day ({})",
+            width90, width60
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confidence_interval_has_minimum_width() {
+        // Constant-value data: zero residual, so the 5% floor should kick in
+        let now = Utc::now();
+        let points: Vec<TimeSeriesPoint> = (0..60)
+            .map(|i| TimeSeriesPoint {
+                timestamp: now - Duration::days(60 - i),
+                value: 500.0, // constant
+            })
+            .collect();
+        let data = TimeSeries {
+            entity_id: "flat_vendor".to_string(),
+            entity_type: EntityType::Vendor,
+            metric_name: "spend".to_string(),
+            points,
+        };
+
+        let mut forecaster = ArimaForecaster::new();
+        forecaster.fit(&data).await.unwrap();
+
+        let forecast = forecaster.forecast(ForecastHorizon::Days30).await.unwrap();
+        let width = forecast.confidence_upper - forecast.confidence_lower;
+
+        assert!(
+            width > 0.0,
+            "confidence interval should have nonzero width (5% floor), got width={}",
+            width
+        );
+        // The floor is 5% of predicted value; predicted ~500, so width should be >= 2 * 5% * 500 = 50
+        // but we just check it's positive to avoid being too brittle
     }
 }

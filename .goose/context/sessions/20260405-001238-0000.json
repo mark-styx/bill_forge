@@ -1,0 +1,20 @@
+{
+  "session_id": "20260405-001238-0000",
+  "started_at": "2026-04-05T00:12:38.896692Z",
+  "ended_at": "2026-04-05T00:12:38.896692Z",
+  "summary": "Fixed bug where ML category suggestions never reached workflow state. The submit_for_processing() handler in invoices.rs ran ML categorization and the workflow engine but never assigned the invoice to a workflow queue. Added queue assignment logic after the workflow engine returns final_status: maps Approved/ReadyForPayment→Payment queue, PendingApproval→Approval queue, terminal states→no queue, default→Review queue. Uses WorkQueueRepository::get_by_type() for lookup, move_item() for queue_items insert, and inline SQL for current_queue_id update. Non-fatal if no queue exists (logs warning, continues). Also added 2 DB integration test stubs. Build and all existing tests pass.",
+  "files_modified": [
+    "backend/crates/api/src/routes/invoices.rs",
+    "backend/crates/api/tests/integration_tests.rs"
+  ],
+  "decisions_made": [
+    "Terminal states (Rejected, Voided, Paid) return early without queue assignment",
+    "Queue lookup failures are non-fatal - log warning and return response with null queue_id",
+    "Used WorkQueueRepository trait methods (get_by_type, move_item) rather than raw SQL for queue operations, following existing patterns"
+  ],
+  "open_questions": [],
+  "next_steps": [
+    "Run full DB integration tests with live PostgreSQL to verify queue assignment end-to-end",
+    "Consider adding a unit test with mocked WorkQueueRepository to test the status-to-queue-type mapping logic without a database"
+  ]
+}

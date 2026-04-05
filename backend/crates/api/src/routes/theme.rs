@@ -103,6 +103,18 @@ pub struct CreateOrganizationThemeInput {
     pub gradient_config: Option<GradientConfig>,
 }
 
+/// Partial update input for PUT /organization/theme.
+/// Frontend sends `Partial<CreateOrganizationThemeInput>` so every field is optional.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateOrganizationThemeInput {
+    pub preset_id: Option<String>,
+    pub custom_colors: Option<OrganizationThemeColors>,
+    pub branding: Option<OrganizationBranding>,
+    pub enabled_for_all_users: Option<bool>,
+    pub allow_user_override: Option<bool>,
+    pub gradient_config: Option<GradientConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserThemePreference {
     pub id: String,
@@ -119,6 +131,15 @@ pub struct CreateUserThemeInput {
     pub preset_id: String,
     pub custom_colors: Option<OrganizationThemeColors>,
     pub mode: String,
+}
+
+/// Partial update input for PUT /user/theme.
+/// Frontend sends `Partial<CreateUserThemeInput>` so every field is optional.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateUserThemeInput {
+    pub preset_id: Option<String>,
+    pub custom_colors: Option<OrganizationThemeColors>,
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,7 +212,7 @@ async fn update_org_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-    Json(input): Json<CreateOrganizationThemeInput>,
+    Json(input): Json<UpdateOrganizationThemeInput>,
 ) -> Json<OrganizationTheme> {
     let tenant_id = tenant.tenant_id.to_string();
     let _ = (user, tenant);
@@ -199,9 +220,9 @@ async fn update_org_theme(
     Json(OrganizationTheme {
         id: uuid::Uuid::new_v4().to_string(),
         tenant_id,
-        preset_id: input.preset_id,
+        preset_id: input.preset_id.unwrap_or_else(|| "default".into()),
         custom_colors: input.custom_colors,
-        branding: input.branding,
+        branding: input.branding.unwrap_or_default(),
         enabled_for_all_users: input.enabled_for_all_users.unwrap_or(false),
         allow_user_override: input.allow_user_override.unwrap_or(true),
         gradient_config: input.gradient_config,
@@ -309,15 +330,15 @@ async fn create_user_theme(
 async fn update_user_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
-    Json(input): Json<CreateUserThemeInput>,
+    Json(input): Json<UpdateUserThemeInput>,
 ) -> Json<UserThemePreference> {
     let now = chrono::Utc::now().to_rfc3339();
     Json(UserThemePreference {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: user.user_id.to_string(),
-        preset_id: input.preset_id,
+        preset_id: input.preset_id.unwrap_or_else(|| "default".into()),
         custom_colors: input.custom_colors,
-        mode: input.mode,
+        mode: input.mode.unwrap_or_else(|| "system".into()),
         created_at: now.clone(),
         updated_at: now,
     })

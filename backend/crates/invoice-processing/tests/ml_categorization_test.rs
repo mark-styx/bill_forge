@@ -6,9 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use anyhow::Result;
 use billforge_invoice_processing::{
-    categorization::{CategoryType, LineItemInput},
-    MLCategorizer,
-    embedding_cache::EmbeddingCache,
+    categorization::CategoryType,
     feedback_loop::FeedbackLearning,
 };
 use billforge_core::TenantId;
@@ -216,7 +214,7 @@ async fn test_ml_categorization_without_api_key(pool: PgPool) -> sqlx::Result<()
 
     let tenant_id = setup_test_tenant(&pool).await;
     seed_gl_codes(&pool, &tenant_id).await;
-    let vendor_ids = seed_vendors(&pool, &tenant_id).await;
+    let _vendor_ids = seed_vendors(&pool, &tenant_id).await;
 
     // This test would need a valid API key to actually test ML categorization
     // For now, we just verify the structure is correct
@@ -390,7 +388,7 @@ async fn test_vendor_embedding_storage(pool: PgPool) -> sqlx::Result<()> {
 async fn test_similarity_search_with_pgvector(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = setup_test_tenant(&pool).await;
     seed_gl_codes(&pool, &tenant_id).await;
-    let schema_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
+    let _schema_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
 
     // Create two similar embeddings
     let _embedding1 = vec![1.0, 0.0, 0.0]; // Simplified for test

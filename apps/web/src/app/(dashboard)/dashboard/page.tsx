@@ -28,14 +28,14 @@ import {
 import Link from 'next/link';
 
 export default function DashboardPage() {
-  const { hasModule, user, tenant } = useAuthStore();
+  const { hasModule, user } = useAuthStore();
   const { getCurrentColors } = useThemeStore();
   const { getBrandGradient } = useOrganizationTheme();
 
   const colors = getCurrentColors();
   const brandGradient = getBrandGradient();
 
-  const { data: summary, isLoading } = useQuery({
+  const { data: summary, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => reportsApi.dashboardSummary(),
   });
@@ -44,7 +44,7 @@ export default function DashboardPage() {
   const allStats = [
     {
       name: 'Pending Review',
-      value: summary?.invoices_pending_review ?? 0,
+      value: isError ? '--' : (summary?.invoices_pending_review ?? 0),
       icon: Clock,
       colorKey: 'warning',
       href: '/invoices?status=pending',
@@ -52,7 +52,7 @@ export default function DashboardPage() {
     },
     {
       name: 'Awaiting Approval',
-      value: summary?.invoices_pending_approval ?? 0,
+      value: isError ? '--' : (summary?.invoices_pending_approval ?? 0),
       icon: AlertCircle,
       colorKey: 'primary',
       href: '/processing/approvals',
@@ -60,7 +60,7 @@ export default function DashboardPage() {
     },
     {
       name: 'Ready for Payment',
-      value: summary?.invoices_ready_for_payment ?? 0,
+      value: isError ? '--' : (summary?.invoices_ready_for_payment ?? 0),
       icon: CheckCircle,
       colorKey: 'success',
       href: '/processing/queues',
@@ -68,7 +68,7 @@ export default function DashboardPage() {
     },
     {
       name: 'Active Vendors',
-      value: summary?.vendors_active ?? 0,
+      value: isError ? '--' : (summary?.vendors_active ?? 0),
       icon: Users,
       colorKey: 'vendor',
       href: '/vendors',
@@ -76,7 +76,7 @@ export default function DashboardPage() {
     },
     {
       name: 'Total Pending',
-      value: `$${(summary?.total_amount_pending ?? 0).toLocaleString()}`,
+      value: isError ? '$--' : `$${(summary?.total_amount_pending ?? 0).toLocaleString()}`,
       icon: DollarSign,
       colorKey: 'accent',
       href: '/reports',
@@ -124,6 +124,20 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Error Banner */}
+      {isError && (
+        <div className="card border-destructive/50 bg-destructive/5 p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-destructive">Unable to load dashboard metrics</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{error instanceof Error ? error.message : 'Please try again'}</p>
+          </div>
+          <button onClick={() => refetch()} className="text-sm font-medium text-primary hover:underline">
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat, index) => {
@@ -157,6 +171,8 @@ export default function DashboardPage() {
                 <div className="text-2xl font-semibold text-foreground">
                   {isLoading ? (
                     <span className="inline-block w-12 h-7 bg-secondary animate-pulse rounded" />
+                  ) : isError ? (
+                    stat.value
                   ) : typeof stat.value === 'number' ? (
                     <AnimatedCounter value={stat.value} duration={800} />
                   ) : (
@@ -264,7 +280,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="flex-1">
                   <p className="font-medium text-foreground">View Reports</p>
-                  <p className="text-sm text-muted-foreground">Analytics & insights</p>
+                  <p className="text-sm text-muted-foreground">Analytics &amp; insights</p>
                 </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-reporting group-hover:translate-x-1 transition-all" />
               </Link>
@@ -332,13 +348,13 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.invoices_pending_review ?? 0} duration={1000} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_pending_review ?? 0} duration={1000} />}
                     </div>
                     <p className="text-xs text-muted-foreground">Pending review</p>
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.invoices_this_month ?? 0} duration={1200} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_this_month ?? 0} duration={1200} />}
                     </div>
                     <p className="text-xs text-muted-foreground">This month</p>
                   </div>
@@ -369,19 +385,19 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-foreground">Processing</h3>
-                    <p className="text-sm text-muted-foreground">Approvals & workflows</p>
+                    <p className="text-sm text-muted-foreground">Approvals &amp; workflows</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.invoices_pending_approval ?? 0} duration={1000} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_pending_approval ?? 0} duration={1000} />}
                     </div>
                     <p className="text-xs text-muted-foreground">Awaiting</p>
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1000} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1000} />}
                     </div>
                     <p className="text-xs text-muted-foreground">Ready</p>
                   </div>
@@ -418,13 +434,13 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.vendors_active ?? 0} duration={1000} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.vendors_active ?? 0} duration={1000} />}
                     </div>
                     <p className="text-xs text-muted-foreground">Active</p>
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1200} />
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_ready_for_payment ?? 0} duration={1200} />}
                     </div>
                     <p className="text-xs text-muted-foreground">Ready to pay</p>
                   </div>

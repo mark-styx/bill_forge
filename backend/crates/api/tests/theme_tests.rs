@@ -160,6 +160,47 @@ fn test_create_user_theme_input_deserialize() {
     assert!(input.custom_colors.is_none());
 }
 
+#[test]
+fn test_update_organization_theme_input_partial_deserialize() {
+    // Frontend sends Partial<> — only changed fields
+    let json = r#"{ "enabled_for_all_users": true }"#;
+    let input: UpdateOrganizationThemeInput = serde_json::from_str(json).expect("deserialize");
+    assert!(input.preset_id.is_none());
+    assert!(input.branding.is_none());
+    assert!(input.enabled_for_all_users.unwrap());
+}
+
+#[test]
+fn test_update_organization_theme_input_full_deserialize() {
+    let json = r#"{
+        "preset_id": "midnight",
+        "branding": { "brandName": "Acme" },
+        "enabled_for_all_users": true,
+        "allow_user_override": false
+    }"#;
+    let input: UpdateOrganizationThemeInput = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(input.preset_id.as_deref(), Some("midnight"));
+    assert_eq!(input.branding.unwrap().brand_name, "Acme");
+}
+
+#[test]
+fn test_update_user_theme_input_partial_deserialize() {
+    let json = r#"{ "mode": "dark" }"#;
+    let input: UpdateUserThemeInput = serde_json::from_str(json).expect("deserialize");
+    assert!(input.preset_id.is_none());
+    assert_eq!(input.mode.as_deref(), Some("dark"));
+    assert!(input.custom_colors.is_none());
+}
+
+#[test]
+fn test_update_user_theme_input_empty_deserialize() {
+    let json = r#"{}"#;
+    let input: UpdateUserThemeInput = serde_json::from_str(json).expect("deserialize");
+    assert!(input.preset_id.is_none());
+    assert!(input.mode.is_none());
+    assert!(input.custom_colors.is_none());
+}
+
 // ---------------------------------------------------------------------------
 // Effective theme shape
 // ---------------------------------------------------------------------------

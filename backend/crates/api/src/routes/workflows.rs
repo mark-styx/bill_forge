@@ -396,6 +396,70 @@ async fn delete_assignment_rule(
 }
 
 // ============================================================================
+// Shared Approval Aggregation Logic
+// ============================================================================
+
+/// After an individual approval_request is resolved, check if the invoice's
+/// overall approval status should change. Only transitions the invoice when
+/// ALL approval requests are resolved (no pending remain).
+///
+/// Returns `Ok(Some(status))` when the invoice status was updated,
+/// `Ok(None)` when pending requests remain (no status change).
+pub(crate) async fn resolve_invoice_approval_status(
+    executor: &mut sqlx::PgConnection,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: uuid::Uuid,
+) -> Result<Option<billforge_core::domain::ProcessingStatus>, billforge_core::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Counts {
+        pending_count: i64,
+        rejected_count: i64,
+        approved_count: i64,
+    }
+
+    let counts = sqlx::query_as::<_, Counts>(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending_count,
+            COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_count,
+            COUNT(*) FILTER (WHERE status = 'approved') AS approved_count
+        FROM approval_requests
+        WHERE invoice_id = $1 AND tenant_id = $2
+        "#,
+    )
+    .bind(invoice_id)
+    .bind(*tenant_id.as_uuid())
+    .fetch_one(&mut *executor)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count approval statuses: {}", e)))?;
+
+    if counts.pending_count > 0 {
+        // Still waiting on some approvers - do not change invoice status
+        return Ok(None);
+    }
+
+    // All requests resolved. Determine final status.
+    let new_status = if counts.rejected_count > 0 {
+        billforge_core::domain::ProcessingStatus::Rejected
+    } else if counts.approved_count > 0 {
+        billforge_core::domain::ProcessingStatus::Approved
+    } else {
+        // No requests exist at all (shouldn't normally happen)
+        return Ok(None);
+    };
+
+    sqlx::query("UPDATE invoices SET processing_status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3")
+        .bind(new_status.as_str())
+        .bind(invoice_id)
+        .bind(*tenant_id.as_uuid())
+        .execute(&mut *executor)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+
+    Ok(Some(new_status))
+}
+
+// ============================================================================
 // Approval Handlers
 // ============================================================================
 
@@ -684,14 +748,8 @@ async fn approve(
         ).into());
     }
 
-    // Update invoice processing status
-    sqlx::query("UPDATE invoices SET processing_status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3")
-        .bind(billforge_core::domain::ProcessingStatus::Approved.as_str())
-        .bind(info.invoice_id)
-        .bind(*tenant.tenant_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let _new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
@@ -789,14 +847,8 @@ async fn reject(
         ).into());
     }
 
-    // Update invoice processing status
-    sqlx::query("UPDATE invoices SET processing_status = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3")
-        .bind(billforge_core::domain::ProcessingStatus::Rejected.as_str())
-        .bind(info.invoice_id)
-        .bind(*tenant.tenant_id.as_uuid())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let _new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
@@ -944,7 +996,7 @@ async fn bulk_operation(
     Json(input): Json<BulkOperationInput>,
 ) -> ApiResult<Json<BulkOperationResult>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     let mut successful = 0;
     let mut errors = Vec::new();
 
@@ -957,19 +1009,36 @@ async fn bulk_operation(
                     billforge_core::domain::ProcessingStatus::ReadyForPayment,
                 ).await
             }
-            BulkOperationType::Approve => {
-                invoice_repo.update_processing_status(
-                    &tenant.tenant_id,
-                    invoice_id,
-                    billforge_core::domain::ProcessingStatus::Approved,
-                ).await
-            }
-            BulkOperationType::Reject => {
-                invoice_repo.update_processing_status(
-                    &tenant.tenant_id,
-                    invoice_id,
-                    billforge_core::domain::ProcessingStatus::Rejected,
-                ).await
+            BulkOperationType::Approve | BulkOperationType::Reject => {
+                // Check for pending approval_requests - bulk operations must not
+                // bypass the multi-approval workflow resolution logic.
+                let has_approval_requests: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2 AND status = 'pending')"
+                )
+                .bind(invoice_id.as_uuid())
+                .bind(*tenant.tenant_id.as_uuid())
+                .fetch_one(&*pool)
+                .await
+                .map_err(|e| billforge_core::Error::Database(format!(
+                    "Failed to check approval_requests for invoice {}: {}", invoice_id, e
+                )))?;
+
+                if has_approval_requests {
+                    Err(billforge_core::Error::Validation(
+                        "Cannot bulk-approve/reject invoice with active approval workflow - use individual approval actions".to_string()
+                    ))
+                } else {
+                    let status = if matches!(input.operation, BulkOperationType::Approve) {
+                        billforge_core::domain::ProcessingStatus::Approved
+                    } else {
+                        billforge_core::domain::ProcessingStatus::Rejected
+                    };
+                    invoice_repo.update_processing_status(
+                        &tenant.tenant_id,
+                        invoice_id,
+                        status,
+                    ).await
+                }
             }
             BulkOperationType::MoveToQueue | BulkOperationType::AssignTo => {
                 // These require additional parameters - skip for now

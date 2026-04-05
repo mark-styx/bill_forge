@@ -16,5 +16,6 @@ pub mod oauth;
 pub mod types;
 
 pub use client::XeroClient;
+pub use client::ClientError;
 pub use oauth::{XeroOAuth, XeroOAuthConfig, XeroEnvironment};
 pub use types::*;

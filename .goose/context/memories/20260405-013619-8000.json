@@ -1,0 +1,16 @@
+{
+  "id": "20260405-013619-8000",
+  "memory_type": "finding",
+  "content": "ApprovalTarget enum (workflow.rs:262) has no #[serde(rename_all)] attribute. When serialized as JSONB:\n- `ApprovalTarget::User(UserId(uuid))` -> `{\"User\":\"<uuid>\"}` (NOT `{\"user_id\":\"<uuid>\"}`)\n- SQL queries use `requested_from->>'user_id'` which only works if a `user_id` key exists in the JSONB\n\nThis means either: (a) there's a custom serializer somewhere, or (b) all records use the ApprovalTarget::User variant which produces `{\"User\":\"<uuid>\"}` and the `->>'user_id'` queries don't match. The `into_approval_request` method in workflow_repo.rs reads `requested_from` as a plain UUID column (not JSONB), confirming the tenant DB (tenant_db.rs) uses a simple UUID column. The main migration (005) defines JSONB but tenant_db creates UUID. The `requested_from->>'user_id'` queries work in the context where the column is JSONB with a `user_id` key - likely from the workflow engine that stores ApprovalTarget as JSON.",
+  "summary": "ApprovalTarget JSON serialization has no user_id key but SQL queries use requested_from->>'user_id'",
+  "tags": [
+    "approval",
+    "jsonb",
+    "requested_from",
+    "data-inconsistency"
+  ],
+  "relevance": 0.8,
+  "created_at": "2026-04-05T01:36:19.285770Z",
+  "updated_at": "2026-04-05T01:36:19.285770Z",
+  "recall_count": 0
+}

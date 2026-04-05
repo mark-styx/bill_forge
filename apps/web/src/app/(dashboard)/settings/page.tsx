@@ -4,9 +4,9 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
-import { api, invoiceStatusApi, InvoiceStatusConfig, InvoiceStatusConfigInput } from '@/lib/api';
+import { api, invoiceStatusApi, InvoiceStatusConfigInput } from '@/lib/api';
 import { toast } from 'sonner';
-import { ColorPicker, ColorSwatch, GradientPicker } from '@/components/ui/color-picker';
+import { ColorPicker, ColorSwatch } from '@/components/ui/color-picker';
 import {
   Palette,
   Sun,
@@ -22,12 +22,9 @@ import {
   RotateCcw,
   Upload,
   Save,
-  Download,
-  Copy,
   Tags,
   Plus,
   Trash2,
-  GripVertical,
   ArrowUp,
   ArrowDown,
 } from 'lucide-react';
@@ -90,18 +87,18 @@ export default function SettingsPage() {
 
   // Organization branding state
   const [brandColors, setBrandColors] = useState<ThemeColors>({
-    primary: organizationTheme?.customColors?.primary || '210 100% 50%',
-    accent: organizationTheme?.customColors?.accent || '190 95% 45%',
-    capture: organizationTheme?.customColors?.capture || '195 100% 45%',
-    processing: organizationTheme?.customColors?.processing || '160 84% 39%',
-    vendor: organizationTheme?.customColors?.vendor || '270 70% 55%',
-    reporting: organizationTheme?.customColors?.reporting || '35 95% 55%',
+    primary: organizationTheme?.custom_colors?.primary || '210 100% 50%',
+    accent: organizationTheme?.custom_colors?.accent || '190 95% 45%',
+    capture: organizationTheme?.custom_colors?.capture || '195 100% 45%',
+    processing: organizationTheme?.custom_colors?.processing || '160 84% 39%',
+    vendor: organizationTheme?.custom_colors?.vendor || '270 70% 55%',
+    reporting: organizationTheme?.custom_colors?.reporting || '35 95% 55%',
   });
 
   const handleSaveOrganizationTheme = () => {
     setOrganizationTheme({
-      presetId: presetId,
-      customColors: brandColors,
+      preset_id: presetId,
+      custom_colors: brandColors,
       branding: { brandName: orgBrandName },
     });
     toast.success('Organization theme saved');

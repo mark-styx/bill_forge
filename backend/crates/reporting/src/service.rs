@@ -26,53 +26,59 @@ impl ReportingService {
     /// Get dashboard summary metrics for a tenant
     pub async fn get_dashboard_summary(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<DashboardSummary> {
         // Count invoices pending review (capture_status in pending, ready_for_review)
         let invoices_pending_review: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE capture_status IN ('pending', 'ready_for_review')"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND capture_status IN ('pending', 'ready_for_review')"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         // Count invoices pending approval
         let invoices_pending_approval: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'pending_approval'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'pending_approval'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         // Count invoices ready for payment
         let invoices_ready_for_payment: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status IN ('approved', 'ready_for_payment')"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status IN ('approved', 'ready_for_payment')"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         // Count invoices processed today
         let invoices_processed_today: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE DATE(created_at) = CURRENT_DATE AND capture_status = 'reviewed'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND DATE(created_at) = CURRENT_DATE AND capture_status = 'reviewed'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         // Total pending amount (cents)
         let total_pending_cents: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE processing_status NOT IN ('paid', 'voided', 'rejected')"
+            "SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE tenant_id = $1 AND processing_status NOT IN ('paid', 'voided', 'rejected')"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         // Count active vendors
         let vendors_active: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM vendors WHERE status = 'active'"
+            "SELECT COUNT(*) FROM vendors WHERE tenant_id = $1 AND status = 'active'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
@@ -86,10 +92,12 @@ impl ReportingService {
                 0.0
             )
             FROM invoices
-            WHERE processing_status = 'paid'
+            WHERE tenant_id = $1
+            AND processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
             "#
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0.0);
@@ -108,7 +116,7 @@ impl ReportingService {
     /// Get invoice volume over time
     pub async fn get_invoice_volume(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: NaiveDate,
         end_date: NaiveDate,
@@ -131,7 +139,7 @@ impl ReportingService {
                 COUNT(*) as count,
                 COALESCE(SUM(total_amount_cents), 0) as total_amount
             FROM invoices
-            WHERE invoice_date >= $1 AND invoice_date <= $2
+            WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
             GROUP BY period
             ORDER BY period ASC
             "#,
@@ -146,6 +154,7 @@ impl ReportingService {
         }
 
         let rows = sqlx::query_as::<_, VolumeRow>(&sql)
+            .bind(*tenant_id.as_uuid())
             .bind(start_date)
             .bind(end_date)
             .fetch_all(&**pool)
@@ -167,7 +176,7 @@ impl ReportingService {
     /// Get spend by vendor (top vendors by spend)
     pub async fn get_vendor_spend(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: Option<NaiveDate>,
         end_date: Option<NaiveDate>,
@@ -193,11 +202,11 @@ impl ReportingService {
                 MAX(i.invoice_date) as last_invoice_date
             FROM invoices i
             LEFT JOIN vendors v ON i.vendor_id = v.id
-            WHERE i.vendor_id IS NOT NULL
+            WHERE i.vendor_id IS NOT NULL AND i.tenant_id = $1
             "#
         );
 
-        let mut param_count = 1;
+        let mut param_count = 2;
 
         if start_date.is_some() {
             query_str.push_str(&format!(" AND i.invoice_date >= ${}", param_count));
@@ -222,6 +231,7 @@ impl ReportingService {
         match (start_date, end_date) {
             (Some(start), Some(end)) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
+                    .bind(*tenant_id.as_uuid())
                     .bind(start)
                     .bind(end)
                     .bind(limit as i32)
@@ -244,6 +254,7 @@ impl ReportingService {
             }
             (Some(start), None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
+                    .bind(*tenant_id.as_uuid())
                     .bind(start)
                     .bind(limit as i32)
                     .fetch_all(&**pool)
@@ -265,6 +276,7 @@ impl ReportingService {
             }
             (None, Some(end)) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
+                    .bind(*tenant_id.as_uuid())
                     .bind(end)
                     .bind(limit as i32)
                     .fetch_all(&**pool)
@@ -286,6 +298,7 @@ impl ReportingService {
             }
             (None, None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
+                    .bind(*tenant_id.as_uuid())
                     .bind(limit as i32)
                     .fetch_all(&**pool)
                     .await
@@ -338,7 +351,7 @@ impl ReportingService {
     /// Get count of invoices processed this week (Monday to current day)
     pub async fn get_invoices_processed_this_week(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<u64> {
         // Calculate the Monday of the current week
@@ -350,10 +363,12 @@ impl ReportingService {
             r#"
             SELECT COUNT(*)
             FROM invoices
-            WHERE capture_status = 'reviewed'
-            AND DATE(created_at) >= $1
+            WHERE tenant_id = $1
+            AND capture_status = 'reviewed'
+            AND DATE(created_at) >= $2
             "#
         )
+        .bind(*tenant_id.as_uuid())
         .bind(week_start)
         .fetch_one(&**pool)
         .await
@@ -365,7 +380,7 @@ impl ReportingService {
     /// Get invoice aging report (buckets: 0-30, 31-60, 61-90, 90+ days)
     pub async fn get_invoice_aging(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<Vec<AgingBucket>> {
         #[derive(sqlx::FromRow)]
@@ -404,13 +419,15 @@ impl ReportingService {
                 COUNT(*) as invoice_count,
                 COALESCE(SUM(total_amount_cents), 0) as total_amount
             FROM invoices
-            WHERE processing_status NOT IN ('paid', 'voided', 'rejected')
+            WHERE tenant_id = $1
+            AND processing_status NOT IN ('paid', 'voided', 'rejected')
             AND due_date IS NOT NULL
             GROUP BY bucket, days_min, days_max
             ORDER BY days_min ASC
         "#;
 
         let rows = sqlx::query_as::<_, AgingRow>(sql)
+            .bind(*tenant_id.as_uuid())
             .fetch_all(&**pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to query aging: {}", e)))?;
@@ -473,7 +490,7 @@ impl ReportingService {
     /// Get processing metrics
     pub async fn get_processing_metrics(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<ProcessingMetrics> {
         // Average capture time (from created to reviewed)
@@ -484,10 +501,11 @@ impl ReportingService {
                 0.0
             )
             FROM invoices
-            WHERE capture_status = 'reviewed'
+            WHERE tenant_id = $1 AND capture_status = 'reviewed'
             AND created_at >= NOW() - INTERVAL '30 days'
             "#
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0.0);
@@ -500,10 +518,11 @@ impl ReportingService {
                 0.0
             )
             FROM invoices
-            WHERE processing_status IN ('approved', 'ready_for_payment', 'paid')
+            WHERE tenant_id = $1 AND processing_status IN ('approved', 'ready_for_payment', 'paid')
             AND created_at >= NOW() - INTERVAL '30 days'
             "#
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0.0);
@@ -516,47 +535,53 @@ impl ReportingService {
                 0.0
             )
             FROM invoices
-            WHERE processing_status = 'paid'
+            WHERE tenant_id = $1 AND processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
             "#
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0.0);
 
         // Count total and auto-approved for rate calculation
-        let total_approved: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status IN ('approved', 'ready_for_payment', 'paid') AND created_at >= NOW() - INTERVAL '30 days'"
+        let _total_approved: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status IN ('approved', 'ready_for_payment', 'paid') AND created_at >= NOW() - INTERVAL '30 days'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         let total_rejected: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'rejected' AND created_at >= NOW() - INTERVAL '30 days'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'rejected' AND created_at >= NOW() - INTERVAL '30 days'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         let total_processed: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status NOT IN ('draft', 'submitted') AND created_at >= NOW() - INTERVAL '30 days'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status NOT IN ('draft', 'submitted') AND created_at >= NOW() - INTERVAL '30 days'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(1); // Avoid division by zero
 
         // First pass rate (invoices that didn't go on hold or get rejected first)
         let first_pass_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'paid' AND notes NOT LIKE '%hold%' AND created_at >= NOW() - INTERVAL '30 days'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'paid' AND notes NOT LIKE '%hold%' AND created_at >= NOW() - INTERVAL '30 days'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(0);
 
         let paid_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoices WHERE processing_status = 'paid' AND created_at >= NOW() - INTERVAL '30 days'"
+            "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'paid' AND created_at >= NOW() - INTERVAL '30 days'"
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
         .unwrap_or(1);
@@ -582,7 +607,7 @@ impl ReportingService {
     /// Get invoice status distribution
     pub async fn get_status_distribution(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<Vec<StatusDistribution>> {
         #[derive(sqlx::FromRow)]
@@ -598,16 +623,19 @@ impl ReportingService {
                 COUNT(*) as count,
                 COALESCE(SUM(total_amount_cents), 0) as total_amount
             FROM invoices
+            WHERE tenant_id = $1
             GROUP BY processing_status
             ORDER BY count DESC
         "#;
 
-        let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices")
+        let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices WHERE tenant_id = $1")
+            .bind(*tenant_id.as_uuid())
             .fetch_one(&**pool)
             .await
             .unwrap_or(1);
 
         let rows = sqlx::query_as::<_, StatusRow>(sql)
+            .bind(*tenant_id.as_uuid())
             .fetch_all(&**pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to query status distribution: {}", e)))?;
@@ -632,7 +660,7 @@ impl ReportingService {
     /// Execute a custom report query
     pub async fn execute_custom_report(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         query: CustomReportQuery,
     ) -> Result<CustomReportResult> {
@@ -645,7 +673,7 @@ impl ReportingService {
                     COUNT(*) as invoice_count,
                     SUM(total_amount_cents) / 100.0 as total_amount
                 FROM invoices
-                WHERE invoice_date >= $1 AND invoice_date <= $2
+                WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
                 GROUP BY department
                 ORDER BY total_amount DESC
                 "#.to_string()
@@ -657,7 +685,7 @@ impl ReportingService {
                     COUNT(*) as invoice_count,
                     SUM(total_amount_cents) / 100.0 as total_amount
                 FROM invoices
-                WHERE invoice_date >= $1 AND invoice_date <= $2
+                WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
                 GROUP BY gl_code
                 ORDER BY total_amount DESC
                 "#.to_string()
@@ -669,7 +697,7 @@ impl ReportingService {
                     COUNT(*) as count,
                     SUM(CASE WHEN comments IS NOT NULL THEN 1 ELSE 0 END) as with_comments
                 FROM approval_requests
-                WHERE created_at >= $1 AND created_at <= $2
+                WHERE tenant_id = $1 AND created_at >= $2 AND created_at <= $3
                 GROUP BY status
                 "#.to_string()
             }
@@ -690,6 +718,7 @@ impl ReportingService {
 
         // Execute query and get raw rows
         let rows = sqlx::query(&sql)
+            .bind(*tenant_id.as_uuid())
             .bind(start_date)
             .bind(end_date)
             .fetch_all(&**pool)
@@ -745,7 +774,7 @@ impl ReportingService {
     /// Get spend trends over time with period-over-period comparison
     pub async fn get_spend_trends(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: NaiveDate,
         end_date: NaiveDate,
@@ -769,7 +798,7 @@ impl ReportingService {
                     COUNT(*) as invoice_count,
                     COALESCE(SUM(total_amount_cents), 0) / 100.0 as total_spend
                 FROM invoices
-                WHERE invoice_date >= $1 AND invoice_date <= $2
+                WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
                 GROUP BY period
             )
             SELECT
@@ -794,6 +823,7 @@ impl ReportingService {
         }
 
         let rows = sqlx::query_as::<_, TrendRow>(&sql)
+            .bind(*tenant_id.as_uuid())
             .bind(start_date)
             .bind(end_date)
             .fetch_all(&**pool)
@@ -829,7 +859,7 @@ impl ReportingService {
     /// Get category breakdown (GL codes, departments, cost centers)
     pub async fn get_category_breakdown(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         category_type: &str,
         start_date: Option<NaiveDate>,
@@ -849,21 +879,18 @@ impl ReportingService {
                 COUNT(*) as invoice_count,
                 COALESCE(SUM(total_amount_cents), 0) / 100.0 as total_amount
             FROM invoices
+            WHERE tenant_id = $1
             "#,
             column
         );
 
-        let mut conditions: Vec<String> = Vec::new();
+        let mut param_count = 2;
         if start_date.is_some() {
-            conditions.push("invoice_date >= $1".to_string());
+            sql.push_str(&format!(" AND invoice_date >= ${}", param_count));
+            param_count += 1;
         }
         if end_date.is_some() {
-            conditions.push(format!("invoice_date <= ${}", if start_date.is_some() { 2 } else { 1 }));
-        }
-
-        if !conditions.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&conditions.join(" AND "));
+            sql.push_str(&format!(" AND invoice_date <= ${}", param_count));
         }
 
         sql.push_str(&format!(
@@ -881,6 +908,7 @@ impl ReportingService {
         let rows = match (start_date, end_date) {
             (Some(start), Some(end)) => {
                 sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(*tenant_id.as_uuid())
                     .bind(start)
                     .bind(end)
                     .fetch_all(&**pool)
@@ -888,18 +916,21 @@ impl ReportingService {
             }
             (Some(start), None) => {
                 sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(*tenant_id.as_uuid())
                     .bind(start)
                     .fetch_all(&**pool)
                     .await
             }
             (None, Some(end)) => {
                 sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(*tenant_id.as_uuid())
                     .bind(end)
                     .fetch_all(&**pool)
                     .await
             }
             (None, None) => {
                 sqlx::query_as::<_, CategoryRow>(&sql)
+                    .bind(*tenant_id.as_uuid())
                     .fetch_all(&**pool)
                     .await
             }
@@ -907,7 +938,7 @@ impl ReportingService {
         .map_err(|e| Error::Database(format!("Failed to query category breakdown: {}", e)))?;
 
         let total_spend: f64 = rows.iter().map(|r| r.total_amount).sum();
-        let total_count: u64 = rows.len() as u64;
+        let _total_count: u64 = rows.len() as u64;
 
         let results = rows
             .into_iter()
@@ -935,7 +966,7 @@ impl ReportingService {
     /// Get vendor performance metrics
     pub async fn get_vendor_performance(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         limit: u32,
     ) -> Result<Vec<VendorPerformanceMetrics>> {
@@ -969,7 +1000,7 @@ impl ReportingService {
                     COUNT(*) FILTER (WHERE i.notes ILIKE '%dispute%' OR i.notes ILIKE '%discrepancy%')::float / COUNT(*) as dispute_rate
                 FROM invoices i
                 LEFT JOIN vendors v ON i.vendor_id = v.id
-                WHERE i.vendor_id IS NOT NULL
+                WHERE i.vendor_id IS NOT NULL AND i.tenant_id = $1
                 GROUP BY i.vendor_id, vendor_name
             )
             SELECT
@@ -989,7 +1020,7 @@ impl ReportingService {
                 )) as reliability_score
             FROM vendor_stats
             ORDER BY total_spend DESC
-            LIMIT $1
+            LIMIT $2
         "#;
 
         #[derive(sqlx::FromRow)]
@@ -1006,6 +1037,7 @@ impl ReportingService {
         }
 
         let rows = sqlx::query_as::<_, VendorPerfRow>(sql)
+            .bind(*tenant_id.as_uuid())
             .bind(limit as i32)
             .fetch_all(&**pool)
             .await
@@ -1032,35 +1064,14 @@ impl ReportingService {
     /// Get approval analytics including bottlenecks and approver workloads
     pub async fn get_approval_analytics(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: Option<NaiveDate>,
         end_date: Option<NaiveDate>,
     ) -> Result<ApprovalAnalytics> {
-        // Build date filter conditions
-        let date_filter = match (start_date, end_date) {
-            (Some(start), Some(end)) => format!(
-                "WHERE ar.created_at >= '{}' AND ar.created_at <= '{}'",
-                start, end
-            ),
-            (Some(start), None) => format!("WHERE ar.created_at >= '{}'", start),
-            (None, Some(end)) => format!("WHERE ar.created_at <= '{}'", end),
-            (None, None) => String::new(),
-        };
-
-        // Get overall approval stats
-        let stats_sql = format!(
-            r#"
-            SELECT
-                COUNT(*) as total_approvals,
-                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
-                COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
-                COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
-            FROM approval_requests ar
-            {}
-            "#,
-            date_filter
-        );
+        // Build WHERE clause fragments and bind parameters
+        // $1 = tenant_id always, $2/$3 = start_date/end_date when present
+        let tenant_uuid = *tenant_id.as_uuid();
 
         #[derive(sqlx::FromRow)]
         struct StatsRow {
@@ -1070,27 +1081,76 @@ impl ReportingService {
             rejection_rate: Option<f64>,
         }
 
-        let stats = sqlx::query_as::<_, StatsRow>(&stats_sql)
-            .fetch_one(&**pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to query approval stats: {}", e)))?;
+        // Get overall approval stats
+        let stats = match (start_date, end_date) {
+            (Some(start), Some(end)) => {
+                let sql = r#"
+                SELECT
+                    COUNT(*) as total_approvals,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
+                    COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2 AND ar.created_at <= $3
+                "#;
+                sqlx::query_as::<_, StatsRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_one(&**pool)
+                    .await
+            }
+            (Some(start), None) => {
+                let sql = r#"
+                SELECT
+                    COUNT(*) as total_approvals,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
+                    COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2
+                "#;
+                sqlx::query_as::<_, StatsRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .fetch_one(&**pool)
+                    .await
+            }
+            (None, Some(end)) => {
+                let sql = r#"
+                SELECT
+                    COUNT(*) as total_approvals,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
+                    COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at <= $2
+                "#;
+                sqlx::query_as::<_, StatsRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(end)
+                    .fetch_one(&**pool)
+                    .await
+            }
+            (None, None) => {
+                let sql = r#"
+                SELECT
+                    COUNT(*) as total_approvals,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_approval_time_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float / NULLIF(COUNT(*), 0) as approval_rate,
+                    COUNT(*) FILTER (WHERE ar.status = 'rejected')::float / NULLIF(COUNT(*), 0) as rejection_rate
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1
+                "#;
+                sqlx::query_as::<_, StatsRow>(sql)
+                    .bind(tenant_uuid)
+                    .fetch_one(&**pool)
+                    .await
+            }
+        }
+        .map_err(|e| Error::Database(format!("Failed to query approval stats: {}", e)))?;
 
         // Get bottleneck stages (workflow steps with longest average times)
-        let bottleneck_sql = format!(
-            r#"
-            SELECT
-                COALESCE(ar.level::text, 'Unknown') as stage_name,
-                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
-                COUNT(*) as invoice_count
-            FROM approval_requests ar
-            {}
-            GROUP BY ar.level
-            ORDER BY avg_time_hours DESC
-            LIMIT 5
-            "#,
-            date_filter
-        );
-
         #[derive(sqlx::FromRow)]
         struct BottleneckRow {
             stage_name: String,
@@ -1098,10 +1158,81 @@ impl ReportingService {
             invoice_count: i64,
         }
 
-        let bottleneck_rows = sqlx::query_as::<_, BottleneckRow>(&bottleneck_sql)
-            .fetch_all(&**pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to query bottlenecks: {}", e)))?;
+        let bottleneck_rows = match (start_date, end_date) {
+            (Some(start), Some(end)) => {
+                let sql = r#"
+                SELECT
+                    COALESCE(ar.level::text, 'Unknown') as stage_name,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
+                    COUNT(*) as invoice_count
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2 AND ar.created_at <= $3
+                GROUP BY ar.level
+                ORDER BY avg_time_hours DESC
+                LIMIT 5
+                "#;
+                sqlx::query_as::<_, BottleneckRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (Some(start), None) => {
+                let sql = r#"
+                SELECT
+                    COALESCE(ar.level::text, 'Unknown') as stage_name,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
+                    COUNT(*) as invoice_count
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2
+                GROUP BY ar.level
+                ORDER BY avg_time_hours DESC
+                LIMIT 5
+                "#;
+                sqlx::query_as::<_, BottleneckRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, Some(end)) => {
+                let sql = r#"
+                SELECT
+                    COALESCE(ar.level::text, 'Unknown') as stage_name,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
+                    COUNT(*) as invoice_count
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1 AND ar.created_at <= $2
+                GROUP BY ar.level
+                ORDER BY avg_time_hours DESC
+                LIMIT 5
+                "#;
+                sqlx::query_as::<_, BottleneckRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, None) => {
+                let sql = r#"
+                SELECT
+                    COALESCE(ar.level::text, 'Unknown') as stage_name,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600) as avg_time_hours,
+                    COUNT(*) as invoice_count
+                FROM approval_requests ar
+                WHERE ar.tenant_id = $1
+                GROUP BY ar.level
+                ORDER BY avg_time_hours DESC
+                LIMIT 5
+                "#;
+                sqlx::query_as::<_, BottleneckRow>(sql)
+                    .bind(tenant_uuid)
+                    .fetch_all(&**pool)
+                    .await
+            }
+        }
+        .map_err(|e| Error::Database(format!("Failed to query bottlenecks: {}", e)))?;
 
         let total_time: f64 = bottleneck_rows
             .iter()
@@ -1123,27 +1254,6 @@ impl ReportingService {
             .collect();
 
         // Get approver workloads
-        let workload_sql = format!(
-            r#"
-            SELECT
-                ar.approver_id::text,
-                COALESCE(u.email, 'Unknown') as approver_name,
-                COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
-                AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
-                    FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
-                COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
-                COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
-                    NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
-            FROM approval_requests ar
-            LEFT JOIN users u ON ar.approver_id = u.id
-            {}
-            GROUP BY ar.approver_id, u.email
-            ORDER BY approvals_completed DESC
-            LIMIT 20
-            "#,
-            date_filter
-        );
-
         #[derive(sqlx::FromRow)]
         struct WorkloadRow {
             approver_id: String,
@@ -1154,10 +1264,105 @@ impl ReportingService {
             approval_rate: Option<f64>,
         }
 
-        let workload_rows = sqlx::query_as::<_, WorkloadRow>(&workload_sql)
-            .fetch_all(&**pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to query approver workloads: {}", e)))?;
+        let workload_rows = match (start_date, end_date) {
+            (Some(start), Some(end)) => {
+                let sql = r#"
+                SELECT
+                    ar.approver_id::text,
+                    COALESCE(u.email, 'Unknown') as approver_name,
+                    COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
+                        FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
+                        NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
+                FROM approval_requests ar
+                LEFT JOIN users u ON ar.approver_id = u.id
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2 AND ar.created_at <= $3
+                GROUP BY ar.approver_id, u.email
+                ORDER BY approvals_completed DESC
+                LIMIT 20
+                "#;
+                sqlx::query_as::<_, WorkloadRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (Some(start), None) => {
+                let sql = r#"
+                SELECT
+                    ar.approver_id::text,
+                    COALESCE(u.email, 'Unknown') as approver_name,
+                    COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
+                        FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
+                        NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
+                FROM approval_requests ar
+                LEFT JOIN users u ON ar.approver_id = u.id
+                WHERE ar.tenant_id = $1 AND ar.created_at >= $2
+                GROUP BY ar.approver_id, u.email
+                ORDER BY approvals_completed DESC
+                LIMIT 20
+                "#;
+                sqlx::query_as::<_, WorkloadRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(start)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, Some(end)) => {
+                let sql = r#"
+                SELECT
+                    ar.approver_id::text,
+                    COALESCE(u.email, 'Unknown') as approver_name,
+                    COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
+                        FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
+                        NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
+                FROM approval_requests ar
+                LEFT JOIN users u ON ar.approver_id = u.id
+                WHERE ar.tenant_id = $1 AND ar.created_at <= $2
+                GROUP BY ar.approver_id, u.email
+                ORDER BY approvals_completed DESC
+                LIMIT 20
+                "#;
+                sqlx::query_as::<_, WorkloadRow>(sql)
+                    .bind(tenant_uuid)
+                    .bind(end)
+                    .fetch_all(&**pool)
+                    .await
+            }
+            (None, None) => {
+                let sql = r#"
+                SELECT
+                    ar.approver_id::text,
+                    COALESCE(u.email, 'Unknown') as approver_name,
+                    COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')) as approvals_completed,
+                    AVG(EXTRACT(EPOCH FROM (ar.decided_at - ar.created_at)) / 3600)
+                        FILTER (WHERE ar.status IN ('approved', 'rejected')) as avg_time_to_approve_hours,
+                    COUNT(*) FILTER (WHERE ar.status = 'pending') as pending_approvals,
+                    COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
+                        NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
+                FROM approval_requests ar
+                LEFT JOIN users u ON ar.approver_id = u.id
+                WHERE ar.tenant_id = $1
+                GROUP BY ar.approver_id, u.email
+                ORDER BY approvals_completed DESC
+                LIMIT 20
+                "#;
+                sqlx::query_as::<_, WorkloadRow>(sql)
+                    .bind(tenant_uuid)
+                    .fetch_all(&**pool)
+                    .await
+            }
+        }
+        .map_err(|e| Error::Database(format!("Failed to query approver workloads: {}", e)))?;
 
         let approver_workloads = workload_rows
             .into_iter()
@@ -1186,7 +1391,7 @@ impl ReportingService {
     /// Generate digest content for a user
     pub async fn generate_digest_content(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         user_id: uuid::Uuid,
         digest_type: DigestType,
@@ -1194,13 +1399,13 @@ impl ReportingService {
         period_end: NaiveDate,
     ) -> Result<DigestContent> {
         // Get summary metrics
-        let summary = self.get_digest_summary(_tenant_id, pool, period_start, period_end).await?;
+        let summary = self.get_digest_summary(tenant_id, pool, period_start, period_end).await?;
 
         // Get highlights based on digest type
-        let highlights = self.get_digest_highlights(_tenant_id, pool, period_start, period_end, &digest_type).await?;
+        let highlights = self.get_digest_highlights(tenant_id, pool, period_start, period_end, &digest_type).await?;
 
         // Get actionable items (pending approvals for this user)
-        let actionable_items = self.get_actionable_items(_tenant_id, pool, user_id).await?;
+        let actionable_items = self.get_actionable_items(tenant_id, pool, user_id).await?;
 
         Ok(DigestContent {
             digest_type,
@@ -1214,7 +1419,7 @@ impl ReportingService {
 
     async fn get_digest_summary(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: NaiveDate,
         end_date: NaiveDate,
@@ -1239,9 +1444,10 @@ impl ReportingService {
                 COUNT(*) FILTER (WHERE status = 'rejected') as rejected_count,
                 AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600) as avg_processing_time_hours
             FROM invoices
-            WHERE invoice_date >= $1 AND invoice_date <= $2
+            WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
             "#,
         )
+        .bind(*tenant_id.as_uuid())
         .bind(start_date)
         .bind(end_date)
         .fetch_one(pool.as_ref())
@@ -1260,7 +1466,7 @@ impl ReportingService {
 
     async fn get_digest_highlights(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         start_date: NaiveDate,
         end_date: NaiveDate,
@@ -1280,12 +1486,13 @@ impl ReportingService {
             SELECT v.name as vendor_name, COALESCE(SUM(i.total_amount_cents), 0) as total_spend
             FROM invoices i
             JOIN vendors v ON i.vendor_id = v.id
-            WHERE i.invoice_date >= $1 AND i.invoice_date <= $2
+            WHERE i.tenant_id = $1 AND i.invoice_date >= $2 AND i.invoice_date <= $3
             GROUP BY v.name
             ORDER BY total_spend DESC
             LIMIT 1
             "#,
         )
+        .bind(*tenant_id.as_uuid())
         .bind(start_date)
         .bind(end_date)
         .fetch_optional(pool.as_ref())
@@ -1315,10 +1522,11 @@ impl ReportingService {
             let trend = sqlx::query_as::<_, TrendRow>(
                 r#"
                 SELECT
-                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE invoice_date >= $1 AND invoice_date <= $2) as current_spend,
-                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE invoice_date >= $3 AND invoice_date <= $4) as prior_spend
+                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3) as current_spend,
+                    (SELECT COALESCE(SUM(total_amount_cents), 0) FROM invoices WHERE tenant_id = $1 AND invoice_date >= $4 AND invoice_date <= $5) as prior_spend
                 "#,
             )
+            .bind(*tenant_id.as_uuid())
             .bind(start_date)
             .bind(end_date)
             .bind(prior_start)
@@ -1353,7 +1561,7 @@ impl ReportingService {
 
     async fn get_actionable_items(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         user_id: uuid::Uuid,
     ) -> Result<Vec<ActionableItem>> {
@@ -1376,11 +1584,16 @@ impl ReportingService {
                 EXTRACT(DAY FROM NOW() - i.created_at)::bigint as age_days
             FROM invoices i
             JOIN vendors v ON i.vendor_id = v.id
-            WHERE i.status = 'pending_approval'
+            JOIN approval_requests ar ON ar.invoice_id = i.id
+            WHERE i.tenant_id = $1
+              AND ar.requested_from = $2
+              AND ar.status = 'pending'
+              AND i.status = 'pending_approval'
             ORDER BY i.created_at ASC
             LIMIT 10
             "#,
         )
+        .bind(*tenant_id.as_uuid())
         .bind(user_id)
         .fetch_all(pool.as_ref())
         .await
@@ -1404,7 +1617,7 @@ impl ReportingService {
     /// Get digests that are due for sending
     pub async fn get_due_digests(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
     ) -> Result<Vec<ReportDigest>> {
         #[derive(sqlx::FromRow)]
@@ -1427,11 +1640,12 @@ impl ReportingService {
             SELECT id, tenant_id, user_id, digest_type, frequency, enabled, filters,
                    last_sent_at, next_send_at, created_at, updated_at
             FROM report_digests
-            WHERE enabled = true AND next_send_at <= NOW()
+            WHERE tenant_id = $1 AND enabled = true AND next_send_at <= NOW()
             ORDER BY next_send_at ASC
             LIMIT 100
             "#,
         )
+        .bind(*tenant_id.as_uuid())
         .fetch_all(pool.as_ref())
         .await
         .map_err(|e| Error::Database(format!("Failed to query due digests: {}", e)))?;
@@ -1476,7 +1690,7 @@ impl ReportingService {
     /// Upsert a digest configuration
     pub async fn upsert_digest(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         user_id: uuid::Uuid,
         request: UpsertDigestRequest,
@@ -1538,7 +1752,7 @@ impl ReportingService {
                       last_sent_at, next_send_at, created_at, updated_at
             "#,
         )
-        .bind(*_tenant_id.as_uuid())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id)
         .bind(digest_type_str)
         .bind(match request.frequency {
@@ -1586,7 +1800,7 @@ impl ReportingService {
     /// List digests for a user
     pub async fn list_user_digests(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         user_id: uuid::Uuid,
     ) -> Result<Vec<ReportDigest>> {
@@ -1614,7 +1828,7 @@ impl ReportingService {
             ORDER BY created_at DESC
             "#,
         )
-        .bind(*_tenant_id.as_uuid())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id)
         .fetch_all(pool.as_ref())
         .await
@@ -1660,7 +1874,7 @@ impl ReportingService {
     /// Delete a digest
     pub async fn delete_digest(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         pool: &Arc<PgPool>,
         user_id: uuid::Uuid,
         digest_id: uuid::Uuid,
@@ -1671,7 +1885,7 @@ impl ReportingService {
             WHERE tenant_id = $1 AND user_id = $2 AND id = $3
             "#,
         )
-        .bind(*_tenant_id.as_uuid())
+        .bind(*tenant_id.as_uuid())
         .bind(user_id)
         .bind(digest_id)
         .execute(pool.as_ref())
@@ -1685,5 +1899,348 @@ impl ReportingService {
 impl Default for ReportingService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Create the minimal tables needed by get_actionable_items
+    async fn setup_test_tables(pool: &sqlx::PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id UUID PRIMARY KEY,
+                tenant_id UUID NOT NULL,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create users table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS vendors (
+                id UUID PRIMARY KEY,
+                tenant_id UUID NOT NULL,
+                name TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create vendors table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS invoices (
+                id UUID PRIMARY KEY,
+                tenant_id UUID NOT NULL,
+                vendor_id UUID REFERENCES vendors(id),
+                vendor_name TEXT NOT NULL,
+                invoice_number TEXT NOT NULL,
+                total_amount_cents BIGINT NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                processing_status TEXT NOT NULL DEFAULT 'draft',
+                status TEXT NOT NULL DEFAULT 'draft',
+                document_id UUID NOT NULL,
+                created_by UUID NOT NULL REFERENCES users(id),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(tenant_id, invoice_number)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create invoices table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS approval_requests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                requested_from UUID NOT NULL REFERENCES users(id),
+                status TEXT NOT NULL DEFAULT 'pending',
+                comments TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create approval_requests table");
+    }
+
+    async fn seed_user(pool: &sqlx::PgPool, id: Uuid, tenant_id: Uuid) {
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, email, name) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(format!("user-{}@test.com", id))
+        .bind(format!("Test User {}", id))
+        .execute(pool)
+        .await
+        .expect("Failed to insert user");
+    }
+
+    async fn seed_vendor(pool: &sqlx::PgPool, id: Uuid, tenant_id: Uuid, name: &str) {
+        sqlx::query(
+            "INSERT INTO vendors (id, tenant_id, name) VALUES ($1, $2, $3)",
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(name)
+        .execute(pool)
+        .await
+        .expect("Failed to insert vendor");
+    }
+
+    async fn seed_invoice(
+        pool: &sqlx::PgPool,
+        id: Uuid,
+        tenant_id: Uuid,
+        vendor_id: Uuid,
+        vendor_name: &str,
+        invoice_number: &str,
+        amount_cents: i64,
+        created_by: Uuid,
+    ) {
+        sqlx::query(
+            r#"INSERT INTO invoices
+                (id, tenant_id, vendor_id, vendor_name, invoice_number,
+                 total_amount_cents, status, document_id, created_by)
+               VALUES ($1, $2, $3, $4, $5, $6, 'pending_approval', $7, $8)"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(vendor_id)
+        .bind(vendor_name)
+        .bind(invoice_number)
+        .bind(amount_cents)
+        .bind(Uuid::new_v4()) // document_id
+        .bind(created_by)
+        .execute(pool)
+        .await
+        .expect("Failed to insert invoice");
+    }
+
+    async fn seed_approval_request(
+        pool: &sqlx::PgPool,
+        invoice_id: Uuid,
+        requested_from: Uuid,
+        status: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO approval_requests (invoice_id, requested_from, status) VALUES ($1, $2, $3)",
+        )
+        .bind(invoice_id)
+        .bind(requested_from)
+        .bind(status)
+        .execute(pool)
+        .await
+        .expect("Failed to insert approval request");
+    }
+
+    /// Verify that each user only sees approval requests assigned to them,
+    /// not every pending invoice across the tenant.
+    #[sqlx::test]
+    #[ignore = "requires PostgreSQL database"]
+    async fn test_actionable_items_filtered_by_user(pool: sqlx::PgPool) {
+        setup_test_tables(&pool).await;
+
+        let tenant_id = TenantId::new();
+        let tid = *tenant_id.as_uuid();
+
+        // Create 2 approvers + 1 invoice creator
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        let creator = Uuid::new_v4();
+        seed_user(&pool, user_a, tid).await;
+        seed_user(&pool, user_b, tid).await;
+        seed_user(&pool, creator, tid).await;
+
+        // Create 3 vendors
+        let vendor_1 = Uuid::new_v4();
+        let vendor_2 = Uuid::new_v4();
+        let vendor_3 = Uuid::new_v4();
+        seed_vendor(&pool, vendor_1, tid, "Vendor Alpha").await;
+        seed_vendor(&pool, vendor_2, tid, "Vendor Beta").await;
+        seed_vendor(&pool, vendor_3, tid, "Vendor Gamma").await;
+
+        // Create 3 invoices, all in pending_approval status
+        let invoice_1 = Uuid::new_v4();
+        let invoice_2 = Uuid::new_v4();
+        let invoice_3 = Uuid::new_v4();
+        seed_invoice(&pool, invoice_1, tid, vendor_1, "Vendor Alpha", "INV-001", 10_000, creator).await;
+        seed_invoice(&pool, invoice_2, tid, vendor_2, "Vendor Beta",  "INV-002", 20_000, creator).await;
+        seed_invoice(&pool, invoice_3, tid, vendor_3, "Vendor Gamma", "INV-003", 30_000, creator).await;
+
+        // Approval requests: 2 assigned to user_a, 1 assigned to user_b
+        seed_approval_request(&pool, invoice_1, user_a, "pending").await;
+        seed_approval_request(&pool, invoice_2, user_b, "pending").await;
+        seed_approval_request(&pool, invoice_3, user_a, "pending").await;
+
+        // user_a should see only their 2 invoices, not user_b's
+        let service = ReportingService::new();
+        let pool_arc = Arc::new(pool);
+        let items = service
+            .get_actionable_items(&tenant_id, &pool_arc, user_a)
+            .await
+            .expect("get_actionable_items should succeed");
+
+        assert_eq!(items.len(), 2, "user_a should see exactly 2 actionable items");
+
+        let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
+        assert!(
+            item_ids.contains(&invoice_1.to_string()),
+            "should contain invoice_1 assigned to user_a"
+        );
+        assert!(
+            item_ids.contains(&invoice_3.to_string()),
+            "should contain invoice_3 assigned to user_a"
+        );
+        assert!(
+            !item_ids.contains(&invoice_2.to_string()),
+            "should NOT contain invoice_2 (assigned to user_b)"
+        );
+    }
+
+    /// Verify that approval requests with a non-pending status (e.g. approved)
+    /// are excluded from the actionable items list.
+    #[sqlx::test]
+    #[ignore = "requires PostgreSQL database"]
+    async fn test_actionable_items_excludes_responded_approvals(pool: sqlx::PgPool) {
+        setup_test_tables(&pool).await;
+
+        let tenant_id = TenantId::new();
+        let tid = *tenant_id.as_uuid();
+
+        let approver = Uuid::new_v4();
+        let creator = Uuid::new_v4();
+        seed_user(&pool, approver, tid).await;
+        seed_user(&pool, creator, tid).await;
+
+        let vendor = Uuid::new_v4();
+        seed_vendor(&pool, vendor, tid, "Test Vendor").await;
+
+        // Two invoices both in pending_approval status
+        let invoice_pending = Uuid::new_v4();
+        let invoice_approved = Uuid::new_v4();
+        seed_invoice(&pool, invoice_pending,  tid, vendor, "Test Vendor", "INV-PENDING",   10_000, creator).await;
+        seed_invoice(&pool, invoice_approved, tid, vendor, "Test Vendor", "INV-APPROVED",  20_000, creator).await;
+
+        // One approval request still pending, one already approved
+        seed_approval_request(&pool, invoice_pending,  approver, "pending").await;
+        seed_approval_request(&pool, invoice_approved, approver, "approved").await;
+
+        let service = ReportingService::new();
+        let pool_arc = Arc::new(pool);
+        let items = service
+            .get_actionable_items(&tenant_id, &pool_arc, approver)
+            .await
+            .expect("get_actionable_items should succeed");
+
+        assert_eq!(
+            items.len(),
+            1,
+            "should see exactly 1 actionable item (pending only)"
+        );
+        assert_eq!(
+            items[0].item_id,
+            invoice_pending.to_string(),
+            "should be the pending invoice, not the approved one"
+        );
+    }
+
+    /// Verify that tenant A cannot see tenant B's data through dashboard summary.
+    #[sqlx::test]
+    #[ignore = "requires PostgreSQL database"]
+    async fn test_tenant_isolation_dashboard(pool: sqlx::PgPool) {
+        setup_test_tables(&pool).await;
+
+        let tenant_a = TenantId::from_uuid(Uuid::new_v4());
+        let tenant_b = TenantId::from_uuid(Uuid::new_v4());
+        let tid_a = *tenant_a.as_uuid();
+        let tid_b = *tenant_b.as_uuid();
+
+        // Create a user and vendor for each tenant
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        seed_user(&pool, user_a, tid_a).await;
+        seed_user(&pool, user_b, tid_b).await;
+
+        let vendor_a = Uuid::new_v4();
+        let vendor_b = Uuid::new_v4();
+        seed_vendor(&pool, vendor_a, tid_a, "Vendor A").await;
+        seed_vendor(&pool, vendor_b, tid_b, "Vendor B").await;
+
+        // Tenant A: 2 invoices (pending_approval + approved)
+        let inv_a1 = Uuid::new_v4();
+        let inv_a2 = Uuid::new_v4();
+        seed_invoice(&pool, inv_a1, tid_a, vendor_a, "Vendor A", "INV-A1", 10_000, user_a).await;
+        // Update inv_a1 to pending_approval processing_status
+        sqlx::query("UPDATE invoices SET processing_status = 'pending_approval' WHERE id = $1")
+            .bind(inv_a1)
+            .execute(&pool)
+            .await
+            .expect("Failed to update invoice status");
+
+        seed_invoice(&pool, inv_a2, tid_a, vendor_a, "Vendor A", "INV-A2", 20_000, user_a).await;
+        // Update inv_a2 to paid processing_status
+        sqlx::query("UPDATE invoices SET processing_status = 'paid', capture_status = 'reviewed' WHERE id = $1")
+            .bind(inv_a2)
+            .execute(&pool)
+            .await
+            .expect("Failed to update invoice status");
+
+        // Tenant B: 5 invoices
+        for i in 0..5u32 {
+            let inv_id = Uuid::new_v4();
+            seed_invoice(&pool, inv_id, tid_b, vendor_b, "Vendor B", &format!("INV-B{}", i), 5_000, user_b).await;
+            sqlx::query("UPDATE invoices SET processing_status = 'pending_approval' WHERE id = $1")
+                .bind(inv_id)
+                .execute(&pool)
+                .await
+                .expect("Failed to update invoice status");
+        }
+
+        let service = ReportingService::new();
+        let pool_arc = Arc::new(pool);
+
+        // Tenant A's dashboard should see only 1 pending_approval (inv_a1), not tenant B's 5
+        let dashboard_a = service
+            .get_dashboard_summary(&tenant_a, &pool_arc)
+            .await
+            .expect("get_dashboard_summary should succeed");
+
+        assert_eq!(
+            dashboard_a.invoices_pending_approval, 1,
+            "tenant A should see exactly 1 pending approval (its own)"
+        );
+
+        // Tenant B's dashboard should see 5 pending_approvals, not tenant A's 1
+        let dashboard_b = service
+            .get_dashboard_summary(&tenant_b, &pool_arc)
+            .await
+            .expect("get_dashboard_summary should succeed");
+
+        assert_eq!(
+            dashboard_b.invoices_pending_approval, 5,
+            "tenant B should see exactly 5 pending approvals (its own)"
+        );
     }
 }

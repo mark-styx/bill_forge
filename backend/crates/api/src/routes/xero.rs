@@ -399,7 +399,7 @@ async fn xero_status(
 async fn sync_contacts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
-    Json(request): Json<SyncContactsRequest>,
+    Json(_request): Json<SyncContactsRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
@@ -755,7 +755,7 @@ async fn export_invoice_to_xero(
     .ok()
     .flatten();
 
-    let (vendor_name, invoice_number, total_cents, due_date, po_number, currency) = invoice
+    let (_vendor_name, invoice_number, total_cents, due_date, po_number, currency) = invoice
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: request.invoice_id.clone(),

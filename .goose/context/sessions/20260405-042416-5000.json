@@ -1,0 +1,29 @@
+{
+  "session_id": "20260405-042416-5000",
+  "started_at": "2026-04-05T04:24:16.488855Z",
+  "ended_at": "2026-04-05T04:24:16.488855Z",
+  "summary": "Fixed 3 review gaps in the vendor statement reconciliation workflow:\n1. Migration 068: Changed tenant_id from nullable to NOT NULL on both vendor_statements and vendor_statement_lines. Rewrote as CREATE TABLE IF NOT EXISTS since no prior migration creates the base table.\n2. get_lines() now filters by tenant_id, preventing cross-tenant data access. All 4 callers in route handler updated.\n3. update_line() now validates that matched_invoice_id belongs to the same vendor and tenant via validate_invoice_ownership(), fetches the line to compute actual variance (line.amount_cents - invoice_amount) instead of always storing 0.\n\nBackend builds cleanly. All 22 vendor statement tests pass.",
+  "files_modified": [
+    "backend/migrations/068_create_vendor_statements.sql",
+    "backend/crates/core/src/domain/vendor_statement.rs",
+    "backend/crates/db/src/repositories/vendor_statement_repo.rs",
+    "backend/crates/api/src/routes/vendor_statements.rs",
+    "apps/web/src/lib/api.ts",
+    "backend/crates/api/tests/vendor_statement_tests.rs",
+    "apps/web/src/lib/__tests__/vendor-statement-dto.test.ts"
+  ],
+  "decisions_made": [
+    "Rewrote migration 068 as CREATE TABLE IF NOT EXISTS instead of ALTER TABLE since the base vendor_statements table didn't exist in prior migrations",
+    "Made tenant_id NOT NULL on both tables to prevent cross-tenant data leakage",
+    "Added validate_invoice_ownership() and get_line() repo methods for proper invoice validation during manual matching",
+    "Changed StatementLineItem.tenant_id from Option<TenantId> to TenantId to reflect NOT NULL constraint"
+  ],
+  "open_questions": [
+    "Does the vendor_statements table actually exist in production from a prior deployment? If so, the migration needs to remain as ALTER TABLE with a NOT NULL constraint added after data cleanup."
+  ],
+  "next_steps": [
+    "Run full DB integration tests with live PostgreSQL to verify the migration applies cleanly",
+    "Run web frontend build to verify TypeScript compilation",
+    "Add a manual match test case that verifies invoice ownership validation rejects cross-vendor invoices"
+  ]
+}

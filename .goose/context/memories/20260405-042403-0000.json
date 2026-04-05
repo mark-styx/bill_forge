@@ -1,0 +1,17 @@
+{
+  "id": "20260405-042403-0000",
+  "memory_type": "error",
+  "content": "Fixed 3 review gaps in vendor statement reconciliation:\n1. Migration 068: tenant_id changed from nullable to NOT NULL on both vendor_statements and vendor_statement_lines. vendor_statement_lines got new tenant_id index. Table now uses CREATE TABLE IF NOT EXISTS instead of ALTER TABLE since base table didn't exist.\n2. get_lines() in vendor_statement_repo.rs now requires tenant_id parameter and filters by tenant in SQL query. All 4 callers in vendor_statements.rs route handler updated.\n3. update_line() now validates invoice ownership via validate_invoice_ownership() (checks invoice belongs to same tenant+vendor), fetches the line to get amount_cents, and computes actual variance (line.amount_cents - invoice_amount) instead of always storing 0.\nAlso changed StatementLineItem.tenant_id from Option<TenantId> to TenantId in domain model, LineRow in repo, and frontend api.ts.",
+  "summary": "Fixed vendor statement review gaps: nullable tenant_id, missing tenant filter in get_lines(), zero variance in manual matches",
+  "tags": [
+    "vendor-statement",
+    "tenant-isolation",
+    "security",
+    "variance",
+    "reconciliation"
+  ],
+  "relevance": 0.9,
+  "created_at": "2026-04-05T04:24:03.093980Z",
+  "updated_at": "2026-04-05T04:24:03.093980Z",
+  "recall_count": 0
+}

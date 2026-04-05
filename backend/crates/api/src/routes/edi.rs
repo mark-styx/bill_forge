@@ -22,21 +22,22 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
-use billforge_core::domain::{CreatePurchaseOrderInput, PurchaseOrderId, ReceivingLineItem};
 use billforge_core::types::{TenantId, UserId};
 use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
 use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_edi::{
-    verify_webhook_signature, EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper,
+    verify_webhook_signature, validate_timestamp_freshness, check_replay_nonce,
+    EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper,
     EdiPurchaseOrder, EdiShipNotice, EdiWebhookPayload, process_inbound_ack,
     OutboundEdiService, EdiClient, EdiConfig, check_ack_timeouts,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use sha2::Digest;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -196,14 +197,34 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            if let Some(secret) = &webhook_secret {
-                if !secret.is_empty() && !signature.is_empty() {
-                    if !verify_webhook_signature(&body, signature, secret) {
-                        tracing::warn!("EDI webhook signature verification failed");
-                        return Err(axum::http::StatusCode::UNAUTHORIZED);
+                if let Some(secret) = &webhook_secret {
+                    if !secret.is_empty() && !signature.is_empty() {
+                        if !verify_webhook_signature(&body, signature, secret) {
+                            tracing::warn!("EDI webhook signature verification failed");
+                            return Err(axum::http::StatusCode::UNAUTHORIZED);
+                        }
+                        tracing::debug!("EDI webhook signature verified");
                     }
-                    tracing::debug!("EDI webhook signature verified");
                 }
+
+            // --- Replay protection ---
+            // 1. Timestamp freshness
+            if !validate_timestamp_freshness(payload.timestamp, 300) {
+                tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
+                return Err(axum::http::StatusCode::UNAUTHORIZED);
+            }
+
+            // 2. Nonce deduplication
+            let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
+                let hash = sha2::Sha256::digest(&body);
+                hex::encode(hash)
+            });
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
+                tracing::error!("Replay nonce check failed: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })? {
+                tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
+                return Err(axum::http::StatusCode::CONFLICT);
             }
 
             // 3. Store EDI document record (status: processing)
@@ -484,6 +505,24 @@ async fn webhook_inbound(
                 }
             }
 
+            // --- Replay protection ---
+            if !validate_timestamp_freshness(payload.timestamp, 300) {
+                tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
+                return Err(axum::http::StatusCode::UNAUTHORIZED);
+            }
+
+            let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
+                let hash = sha2::Sha256::digest(&body);
+                hex::encode(hash)
+            });
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
+                tracing::error!("Replay nonce check failed: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })? {
+                tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
+                return Err(axum::http::StatusCode::CONFLICT);
+            }
+
             // Store EDI document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -639,6 +678,24 @@ async fn webhook_inbound(
                         return Err(axum::http::StatusCode::UNAUTHORIZED);
                     }
                 }
+            }
+
+            // --- Replay protection ---
+            if !validate_timestamp_freshness(payload.timestamp, 300) {
+                tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
+                return Err(axum::http::StatusCode::UNAUTHORIZED);
+            }
+
+            let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
+                let hash = sha2::Sha256::digest(&body);
+                hex::encode(hash)
+            });
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
+                tracing::error!("Replay nonce check failed: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })? {
+                tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
+                return Err(axum::http::StatusCode::CONFLICT);
             }
 
             // Store EDI document
@@ -854,6 +911,24 @@ async fn webhook_inbound(
                         return Err(axum::http::StatusCode::UNAUTHORIZED);
                     }
                 }
+            }
+
+            // --- Replay protection ---
+            if !validate_timestamp_freshness(payload.timestamp, 300) {
+                tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
+                return Err(axum::http::StatusCode::UNAUTHORIZED);
+            }
+
+            let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
+                let hash = sha2::Sha256::digest(&body);
+                hex::encode(hash)
+            });
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
+                tracing::error!("Replay nonce check failed: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })? {
+                tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
+                return Err(axum::http::StatusCode::CONFLICT);
             }
 
             // Store the inbound 997 document

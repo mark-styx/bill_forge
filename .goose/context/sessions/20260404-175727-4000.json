@@ -1,0 +1,19 @@
+{
+  "session_id": "20260404-175727-4000",
+  "started_at": "2026-04-04T17:57:27.478042Z",
+  "ended_at": "2026-04-04T17:57:27.478042Z",
+  "summary": "Fixed the dead code issue where process_invoice_through_template() was defined but never called. Wired template-based processing into process_invoice_workflow() by adding a WorkflowTemplateRepository generic parameter to WorkflowService and a with_templates() constructor. The modified process_invoice_workflow() now checks for a default template first, delegates to process_invoice_through_template() if one exists, and falls through to flat rule iteration if no template matches or all stages complete. Added 5 integration tests covering all scenarios. All 105 billforge-core tests pass.",
+  "files_modified": [
+    "backend/crates/core/src/workflow_service.rs"
+  ],
+  "decisions_made": [
+    "Added TR generic param to WorkflowService rather than changing existing call sites. The WorkflowEngine in invoice-processing crate already had its own template wiring - this fix targets the WorkflowService in core which was missing it.",
+    "Used Optional<TR> pattern (template_repo: Option<TR>) so existing new() constructor still works for backward compat, and with_templates() provides the template-aware path."
+  ],
+  "open_questions": [],
+  "next_steps": [
+    "Verify full backend build compiles: SQLX_OFFLINE=true cargo build",
+    "Run full test suite to confirm no regressions",
+    "Merge branch fix/workflow-engine-template-stages"
+  ]
+}

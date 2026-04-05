@@ -1,0 +1,17 @@
+{
+  "id": "20260404-165023-0000",
+  "memory_type": "decision",
+  "content": "Fixed critical multi-tenant data isolation vulnerability in backend/crates/reporting/src/service.rs. All 16 query methods that accepted `_tenant_id` now properly bind it into SQL with parameterized queries. Also fixed SQL injection in `get_approval_analytics` (replaced string-interpolated dates with parameterized binds). Key patterns: dynamic queries with format! need param_count starting at 2 (not 1) after inserting tenant_id=$1; static queries get tenant_id=$1 added to WHERE; methods with existing params shift them up by 1. Test helpers (seed_user, seed_vendor, seed_invoice) updated to accept explicit tenant_id. Added test_tenant_isolation_dashboard test. Syntax verified valid.",
+  "summary": "Fixed tenant_id not bound in reporting SQL queries - all 16 methods now filter by tenant",
+  "tags": [
+    "security",
+    "multi-tenant",
+    "reporting",
+    "tenant-isolation",
+    "sql-injection"
+  ],
+  "relevance": 0.9,
+  "created_at": "2026-04-04T16:50:23.937097Z",
+  "updated_at": "2026-04-04T16:50:23.937097Z",
+  "recall_count": 0
+}

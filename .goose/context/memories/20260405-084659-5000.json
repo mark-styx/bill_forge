@@ -1,0 +1,16 @@
+{
+  "id": "20260405-084659-5000",
+  "memory_type": "decision",
+  "content": "Fixed all 24 `.ok()` calls in quickbooks.rs that silently swallowed DB and partner API failures. Classified into 3 categories:\n- Category A (7 reads): Now propagate errors via `map_err(...)?` so DB errors don't get misinterpreted as \"not found\"\n- Category B (13 writes): Single-shot writes use `map_err(...)?`, loop body writes use `if let Err(e)` with error counter and `continue`\n- Category C (4 non-critical): Use `if let Err(e)` with `tracing::warn!` \n\nAdded `errors: u64` field to `SyncVendorsResponse` struct. Sync accounts response JSON now includes `errors` field. Export invoice returns clear 500 message if export record fails after QB bill is created.\n\nThe one remaining `.ok()` is intentional: `company_info` in the OAuth callback (Category C - optional enrichment with warn log).",
+  "summary": "Replaced all silent .ok() error swallowing in quickbooks.rs with proper error propagation",
+  "tags": [
+    "quickbooks",
+    "error-handling",
+    "api",
+    "sync"
+  ],
+  "relevance": 0.9,
+  "created_at": "2026-04-05T08:46:59.814775Z",
+  "updated_at": "2026-04-05T08:46:59.814775Z",
+  "recall_count": 0
+}

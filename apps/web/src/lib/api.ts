@@ -2,14 +2,6 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-interface ApiResponse<T> {
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
 
 export interface ApiErrorBody {
   error: {
@@ -364,11 +356,25 @@ export interface TenantContextResponse {
 
 // Invoices API
 export const invoicesApi = {
-  list: (params?: { page?: number; per_page?: number; status?: string }) =>
-    api.get<{
+  list: (params?: {
+    page?: number;
+    per_page?: number;
+    capture_status?: string;
+    processing_status?: string;
+    vendor_id?: string;
+    search?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.get<{
       data: Invoice[];
       pagination: PaginationMeta;
-    }>(`/api/v1/invoices?${new URLSearchParams(params as any)}`),
+    }>(`/api/v1/invoices?${qs}`);
+  },
 
   get: (id: string) => api.get<Invoice>(`/api/v1/invoices/${id}`),
 
@@ -591,7 +597,7 @@ export interface Invoice {
   current_queue_id?: string;
   assigned_to?: string;
   document_id: string;
-  supporting_documents?: string[];
+  supporting_documents: string[];
   ocr_confidence?: number;
   categorization_confidence?: number;
   department?: string;
@@ -600,7 +606,7 @@ export interface Invoice {
   notes?: string;
   tags: string[];
   custom_fields?: Record<string, unknown>;
-  created_by?: string;
+  created_by: string;
   created_at: string;
   updated_at: string;
 }
@@ -955,6 +961,120 @@ export async function getIntegrationStatus(statusEndpoint: string): Promise<Inte
   return api.get<IntegrationStatusResponse>(statusEndpoint);
 }
 
+// Shared Integration Types
+export interface AccountMapping {
+  local_account_id: string;
+  remote_account_id: string;
+  remote_account_name: string;
+}
+
+export interface SyncResult {
+  synced: number;
+  created: number;
+  updated: number;
+  errors: string[];
+}
+
+export interface OAuthConnectResponse {
+  redirect_url: string;
+}
+
+// QuickBooks API
+export const quickbooksApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/quickbooks/connect'),
+  disconnect: () => api.post('/api/v1/quickbooks/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/quickbooks/status'),
+  callback: () => api.get('/api/v1/quickbooks/callback'),
+  syncVendors: () => api.post<SyncResult>('/api/v1/quickbooks/sync/vendors'),
+  syncAccounts: () => api.post<SyncResult>('/api/v1/quickbooks/sync/accounts'),
+  exportInvoice: (id: string) => api.post('/api/v1/quickbooks/export/invoice/' + id),
+  getAccountMappings: () => api.get<AccountMapping[]>('/api/v1/quickbooks/mappings/accounts'),
+  updateAccountMappings: (mappings: AccountMapping[]) => api.post('/api/v1/quickbooks/mappings/accounts', mappings),
+};
+
+// Xero API
+export const xeroApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/xero/connect'),
+  disconnect: () => api.post('/api/v1/xero/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/xero/status'),
+  callback: () => api.get('/api/v1/xero/callback'),
+  syncContacts: () => api.post<SyncResult>('/api/v1/xero/sync/contacts'),
+  syncAccounts: () => api.post<SyncResult>('/api/v1/xero/sync/accounts'),
+  exportInvoice: (id: string) => api.post('/api/v1/xero/export/invoice/' + id),
+  getAccountMappings: () => api.get<AccountMapping[]>('/api/v1/xero/mappings/accounts'),
+  updateAccountMappings: (mappings: AccountMapping[]) => api.post('/api/v1/xero/mappings/accounts', mappings),
+};
+
+// Sage Intacct API
+export const sageIntacctApi = {
+  connect: (credentials: { company_id: string; user_id: string; user_password: string }) =>
+    api.post<OAuthConnectResponse>('/api/v1/sage-intacct/connect', credentials),
+  disconnect: () => api.post('/api/v1/sage-intacct/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/sage-intacct/status'),
+  syncVendors: () => api.post<SyncResult>('/api/v1/sage-intacct/sync/vendors'),
+  syncAccounts: () => api.post<SyncResult>('/api/v1/sage-intacct/sync/accounts'),
+  exportInvoice: (id: string) => api.post('/api/v1/sage-intacct/export/invoice/' + id),
+  getAccountMappings: () => api.get<AccountMapping[]>('/api/v1/sage-intacct/mappings/accounts'),
+  updateAccountMappings: (mappings: AccountMapping[]) => api.post('/api/v1/sage-intacct/mappings/accounts', mappings),
+  getEntities: () => api.get<unknown[]>('/api/v1/sage-intacct/entities'),
+};
+
+// Salesforce API
+export const salesforceApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/salesforce/connect'),
+  disconnect: () => api.post('/api/v1/salesforce/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/salesforce/status'),
+  callback: () => api.get('/api/v1/salesforce/callback'),
+  syncAccounts: () => api.post<SyncResult>('/api/v1/salesforce/sync/accounts'),
+  syncContacts: () => api.post<SyncResult>('/api/v1/salesforce/sync/contacts'),
+  getAccountMappings: () => api.get<AccountMapping[]>('/api/v1/salesforce/mappings/accounts'),
+  updateAccountMappings: (mappings: AccountMapping[]) => api.post('/api/v1/salesforce/mappings/accounts', mappings),
+};
+
+// Workday API
+export const workdayApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/workday/connect'),
+  disconnect: () => api.post('/api/v1/workday/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/workday/status'),
+  callback: () => api.get('/api/v1/workday/callback'),
+  syncSuppliers: () => api.post<SyncResult>('/api/v1/workday/sync/suppliers'),
+  syncAccounts: () => api.post<SyncResult>('/api/v1/workday/sync/accounts'),
+  exportInvoice: (id: string) => api.post('/api/v1/workday/export/invoice/' + id),
+  getAccountMappings: () => api.get<AccountMapping[]>('/api/v1/workday/mappings/accounts'),
+  updateAccountMappings: (mappings: AccountMapping[]) => api.post('/api/v1/workday/mappings/accounts', mappings),
+  getCompanies: () => api.get<unknown[]>('/api/v1/workday/companies'),
+};
+
+// Bill.com API
+export const billComApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/bill-com/connect'),
+  disconnect: () => api.post('/api/v1/bill-com/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/bill-com/status'),
+  syncVendors: () => api.post<SyncResult>('/api/v1/bill-com/sync/vendors'),
+  pushBill: (id: string) => api.post('/api/v1/bill-com/push/bill/' + id),
+  payBill: (id: string) => api.post('/api/v1/bill-com/pay/bill/' + id),
+  payBulk: (billIds: string[]) => api.post('/api/v1/bill-com/pay/bulk', { bill_ids: billIds }),
+  listPayments: () => api.get<unknown[]>('/api/v1/bill-com/payments'),
+  listFundingAccounts: () => api.get<unknown[]>('/api/v1/bill-com/funding-accounts'),
+};
+
+// EDI API
+export const ediApi = {
+  connect: () => api.get<OAuthConnectResponse>('/api/v1/edi/connect'),
+  disconnect: () => api.post('/api/v1/edi/disconnect'),
+  status: () => api.get<IntegrationStatusResponse>('/api/v1/edi/status'),
+  webhookInbound: () => api.post('/api/v1/edi/webhook/inbound'),
+  listDocuments: () => api.get<unknown[]>('/api/v1/edi/documents'),
+  getDocument: (id: string) => api.get<unknown>('/api/v1/edi/documents/' + id),
+  sendRemittance: (invoiceId: string) => api.post('/api/v1/edi/send-remittance/' + invoiceId),
+  listOutbound: () => api.get<unknown[]>('/api/v1/edi/outbound'),
+  getAckTimeouts: () => api.get<unknown[]>('/api/v1/edi/ack-timeouts'),
+  listPartners: () => api.get<unknown[]>('/api/v1/edi/partners'),
+  createPartner: (data: unknown) => api.post<unknown>('/api/v1/edi/partners', data),
+  updatePartner: (id: string, data: unknown) => api.put<unknown>('/api/v1/edi/partners/' + id, data),
+  deletePartner: (id: string) => api.delete('/api/v1/edi/partners/' + id),
+};
+
 // Invoice Status Config Types
 export interface InvoiceStatusConfig {
   id: string;
@@ -1133,4 +1253,222 @@ export const userThemeApi = {
       effective_mode: 'light' | 'dark' | 'system';
       can_override: boolean;
     }>('/api/v1/user/theme/effective'),
+};
+
+// ---------------------------------------------------------------------------
+// Vendor Statement Reconciliation Types
+// ---------------------------------------------------------------------------
+
+export type StatementStatus = 'pending' | 'in_review' | 'reconciled' | 'disputed';
+export type LineMatchStatus = 'unmatched' | 'matched' | 'discrepancy' | 'ignored';
+export type LineType = 'invoice' | 'credit' | 'payment' | 'adjustment';
+export type MatchConfidence = 'exact' | 'amount_only' | 'no_match';
+
+export interface VendorStatement {
+  id: string;
+  tenant_id: string;
+  vendor_id: string;
+  statement_number: string | null;
+  statement_date: string | null;
+  period_start: string;
+  period_end: string;
+  opening_balance_cents: number;
+  closing_balance_cents: number;
+  currency: string;
+  status: StatementStatus;
+  reconciled_by: string | null;
+  reconciled_at: string | null;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StatementLineItem {
+  id: string;
+  statement_id: string;
+  tenant_id: string;
+  line_date: string;
+  description: string;
+  reference_number: string | null;
+  amount_cents: number;
+  line_type: LineType;
+  match_status: LineMatchStatus;
+  matched_invoice_id: string | null;
+  variance_cents: number;
+  matched_at: string | null;
+  matched_by: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReconciliationSummary {
+  total_lines: number;
+  matched: number;
+  unmatched: number;
+  discrepancies: number;
+  ignored: number;
+  total_variance_cents: number;
+}
+
+export interface StatementDetailResponse {
+  statement: VendorStatement;
+  lines: StatementLineItem[];
+  summary: ReconciliationSummary;
+}
+
+export interface StatementListResponse {
+  data: VendorStatement[];
+  pagination: { page: number; per_page: number; total_items: number; total_pages: number };
+}
+
+export interface MatchResult {
+  line_id: string;
+  confidence: MatchConfidence;
+  matched_invoice_id: string | null;
+  variance_cents: number;
+  match_status: LineMatchStatus;
+}
+
+export interface MatchResponse {
+  results: MatchResult[];
+  summary: ReconciliationSummary;
+}
+
+export interface CreateStatementInput {
+  vendor_id: string;
+  statement_number?: string;
+  statement_date?: string;
+  period_start: string;
+  period_end: string;
+  opening_balance_cents: number;
+  closing_balance_cents: number;
+  currency?: string;
+  notes?: string;
+  lines: CreateStatementLineInput[];
+}
+
+export interface CreateStatementLineInput {
+  line_date: string;
+  description: string;
+  reference_number?: string;
+  amount_cents: number;
+  line_type?: LineType;
+}
+
+export interface UpdateLineMatchInput {
+  match_status: LineMatchStatus;
+  matched_invoice_id?: string | null;
+  notes?: string;
+}
+
+// Payment Request types
+export interface PaymentRequestItem {
+  id: string;
+  invoice_id: string;
+  invoice_number: string;
+  vendor_name: string;
+  amount_cents: number;
+  currency: string;
+  due_date?: string;
+}
+
+export interface PaymentRequest {
+  id: string;
+  request_number: string;
+  status: string;
+  vendor_id?: string;
+  vendor_name?: string;
+  total_amount_cents: number;
+  currency: string;
+  invoice_count: number;
+  earliest_due_date?: string;
+  latest_due_date?: string;
+  items: PaymentRequestItem[];
+  notes?: string;
+  created_by: string;
+  submitted_at?: string;
+  created_at: string;
+}
+
+export interface PaymentRequestSummary {
+  id: string;
+  request_number: string;
+  status: string;
+  vendor_id?: string;
+  total_amount_cents: number;
+  currency: string;
+  invoice_count: number;
+  earliest_due_date?: string;
+  latest_due_date?: string;
+  notes?: string;
+  created_by: string;
+  submitted_at?: string;
+  created_at: string;
+}
+
+export interface CreatePaymentRequestInput {
+  invoice_ids: string[];
+  notes?: string;
+}
+
+// Payment Requests API
+export const paymentRequestsApi = {
+  create: (data: CreatePaymentRequestInput) =>
+    api.post<PaymentRequest>('/api/v1/payment-requests', data),
+
+  list: (params?: { page?: number; per_page?: number; status?: string; vendor_id?: string }) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.get<{
+      data: PaymentRequestSummary[];
+      pagination: PaginationMeta;
+    }>(`/api/v1/payment-requests?${qs}`);
+  },
+
+  get: (id: string) => api.get<PaymentRequest>(`/api/v1/payment-requests/${id}`),
+
+  addInvoices: (id: string, invoiceIds: string[]) =>
+    api.post<{ success: boolean }>(`/api/v1/payment-requests/${id}/invoices`, { invoice_ids: invoiceIds }),
+
+  submit: (id: string) =>
+    api.post<PaymentRequest>(`/api/v1/payment-requests/${id}/submit`),
+};
+
+// Vendor Statements API
+export const vendorStatementsApi = {
+  /** Create a new statement with line items and auto-match */
+  create: (vendorId: string, data: Omit<CreateStatementInput, 'vendor_id'>) =>
+    api.post<StatementDetailResponse>(`/api/v1/vendors/${vendorId}/statements`, { ...data, vendor_id: vendorId }),
+
+  /** List statements for a vendor */
+  list: (vendorId: string, params?: { page?: number; per_page?: number; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set('page', String(params.page));
+    if (params?.per_page) qs.set('per_page', String(params.per_page));
+    if (params?.status) qs.set('status', params.status);
+    const query = qs.toString();
+    return api.get<StatementListResponse>(`/api/v1/vendors/${vendorId}/statements${query ? `?${query}` : ''}`);
+  },
+
+  /** Get statement detail with lines and reconciliation summary */
+  get: (vendorId: string, statementId: string) =>
+    api.get<StatementDetailResponse>(`/api/v1/vendors/${vendorId}/statements/${statementId}`),
+
+  /** Re-run auto-matching on a statement */
+  runMatch: (vendorId: string, statementId: string) =>
+    api.post<MatchResponse>(`/api/v1/vendors/${vendorId}/statements/${statementId}/match`, {}),
+
+  /** Manually update a line's match status */
+  updateLine: (vendorId: string, statementId: string, lineId: string, data: UpdateLineMatchInput) =>
+    api.put<{ success: boolean }>(`/api/v1/vendors/${vendorId}/statements/${statementId}/lines/${lineId}`, data),
+
+  /** Mark a statement as reconciled */
+  reconcile: (vendorId: string, statementId: string) =>
+    api.post<{ success: boolean; status: string }>(`/api/v1/vendors/${vendorId}/statements/${statementId}/reconcile`, {}),
 };

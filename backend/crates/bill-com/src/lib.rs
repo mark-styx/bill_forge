@@ -16,5 +16,5 @@ pub mod client;
 pub mod types;
 
 pub use auth::{BillComAuth, BillComAuthConfig, BillComEnvironment};
-pub use client::BillComClient;
+pub use client::{BillComClient, ClientError};
 pub use types::*;

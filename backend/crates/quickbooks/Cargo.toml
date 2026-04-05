@@ -38,3 +38,4 @@ billforge-core = { path = "../core" }
 
 [dev-dependencies]
 tokio-test = "0.4"
+wiremock = "0.6"

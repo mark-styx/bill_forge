@@ -296,17 +296,20 @@ impl PurchaseOrderRepository for PurchaseOrderRepositoryImpl {
 
     async fn update_received_quantities(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         po_id: &PurchaseOrderId,
         line_number: u32,
         received_qty: f64,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE po_line_items SET received_quantity = received_quantity + $1 WHERE po_id = $2 AND line_number = $3",
+            "UPDATE po_line_items SET received_quantity = received_quantity + $1 \
+             WHERE po_id = $2 AND line_number = $3 \
+             AND po_id IN (SELECT id FROM purchase_orders WHERE id = $2 AND tenant_id = $4)",
         )
         .bind(received_qty)
         .bind(po_id.0)
         .bind(line_number as i32)
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update received quantities: {}", e)))?;
@@ -316,17 +319,20 @@ impl PurchaseOrderRepository for PurchaseOrderRepositoryImpl {
 
     async fn update_invoiced_quantities(
         &self,
-        _tenant_id: &TenantId,
+        tenant_id: &TenantId,
         po_id: &PurchaseOrderId,
         line_number: u32,
         invoiced_qty: f64,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE po_line_items SET invoiced_quantity = invoiced_quantity + $1 WHERE po_id = $2 AND line_number = $3",
+            "UPDATE po_line_items SET invoiced_quantity = invoiced_quantity + $1 \
+             WHERE po_id = $2 AND line_number = $3 \
+             AND po_id IN (SELECT id FROM purchase_orders WHERE id = $2 AND tenant_id = $4)",
         )
         .bind(invoiced_qty)
         .bind(po_id.0)
         .bind(line_number as i32)
+        .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to update invoiced quantities: {}", e)))?;

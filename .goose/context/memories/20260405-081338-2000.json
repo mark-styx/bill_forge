@@ -1,0 +1,17 @@
+{
+  "id": "20260405-081338-2000",
+  "memory_type": "decision",
+  "content": "Fixed workflow tenant schema divergence by replacing ~230 lines of inline SQL in `run_workflow_migrations()` with `include_str!()` references to the canonical migration files (005 and 057). The 005 migration file was made idempotent (IF NOT EXISTS on indexes, DEFAULT gen_random_uuid() on PKs). The duplicate include_str! call in state.rs for sandbox creation was removed since run_workflow_migrations now handles it. Non-workflow tables (documents, audit_log, EDI, vendor columns, etc.) were preserved as inline SQL in a separate block. Schema consistency integration tests were added to prevent future drift.",
+  "summary": "Workflow tenant schema divergence fixed by using include_str! in tenant_db.rs",
+  "tags": [
+    "migration",
+    "schema",
+    "workflow",
+    "tenant",
+    "divergence"
+  ],
+  "relevance": 0.7,
+  "created_at": "2026-04-05T08:13:38.261902Z",
+  "updated_at": "2026-04-05T08:13:38.261902Z",
+  "recall_count": 0
+}

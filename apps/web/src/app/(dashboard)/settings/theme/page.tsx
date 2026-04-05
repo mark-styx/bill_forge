@@ -43,7 +43,7 @@ export default function ThemePage() {
   const [showQuickPicker, setShowQuickPicker] = useState(false);
 
   const handleQuickPresetSelect = (preset: typeof themePresets[0]) => {
-    if (isOrgThemeActive && !organizationTheme?.allowUserOverride) {
+    if (isOrgThemeActive && !organizationTheme?.allow_user_override) {
       toast.error('Organization theme cannot be overridden');
       return;
     }
@@ -107,11 +107,11 @@ export default function ThemePage() {
                   <p className="font-medium text-foreground">Organization Theme Active</p>
                   <p className="text-sm text-muted-foreground">
                     {organizationTheme.branding?.brandName || tenant?.settings?.company_name || 'Your organization'} theme is being applied
-                    {organizationTheme.allowUserOverride && ' (you can override with personal preferences)'}
+                    {organizationTheme.allow_user_override && ' (you can override with personal preferences)'}
                   </p>
                 </div>
               </div>
-              {organizationTheme.allowUserOverride && (
+              {organizationTheme.allow_user_override && (
                 <Button variant="secondary" size="sm" onClick={handleDisableOrgTheme}>
                   Use Personal Theme
                 </Button>
@@ -151,12 +151,12 @@ export default function ThemePage() {
                 <button
                   key={preset.id}
                   onClick={() => handleQuickPresetSelect(preset)}
-                  disabled={isOrgThemeActive && !organizationTheme?.allowUserOverride}
+                  disabled={isOrgThemeActive && !organizationTheme?.allow_user_override}
                   className={`relative aspect-square rounded-xl transition-all ${
                     isSelected
                       ? 'ring-2 ring-primary ring-offset-2 ring-offset-background'
                       : 'hover:scale-105 hover:shadow-md'
-                  } ${isOrgThemeActive && !organizationTheme?.allowUserOverride ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  } ${isOrgThemeActive && !organizationTheme?.allow_user_override ? 'opacity-50 cursor-not-allowed' : ''}`}
                   style={{ background: gradient }}
                   title={preset.name}
                 >

@@ -143,11 +143,6 @@ impl AppState {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to run invoice migrations: {}", e))?;
 
-        sqlx::raw_sql(include_str!("../../../migrations/005_create_workflow_tables.sql"))
-            .execute(&*tenant_pool)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
-
         sqlx::raw_sql(include_str!("../../../migrations/006_create_quickbooks_tables.sql"))
             .execute(&*tenant_pool)
             .await
@@ -228,7 +223,7 @@ impl AppState {
         // Seed default work queues (the standard AP workflow pipeline)
         // ==========================================================
         let queues = vec![
-            ("11111111-4444-5555-6666-777777770001", "OCR Error Queue", "Invoices that couldn't be processed by OCR", "exception", 0),
+            ("11111111-4444-5555-6666-777777770001", "OCR Error Queue", "Invoices that couldn't be processed by OCR", "ocr_error", 0),
             ("11111111-4444-5555-6666-777777770002", "Accounts Payable Queue", "Initial review queue for AP staff", "review", 1),
             ("11111111-4444-5555-6666-777777770003", "Pending Approval", "Invoices waiting for manager approval", "approval", 0),
             ("11111111-4444-5555-6666-777777770004", "Ready for Payment", "Approved invoices ready to be paid", "payment", 0),

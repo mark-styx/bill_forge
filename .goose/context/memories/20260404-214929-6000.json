@@ -1,0 +1,19 @@
+{
+  "id": "20260404-214929-6000",
+  "memory_type": "decision",
+  "content": "Fixed TS DTO drift from Rust domain types. Key changes:\n\n1. **api.ts**: Invoice, InvoiceLineItem, Vendor types were already correct (someone previously fixed them). Made `created_by` and `supporting_documents` required (non-optional) to match Rust. OrganizationBranding was already camelCase (correct because Rust uses `#[serde(rename_all = \"camelCase\")]`).\n\n2. **stores/auth.ts**: OrganizationTheme was using camelCase (`presetId`, `customColors`, etc.) but Rust serializes as snake_case (no `rename_all` attribute). Fixed to snake_case (`preset_id`, `custom_colors`, etc.). Branding sub-object stays camelCase because Rust OrganizationBranding has `rename_all = \"camelCase\"`.\n\n3. **stores/theme.ts**: OrganizationThemeConfig had same camelCase issue. Fixed to snake_case. Updated exportThemeConfig/importThemeConfig. importThemeConfig now accepts both old camelCase and new snake_case keys for backward compatibility with existing persisted JSON in localStorage.\n\n4. **Ripple effects**: Updated organization-theme-provider.tsx, organization-theme-settings.tsx, theme-settings.tsx, settings/page.tsx, settings/theme/page.tsx to use snake_case field names from OrganizationTheme/OrganizationThemeConfig.\n\n5. **Test**: dto-alignment.test.ts - updated OrganizationBranding test to verify camelCase fields, updated Invoice samples to include required `created_by` and `supporting_documents`.\n\n6. **ThemeState interface**: Has internal camelCase (`presetId`, `customColors`) - these are store-internal state fields, NOT DTO types. Left unchanged since they're not serialized as-is.",
+  "summary": "Fixed TS DTO drift: Invoice/Vendor types in api.ts, snake_case in auth.ts OrganizationTheme and theme.ts OrganizationThemeConfig",
+  "tags": [
+    "typescript",
+    "dto",
+    "drift",
+    "snake-case",
+    "camelCase",
+    "serde",
+    "organization-theme"
+  ],
+  "relevance": 0.9,
+  "created_at": "2026-04-04T21:49:29.760116Z",
+  "updated_at": "2026-04-04T21:49:29.760116Z",
+  "recall_count": 0
+}

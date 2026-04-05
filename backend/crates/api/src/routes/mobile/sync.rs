@@ -43,7 +43,7 @@ pub struct SyncQuery {
 
 /// Delta sync - fetch changes since last sync
 pub async fn sync_invoices(
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     State(state): State<AppState>,
     Query(query): Query<SyncQuery>,

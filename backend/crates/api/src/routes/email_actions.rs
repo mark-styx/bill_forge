@@ -146,26 +146,24 @@ async fn perform_approval(
     invoice_id: uuid::Uuid,
     user_id: &UserId,
 ) -> billforge_core::Result<()> {
-    // Update approval request status
+    // Update only this user's approval request (not all pending requests for the invoice)
     sqlx::query(
         r#"UPDATE approval_requests
            SET status = 'approved', responded_by = $1, responded_at = NOW()
-           WHERE invoice_id = $2 AND status = 'pending'"#
+           WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
+             AND requested_from->>'user_id' = $4"#
     )
     .bind(user_id.as_uuid())
+    .bind(*tenant_id.as_uuid())
     .bind(invoice_id)
+    .bind(user_id.as_uuid().to_string())
     .execute(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Update invoice status
-    let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
-    invoice_repo.update_processing_status(
-        tenant_id,
-        &invoice_id_typed,
-        billforge_core::domain::ProcessingStatus::Approved,
-    ).await?;
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
 
     Ok(())
 }
@@ -177,26 +175,24 @@ async fn perform_rejection(
     invoice_id: uuid::Uuid,
     user_id: &UserId,
 ) -> billforge_core::Result<()> {
-    // Update approval request status
+    // Update only this user's approval request (not all pending requests for the invoice)
     sqlx::query(
         r#"UPDATE approval_requests
            SET status = 'rejected', responded_by = $1, responded_at = NOW()
-           WHERE invoice_id = $2 AND status = 'pending'"#
+           WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
+             AND requested_from->>'user_id' = $4"#
     )
     .bind(user_id.as_uuid())
+    .bind(*tenant_id.as_uuid())
     .bind(invoice_id)
+    .bind(user_id.as_uuid().to_string())
     .execute(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Update invoice status
-    let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
-    invoice_repo.update_processing_status(
-        tenant_id,
-        &invoice_id_typed,
-        billforge_core::domain::ProcessingStatus::Rejected,
-    ).await?;
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
 
     Ok(())
 }

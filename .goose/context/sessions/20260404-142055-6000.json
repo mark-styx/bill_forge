@@ -1,0 +1,26 @@
+{
+  "session_id": "20260404-142055-6000",
+  "started_at": "2026-04-04T14:20:55.815504Z",
+  "ended_at": "2026-04-04T14:20:55.815504Z",
+  "summary": "Fixed logout/refresh token security bug where logout cleared UI state but left refresh tokens active for silent renewal.\n\nChanges across 5 files:\n1. **backend/crates/auth/Cargo.toml** - Added sha2 = \"0.10\" dependency\n2. **backend/crates/auth/src/jwt.rs** - Added `refresh_token_expiry_days()` public getter\n3. **backend/crates/auth/src/service.rs** - Added `hash_token()` (SHA-256), `refresh_token_expiry()`, `store_refresh_token_hash()` helpers. Modified `register()`, `provision()`, `login()` to store token hashes in DB. Modified `refresh()` to validate revocation status, revoke old token (rotation), and store new token hash.\n4. **apps/web/src/stores/auth.ts** - Made `logout()` async, calls `authApi.logout()` (backend), clears both `setToken(null)` and `setRefreshToken(null)`, clears local state first then fires best-effort backend call.\n5. **backend/crates/auth/src/tests.rs** - Added `token_hash_tests` module with 4 unit tests (deterministic, different inputs, length, empty input).\n\nNote: `authApi.logout()` was already present in `apps/web/src/lib/api.ts`. The `hex` module was already present at the bottom of service.rs.",
+  "files_modified": [
+    "backend/crates/auth/Cargo.toml",
+    "backend/crates/auth/src/jwt.rs",
+    "backend/crates/auth/src/service.rs",
+    "backend/crates/auth/src/tests.rs",
+    "apps/web/src/stores/auth.ts"
+  ],
+  "decisions_made": [
+    "Clear frontend state first, then fire backend logout call (best-effort) - ensures UI is responsive even if backend is unreachable",
+    "Reject refresh tokens with no DB row (pre-deployment tokens) - forces re-login which is desirable from security perspective",
+    "Implemented single-use token rotation: old refresh token is revoked when new one is issued during refresh"
+  ],
+  "open_questions": [
+    "Integration test for refresh-after-logout scenario requires live DB - deferred to existing integration test patterns in backend/crates/api/tests/"
+  ],
+  "next_steps": [
+    "Run SQLX_OFFLINE=true cargo test to verify backend compilation and unit tests pass",
+    "Run npx next build to verify frontend compilation",
+    "Merge branch fix/logout-revoke-refresh-token after verification"
+  ]
+}

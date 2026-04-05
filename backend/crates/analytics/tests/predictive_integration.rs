@@ -8,6 +8,7 @@ use billforge_analytics::{
     predictive_models::*,
 };
 use chrono::{Duration, Utc};
+use serde_json;
 
 /// Test ARIMA forecaster with sufficient data
 #[tokio::test]
@@ -283,4 +284,62 @@ async fn test_seasonality_detection() {
 
     // Should detect seasonality
     assert!(forecast.seasonality_detected, "Should detect weekly seasonality");
+}
+
+/// Test that all EntityType variants serialize/deserialize correctly,
+/// confirming the exact string values the accuracy loop must match.
+#[test]
+fn test_entity_type_serialization_roundtrip() {
+    let variants = vec![
+        EntityType::Vendor,
+        EntityType::Department,
+        EntityType::GlCode,
+        EntityType::Tenant,
+        EntityType::Approver,
+    ];
+
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let deserialized: EntityType = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, deserialized, "Roundtrip failed for {:?}", variant);
+
+        // Also verify the plain string value (without surrounding quotes)
+        let plain = json.trim_matches('"');
+        let roundtrip: EntityType = serde_json::from_str(&format!("\"{}\"", plain)).unwrap();
+        assert_eq!(variant, roundtrip, "Plain string roundtrip failed for {:?}", variant);
+    }
+}
+
+/// Test that the entity type match logic covers all supported types.
+/// Extracts the same matching pattern used in calculate_forecast_accuracy.
+#[test]
+fn test_entity_type_match_coverage() {
+    fn is_supported_entity_type(entity_type: &str) -> bool {
+        match entity_type {
+            "\"vendor\"" | "vendor" => true,
+            "\"department\"" | "department" => true,
+            _ => false,
+        }
+    }
+
+    // Serialize each EntityType to get the actual string the DB would store
+    let vendor_json = serde_json::to_string(&EntityType::Vendor).unwrap();
+    let dept_json = serde_json::to_string(&EntityType::Department).unwrap();
+    let glcode_json = serde_json::to_string(&EntityType::GlCode).unwrap();
+    let tenant_json = serde_json::to_string(&EntityType::Tenant).unwrap();
+    let approver_json = serde_json::to_string(&EntityType::Approver).unwrap();
+
+    // Vendor and Department (both plain and JSON-quoted) are supported
+    assert!(is_supported_entity_type("vendor"), "Vendor should be supported");
+    assert!(is_supported_entity_type(&vendor_json), "Vendor JSON should be supported");
+    assert!(is_supported_entity_type("department"), "Department should be supported");
+    assert!(is_supported_entity_type(&dept_json), "Department JSON should be supported");
+
+    // GlCode, Tenant, Approver are not supported for accuracy calculation
+    assert!(!is_supported_entity_type("gl_code"), "GlCode should not be supported");
+    assert!(!is_supported_entity_type(&glcode_json), "GlCode JSON should not be supported");
+    assert!(!is_supported_entity_type("tenant"), "Tenant should not be supported");
+    assert!(!is_supported_entity_type(&tenant_json), "Tenant JSON should not be supported");
+    assert!(!is_supported_entity_type("approver"), "Approver should not be supported");
+    assert!(!is_supported_entity_type(&approver_json), "Approver JSON should not be supported");
 }

@@ -1,0 +1,166 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import DashboardPage from '../page';
+import { reportsApi } from '@/lib/api';
+
+// Mock the API module
+vi.mock('@/lib/api', () => ({
+  reportsApi: {
+    dashboardSummary: vi.fn(),
+  },
+}));
+
+// Mock the stores to provide required module data
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: vi.fn(() => ({
+    hasModule: (module: string) =>
+      ['invoice_capture', 'invoice_processing', 'vendor_management', 'reporting'].includes(module),
+    user: { name: 'Test User', id: '1', tenant_id: 't1', email: 'test@test.com', roles: [] },
+    tenant: {
+      id: 't1',
+      name: 'Test Org',
+      enabled_modules: ['invoice_capture', 'invoice_processing', 'vendor_management', 'reporting'],
+      settings: { company_name: 'Test' },
+    },
+  })),
+}));
+
+vi.mock('@/stores/theme', () => ({
+  useThemeStore: vi.fn(() => ({
+    getCurrentColors: () => ({
+      primary: '220 90% 56%',
+      accent: '280 70% 50%',
+      capture: '180 70% 40%',
+      processing: '30 90% 50%',
+      vendor: '150 60% 40%',
+      reporting: '260 60% 55%',
+    }),
+  })),
+}));
+
+vi.mock('@/components/organization-theme-provider', () => ({
+  useOrganizationTheme: () => ({
+    getBrandGradient: () => 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+  }),
+}));
+
+// Mock next/link
+vi.mock('next/link', () => ({
+  default: ({ children, ...props }: { children: React.ReactNode; href: string }) => (
+    <a {...props}>{children}</a>
+  ),
+}));
+
+// Mock AnimatedCounter to just render the value
+vi.mock('@/components/ui/animated-counter', () => ({
+  AnimatedCounter: ({ value }: { value: number }) => <span>{value}</span>,
+}));
+
+// Mock glass-card components
+vi.mock('@/components/ui/glass-card', () => ({
+  GlassCard: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SpotlightCard: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+// Mock gradient-card components
+vi.mock('@/components/ui/gradient-card', () => ({
+  GradientButton: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
+}));
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+    logger: {
+      log: console.log,
+      warn: console.warn,
+      error: () => {},
+    },
+  });
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = createQueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>
+  );
+}
+
+const mockSummaryData = {
+  invoices_pending_review: 5,
+  invoices_pending_approval: 3,
+  invoices_ready_for_payment: 2,
+  total_amount_pending: 15000,
+  vendors_active: 10,
+  invoices_this_month: 25,
+};
+
+describe('DashboardPage error handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows error banner and dashes when API fails, not zeros', async () => {
+    vi.mocked(reportsApi.dashboardSummary).mockRejectedValueOnce(
+      new Error('API error 500')
+    );
+
+    renderWithProviders(<DashboardPage />);
+
+    // Wait for the error state to appear
+    await waitFor(() => {
+      expect(screen.getByText(/unable to load dashboard metrics/i)).toBeInTheDocument();
+    });
+
+    // Error detail should be visible
+    expect(screen.getByText('API error 500')).toBeInTheDocument();
+
+    // Retry button should be present
+    expect(screen.getByText('Retry')).toBeInTheDocument();
+
+    // Stat values should show '--' not '0'
+    const dashElements = screen.getAllByText('--');
+    expect(dashElements.length).toBeGreaterThanOrEqual(4); // 4 numeric stats in grid + module cards
+
+    // The currency stat should show '$--'
+    expect(screen.getByText('$--')).toBeInTheDocument();
+  });
+
+  it('recovers after clicking Retry when API succeeds on second call', async () => {
+    const user = userEvent.setup();
+
+    // Fail first, succeed second
+    vi.mocked(reportsApi.dashboardSummary)
+      .mockRejectedValueOnce(new Error('API error 500'))
+      .mockResolvedValueOnce(mockSummaryData);
+
+    renderWithProviders(<DashboardPage />);
+
+    // Wait for error state
+    await waitFor(() => {
+      expect(screen.getByText(/unable to load dashboard metrics/i)).toBeInTheDocument();
+    });
+
+    // Click Retry
+    await user.click(screen.getByText('Retry'));
+
+    // Wait for recovery - stats should show real values (use getAllByText since values
+    // appear in both the stats grid and the module overview cards)
+    await waitFor(() => {
+      const pendingReview = screen.getAllByText('5');
+      expect(pendingReview.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Error banner should be gone
+    expect(screen.queryByText(/unable to load dashboard metrics/i)).not.toBeInTheDocument();
+
+    // Real values should be visible
+    expect(screen.getAllByText('3').length).toBeGreaterThanOrEqual(1); // Awaiting Approval
+    expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1); // Active Vendors
+  });
+});

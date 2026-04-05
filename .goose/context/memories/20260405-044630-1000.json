@@ -1,0 +1,16 @@
+{
+  "id": "20260405-044630-1000",
+  "memory_type": "decision",
+  "content": "Implemented payment request module (migration 069, repo, routes, tests). Key design: draft->submitted workflow, auto-computes totals/dates/vendor from invoices, validates invoices are in ready_for_payment status. Exposed PaymentRequest and PaymentRequestItem types from db crate via pub use. Submit transitions invoices to 'payment_submitted' processing status.",
+  "summary": "Payment request module: draft->submit workflow with invoice batching",
+  "tags": [
+    "payment-requests",
+    "migration-069",
+    "api-routes",
+    "repository"
+  ],
+  "relevance": 0.8,
+  "created_at": "2026-04-05T04:46:30.348659Z",
+  "updated_at": "2026-04-05T04:46:30.348659Z",
+  "recall_count": 0
+}

@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus},
+    domain::{CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus, QueueType},
     traits::InvoiceRepository,
     types::{Money, PaginatedResponse, Pagination},
 };
@@ -17,9 +17,6 @@ use billforge_invoice_capture::ocr;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
-
-/// UUID of the OCR Error Queue (from seed data)
-const OCR_ERROR_QUEUE_ID: &str = "11111111-4444-5555-6666-777777770001";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -51,7 +48,10 @@ pub struct ListInvoicesQuery {
     params(
         ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
         ("per_page" = Option<u32>, Query, description = "Items per page"),
-        ("status" = Option<String>, Query, description = "Filter by status")
+        ("vendor_id" = Option<String>, Query, description = "Filter by vendor ID"),
+        ("capture_status" = Option<String>, Query, description = "Filter by capture status"),
+        ("processing_status" = Option<String>, Query, description = "Filter by processing status"),
+        ("search" = Option<String>, Query, description = "Search term")
     ),
     responses(
         (status = 200, description = "List of invoices"),
@@ -334,32 +334,58 @@ async fn upload_invoice(
 
             // If OCR failed, move to error queue
             if capture_status == CaptureStatus::Failed {
-                let error_queue_id = Uuid::parse_str(OCR_ERROR_QUEUE_ID).ok();
-                if let Some(queue_id) = error_queue_id {
-                    // Update invoice queue
-                    let pool = state.db.tenant(&tenant.tenant_id).await?;
+                let pool = state.db.tenant(&tenant.tenant_id).await?;
+                let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
 
-                    sqlx::query(
-                        "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
-                    )
-                    .bind(queue_id)
-                    .bind(invoice.id.as_uuid())
-                    .execute(&*pool)
-                    .await
-                    .ok();
+                match billforge_core::traits::WorkQueueRepository::get_by_type(
+                    &queue_repo,
+                    &tenant.tenant_id,
+                    QueueType::OcrError,
+                ).await {
+                    Ok(Some(error_queue)) => {
+                        if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(
+                            &queue_repo,
+                            &tenant.tenant_id,
+                            &invoice.id,
+                            &error_queue.id,
+                            None,
+                        ).await {
+                            tracing::warn!(
+                                invoice_id = %invoice.id,
+                                queue_id = %error_queue.id,
+                                error = %e,
+                                "Failed to create OCR error queue item"
+                            );
+                        }
 
-                    // Create queue item
-                    let queue_item_id = Uuid::new_v4();
-                    sqlx::query(
-                        "INSERT INTO queue_items (id, queue_id, invoice_id, priority, entered_at)
-                         VALUES ($1, $2, $3, 2, NOW())"
-                    )
-                    .bind(queue_item_id)
-                    .bind(queue_id)
-                    .bind(invoice.id.as_uuid())
-                    .execute(&*pool)
-                    .await
-                    .ok();
+                        if let Err(e) = sqlx::query(
+                            "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
+                        )
+                        .bind(error_queue.id.0)
+                        .bind(invoice.id.as_uuid())
+                        .execute(&*pool)
+                        .await
+                        {
+                            tracing::warn!(
+                                invoice_id = %invoice.id,
+                                error = %e,
+                                "Failed to update invoice current_queue_id"
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::error!(
+                            invoice_id = %invoice.id,
+                            "No OcrError queue found for tenant, invoice will not appear in any queue"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            invoice_id = %invoice.id,
+                            error = %e,
+                            "Failed to look up OcrError queue, invoice will not appear in any queue"
+                        );
+                    }
                 }
             }
 
@@ -483,8 +509,13 @@ async fn submit_for_processing(
     ).await?;
     invoice.processing_status = ProcessingStatus::Submitted;
 
-    // Run auto-categorization if fields not already set
-    if invoice.gl_code.is_none() && invoice.department.is_none() && invoice.cost_center.is_none() {
+    // Run auto-categorization if ANY categorization field is missing
+    if invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none() {
+        // Capture which fields already have values so we don't overwrite them
+        let had_gl_code = invoice.gl_code.is_some();
+        let had_department = invoice.department.is_some();
+        let had_cost_center = invoice.cost_center.is_some();
+
         let cat_engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
         let line_items: Vec<billforge_invoice_processing::categorization::LineItemInput> = invoice.line_items.iter().map(|li| {
             billforge_invoice_processing::categorization::LineItemInput {
@@ -548,12 +579,25 @@ async fn submit_for_processing(
 
         match cat_result {
             Ok(categorization) => {
-                let updates = serde_json::json!({
-                    "gl_code": categorization.gl_code.as_ref().map(|s| &s.value),
-                    "department": categorization.department.as_ref().map(|s| &s.value),
-                    "cost_center": categorization.cost_center.as_ref().map(|s| &s.value),
+                // Build updates JSON, only including fields that were originally None
+                let mut updates = serde_json::json!({
                     "categorization_confidence": categorization.overall_confidence,
                 });
+                if !had_gl_code {
+                    updates["gl_code"] = serde_json::json!(
+                        categorization.gl_code.as_ref().map(|s| &s.value)
+                    );
+                }
+                if !had_department {
+                    updates["department"] = serde_json::json!(
+                        categorization.department.as_ref().map(|s| &s.value)
+                    );
+                }
+                if !had_cost_center {
+                    updates["cost_center"] = serde_json::json!(
+                        categorization.cost_center.as_ref().map(|s| &s.value)
+                    );
+                }
                 if let Err(e) = invoice_repo.update(&tenant.tenant_id, &invoice_id, updates).await {
                     tracing::warn!(invoice_id = %invoice_id, error = %e, "Failed to persist auto-categorization");
                 } else {
@@ -596,17 +640,90 @@ async fn submit_for_processing(
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
 
     // Update invoice with final status from workflow
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     invoice_repo.update_processing_status(
         &tenant.tenant_id,
         &invoice_id,
         final_status,
     ).await?;
 
+    // Assign invoice to the appropriate workflow queue based on final_status
+    let target_queue_type = match final_status {
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment => QueueType::Payment,
+        ProcessingStatus::PendingApproval => QueueType::Approval,
+        ProcessingStatus::Rejected | ProcessingStatus::Voided | ProcessingStatus::Paid => {
+            // Terminal states - no queue needed
+            return Ok(Json(serde_json::json!({
+                "message": "Invoice submitted for processing",
+                "invoice_id": id,
+                "status": format!("{:?}", final_status).to_lowercase()
+            })));
+        }
+        _ => QueueType::Review, // Default fallback to AP review queue
+    };
+
+    let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    let queue_id = match billforge_core::traits::WorkQueueRepository::get_by_type(
+        &queue_repo,
+        &tenant.tenant_id,
+        target_queue_type,
+    ).await {
+        Ok(Some(queue)) => Some(queue.id),
+        Ok(None) => {
+            tracing::warn!(
+                invoice_id = %invoice_id,
+                queue_type = ?target_queue_type,
+                "No queue found for tenant, invoice will not appear in workflow"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                invoice_id = %invoice_id,
+                error = %e,
+                "Failed to look up queue, invoice will not appear in workflow"
+            );
+            None
+        }
+    };
+
+    let mut response_queue_id: Option<String> = None;
+    if let Some(ref qid) = queue_id {
+        // Create queue_items entry via move_item
+        if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(
+            &queue_repo,
+            &tenant.tenant_id,
+            &invoice_id,
+            qid,
+            None,
+        ).await {
+            tracing::warn!(
+                invoice_id = %invoice_id,
+                queue_id = %qid,
+                error = %e,
+                "Failed to create queue item"
+            );
+        }
+
+        // Update invoice's current_queue_id (matching OCR-error pattern)
+        sqlx::query(
+            "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
+        )
+        .bind(qid.0)
+        .bind(invoice_id.0)
+        .execute(&*pool)
+        .await
+        .ok();
+
+        response_queue_id = Some(qid.to_string());
+    }
+
     Ok(Json(serde_json::json!({
         "message": "Invoice submitted for processing",
         "invoice_id": id,
-        "status": format!("{:?}", final_status).to_lowercase()
+        "status": format!("{:?}", final_status).to_lowercase(),
+        "queue_id": response_queue_id
     })))
 }
 

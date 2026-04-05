@@ -923,12 +923,12 @@ export const themePresets: ThemePreset[] = [
 
 // Organization theme that can be stored/synced with backend
 export interface OrganizationThemeConfig {
-  presetId: string;
-  customColors?: ThemeColors;
+  preset_id: string;
+  custom_colors?: ThemeColors;
   branding: BrandingConfig;
-  enabledForAllUsers?: boolean;
-  allowUserOverride?: boolean;
-  gradientConfig?: GradientConfig;
+  enabled_for_all_users?: boolean;
+  allow_user_override?: boolean;
+  gradient_config?: GradientConfig;
   // Live preview support
   isPreviewMode?: boolean;
   previewColors?: ThemeColors;
@@ -1000,30 +1000,35 @@ export function getThemeCategories(): string[] {
 
 // Export/Import theme configuration
 export function exportThemeConfig(state: {
-  presetId: string;
-  customColors: ThemeColors | null;
+  preset_id: string;
+  custom_colors: ThemeColors | null;
   organizationTheme: OrganizationThemeConfig | null;
 }): string {
   return JSON.stringify({
     version: '1.0',
     exportedAt: new Date().toISOString(),
     config: {
-      presetId: state.presetId,
-      customColors: state.customColors,
+      preset_id: state.preset_id,
+      custom_colors: state.custom_colors,
       organizationTheme: state.organizationTheme,
     },
   }, null, 2);
 }
 
 export function importThemeConfig(json: string): {
-  presetId: string;
-  customColors: ThemeColors | null;
+  preset_id: string;
+  custom_colors: ThemeColors | null;
   organizationTheme: OrganizationThemeConfig | null;
 } | null {
   try {
     const data = JSON.parse(json);
     if (data.version && data.config) {
-      return data.config;
+      // Support both old camelCase and new snake_case keys
+      return {
+        preset_id: data.config.preset_id || data.config.presetId,
+        custom_colors: data.config.custom_colors || data.config.customColors,
+        organizationTheme: data.config.organizationTheme,
+      };
     }
     return null;
   } catch {
@@ -1115,8 +1120,8 @@ export const useThemeStore = create<ThemeState>()(
       // Organization theme management
       setOrganizationTheme: (theme) => {
         set({ organizationTheme: theme, isOrgThemeActive: true });
-        const colors = theme.customColors ||
-          themePresets.find((p) => p.id === theme.presetId)?.colors ||
+        const colors = theme.custom_colors ||
+          themePresets.find((p) => p.id === theme.preset_id)?.colors ||
           themePresets[0].colors;
         applyColors(colors);
       },
@@ -1138,9 +1143,9 @@ export const useThemeStore = create<ThemeState>()(
         const newTheme = { ...organizationTheme, ...updates };
         set({ organizationTheme: newTheme });
 
-        if (updates.customColors || updates.presetId) {
-          const colors = newTheme.customColors ||
-            themePresets.find((p) => p.id === newTheme.presetId)?.colors ||
+        if (updates.custom_colors || updates.preset_id) {
+          const colors = newTheme.custom_colors ||
+            themePresets.find((p) => p.id === newTheme.preset_id)?.colors ||
             themePresets[0].colors;
           applyColors(colors);
         }
@@ -1163,8 +1168,8 @@ export const useThemeStore = create<ThemeState>()(
 
         // Organization theme takes precedence
         if (isOrgThemeActive && organizationTheme) {
-          if (organizationTheme.customColors) return organizationTheme.customColors;
-          const orgPreset = themePresets.find((p) => p.id === organizationTheme.presetId);
+          if (organizationTheme.custom_colors) return organizationTheme.custom_colors;
+          const orgPreset = themePresets.find((p) => p.id === organizationTheme.preset_id);
           if (orgPreset) return orgPreset.colors;
         }
 
@@ -1187,8 +1192,8 @@ export const useThemeStore = create<ThemeState>()(
           // Apply organization theme if active, otherwise user theme
           let colors: ThemeColors;
           if (state.isOrgThemeActive && state.organizationTheme) {
-            colors = state.organizationTheme.customColors ||
-              themePresets.find((p) => p.id === state.organizationTheme?.presetId)?.colors ||
+            colors = state.organizationTheme.custom_colors ||
+              themePresets.find((p) => p.id === state.organizationTheme?.preset_id)?.colors ||
               themePresets[0].colors;
           } else {
             colors = state.customColors ||

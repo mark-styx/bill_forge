@@ -221,8 +221,50 @@ impl VendorStatementRepositoryImpl {
         Ok((rows.into_iter().map(|r| r.into_domain()).collect(), count.0 as u64))
     }
 
-    /// Get all line items for a statement.
-    pub async fn get_lines(&self, statement_id: Uuid) -> Result<Vec<StatementLineItem>> {
+    /// Get a single line by ID, scoped to tenant.
+    pub async fn get_line(&self, tenant_id: &TenantId, line_id: Uuid) -> Result<Option<StatementLineItem>> {
+        let row = sqlx::query_as::<_, LineRow>(
+            r#"SELECT
+                id, statement_id, tenant_id, line_date, description,
+                reference_number, amount_cents, line_type, match_status,
+                matched_invoice_id, variance_cents, matched_at, matched_by,
+                notes, created_at, updated_at
+               FROM vendor_statement_lines
+               WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(line_id)
+        .bind(tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get statement line: {}", e)))?;
+
+        Ok(row.map(|r| r.into_domain()))
+    }
+
+    /// Validate that an invoice belongs to the same tenant and a given vendor.
+    /// Returns the invoice amount_cents if valid, or an error.
+    pub async fn validate_invoice_ownership(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: Uuid,
+        vendor_id: Uuid,
+    ) -> Result<Option<i64>> {
+        let row = sqlx::query_as::<_, (i64,)>(
+            r#"SELECT total_amount_cents FROM invoices
+               WHERE id = $1 AND tenant_id = $2 AND vendor_id = $3"#,
+        )
+        .bind(invoice_id)
+        .bind(tenant_id.as_uuid())
+        .bind(vendor_id)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to validate invoice ownership: {}", e)))?;
+
+        Ok(row.map(|(amount,)| amount))
+    }
+
+    /// Get all line items for a statement, filtered by tenant.
+    pub async fn get_lines(&self, tenant_id: &TenantId, statement_id: Uuid) -> Result<Vec<StatementLineItem>> {
         let rows = sqlx::query_as::<_, LineRow>(
             r#"SELECT
                 id, statement_id, tenant_id, line_date, description,
@@ -230,10 +272,11 @@ impl VendorStatementRepositoryImpl {
                 matched_invoice_id, variance_cents, matched_at, matched_by,
                 notes, created_at, updated_at
                FROM vendor_statement_lines
-               WHERE statement_id = $1
+               WHERE statement_id = $1 AND tenant_id = $2
                ORDER BY line_date, created_at"#,
         )
         .bind(statement_id)
+        .bind(tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get statement lines: {}", e)))?;
@@ -428,7 +471,7 @@ impl StatementRow {
 struct LineRow {
     id: Uuid,
     statement_id: Uuid,
-    tenant_id: Option<Uuid>,
+    tenant_id: Uuid,
     line_date: NaiveDate,
     description: String,
     reference_number: Option<String>,
@@ -449,7 +492,7 @@ impl LineRow {
         StatementLineItem {
             id: self.id,
             statement_id: self.statement_id,
-            tenant_id: self.tenant_id.map(TenantId::from_uuid),
+            tenant_id: TenantId::from_uuid(self.tenant_id),
             line_date: self.line_date,
             description: self.description,
             reference_number: self.reference_number,

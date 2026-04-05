@@ -1,0 +1,20 @@
+{
+  "session_id": "20260405-060825-2000",
+  "started_at": "2026-04-05T06:08:25.268214Z",
+  "ended_at": "2026-04-05T06:08:25.268214Z",
+  "summary": "Wired QuickBooks token auto-refresh into sync/export routes. Added `get_authenticated_qb_client()` helper that fetches the QB connection, checks if the access token is expired/near-expiry (5-min buffer), calls `refresh_token()` if needed, persists new tokens to DB, and returns a ready-to-use `QuickBooksClient`. Also extracted `build_qb_oauth()` and `qb_environment()` helpers to reduce duplication. Replaced the duplicated connection-fetch + hard-error-on-expiry + client-build blocks in all three routes (`sync_vendors`, `sync_accounts`, `export_invoice_to_quickbooks`) with single calls to the helper. Added two tests: `test_token_storage_has_refresh_token` (verifies QBTokenStorage has refresh_token field) and `test_quickbooks_environment_token_url` (verifies refresh endpoint URL is correct).",
+  "files_modified": [
+    "backend/crates/api/src/routes/quickbooks.rs",
+    "backend/crates/api/tests/quickbooks_tests.rs"
+  ],
+  "decisions_made": [
+    "Used 5-minute buffer before token expiry to proactively refresh rather than waiting until exact expiry",
+    "Placed helper functions at end of file to minimize diff and avoid moving existing route handlers",
+    "Helper fetches its own DB pool since AppState.db.tenant() is cheap and routes still need their own pool for subsequent queries"
+  ],
+  "open_questions": [],
+  "next_steps": [
+    "Manual verification: connect QB, wait >1 hour, hit sync/vendors - should auto-refresh instead of erroring",
+    "Consider extracting the OAuth builder pattern further in the connect/disconnect/callback handlers (not in scope for this ticket)"
+  ]
+}

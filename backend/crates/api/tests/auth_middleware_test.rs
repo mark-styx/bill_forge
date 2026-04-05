@@ -7,7 +7,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
     middleware,
-    response::IntoResponse,
     routing::{get, post},
     Router,
 };
@@ -29,7 +28,7 @@ fn build_test_router() -> Router {
         .route("/api/v1/auth/register", post(ok_handler))
         .route("/api/v1/auth/provision", post(ok_handler))
         .route("/api/v1/auth/refresh", post(ok_handler))
-        .route("/api/v1/actions/{token}", post(ok_handler))
+        .route("/api/v1/actions/:token", post(ok_handler))
         .route("/api/v1/edi/webhook/test", post(ok_handler))
         .route("/api/v1/billing/plans", get(ok_handler))
         // Protected path
@@ -60,8 +59,6 @@ async fn unauthenticated_api_request_returns_401() {
 
 #[tokio::test]
 async fn public_paths_allow_unauthenticated() {
-    let app = build_test_router();
-
     // Test each public path - they should NOT return 401 from the middleware
     let public_paths = vec![
         ("/api/v1/auth/login", "POST"),
@@ -75,7 +72,7 @@ async fn public_paths_allow_unauthenticated() {
 
     for (path, method) in public_paths {
         let app = build_test_router();
-        let mut builder = Request::builder().uri(path).method(method);
+        let builder = Request::builder().uri(path).method(method);
         let request = builder.body(Body::empty()).unwrap();
 
         let response = app.oneshot(request).await.unwrap();

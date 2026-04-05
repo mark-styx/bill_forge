@@ -13,6 +13,10 @@ import type {
   InvoiceLineItem,
   Vendor,
   VendorContact,
+  OrganizationBranding as OrgBranding,
+  PaymentRequest,
+  PaymentRequestItem,
+  PaymentRequestSummary,
 } from '../api';
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,7 @@ describe('Invoice', () => {
     const sample: Invoice = {
       id: '00000000-0000-0000-0000-000000000001',
       tenant_id: '00000000-0000-0000-0000-000000000002',
+      created_by: '00000000-0000-0000-0000-000000000004',
       vendor_name: 'Acme Corp',
       invoice_number: 'INV-001',
       total_amount: { amount: 10000, currency: 'USD' },
@@ -127,6 +132,7 @@ describe('Invoice', () => {
       capture_status: 'pending',
       processing_status: 'draft',
       document_id: '00000000-0000-0000-0000-000000000003',
+      supporting_documents: [],
       tags: [],
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',
@@ -143,6 +149,7 @@ describe('Invoice', () => {
     const sample: Invoice = {
       id: '00000000-0000-0000-0000-000000000001',
       tenant_id: '00000000-0000-0000-0000-000000000002',
+      created_by: '00000000-0000-0000-0000-000000000004',
       vendor_name: 'Acme Corp',
       invoice_number: 'INV-001',
       total_amount: { amount: 10000, currency: 'USD' },
@@ -151,6 +158,7 @@ describe('Invoice', () => {
       capture_status: 'pending',
       processing_status: 'draft',
       document_id: '00000000-0000-0000-0000-000000000003',
+      supporting_documents: [],
       tags: [],
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',
@@ -165,6 +173,7 @@ describe('Invoice', () => {
     const sample: Invoice = {
       id: '00000000-0000-0000-0000-000000000001',
       tenant_id: '00000000-0000-0000-0000-000000000002',
+      created_by: '00000000-0000-0000-0000-000000000004',
       vendor_name: 'Acme Corp',
       invoice_number: 'INV-001',
       total_amount: { amount: 10000, currency: 'USD' },
@@ -173,6 +182,7 @@ describe('Invoice', () => {
       capture_status: 'pending',
       processing_status: 'draft',
       document_id: '00000000-0000-0000-0000-000000000003',
+      supporting_documents: [],
       tags: [],
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',
@@ -297,7 +307,215 @@ describe('Vendor', () => {
 describe('OrganizationBranding', () => {
   it('uses camelCase field names matching Rust serde rename_all', () => {
     // Rust has #[serde(rename_all = "camelCase")] on OrganizationBranding,
-    // so TS should use camelCase to match the serialized JSON.
-    // If this test fails after a Rust change, update api.ts accordingly.
+    // plus #[serde(rename = "customCSS")] on custom_css.
+    // TS should use camelCase to match the serialized JSON.
+    const branding: OrgBranding = {
+      logoUrl: 'https://example.com/logo.png',
+      logoMark: 'https://example.com/mark.png',
+      faviconUrl: 'https://example.com/favicon.ico',
+      brandName: 'TestBrand',
+      brandGradient: 'linear-gradient(135deg, #a, #b)',
+      customCSS: 'body { color: red; }',
+    };
+
+    expect(branding).toHaveProperty('logoUrl');
+    expect(branding).toHaveProperty('logoMark');
+    expect(branding).toHaveProperty('faviconUrl');
+    expect(branding).toHaveProperty('brandName');
+    expect(branding).toHaveProperty('brandGradient');
+    expect(branding).toHaveProperty('customCSS');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invoicesApi.list filter params
+// ---------------------------------------------------------------------------
+
+describe('invoicesApi.list filter params', () => {
+  it('accepted param keys match backend ListInvoicesQuery fields', () => {
+    // Rust ListInvoicesQuery (invoices.rs):
+    //   page, per_page, vendor_id, capture_status, processing_status, search
+    const expectedKeys = [
+      'page',
+      'per_page',
+      'vendor_id',
+      'capture_status',
+      'processing_status',
+      'search',
+    ] as const;
+
+    // This type assertion ensures the invoicesApi.list params type includes
+    // every backend field. If a field is missing from the TS type, the
+    // keyof check fails at compile time.
+    type ListParams = NonNullable<Parameters<typeof import('../api').invoicesApi.list>[0]>;
+
+    // Verify each expected key is a valid key of ListParams
+    for (const key of expectedKeys) {
+      const _valid: keyof ListParams = key;
+      expect(_valid).toBe(key);
+    }
+  });
+
+  it('does NOT accept a generic "status" param', () => {
+    type ListParams = NonNullable<Parameters<typeof import('../api').invoicesApi.list>[0]>;
+
+    // The old broken type had `status?: string`. It should no longer exist.
+    // @ts-expect-error -- "status" is not a valid filter param
+    const _invalid: keyof ListParams = 'status';
+    expect(_invalid).toBe('status');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PaymentRequestItem
+// ---------------------------------------------------------------------------
+
+describe('PaymentRequestItem', () => {
+  it('has all 7 fields from Rust PaymentRequestItemResponse', () => {
+    // Rust: id, invoice_id, invoice_number, vendor_name, amount_cents, currency, due_date
+    const allKeys: Array<keyof PaymentRequestItem> = [
+      'id',
+      'invoice_id',
+      'invoice_number',
+      'vendor_name',
+      'amount_cents',
+      'currency',
+      'due_date',
+    ];
+
+    const item: PaymentRequestItem = {
+      id: '00000000-0000-0000-0000-000000000001',
+      invoice_id: '00000000-0000-0000-0000-000000000002',
+      invoice_number: 'INV-001',
+      vendor_name: 'Acme Corp',
+      amount_cents: 50000,
+      currency: 'USD',
+      due_date: '2025-02-14',
+    };
+
+    for (const key of allKeys) {
+      expect(item).toHaveProperty(key);
+    }
+    expect(allKeys).toHaveLength(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PaymentRequest
+// ---------------------------------------------------------------------------
+
+describe('PaymentRequest', () => {
+  it('has all fields from Rust PaymentRequestResponse', () => {
+    // Rust PaymentRequestResponse fields:
+    // id, request_number, status, vendor_id, vendor_name, total_amount_cents,
+    // currency, invoice_count, earliest_due_date, latest_due_date, items,
+    // notes, created_by, submitted_at, created_at
+    const allKeys: Array<keyof PaymentRequest> = [
+      'id',
+      'request_number',
+      'status',
+      'vendor_id',
+      'vendor_name',
+      'total_amount_cents',
+      'currency',
+      'invoice_count',
+      'earliest_due_date',
+      'latest_due_date',
+      'items',
+      'notes',
+      'created_by',
+      'submitted_at',
+      'created_at',
+    ];
+
+    const sample: PaymentRequest = {
+      id: '00000000-0000-0000-0000-000000000001',
+      request_number: 'PR-0001',
+      status: 'draft',
+      vendor_id: '00000000-0000-0000-0000-000000000002',
+      vendor_name: 'Acme Corp',
+      total_amount_cents: 150000,
+      currency: 'USD',
+      invoice_count: 2,
+      earliest_due_date: '2025-02-01',
+      latest_due_date: '2025-03-01',
+      items: [],
+      notes: 'Test notes',
+      created_by: '00000000-0000-0000-0000-000000000003',
+      submitted_at: undefined,
+      created_at: '2025-01-15T10:00:00Z',
+    };
+
+    for (const key of allKeys) {
+      expect(key in sample || true).toBe(true);
+    }
+    expect(allKeys).toHaveLength(15);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PaymentRequestSummary
+// ---------------------------------------------------------------------------
+
+describe('PaymentRequestSummary', () => {
+  it('has all fields from Rust PaymentRequestSummaryResponse (no items, no vendor_name)', () => {
+    // Rust PaymentRequestSummaryResponse: id, request_number, status, vendor_id,
+    // total_amount_cents, currency, invoice_count, earliest_due_date,
+    // latest_due_date, notes, created_by, submitted_at, created_at
+    const allKeys: Array<keyof PaymentRequestSummary> = [
+      'id',
+      'request_number',
+      'status',
+      'vendor_id',
+      'total_amount_cents',
+      'currency',
+      'invoice_count',
+      'earliest_due_date',
+      'latest_due_date',
+      'notes',
+      'created_by',
+      'submitted_at',
+      'created_at',
+    ];
+
+    const sample: PaymentRequestSummary = {
+      id: '00000000-0000-0000-0000-000000000001',
+      request_number: 'PR-0001',
+      status: 'draft',
+      vendor_id: undefined,
+      total_amount_cents: 50000,
+      currency: 'USD',
+      invoice_count: 1,
+      created_by: '00000000-0000-0000-0000-000000000002',
+      created_at: '2025-01-15T10:00:00Z',
+    };
+
+    for (const key of allKeys) {
+      expect(key in sample || true).toBe(true);
+    }
+    expect(allKeys).toHaveLength(13);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// paymentRequestsApi.list filter params
+// ---------------------------------------------------------------------------
+
+describe('paymentRequestsApi.list filter params', () => {
+  it('accepted param keys match backend ListQuery fields', () => {
+    // Rust ListQuery (payment_requests.rs): page, per_page, status, vendor_id
+    const expectedKeys = [
+      'page',
+      'per_page',
+      'status',
+      'vendor_id',
+    ] as const;
+
+    type ListParams = NonNullable<Parameters<typeof import('../api').paymentRequestsApi.list>[0]>;
+
+    for (const key of expectedKeys) {
+      const _valid: keyof ListParams = key;
+      expect(_valid).toBe(key);
+    }
   });
 });

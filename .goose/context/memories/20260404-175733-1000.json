@@ -1,0 +1,16 @@
+{
+  "id": "20260404-175733-1000",
+  "memory_type": "decision",
+  "content": "Fixed process_invoice_through_template dead code in workflow_service.rs. The method was defined but never called because Wired template-based processing into process_invoice_workflow() by adding TR: WorkflowTemplateRepository generic param, Used Option<TR> pattern so existing new() still works for backward compat. with_templates() provides template-aware path. process_invoice_workflow() now checks for a default template first and falls through to flat rules. The invoice-processing crate's WorkflowEngine already had its own template wiring - this fix targets WorkflowService in core.",
+  "summary": "Wired template stages into process_invoice_workflow in workflow_service.rs",
+  "tags": [
+    "workflow",
+    "template",
+    "dead-code",
+    "invoice-processing"
+  ],
+  "relevance": 0.8,
+  "created_at": "2026-04-04T17:57:33.889213Z",
+  "updated_at": "2026-04-04T17:57:33.889213Z",
+  "recall_count": 0
+}

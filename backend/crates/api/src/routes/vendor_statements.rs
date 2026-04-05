@@ -90,7 +90,7 @@ async fn create_statement(
         .create_statement(&tenant.tenant_id, input, user.user_id.0)
         .await?;
 
-    let lines = repo.get_lines(statement.id.0).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement.id.0).await?;
 
     let invoices = repo
         .get_vendor_invoices_in_range(
@@ -102,9 +102,9 @@ async fn create_statement(
         .await?;
 
     let match_results = auto_match_lines(&lines, &invoices);
-    repo.apply_match_results(&match_results).await?;
+    repo.apply_match_results(&tenant.tenant_id, &match_results).await?;
 
-    let lines = repo.get_lines(statement.id.0).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement.id.0).await?;
     let summary = compute_reconciliation_summary(&lines);
 
     Ok(Json(StatementDetailResponse {
@@ -165,7 +165,7 @@ async fn get_statement(
             id: statement_id.to_string(),
         })?;
 
-    let lines = repo.get_lines(statement_id).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement_id).await?;
     let summary = compute_reconciliation_summary(&lines);
 
     Ok(Json(StatementDetailResponse {
@@ -191,7 +191,7 @@ async fn run_auto_match(
             id: statement_id.to_string(),
         })?;
 
-    let lines = repo.get_lines(statement_id).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement_id).await?;
     let invoices = repo
         .get_vendor_invoices_in_range(
             &tenant.tenant_id,
@@ -202,9 +202,9 @@ async fn run_auto_match(
         .await?;
 
     let results = auto_match_lines(&lines, &invoices);
-    repo.apply_match_results(&results).await?;
+    repo.apply_match_results(&tenant.tenant_id, &results).await?;
 
-    let lines = repo.get_lines(statement_id).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement_id).await?;
     let summary = compute_reconciliation_summary(&lines);
 
     Ok(Json(MatchResponse { results, summary }))
@@ -213,16 +213,48 @@ async fn run_auto_match(
 async fn update_line(
     State(state): State<AppState>,
     VendorMgmtAccess(_user, tenant): VendorMgmtAccess,
-    Path((_vendor_id, _statement_id, line_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path((vendor_id, statement_id, line_id)): Path<(Uuid, Uuid, Uuid)>,
     Json(input): Json<UpdateLineMatchInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = VendorStatementRepositoryImpl::new(pool);
 
+    // Verify the statement belongs to this tenant before modifying its line
+    let _statement = repo
+        .get_statement(&tenant.tenant_id, statement_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "VendorStatement".to_string(),
+            id: statement_id.to_string(),
+        })?;
+
+    // Fetch the line to get its amount for variance calculation
+    let line = repo
+        .get_line(&tenant.tenant_id, line_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "StatementLine".to_string(),
+            id: line_id.to_string(),
+        })?;
+
+    // Validate invoice ownership and compute variance
+    let variance = if let Some(invoice_id) = input.matched_invoice_id {
+        let invoice_amount = repo
+            .validate_invoice_ownership(&tenant.tenant_id, invoice_id, vendor_id)
+            .await?
+            .ok_or_else(|| billforge_core::Error::Validation(
+                "Matched invoice not found or does not belong to this vendor".to_string(),
+            ))?;
+        line.amount_cents - invoice_amount
+    } else {
+        0
+    };
+
     repo.update_line_match(
+        &tenant.tenant_id,
         line_id,
         input.matched_invoice_id,
-        0i64,
+        variance,
         &input.match_status,
         "manual",
     )
@@ -249,7 +281,7 @@ async fn reconcile_statement(
         })?;
 
     // Check all lines are matched, discrepancy, or ignored
-    let lines = repo.get_lines(statement_id).await?;
+    let lines = repo.get_lines(&tenant.tenant_id, statement_id).await?;
     let has_unresolved = lines.iter().any(|l| {
         l.match_status != LineMatchStatus::Matched
             && l.match_status != LineMatchStatus::Ignored
@@ -265,6 +297,7 @@ async fn reconcile_statement(
     }
 
     repo.update_statement_status(
+        &tenant.tenant_id,
         statement_id,
         &StatementStatus::Reconciled,
         Some(user.user_id.0),

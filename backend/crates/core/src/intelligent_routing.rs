@@ -19,6 +19,41 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Bundle of routing data needed to call `route_invoice()`.
+///
+/// The `RoutingDataProvider` trait assembles this from the database so
+/// callers do not need to gather each collection individually.
+#[derive(Debug, Clone, Default)]
+pub struct RoutingContext {
+    pub eligible_approvers: Vec<UserId>,
+    pub workloads: HashMap<UserId, ApproverWorkload>,
+    pub availabilities: Vec<ApproverAvailability>,
+    pub expertise: Vec<ApproverExpertise>,
+}
+
+impl RoutingContext {
+    /// Convenience: delegate to `IntelligentRoutingEngine::route_invoice`
+    /// using the data stored in this context.
+    pub fn route(&self, engine: &IntelligentRoutingEngine, invoice: &Invoice) -> RoutingDecision {
+        engine.route_invoice(
+            invoice,
+            &self.eligible_approvers,
+            &self.workloads,
+            &self.availabilities,
+            &self.expertise,
+        )
+    }
+}
+
+/// Trait for fetching the routing data a tenant needs for intelligent approval routing.
+///
+/// A concrete implementation that hits the database will be provided in a follow-up;
+/// for now tests use mocks.
+#[async_trait::async_trait]
+pub trait RoutingDataProvider: Send + Sync {
+    async fn get_routing_context(&self, tenant_id: &TenantId) -> Result<RoutingContext>;
+}
+
 /// Routing decision with reasoning
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingDecision {
@@ -255,8 +290,25 @@ impl IntelligentRoutingEngine {
             })
             .collect();
 
-        // Find the best candidate
-        let best = candidates
+        // Partition into available (availability_score > 0.0) vs unavailable
+        let available: Vec<&CandidateScore> = candidates
+            .iter()
+            .filter(|c| c.availability_score > 0.0)
+            .collect();
+
+        // Pick best from available pool; fall back to full pool only if all are unavailable
+        let (pool, strategy_override): (Vec<&CandidateScore>, Option<RoutingStrategy>) =
+            if available.is_empty() {
+                (
+                    candidates.iter().collect(),
+                    Some(RoutingStrategy::Fallback),
+                )
+            } else {
+                (available, None)
+            };
+
+        // Find the best candidate from the selected pool
+        let best = pool
             .iter()
             .max_by(|a, b| {
                 a.score
@@ -271,8 +323,9 @@ impl IntelligentRoutingEngine {
             availabilities,
         );
 
-        // Determine strategy used
-        let strategy = self.determine_strategy(&candidates);
+        // Determine strategy used (respect override when all unavailable)
+        let strategy = strategy_override
+            .unwrap_or_else(|| self.determine_strategy(&pool.iter().map(|cs| (*cs).clone()).collect::<Vec<_>>()));
 
         RoutingDecision {
             approver_id: Some(final_approver),
@@ -709,5 +762,163 @@ mod tests {
         assert!(decision.approver_id.is_some());
         // Approver 1 should win due to higher expertise score
         // (assuming availability and workload are equal)
+    }
+
+    #[test]
+    fn test_available_approver_preferred_over_unavailable_expert() {
+        // approver1: available but low expertise; approver2: out-of-office with high expertise
+        let config = RoutingConfig {
+            workload_weight: 0.1,
+            expertise_weight: 0.8,
+            availability_weight: 0.1,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+
+        let vendor_id = Uuid::new_v4();
+        let invoice = Invoice {
+            vendor_id: Some(vendor_id),
+            ..create_test_invoice()
+        };
+
+        let approver1 = UserId(Uuid::new_v4()); // available, low expertise
+        let approver2 = UserId(Uuid::new_v4()); // out-of-office, high expertise
+
+        let expertise = vec![
+            ApproverExpertise {
+                user_id: approver1.clone(),
+                expertise_type: ExpertiseType::Vendor,
+                expertise_key: vendor_id.to_string(),
+                total_approved: 5,
+                total_rejected: 1,
+                avg_time_hours: Some(24.0),
+                expertise_score: 0.2,
+                last_used_at: Some(Utc::now()),
+            },
+            ApproverExpertise {
+                user_id: approver2.clone(),
+                expertise_type: ExpertiseType::Vendor,
+                expertise_key: vendor_id.to_string(),
+                total_approved: 100,
+                total_rejected: 2,
+                avg_time_hours: Some(4.0),
+                expertise_score: 0.95,
+                last_used_at: Some(Utc::now()),
+            },
+        ];
+
+        let availabilities = vec![ApproverAvailability {
+            user_id: approver2.clone(),
+            status: AvailabilityStatus::OutOfOffice,
+            delegate_id: None,
+            start_at: Utc::now() - chrono::Duration::hours(1),
+            end_at: Utc::now() + chrono::Duration::hours(24),
+            reason: Some("Sick leave".to_string()),
+        }];
+
+        let decision = engine.route_invoice(
+            &invoice,
+            &[approver1.clone(), approver2.clone()],
+            &HashMap::new(),
+            &availabilities,
+            &expertise,
+        );
+
+        assert!(decision.approver_id.is_some());
+        assert_eq!(decision.approver_id.unwrap(), approver1);
+        assert_ne!(decision.strategy, RoutingStrategy::Fallback);
+    }
+
+    #[test]
+    fn test_all_unavailable_returns_fallback_strategy() {
+        let config = RoutingConfig {
+            enable_auto_delegation: true,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+
+        let invoice = create_test_invoice();
+        let approver1 = UserId(Uuid::new_v4());
+        let approver2 = UserId(Uuid::new_v4());
+
+        let availabilities = vec![
+            ApproverAvailability {
+                user_id: approver1.clone(),
+                status: AvailabilityStatus::Vacation,
+                delegate_id: None,
+                start_at: Utc::now() - chrono::Duration::hours(1),
+                end_at: Utc::now() + chrono::Duration::hours(168),
+                reason: Some("Vacation".to_string()),
+            },
+            ApproverAvailability {
+                user_id: approver2.clone(),
+                status: AvailabilityStatus::OutOfOffice,
+                delegate_id: None,
+                start_at: Utc::now() - chrono::Duration::hours(1),
+                end_at: Utc::now() + chrono::Duration::hours(24),
+                reason: Some("Sick leave".to_string()),
+            },
+        ];
+
+        let decision = engine.route_invoice(
+            &invoice,
+            &[approver1.clone(), approver2.clone()],
+            &HashMap::new(),
+            &availabilities,
+            &[],
+        );
+
+        // Should still pick someone (best of the unavailable)
+        assert!(decision.approver_id.is_some());
+        assert_eq!(decision.strategy, RoutingStrategy::Fallback);
+        // Delegation was attempted (no delegates configured, so delegated_from is None)
+        assert_eq!(decision.delegated_from, None);
+    }
+
+    #[test]
+    fn test_routing_context_route_delegates_to_engine() {
+        let engine = IntelligentRoutingEngine::new(RoutingConfig {
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            ..Default::default()
+        });
+
+        let approver = UserId(Uuid::new_v4());
+
+        let ctx = RoutingContext {
+            eligible_approvers: vec![approver.clone()],
+            workloads: HashMap::from([(
+                approver.clone(),
+                ApproverWorkload {
+                    user_id: approver.clone(),
+                    active_approvals: 0,
+                    pending_approvals: 0,
+                    completed_this_week: 10,
+                    avg_approval_time_hours: Some(4.0),
+                    workload_score: 5.0,
+                    last_assignment_at: None,
+                },
+            )]),
+            availabilities: vec![],
+            expertise: vec![],
+        };
+
+        let invoice = create_test_invoice();
+        let decision = ctx.route(&engine, &invoice);
+
+        assert!(decision.approver_id.is_some());
+        assert_eq!(decision.approver_id.unwrap(), approver);
+    }
+
+    #[test]
+    fn test_routing_context_empty_approvers_returns_fallback() {
+        let engine = IntelligentRoutingEngine::new(RoutingConfig::default());
+        let ctx = RoutingContext::default();
+        let invoice = create_test_invoice();
+
+        let decision = ctx.route(&engine, &invoice);
+        assert!(decision.approver_id.is_none());
+        assert_eq!(decision.strategy, RoutingStrategy::Fallback);
     }
 }

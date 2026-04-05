@@ -11,8 +11,8 @@ export interface User {
 }
 
 export interface OrganizationTheme {
-  presetId: string;
-  customColors?: {
+  preset_id: string;
+  custom_colors?: {
     primary: string;      // HSL values like "220 90% 56%"
     accent: string;
     capture: string;
@@ -20,10 +20,7 @@ export interface OrganizationTheme {
     vendor: string;
     reporting: string;
   };
-  logoUrl?: string;
-  logoMark?: string;      // Small icon version
-  brandGradient?: string; // Custom gradient for brand areas
-  gradientConfig?: {
+  gradient_config?: {
     enabled: boolean;
     type: 'linear' | 'radial' | 'conic';
     angle?: number;
@@ -35,8 +32,8 @@ export interface OrganizationTheme {
     logoMark?: string;
     faviconUrl?: string;
   };
-  enabledForAllUsers?: boolean;
-  allowUserOverride?: boolean;
+  enabled_for_all_users?: boolean;
+  allow_user_override?: boolean;
 }
 
 export interface Tenant {
@@ -143,7 +140,13 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: async () => {
-        // Clear local state immediately
+        // Revoke refresh tokens on backend FIRST (while we still have the access token)
+        try {
+          await authApi.logout();
+        } catch {
+          // Ignore - still clear local state below
+        }
+        // Clear local state
         api.setToken(null);
         api.setRefreshToken(null);
         set({
@@ -154,12 +157,6 @@ export const useAuthStore = create<AuthState>()(
           refreshToken: null,
           isAuthenticated: false,
         });
-        // Best-effort call to backend to revoke refresh tokens
-        try {
-          await authApi.logout();
-        } catch {
-          // Ignore - local state already cleared
-        }
       },
 
       setTokens: (access: string, refresh: string) => {

@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
@@ -534,11 +534,11 @@ async fn approve_invoice(
 ) -> ApiResult<Json<serde_json::Value>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Update approval request (scoped to the current user)
+    // Update approval request (scoped to the current user, only if still pending)
     let result = sqlx::query(
         r#"UPDATE approval_requests
         SET status = 'approved', responded_at = NOW(), comments = $3
-        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4"#,
+        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4 AND status = 'pending'"#,
     )
     .bind(tenant.tenant_id.0)
     .bind(id)
@@ -548,25 +548,24 @@ async fn approve_invoice(
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
-    // Only update invoice if the approval request was actually modified (authorization check)
+    // Only update invoice if the approval request was actually modified (authorization + pending check)
     if result.rows_affected() == 0 {
-        return Err(ApiError(billforge_core::Error::NotFound {
-            resource_type: "ApprovalRequest".to_string(),
-            id: id.to_string(),
-        }));
+        return Err(ApiError(billforge_core::Error::Conflict(
+            "Approval request has already been processed".to_string(),
+        )));
     }
 
-    sqlx::query(
-        r#"UPDATE invoices SET processing_status = 'approved', updated_at = NOW()
-        WHERE tenant_id = $1 AND id = (
-            SELECT (invoice_id::uuid) FROM approval_requests WHERE id = $2
-        )"#,
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let invoice_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT invoice_id FROM approval_requests WHERE id = $1",
     )
-    .bind(tenant.tenant_id.0)
     .bind(id)
-    .execute(&*pool)
+    .fetch_one(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
+    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, &tenant.tenant_id, invoice_id).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -586,20 +585,37 @@ async fn reject_invoice(
 ) -> ApiResult<Json<serde_json::Value>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    sqlx::query!(
-        r#"
-        UPDATE approval_requests
+    // Update approval request (scoped to the current user, only if still pending)
+    let result = sqlx::query(
+        r#"UPDATE approval_requests
         SET status = 'rejected', responded_at = NOW(), comments = $3
-        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4
-        "#,
-        tenant.tenant_id.0,
-        id,
-        payload.reason,
-        user.user_id.0.to_string(),
+        WHERE tenant_id = $1 AND id = $2 AND requested_from->>'user_id' = $4 AND status = 'pending'"#,
     )
+    .bind(tenant.tenant_id.0)
+    .bind(id)
+    .bind(&payload.reason)
+    .bind(user.user_id.0.to_string())
     .execute(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError(billforge_core::Error::Conflict(
+            "Approval request has already been processed".to_string(),
+        )));
+    }
+
+    let invoice_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT invoice_id FROM approval_requests WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
+    // Resolve invoice approval status (only transitions if ALL requests resolved)
+    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, &tenant.tenant_id, invoice_id).await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

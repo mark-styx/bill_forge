@@ -1,0 +1,26 @@
+{
+  "session_id": "20260405-054057-2000",
+  "started_at": "2026-04-05T05:40:57.857863Z",
+  "ended_at": "2026-04-05T05:40:57.857863Z",
+  "summary": "Implemented OCR failure recovery unification across 4 files:\n\n1. **`workflow.rs`** - Added `OcrError` variant to `QueueType` enum\n2. **`workflow_repo.rs`** - Added `\"ocr_error\" => QueueType::OcrError` mapping in `WorkQueueRow::into_queue()`\n3. **`invoices.rs`** - Removed `OCR_ERROR_QUEUE_ID` constant and `Uuid` import. Replaced raw SQL error queuing block (lines 338-367) with `WorkQueueRepository::get_by_type()` + `move_item()` pattern matching the submit path. Added `tracing::error!` for missing queue (invoice lost from workflow) and `tracing::warn!` for move_item/update failures.\n4. **`state.rs`** - Updated seed data from `\"exception\"` to `\"ocr_error\"` for the OCR Error Queue row\n5. **`ocr_error_queue_test.rs`** (new) - Two integration tests: `ocr_failure_routes_to_error_queue` and `ocr_failure_logs_when_queue_missing`\n\nAll files pass syntax checks.",
+  "files_modified": [
+    "backend/crates/core/src/domain/workflow.rs",
+    "backend/crates/db/src/repositories/workflow_repo.rs",
+    "backend/crates/api/src/routes/invoices.rs",
+    "backend/crates/api/src/state.rs",
+    "backend/crates/api/tests/ocr_error_queue_test.rs"
+  ],
+  "decisions_made": [
+    "Used existing Exception-style pattern for OcrError (no new DB column needed, just new queue_type string value)",
+    "Used tracing::error! (not warn!) when queue lookup fails, since invoice is lost from workflow",
+    "Kept the submit path's .ok() pattern unchanged - only changed the upload path"
+  ],
+  "open_questions": [
+    "The submit path (line 669-676) still uses bare .ok() on the UPDATE - same issue as the old upload path but plan did not scope fixing that"
+  ],
+  "next_steps": [
+    "Run SQLX_OFFLINE=true cargo build to verify compilation",
+    "Run SQLX_OFFLINE=true cargo test to verify tests compile",
+    "Check if sqlx-data.json needs updating for the changed query patterns"
+  ]
+}

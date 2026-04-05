@@ -11,6 +11,7 @@ use crate::domain::invoice::InvoiceId;
 use crate::domain::vendor::VendorId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 
 /// Unique identifier for a workflow rule
@@ -206,6 +207,8 @@ pub enum QueueType {
     Approval,
     /// Exception/problem invoices
     Exception,
+    /// OCR failures requiring manual review
+    OcrError,
     /// Ready for payment
     Payment,
     /// Custom queue
@@ -334,6 +337,118 @@ pub struct CreateApprovalDelegationInput {
     pub end_date: DateTime<Utc>,
     #[serde(default)]
     pub conditions: Option<Vec<RuleCondition>>,
+}
+
+impl CreateApprovalDelegationInput {
+    /// Validates basic invariants that don't require database access.
+    /// - Both IDs must be valid UUIDs
+    /// - delegator_id must differ from delegate_id
+    /// - start_date must precede end_date
+    pub fn validate_basic(&self) -> crate::error::Result<()> {
+        let delegator_uuid = Uuid::parse_str(&self.delegator_id).map_err(|_| {
+            crate::Error::Validation("delegator_id is not a valid UUID".to_string())
+        })?;
+        let delegate_uuid = Uuid::parse_str(&self.delegate_id).map_err(|_| {
+            crate::Error::Validation("delegate_id is not a valid UUID".to_string())
+        })?;
+
+        if delegator_uuid == delegate_uuid {
+            return Err(crate::Error::Validation(
+                "Cannot delegate to yourself".to_string(),
+            ));
+        }
+
+        if self.start_date >= self.end_date {
+            return Err(crate::Error::Validation(
+                "start_date must be before end_date".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Detects whether adding a new delegation (delegator_id → delegate_id) would
+/// create a cycle among existing active delegations whose date ranges overlap
+/// the window [overlap_start, overlap_end].
+///
+/// Returns `Some(path)` with the cycle (excluding the proposed edge) if a
+/// cycle would be formed, or `None` if no cycle is detected.  Traversal is
+/// capped at 10 hops to avoid runaway on corrupt data.
+///
+/// Uses BFS to explore ALL outgoing edges from each visited node, ensuring
+/// cycles through alternate delegation paths are detected.
+pub fn detect_delegation_cycle(
+    existing: &[ApprovalDelegation],
+    delegator_id: &UserId,
+    delegate_id: &UserId,
+    overlap_start: DateTime<Utc>,
+    overlap_end: DateTime<Utc>,
+) -> Option<Vec<UserId>> {
+    /// Check whether two date ranges overlap: [s1, e1) ∩ [s2, e2) ≠ ∅
+    fn ranges_overlap(s1: DateTime<Utc>, e1: DateTime<Utc>, s2: DateTime<Utc>, e2: DateTime<Utc>) -> bool {
+        s1 < e2 && s2 < e1
+    }
+
+    // Collect active, overlapping delegations as adjacency: delegator → delegates
+    let mut adj: Vec<(&UserId, &UserId)> = existing
+        .iter()
+        .filter(|d| {
+            d.is_active && ranges_overlap(d.start_date, d.end_date, overlap_start, overlap_end)
+        })
+        .map(|d| (&d.delegator_id, &d.delegate_id))
+        .collect();
+
+    // Build adjacency list: from_node → [to_nodes] for multi-edge lookup
+    adj.sort_by_key(|(from, _)| *from);
+    let groups: Vec<(&UserId, Vec<&UserId>)> = {
+        let mut result = Vec::new();
+        let mut i = 0;
+        while i < adj.len() {
+            let from = adj[i].0;
+            let mut tos = Vec::new();
+            while i < adj.len() && adj[i].0 == from {
+                tos.push(adj[i].1);
+                i += 1;
+            }
+            result.push((from, tos));
+        }
+        result
+    };
+
+    // BFS from delegate_id, exploring ALL outgoing edges per node.
+    let mut queue: VecDeque<(UserId, Vec<UserId>, usize)> = VecDeque::new();
+    queue.push_back((delegate_id.clone(), vec![delegate_id.clone()], 0));
+    let mut visited: HashSet<UserId> = HashSet::new();
+    visited.insert(delegate_id.clone());
+
+    while let Some((current, path, depth)) = queue.pop_front() {
+        if depth >= 10 {
+            continue; // depth cap exceeded, don't explore further
+        }
+
+        // Find all outgoing edges from `current`
+        for (from, tos) in &groups {
+            if **from == current {
+                for to in tos {
+                    if *to == delegator_id {
+                        let mut cycle_path = path.clone();
+                        cycle_path.push((*to).clone());
+                        return Some(cycle_path);
+                    }
+                    if !visited.contains(*to) {
+                        visited.insert((*to).clone());
+                        let mut new_path = path.clone();
+                        new_path.push((*to).clone());
+                        queue.push_back(((*to).clone(), new_path, depth + 1));
+                    }
+                }
+                break; // each group has a unique from, so we can stop after match
+            }
+        }
+    }
+
+    None
 }
 
 /// Input for creating/updating an approval limit

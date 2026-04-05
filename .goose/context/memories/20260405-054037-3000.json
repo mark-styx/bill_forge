@@ -1,0 +1,17 @@
+{
+  "id": "20260405-054037-3000",
+  "memory_type": "decision",
+  "content": "Unified OCR failure recovery to use WorkQueueRepository abstraction instead of hardcoded UUID + raw SQL. Added QueueType::OcrError variant, updated workflow_repo.rs match, replaced upload_invoice error queuing block with get_by_type + move_item pattern, removed OCR_ERROR_QUEUE_ID constant, added tracing::error! for missing queue. Seed data in state.rs updated from \"exception\" to \"ocr_error\" queue_type. Integration tests in ocr_error_queue_test.rs.",
+  "summary": "OCR error queue: unified to use WorkQueueRepository with QueueType::OcrError variant",
+  "tags": [
+    "ocr",
+    "error-queue",
+    "workflow",
+    "queue-type",
+    "invoices"
+  ],
+  "relevance": 0.8,
+  "created_at": "2026-04-05T05:40:37.643653Z",
+  "updated_at": "2026-04-05T05:40:37.643653Z",
+  "recall_count": 0
+}

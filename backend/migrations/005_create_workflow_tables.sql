@@ -3,7 +3,7 @@
 
 -- Workflow rules table
 CREATE TABLE IF NOT EXISTS workflow_rules (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -16,13 +16,13 @@ CREATE TABLE IF NOT EXISTS workflow_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_workflow_rules_tenant ON workflow_rules(tenant_id);
-CREATE INDEX idx_workflow_rules_type ON workflow_rules(tenant_id, rule_type);
-CREATE INDEX idx_workflow_rules_active ON workflow_rules(tenant_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_workflow_rules_tenant ON workflow_rules(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_rules_type ON workflow_rules(tenant_id, rule_type);
+CREATE INDEX IF NOT EXISTS idx_workflow_rules_active ON workflow_rules(tenant_id, is_active);
 
 -- Work queues table
 CREATE TABLE IF NOT EXISTS work_queues (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -36,12 +36,12 @@ CREATE TABLE IF NOT EXISTS work_queues (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_work_queues_tenant ON work_queues(tenant_id);
-CREATE INDEX idx_work_queues_type ON work_queues(tenant_id, queue_type);
+CREATE INDEX IF NOT EXISTS idx_work_queues_tenant ON work_queues(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_work_queues_type ON work_queues(tenant_id, queue_type);
 
 -- Queue items table
 CREATE TABLE IF NOT EXISTS queue_items (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     queue_id UUID NOT NULL REFERENCES work_queues(id) ON DELETE CASCADE,
     invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
@@ -57,14 +57,14 @@ CREATE TABLE IF NOT EXISTS queue_items (
     notes TEXT
 );
 
-CREATE INDEX idx_queue_items_queue ON queue_items(queue_id);
-CREATE INDEX idx_queue_items_invoice ON queue_items(invoice_id);
-CREATE INDEX idx_queue_items_assigned ON queue_items(assigned_to);
-CREATE INDEX idx_queue_items_status ON queue_items(queue_id, status);
+CREATE INDEX IF NOT EXISTS idx_queue_items_queue ON queue_items(queue_id);
+CREATE INDEX IF NOT EXISTS idx_queue_items_invoice ON queue_items(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_queue_items_assigned ON queue_items(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(queue_id, status);
 
 -- Assignment rules table
 CREATE TABLE IF NOT EXISTS assignment_rules (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     queue_id UUID NOT NULL REFERENCES work_queues(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
@@ -77,12 +77,12 @@ CREATE TABLE IF NOT EXISTS assignment_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_assignment_rules_tenant ON assignment_rules(tenant_id);
-CREATE INDEX idx_assignment_rules_queue ON assignment_rules(queue_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_rules_tenant ON assignment_rules(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_rules_queue ON assignment_rules(queue_id);
 
 -- Approval requests table
 CREATE TABLE IF NOT EXISTS approval_requests (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
     rule_id UUID REFERENCES workflow_rules(id),
@@ -96,13 +96,13 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_approval_requests_invoice ON approval_requests(invoice_id);
-CREATE INDEX idx_approval_requests_status ON approval_requests(tenant_id, status);
-CREATE INDEX idx_approval_requests_expires ON approval_requests(expires_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_approval_requests_invoice ON approval_requests(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_expires ON approval_requests(expires_at) WHERE status = 'pending';
 
 -- Email action tokens table for secure email-based actions
 CREATE TABLE IF NOT EXISTS email_action_tokens (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
     action_type VARCHAR(100) NOT NULL,
@@ -115,13 +115,13 @@ CREATE TABLE IF NOT EXISTS email_action_tokens (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_email_tokens_hash ON email_action_tokens(token_hash);
-CREATE INDEX idx_email_tokens_expires ON email_action_tokens(expires_at) WHERE used_at IS NULL;
-CREATE INDEX idx_email_tokens_user ON email_action_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_hash ON email_action_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_expires ON email_action_tokens(expires_at) WHERE used_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON email_action_tokens(user_id);
 
 -- Approval delegation table
 CREATE TABLE IF NOT EXISTS approval_delegations (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     delegator_id UUID NOT NULL REFERENCES users(id),
     delegate_id UUID NOT NULL REFERENCES users(id),
@@ -132,13 +132,13 @@ CREATE TABLE IF NOT EXISTS approval_delegations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_delegations_delegator ON approval_delegations(delegator_id);
-CREATE INDEX idx_delegations_delegate ON approval_delegations(delegate_id);
-CREATE INDEX idx_delegations_active ON approval_delegations(tenant_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_delegations_delegator ON approval_delegations(delegator_id);
+CREATE INDEX IF NOT EXISTS idx_delegations_delegate ON approval_delegations(delegate_id);
+CREATE INDEX IF NOT EXISTS idx_delegations_active ON approval_delegations(tenant_id, is_active);
 
 -- Audit log for workflow actions
 CREATE TABLE IF NOT EXISTS workflow_audit_log (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(255) NOT NULL,
     entity_type VARCHAR(100) NOT NULL,
     entity_id UUID NOT NULL,
@@ -152,6 +152,6 @@ CREATE TABLE IF NOT EXISTS workflow_audit_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_log_entity ON workflow_audit_log(entity_type, entity_id);
-CREATE INDEX idx_audit_log_actor ON workflow_audit_log(actor_id);
-CREATE INDEX idx_audit_log_tenant ON workflow_audit_log(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON workflow_audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON workflow_audit_log(actor_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON workflow_audit_log(tenant_id, created_at);

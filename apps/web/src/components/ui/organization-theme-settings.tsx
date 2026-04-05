@@ -15,8 +15,8 @@ import {
 } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
 import { organizationThemeApi } from '@/lib/api';
-import { ColorPicker, GradientPicker, ColorSwatch } from './color-picker';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './card';
+import { ColorPicker, ColorSwatch } from './color-picker';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './card';
 import { Button } from './button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs';
 import { Switch } from './switch';
@@ -33,7 +33,6 @@ import {
   Check,
   Building2,
   Palette,
-  Image,
   FileJson,
   Sparkles,
   Globe,
@@ -56,7 +55,7 @@ interface OrganizationThemeSettingsProps {
 }
 
 export function OrganizationThemeSettings({
-  organizationId,
+  organizationId: _organizationId,
   organizationName = 'Your Organization',
   onSave,
   onCancel,
@@ -73,7 +72,6 @@ export function OrganizationThemeSettings({
     startPreview,
     stopPreview,
     applyPreviewColors,
-    getBrandGradient,
   } = useOrganizationTheme();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,29 +91,29 @@ export function OrganizationThemeSettings({
   const [faviconUrl, setFaviconUrl] = useState(organizationTheme?.branding?.faviconUrl || '');
 
   // Theme
-  const [selectedPresetId, setSelectedPresetId] = useState(organizationTheme?.presetId || presetId);
-  const [useCustomColors, setUseCustomColors] = useState(!!organizationTheme?.customColors);
+  const [selectedPresetId, setSelectedPresetId] = useState(organizationTheme?.preset_id || presetId);
+  const [useCustomColors, setUseCustomColors] = useState(!!organizationTheme?.custom_colors);
   const [colors, setColors] = useState<ThemeColors>(
-    organizationTheme?.customColors || getCurrentColors()
+    organizationTheme?.custom_colors || getCurrentColors()
   );
 
   // Gradient
   const [gradientEnabled, setGradientEnabled] = useState<boolean>(
-    organizationTheme?.gradientConfig?.enabled ?? true
+    organizationTheme?.gradient_config?.enabled ?? true
   );
   const [gradientType, setGradientType] = useState<'linear' | 'radial' | 'conic'>(
-    (organizationTheme?.gradientConfig?.type as 'linear' | 'radial' | 'conic') || 'linear'
+    (organizationTheme?.gradient_config?.type as 'linear' | 'radial' | 'conic') || 'linear'
   );
   const [gradientAngle, setGradientAngle] = useState(
-    organizationTheme?.gradientConfig?.angle || 135
+    organizationTheme?.gradient_config?.angle || 135
   );
 
   // Permissions
   const [enabledForAllUsers, setEnabledForAllUsers] = useState(
-    organizationTheme?.enabledForAllUsers ?? true
+    organizationTheme?.enabled_for_all_users ?? true
   );
   const [allowUserOverride, setAllowUserOverride] = useState(
-    organizationTheme?.allowUserOverride ?? true
+    organizationTheme?.allow_user_override ?? true
   );
 
   // Track changes
@@ -165,17 +163,17 @@ export function OrganizationThemeSettings({
       };
 
       const themeConfig: OrganizationThemeConfig = {
-        presetId: selectedPresetId,
-        customColors: useCustomColors ? colors : undefined,
+        preset_id: selectedPresetId,
+        custom_colors: useCustomColors ? colors : undefined,
         branding: {
           brandName,
           logoUrl: logoUrl || undefined,
           logoMark: logoMarkUrl || undefined,
           faviconUrl: faviconUrl || undefined,
         },
-        enabledForAllUsers,
-        allowUserOverride,
-        gradientConfig,
+        enabled_for_all_users: enabledForAllUsers,
+        allow_user_override: allowUserOverride,
+        gradient_config: gradientConfig,
       };
 
       // Save to API
@@ -210,15 +208,15 @@ export function OrganizationThemeSettings({
   // Export theme
   const handleExport = () => {
     const config = exportThemeConfig({
-      presetId: selectedPresetId,
-      customColors: useCustomColors ? colors : null,
+      preset_id: selectedPresetId,
+      custom_colors: useCustomColors ? colors : null,
       organizationTheme: {
-        presetId: selectedPresetId,
-        customColors: useCustomColors ? colors : undefined,
+        preset_id: selectedPresetId,
+        custom_colors: useCustomColors ? colors : undefined,
         branding: { brandName, logoUrl, logoMark: logoMarkUrl, faviconUrl },
-        enabledForAllUsers,
-        allowUserOverride,
-        gradientConfig: { enabled: gradientEnabled, type: gradientType, angle: gradientAngle },
+        enabled_for_all_users: enabledForAllUsers,
+        allow_user_override: allowUserOverride,
+        gradient_config: { enabled: gradientEnabled, type: gradientType, angle: gradientAngle },
       },
     });
 
@@ -246,12 +244,12 @@ export function OrganizationThemeSettings({
       const imported = importThemeConfig(content);
 
       if (imported) {
-        setSelectedPresetId(imported.presetId);
-        if (imported.customColors) {
-          setColors(imported.customColors);
+        setSelectedPresetId(imported.preset_id);
+        if (imported.custom_colors) {
+          setColors(imported.custom_colors);
           setUseCustomColors(true);
         } else {
-          const preset = themePresets.find((p) => p.id === imported.presetId);
+          const preset = themePresets.find((p) => p.id === imported.preset_id);
           if (preset) {
             setColors(preset.colors);
           }
@@ -622,6 +620,7 @@ export function OrganizationThemeSettings({
                     <Label className="text-sm font-medium mb-3 block">{item.label}</Label>
                     <div className="flex items-center justify-center p-4 bg-background rounded-lg border border-border min-h-[80px] mb-3">
                       {item.url ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
                         <img src={item.url} alt={item.label} className={`${item.size} object-contain`} />
                       ) : (
                         <div
@@ -672,6 +671,7 @@ export function OrganizationThemeSettings({
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 {logoMarkUrl ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
                   <img src={logoMarkUrl} alt="Logo" className="w-10 h-10 object-contain" />
                 ) : (
                   <div className="org-brand-mark">{brandName?.[0]?.toUpperCase() || 'B'}</div>
