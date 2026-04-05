@@ -228,6 +228,26 @@ impl PaymentRequestRepositoryImpl {
             )));
         }
 
+        // Check for duplicates already in this payment request
+        let already_added: std::collections::HashSet<Uuid> = sqlx::query_scalar(
+            r#"SELECT invoice_id FROM payment_request_items
+               WHERE payment_request_id = $1 AND invoice_id = ANY($2)"#,
+        )
+        .bind(request_id)
+        .bind(invoice_ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to check for duplicate invoices: {}", e)))?
+        .into_iter()
+        .collect();
+
+        if !already_added.is_empty() {
+            return Err(Error::Validation(format!(
+                "Some invoices are already in this payment request: {:?}",
+                already_added.into_iter().collect::<Vec<_>>()
+            )));
+        }
+
         let now = Utc::now();
         let mut items = Vec::new();
 
@@ -263,10 +283,9 @@ impl PaymentRequestRepositoryImpl {
 
         // Recompute aggregates from all items
         let all_items: Vec<(i64, Option<chrono::NaiveDate>, Option<Uuid>)> = sqlx::query_as(
-            r#"SELECT i.total_amount_cents, inv.due_date, inv.vendor_id
+            r#"SELECT i.total_amount_cents, i.due_date, i.vendor_id
                FROM payment_request_items pri
                JOIN invoices i ON i.id = pri.invoice_id
-               LEFT JOIN invoices inv ON inv.id = pri.invoice_id
                WHERE pri.payment_request_id = $1"#,
         )
         .bind(request_id)
@@ -413,12 +432,18 @@ impl PaymentRequestRepositoryImpl {
     }
 
     /// Submit a draft payment request, transitioning status and updating invoices.
+    /// Both operations are wrapped in a single transaction to prevent inconsistent state
+    /// where the request is marked submitted but invoices remain ready_for_payment.
     pub async fn submit_payment_request(
         &self,
         tenant_id: &TenantId,
         id: Uuid,
     ) -> Result<PaymentRequest> {
         let now = Utc::now();
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            Error::Database(format!("Failed to begin transaction: {}", e))
+        })?;
 
         let result = sqlx::query(
             r#"UPDATE payment_requests
@@ -429,7 +454,7 @@ impl PaymentRequestRepositoryImpl {
         .bind(now)
         .bind(id)
         .bind(tenant_id.as_uuid())
-        .execute(&*self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to submit payment request: {}", e)))?;
 
@@ -440,7 +465,7 @@ impl PaymentRequestRepositoryImpl {
             )
             .bind(id)
             .bind(tenant_id.as_uuid())
-            .fetch_optional(&*self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| Error::Database(format!("Failed to check payment request: {}", e)))?;
 
@@ -460,7 +485,7 @@ impl PaymentRequestRepositoryImpl {
             }
         }
 
-        // Update invoice processing_status to 'payment_submitted'
+        // Update invoice processing_status to 'payment_submitted' within same transaction
         sqlx::query(
             r#"UPDATE invoices
                SET processing_status = 'payment_submitted', updated_at = $1
@@ -471,9 +496,13 @@ impl PaymentRequestRepositoryImpl {
         .bind(now)
         .bind(id)
         .bind(tenant_id.as_uuid())
-        .execute(&*self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to update invoice statuses: {}", e)))?;
+
+        tx.commit().await.map_err(|e| {
+            Error::Database(format!("Failed to commit submit transaction: {}", e))
+        })?;
 
         // Fetch and return the updated request
         let row = sqlx::query_as::<_, RequestRow>(

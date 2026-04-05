@@ -32,5 +32,6 @@ CREATE TABLE IF NOT EXISTS payment_request_items (
 CREATE INDEX IF NOT EXISTS idx_payment_requests_tenant ON payment_requests(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_payment_requests_status ON payment_requests(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_payment_requests_vendor ON payment_requests(tenant_id, vendor_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_request_items_unique ON payment_request_items(payment_request_id, invoice_id);
 CREATE INDEX IF NOT EXISTS idx_payment_request_items_request ON payment_request_items(payment_request_id);
 CREATE INDEX IF NOT EXISTS idx_payment_request_items_invoice ON payment_request_items(invoice_id);
