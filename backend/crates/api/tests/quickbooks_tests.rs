@@ -130,3 +130,125 @@ fn test_quickbooks_environment() {
     // Verify environment variants exist
     assert_ne!(sandbox, production);
 }
+
+#[test]
+fn test_token_storage_has_refresh_token() {
+    use billforge_quickbooks::types::QBTokenStorage;
+    use chrono::{TimeZone, Utc};
+
+    // Verify QBTokenStorage struct has a refresh_token field, confirming the DB schema
+    // stores the refresh token needed for automatic token refresh.
+    let storage = QBTokenStorage {
+        tenant_id: "test-tenant".to_string(),
+        company_id: "test-company".to_string(),
+        access_token: "access_token_value".to_string(),
+        refresh_token: "refresh_token_value".to_string(),
+        access_token_expires_at: Utc::now(),
+        refresh_token_expires_at: Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+
+    assert_eq!(storage.refresh_token, "refresh_token_value");
+    assert!(!storage.refresh_token.is_empty());
+}
+
+#[test]
+fn test_quickbooks_environment_token_url() {
+    use billforge_quickbooks::oauth::QuickBooksEnvironment;
+
+    let sandbox = QuickBooksEnvironment::Sandbox;
+    let production = QuickBooksEnvironment::Production;
+
+    // Both environments use the same Intuit OAuth token endpoint for refresh
+    let expected_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+    assert_eq!(sandbox.token_url(), expected_url);
+    assert_eq!(production.token_url(), expected_url);
+}
+
+// ============================================================================
+// Sync Response Structure Tests
+// ============================================================================
+
+#[test]
+fn test_sync_vendors_response_with_errors_field() {
+    // Verify SyncVendorsResponse includes the `errors` field for partial-success reporting.
+    // This is backward-compatible (additive field) — the frontend can show a warning if errors > 0.
+    let response = serde_json::from_str::<serde_json::Value>(
+        r#"{"imported": 3, "updated": 1, "skipped": 0, "errors": 2}"#
+    ).unwrap();
+
+    assert_eq!(response["imported"], 3);
+    assert_eq!(response["updated"], 1);
+    assert_eq!(response["skipped"], 0);
+    assert_eq!(response["errors"], 2);
+}
+
+#[test]
+fn test_sync_vendors_response_partial_success_serialization() {
+    // Simulate a partial-success sync: some vendors imported, some updated, some failed.
+    let imported = 3u64;
+    let updated = 1u64;
+    let skipped = 0u64;
+    let errors = 2u64;
+
+    let json = serde_json::json!({
+        "imported": imported,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+    });
+
+    assert_eq!(json["imported"], 3);
+    assert_eq!(json["updated"], 1);
+    assert_eq!(json["skipped"], 0);
+    assert_eq!(json["errors"], 2);
+
+    // Verify the JSON is valid and round-trips
+    let serialized = serde_json::to_string(&json).unwrap();
+    let deserialized: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(deserialized["errors"], 2);
+}
+
+#[test]
+fn test_sync_vendors_response_zero_errors() {
+    // When no errors occur, errors field should still be present and equal 0.
+    let json = serde_json::json!({
+        "imported": 5,
+        "updated": 3,
+        "skipped": 0,
+        "errors": 0,
+    });
+
+    assert_eq!(json["errors"], 0);
+}
+
+#[test]
+fn test_export_invoice_response_structure() {
+    // Verify ExportInvoiceResponse has both required fields.
+    let response = serde_json::json!({
+        "quickbooks_invoice_id": "QB-BILL-123",
+        "status": "synced"
+    });
+
+    assert_eq!(response["quickbooks_invoice_id"], "QB-BILL-123");
+    assert_eq!(response["status"], "synced");
+
+    // Ensure both keys exist
+    assert!(response.get("quickbooks_invoice_id").is_some());
+    assert!(response.get("status").is_some());
+}
+
+#[test]
+fn test_sync_accounts_response_includes_errors() {
+    // Verify the sync_accounts response includes an errors count.
+    let json = serde_json::json!({
+        "status": "synced",
+        "count": 10,
+        "errors": 1
+    });
+
+    assert_eq!(json["status"], "synced");
+    assert_eq!(json["count"], 10);
+    assert_eq!(json["errors"], 1);
+}

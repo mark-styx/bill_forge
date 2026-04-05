@@ -16,9 +16,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use billforge_core::TenantId;
 use billforge_quickbooks::{QuickBooksClient, QuickBooksOAuth, QuickBooksOAuthConfig, QuickBooksEnvironment};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::{error, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -69,6 +71,8 @@ pub struct SyncVendorsResponse {
     pub updated: u64,
     /// Number of vendors skipped
     pub skipped: u64,
+    /// Number of vendors that failed to sync
+    pub errors: u64,
 }
 
 /// Account mapping
@@ -147,7 +151,10 @@ async fn quickbooks_connect(
     .bind(expires_at)
     .execute(&*pool)
     .await
-    .ok();  // Ignore errors if table doesn't exist yet
+    .map_err(|e| {
+        error!(error = %e, "Failed to store OAuth state for tenant {}", tenant.tenant_id.as_str());
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
     let oauth_url = oauth.authorization_url(&state_token);
     Ok(Redirect::temporary(&oauth_url))
@@ -199,7 +206,10 @@ async fn quickbooks_callback(
     .bind(tenant_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .ok()
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch OAuth state for tenant {}", tenant_id.as_str());
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
     .flatten();
 
     let is_valid = stored_state
@@ -243,7 +253,12 @@ async fn quickbooks_callback(
         },
     );
 
-    let company_info = client.get_company_info().await.ok();
+    let company_info = client.get_company_info().await
+        .map_err(|e| {
+            warn!(error = %e, "Failed to fetch company info from QuickBooks — using defaults");
+            e
+        })
+        .ok();
     let company_name = company_info
         .and_then(|info| info.get("CompanyName")?.as_str().map(|s| s.to_string()));
 
@@ -280,11 +295,13 @@ async fn quickbooks_callback(
     .map_err(|e| billforge_core::Error::Database(format!("Failed to store QuickBooks tokens: {}", e)))?;
 
     // Clean up state token
-    sqlx::query("DELETE FROM quickbooks_oauth_states WHERE tenant_id = $1")
+    if let Err(e) = sqlx::query("DELETE FROM quickbooks_oauth_states WHERE tenant_id = $1")
         .bind(tenant_id.as_uuid())
         .execute(&*pool)
         .await
-        .ok();
+    {
+        warn!(error = %e, "Failed to clean up OAuth state — will expire naturally");
+    }
 
     // Redirect to success page
     Ok(Redirect::temporary(&format!("{}/dashboard?quickbooks=connected", state.config.frontend_url)))
@@ -314,7 +331,10 @@ async fn quickbooks_disconnect(
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .ok()
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch connection for disconnect");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
     .flatten();
 
     if let Some((refresh_token,)) = connection {
@@ -330,16 +350,20 @@ async fn quickbooks_disconnect(
                 },
             });
 
-            oauth.revoke_token(&refresh_token).await.ok();
+            if let Err(e) = oauth.revoke_token(&refresh_token).await {
+                warn!(error = %e, "Failed to revoke QuickBooks token — it will expire naturally");
+            }
         }
     }
 
     // Delete connection from database
-    sqlx::query("DELETE FROM quickbooks_connections WHERE tenant_id = $1")
+    if let Err(e) = sqlx::query("DELETE FROM quickbooks_connections WHERE tenant_id = $1")
         .bind(tenant.tenant_id.as_uuid())
         .execute(&*pool)
         .await
-        .ok();
+    {
+        warn!(error = %e, "Failed to delete QuickBooks connection record");
+    }
 
     Ok(Json(serde_json::json!({ "status": "disconnected" })))
 }
@@ -370,7 +394,10 @@ async fn quickbooks_status(
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .ok()
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch connection status");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
     .flatten();
 
     let status = if let Some((company_id, company_name, sync_enabled, last_sync_at)) = connection {
@@ -409,39 +436,10 @@ async fn quickbooks_status(
 async fn sync_vendors(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
-    Json(request): Json<SyncVendorsRequest>,
+    Json(_request): Json<SyncVendorsRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get QuickBooks connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT company_id, access_token, access_token_expires_at FROM quickbooks_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (company_id, access_token, token_expires_at) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks not connected or sync disabled".to_string()))?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation("QuickBooks token expired. Please reconnect.".to_string()).into());
-    }
-
-    let qb_config = state.config.quickbooks.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks integration not configured".to_string()))?;
-
-    let client = QuickBooksClient::new(
-        access_token,
-        company_id,
-        match qb_config.environment {
-            crate::config::QuickBooksEnvironment::Sandbox => QuickBooksEnvironment::Sandbox,
-            crate::config::QuickBooksEnvironment::Production => QuickBooksEnvironment::Production,
-        },
-    );
+    let client = get_authenticated_qb_client(&state, &tenant.tenant_id).await?;
 
     // Create sync log entry
     let sync_id = Uuid::new_v4();
@@ -453,7 +451,10 @@ async fn sync_vendors(
     .bind(tenant.tenant_id.as_uuid())
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(error = %e, "Failed to create vendor sync log");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
     // Fetch vendors from QuickBooks (paginate through all results)
     let mut all_vendors = Vec::new();
@@ -475,6 +476,7 @@ async fn sync_vendors(
     let mut imported = 0u64;
     let mut updated = 0u64;
     let skipped = 0u64;
+    let mut errors = 0u64;
 
     // Sync each vendor
     for qb_vendor in all_vendors {
@@ -488,7 +490,10 @@ async fn sync_vendors(
         .bind(&qb_vendor.Id)
         .fetch_optional(&*pool)
         .await
-        .ok()
+        .map_err(|e| {
+            error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to look up vendor mapping");
+            billforge_core::Error::Internal(format!("Database error: {}", e))
+        })?
         .flatten();
 
         if let Some((vendor_id,)) = existing {
@@ -496,7 +501,7 @@ async fn sync_vendors(
             let email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
             let phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
 
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
                  WHERE id = $1"
             )
@@ -506,10 +511,14 @@ async fn sync_vendors(
             .bind(phone)
             .execute(&*pool)
             .await
-            .ok();
+            {
+                error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to update vendor");
+                errors += 1;
+                continue;
+            }
 
             // Update mapping
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE quickbooks_vendor_mappings
                  SET quickbooks_vendor_name = $3, sync_token = $4, last_synced_at = NOW(), updated_at = NOW()
                  WHERE tenant_id = $1 AND quickbooks_vendor_id = $2"
@@ -520,7 +529,11 @@ async fn sync_vendors(
             .bind(&qb_vendor.SyncToken)
             .execute(&*pool)
             .await
-            .ok();
+            {
+                error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to update vendor mapping");
+                errors += 1;
+                continue;
+            }
 
             updated += 1;
         } else {
@@ -530,7 +543,7 @@ async fn sync_vendors(
             let phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
             let vendor_type = if qb_vendor.CompanyName.is_some() { "business" } else { "contractor" };
 
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO vendors (id, name, vendor_type, email, phone, status, created_at, updated_at)
                  VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())"
             )
@@ -542,10 +555,14 @@ async fn sync_vendors(
             .bind(if qb_vendor.Active { "active" } else { "inactive" })
             .execute(&*pool)
             .await
-            .ok();
+            {
+                error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to insert vendor");
+                errors += 1;
+                continue;
+            }
 
             // Create mapping
-            sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT INTO quickbooks_vendor_mappings
                  (tenant_id, quickbooks_vendor_id, billforge_vendor_id, quickbooks_vendor_name, sync_token, last_synced_at, created_at, updated_at)
                  VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())"
@@ -557,7 +574,11 @@ async fn sync_vendors(
             .bind(&qb_vendor.SyncToken)
             .execute(&*pool)
             .await
-            .ok();
+            {
+                error!(error = %e, vendor_id = %qb_vendor.Id, "Failed to insert vendor mapping");
+                errors += 1;
+                continue;
+            }
 
             imported += 1;
         }
@@ -575,7 +596,10 @@ async fn sync_vendors(
     .bind(updated as i32)
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(error = %e, "Failed to complete vendor sync log");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
     // Update last sync time on connection
     sqlx::query(
@@ -584,12 +608,16 @@ async fn sync_vendors(
     .bind(tenant.tenant_id.as_uuid())
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(error = %e, "Failed to update last sync time");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
     let response = SyncVendorsResponse {
         imported,
         updated,
         skipped,
+        errors,
     };
 
     Ok(Json(response))
@@ -611,36 +639,7 @@ async fn sync_accounts(
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get QuickBooks connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT company_id, access_token, access_token_expires_at FROM quickbooks_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (company_id, access_token, token_expires_at) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks not connected or sync disabled".to_string()))?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation("QuickBooks token expired. Please reconnect.".to_string()).into());
-    }
-
-    let qb_config = state.config.quickbooks.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks integration not configured".to_string()))?;
-
-    let client = QuickBooksClient::new(
-        access_token,
-        company_id,
-        match qb_config.environment {
-            crate::config::QuickBooksEnvironment::Sandbox => QuickBooksEnvironment::Sandbox,
-            crate::config::QuickBooksEnvironment::Production => QuickBooksEnvironment::Production,
-        },
-    );
+    let client = get_authenticated_qb_client(&state, &tenant.tenant_id).await?;
 
     // Create sync log entry
     let sync_id = Uuid::new_v4();
@@ -652,7 +651,10 @@ async fn sync_accounts(
     .bind(tenant.tenant_id.as_uuid())
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(error = %e, "Failed to create account sync log");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
     // Fetch accounts from QuickBooks
     let mut all_accounts = Vec::new();
@@ -678,10 +680,11 @@ async fn sync_accounts(
         .collect();
 
     let mut created = 0u64;
+    let mut errors = 0u64;
 
     // Upsert account mappings
     for qb_account in expense_accounts {
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT INTO quickbooks_account_mappings
              (tenant_id, quickbooks_account_id, quickbooks_account_name, quickbooks_account_type, billforge_gl_code, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $2, NOW(), NOW())
@@ -696,7 +699,11 @@ async fn sync_accounts(
         .bind(&qb_account.AccountType)
         .execute(&*pool)
         .await
-        .ok();
+        {
+            error!(error = %e, account_id = %qb_account.Id, "Failed to upsert account mapping");
+            errors += 1;
+            continue;
+        }
 
         created += 1;
     }
@@ -711,9 +718,12 @@ async fn sync_accounts(
     .bind(created as i32)
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(error = %e, "Failed to complete account sync log");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
 
-    Ok(Json(serde_json::json!({ "status": "synced", "count": created })))
+    Ok(Json(serde_json::json!({ "status": "synced", "count": created, "errors": errors })))
 }
 
 /// Export invoice to QuickBooks
@@ -736,24 +746,6 @@ async fn export_invoice_to_quickbooks(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Get QuickBooks connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT company_id, access_token, access_token_expires_at FROM quickbooks_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (company_id, access_token, token_expires_at) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks not connected or sync disabled".to_string()))?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation("QuickBooks token expired. Please reconnect.".to_string()).into());
-    }
-
     // Get invoice from database
     let invoice_id: billforge_core::domain::InvoiceId = request.invoice_id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
@@ -765,7 +757,10 @@ async fn export_invoice_to_quickbooks(
     .bind(invoice_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .ok()
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch invoice for export");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
     .flatten();
 
     let (vendor_name, invoice_number, total_cents, due_date, po_number) = invoice
@@ -784,24 +779,17 @@ async fn export_invoice_to_quickbooks(
     .bind(invoice_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .ok()
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch vendor mapping for export");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
     .flatten();
 
     let quickbooks_vendor_id = vendor_mapping
         .map(|(id,)| id)
         .ok_or_else(|| billforge_core::Error::Validation("Vendor not found in QuickBooks. Please sync vendors first.".to_string()))?;
 
-    let qb_config = state.config.quickbooks.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("QuickBooks integration not configured".to_string()))?;
-
-    let client = QuickBooksClient::new(
-        access_token,
-        company_id,
-        match qb_config.environment {
-            crate::config::QuickBooksEnvironment::Sandbox => QuickBooksEnvironment::Sandbox,
-            crate::config::QuickBooksEnvironment::Production => QuickBooksEnvironment::Production,
-        },
-    );
+    let client = get_authenticated_qb_client(&state, &tenant.tenant_id).await?;
 
     // Build QuickBooks bill
     use billforge_quickbooks::{QBBill, QBBillLine, QBAccountBasedExpenseLineDetail, QBReference};
@@ -861,7 +849,18 @@ async fn export_invoice_to_quickbooks(
     .bind(&created_bill.Id)
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| {
+        error!(
+            error = %e,
+            quickbooks_bill_id = %created_bill.Id,
+            invoice_id = %invoice_id.as_uuid(),
+            "Invoice exported to QuickBooks but failed to save export record"
+        );
+        billforge_core::Error::Internal(format!(
+            "Invoice exported to QuickBooks (bill ID: {}) but failed to save export record. Contact support.",
+            created_bill.Id
+        ))
+    })?;
 
     let response = ExportInvoiceResponse {
         quickbooks_invoice_id: created_bill.Id,
@@ -899,7 +898,7 @@ async fn get_account_mappings(
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to get account mappings: {}", e)))?
     .into_iter()
-    .map(|(qb_id, bf_id, name, acct_type, dept)| AccountMapping {
+    .map(|(qb_id, bf_id, name, acct_type, _dept)| AccountMapping {
         billforge_account_id: bf_id,
         quickbooks_account_id: qb_id,
         account_name: name,
@@ -930,7 +929,7 @@ async fn update_account_mappings(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     for mapping in mappings {
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             "UPDATE quickbooks_account_mappings
              SET billforge_gl_code = $3, updated_at = NOW()
              WHERE tenant_id = $1 AND quickbooks_account_id = $2"
@@ -940,8 +939,104 @@ async fn update_account_mappings(
         .bind(&mapping.billforge_account_id)
         .execute(&*pool)
         .await
-        .ok();
+        {
+            error!(error = %e, account_id = %mapping.quickbooks_account_id, "Failed to update account mapping");
+        }
     }
 
     Ok(Json(serde_json::json!({ "status": "updated" })))
+}
+
+/// Build a QuickBooksOAuth instance from the app's QuickBooks config.
+fn build_qb_oauth(
+    qb_config: &crate::config::QuickBooksConfig,
+) -> QuickBooksOAuth {
+    QuickBooksOAuth::new(QuickBooksOAuthConfig {
+        client_id: qb_config.client_id.clone(),
+        client_secret: qb_config.client_secret.clone(),
+        redirect_uri: qb_config.redirect_uri.clone(),
+        environment: match qb_config.environment {
+            crate::config::QuickBooksEnvironment::Sandbox => QuickBooksEnvironment::Sandbox,
+            crate::config::QuickBooksEnvironment::Production => QuickBooksEnvironment::Production,
+        },
+    })
+}
+
+/// Map from the app config environment enum to the quickbooks crate environment enum.
+fn qb_environment(qb_config: &crate::config::QuickBooksConfig) -> QuickBooksEnvironment {
+    match qb_config.environment {
+        crate::config::QuickBooksEnvironment::Sandbox => QuickBooksEnvironment::Sandbox,
+        crate::config::QuickBooksEnvironment::Production => QuickBooksEnvironment::Production,
+    }
+}
+
+/// Fetch the QuickBooks connection for a tenant, automatically refreshing the access token
+/// if it is expired or near-expiry (within 5 minutes). Returns a ready-to-use `QuickBooksClient`.
+async fn get_authenticated_qb_client(
+    state: &AppState,
+    tenant_id: &TenantId,
+) -> crate::error::ApiResult<QuickBooksClient> {
+    let pool = state.db.tenant(tenant_id).await?;
+
+    // Fetch connection including refresh_token
+    let connection: Option<(String, String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT company_id, access_token, refresh_token, access_token_expires_at \
+         FROM quickbooks_connections WHERE tenant_id = $1 AND sync_enabled = true"
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| {
+        error!(error = %e, "Failed to fetch QuickBooks connection for token refresh");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?
+    .flatten();
+
+    let (company_id, mut access_token, refresh_token_val, token_expires_at) = connection
+        .ok_or_else(|| billforge_core::Error::Validation(
+            "QuickBooks not connected or sync disabled".to_string()
+        ))?;
+
+    // Refresh if token is expired or will expire within 5 minutes
+    if token_expires_at <= Utc::now() + Duration::minutes(5) {
+        let qb_config = state.config.quickbooks.as_ref()
+            .ok_or_else(|| billforge_core::Error::Validation(
+                "QuickBooks integration not configured".to_string()
+            ))?;
+
+        let oauth = build_qb_oauth(qb_config);
+
+        let new_tokens = oauth.refresh_token(&refresh_token_val).await
+            .map_err(|e| billforge_core::Error::Validation(
+                format!("QuickBooks token refresh failed: {}. Please reconnect.", e)
+            ))?;
+
+        // Persist refreshed tokens
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE quickbooks_connections \
+             SET access_token = $2, refresh_token = $3, \
+                 access_token_expires_at = $4, refresh_token_expires_at = $5, updated_at = NOW() \
+             WHERE tenant_id = $1"
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(&new_tokens.access_token)
+        .bind(&new_tokens.refresh_token)
+        .bind(now + Duration::seconds(new_tokens.expires_in))
+        .bind(now + Duration::seconds(new_tokens.x_refresh_token_expires_in))
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(
+            format!("Failed to update tokens: {}", e)
+        ))?;
+
+        access_token = new_tokens.access_token;
+    }
+
+    let qb_config = state.config.quickbooks.as_ref()
+        .ok_or_else(|| billforge_core::Error::Validation(
+            "QuickBooks integration not configured".to_string()
+        ))?;
+
+    Ok(QuickBooksClient::new(access_token, company_id, qb_environment(qb_config)))
 }
