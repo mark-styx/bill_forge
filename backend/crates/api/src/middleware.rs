@@ -11,6 +11,62 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+/// Paths that do not require an Authorization header.
+/// Prefix-matched entries end with `/`.
+const PUBLIC_PATHS: &[&str] = &[
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/provision",
+    "/api/v1/auth/refresh",
+    "/api/v1/actions/",
+    "/api/v1/edi/webhook/",
+    "/api/v1/billing/plans",
+];
+
+fn is_public_path(path: &str) -> bool {
+    for prefix in PUBLIC_PATHS {
+        if prefix.ends_with('/') {
+            if path.starts_with(prefix) {
+                return true;
+            }
+        } else if *prefix == path {
+            return true;
+        }
+    }
+    false
+}
+
+/// Gatekeeper middleware that rejects requests to non-public API paths
+/// when no `Authorization: Bearer ...` header is present.
+///
+/// This does NOT validate the token - it only checks for header presence.
+/// Token validation remains the responsibility of handler-level extractors.
+pub async fn require_auth(request: Request<Body>, next: Next) -> Response<Body> {
+    let path = request.uri().path();
+
+    if is_public_path(path) {
+        return next.run(request).await;
+    }
+
+    let has_auth = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.starts_with("Bearer "))
+        .unwrap_or(false);
+
+    if has_auth {
+        return next.run(request).await;
+    }
+
+    warn!(path = %path, "Unauthenticated request to protected endpoint");
+
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .body(Body::from(r#"{"error":"unauthenticated"}"#))
+        .unwrap()
+}
+
 /// Request logging middleware
 pub async fn log_request(request: Request<Body>, next: Next) -> Response<Body> {
     let method = request.method().clone();

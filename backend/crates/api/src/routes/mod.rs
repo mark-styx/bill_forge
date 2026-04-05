@@ -31,7 +31,7 @@ pub mod theme;
 pub mod ai;
 pub mod billing;
 
-use crate::middleware::{rate_limit_auth, RateLimiterState};
+use crate::middleware::{rate_limit_auth, require_auth, RateLimiterState};
 use crate::state::AppState;
 use crate::metrics;
 use axum::{middleware, routing::get, Extension, Router};
@@ -133,4 +133,6 @@ fn api_routes() -> Router<AppState> {
         .merge(vendor_statements::routes())
         // Payment Requests
         .nest("/payment-requests", payment_requests::routes())
+        // Require auth on all API routes (public paths are exempted inside the middleware)
+        .layer(middleware::from_fn(require_auth))
 }
