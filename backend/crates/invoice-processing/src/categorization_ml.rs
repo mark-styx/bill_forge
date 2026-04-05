@@ -425,8 +425,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_overall_confidence_all_fields_present() {
+    #[tokio::test]
+    async fn test_overall_confidence_all_fields_present() {
         let categorizer = MLCategorizer::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
             "test-key".to_string(),
@@ -455,8 +455,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_overall_confidence_one_field_missing() {
+    #[tokio::test]
+    async fn test_overall_confidence_one_field_missing() {
         let categorizer = MLCategorizer::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
             "test-key".to_string(),
@@ -484,8 +484,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_overall_confidence_two_fields_missing() {
+    #[tokio::test]
+    async fn test_overall_confidence_two_fields_missing() {
         let categorizer = MLCategorizer::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
             "test-key".to_string(),
@@ -508,8 +508,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_overall_confidence_no_fields() {
+    #[tokio::test]
+    async fn test_overall_confidence_no_fields() {
         let categorizer = MLCategorizer::new(
             PgPool::connect_lazy("postgres://localhost/test").unwrap(),
             "test-key".to_string(),
