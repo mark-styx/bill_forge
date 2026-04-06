@@ -11,6 +11,11 @@ pub struct MetadataDatabase {
 }
 
 impl MetadataDatabase {
+    /// Create from an existing connection pool (useful for testing)
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     pub async fn new(database_url: &str) -> Result<Self> {
         let pool = PgPool::connect(database_url)
             .await

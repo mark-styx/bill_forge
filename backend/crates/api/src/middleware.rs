@@ -2,9 +2,11 @@
 
 use axum::{
     body::Body,
+    extract::State,
     http::{Request, Response, StatusCode},
     middleware::Next,
 };
+use billforge_auth::AuthService;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,34 +38,57 @@ fn is_public_path(path: &str) -> bool {
     false
 }
 
-/// Gatekeeper middleware that rejects requests to non-public API paths
-/// when no `Authorization: Bearer ...` header is present.
+/// Auth middleware that validates JWT tokens on all non-public API paths.
 ///
-/// This does NOT validate the token - it only checks for header presence.
-/// Token validation remains the responsibility of handler-level extractors.
-pub async fn require_auth(request: Request<Body>, next: Next) -> Response<Body> {
+/// On success, the validated `UserContext` is stored in request extensions
+/// so downstream extractors can reuse it without re-validating.
+pub async fn require_auth(
+    State(auth): State<Arc<AuthService>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
     let path = request.uri().path();
 
     if is_public_path(path) {
         return next.run(request).await;
     }
 
-    let has_auth = request
+    let token = request
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.starts_with("Bearer "))
-        .unwrap_or(false);
+        .and_then(|s| s.strip_prefix("Bearer "));
 
-    if has_auth {
-        return next.run(request).await;
+    let token = match token {
+        Some(t) => t,
+        None => {
+            warn!(path = %path, "Missing or malformed Authorization header");
+            return json_error_response(StatusCode::UNAUTHORIZED, "unauthenticated");
+        }
+    };
+
+    match auth.validate_token(token).await {
+        Ok(user_context) => {
+            request.extensions_mut().insert(user_context);
+            next.run(request).await
+        }
+        Err(e) => {
+            warn!(path = %path, error = %e, "Token validation failed");
+            match e {
+                billforge_core::Error::TokenExpired => {
+                    json_error_response(StatusCode::UNAUTHORIZED, "token_expired")
+                }
+                _ => json_error_response(StatusCode::UNAUTHORIZED, "invalid_token"),
+            }
+        }
     }
+}
 
-    warn!(path = %path, "Unauthenticated request to protected endpoint");
-
+fn json_error_response(status: StatusCode, error: &str) -> Response<Body> {
     Response::builder()
-        .status(StatusCode::UNAUTHORIZED)
-        .body(Body::from(r#"{"error":"unauthenticated"}"#))
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(format!(r#"{{"error":"{}"}}"#, error)))
         .unwrap()
 }
 
