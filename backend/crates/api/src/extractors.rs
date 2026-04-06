@@ -21,21 +21,24 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Check for pre-validated user context from require_auth middleware
+        if let Some(user_context) = parts.extensions.get::<UserContext>().cloned() {
+            return Ok(Self(user_context));
+        }
+
+        // Fallback: validate token manually (for routes not behind require_auth)
         let app_state = AppState::from_ref(state);
 
-        // Get authorization header
         let auth_header = parts
             .headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .ok_or(ApiError(Error::Unauthenticated))?;
 
-        // Extract bearer token
         let token = auth_header
             .strip_prefix("Bearer ")
             .ok_or_else(|| ApiError(Error::InvalidToken("Invalid authorization header".to_string())))?;
 
-        // Validate token and get user context
         let user_context = app_state.auth.validate_token(token).await?;
 
         Ok(Self(user_context))

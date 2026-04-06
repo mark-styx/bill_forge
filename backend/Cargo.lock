@@ -934,6 +934,7 @@ dependencies = [
  "dotenvy",
  "hex",
  "http-body-util",
+ "jsonwebtoken",
  "lazy_static",
  "prometheus",
  "regex",

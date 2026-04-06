@@ -2,6 +2,7 @@
 
 use crate::Config;
 use anyhow::Result;
+use axum::extract::FromRef;
 use billforge_auth::AuthService;
 use billforge_core::{Module, Role, TenantId, traits::{AuditService, StorageService}};
 use billforge_db::{DatabaseManager, LocalStorageService};
@@ -19,6 +20,12 @@ pub struct AppState {
     pub audit: Arc<AuditRepositoryImpl>,
     pub email: Arc<dyn EmailService>,
     pub config: Arc<Config>,
+}
+
+impl FromRef<AppState> for Arc<AuthService> {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth.clone()
+    }
 }
 
 impl AppState {

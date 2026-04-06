@@ -53,7 +53,7 @@ pub fn create_router(state: AppState) -> Router {
         // Prometheus metrics endpoint
         .route("/metrics", get(metrics_handler))
         // API routes
-        .nest("/api/v1", api_routes())
+        .nest("/api/v1", api_routes(state.clone()))
         .with_state(state)
 }
 
@@ -69,7 +69,7 @@ async fn landing_page() -> axum::response::Html<String> {
 }
 
 /// API v1 routes
-fn api_routes() -> Router<AppState> {
+fn api_routes(state: AppState) -> Router<AppState> {
     Router::new()
         // Authentication (rate limited: 20 requests per 60 seconds per source IP)
         .nest("/auth", auth::routes()
@@ -133,6 +133,6 @@ fn api_routes() -> Router<AppState> {
         .merge(vendor_statements::routes())
         // Payment Requests
         .nest("/payment-requests", payment_requests::routes())
-        // Require auth on all API routes (public paths are exempted inside the middleware)
-        .layer(middleware::from_fn(require_auth))
+        // Validate JWT on all API routes (public paths are exempted inside the middleware)
+        .layer(middleware::from_fn_with_state(state, require_auth))
 }
