@@ -218,6 +218,13 @@ impl PgManager {
         crate::tenant_db::run_purchase_order_migrations(pool).await?;
         crate::tenant_db::run_edi_outbound_migrations(pool).await?;
 
+        // Intelligent routing tables (idempotent, uses IF NOT EXISTS)
+        tracing::debug!("Running migration: 051_add_intelligent_routing.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/051_add_intelligent_routing.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run intelligent routing migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }

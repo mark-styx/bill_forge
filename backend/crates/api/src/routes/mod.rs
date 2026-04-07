@@ -30,6 +30,7 @@ mod feedback;
 pub mod theme;
 pub mod ai;
 pub mod billing;
+pub mod routing;
 
 use crate::middleware::{rate_limit_auth, require_auth, RateLimiterState};
 use crate::state::AppState;
@@ -131,6 +132,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/billing", billing::routes())
         // Vendor Statement Reconciliation
         .merge(vendor_statements::routes())
+        // Intelligent Routing & Workload Balancing
+        .nest("/routing", routing::routes())
         // Payment Requests
         .nest("/payment-requests", payment_requests::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)

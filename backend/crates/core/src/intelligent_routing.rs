@@ -114,6 +114,7 @@ pub struct RoutingFactors {
     pub invoice_amount: i64,
     pub vendor_id: Option<Uuid>,
     pub department: Option<String>,
+    pub gl_code: Option<String>,
 }
 
 /// Approver workload metrics
@@ -551,6 +552,7 @@ impl IntelligentRoutingEngine {
             invoice_amount: invoice.total_amount.amount,
             vendor_id: invoice.vendor_id,
             department: invoice.department.clone(),
+            gl_code: invoice.gl_code.clone(),
         }
     }
 
