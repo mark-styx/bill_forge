@@ -164,9 +164,9 @@ export default function WorkQueueDetailPage() {
   };
 
   const colors = queueTypeColors[queue.queue_type] || queueTypeColors.custom;
-  const totalItems = queueItems?.length || 0;
-  const unassignedItems = queueItems?.filter((item: any) => !item.assigned_to).length || 0;
-  const claimedItems = queueItems?.filter((item: any) => item.claimed_at).length || 0;
+  const totalItems = queueItems?.data?.length || 0;
+  const unassignedItems = queueItems?.data?.filter((item: any) => !item.assigned_to).length || 0;
+  const claimedItems = queueItems?.data?.filter((item: any) => item.claimed_at).length || 0;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -270,7 +270,7 @@ export default function WorkQueueDetailPage() {
             <Loader2 className="w-6 h-6 text-primary animate-spin mx-auto mb-3" />
             <p className="text-muted-foreground">Loading items...</p>
           </div>
-        ) : !queueItems || queueItems.length === 0 ? (
+        ) : !queueItems || queueItems.data.length === 0 ? (
           <div className="p-12 text-center">
             <div className="w-14 h-14 rounded-2xl bg-success/10 flex items-center justify-center mx-auto mb-4">
               <CheckCircle className="w-7 h-7 text-success" />
@@ -280,7 +280,7 @@ export default function WorkQueueDetailPage() {
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {queueItems.map((item: any) => {
+            {queueItems.data.map((item: any) => {
               const invoice = getInvoiceForItem(item.invoice_id);
               const isClaimed = !!item.claimed_at;
 
