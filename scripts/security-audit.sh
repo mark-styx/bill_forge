@@ -189,6 +189,10 @@ advisories = data.get("advisories", data.get("vulnerabilities", {}))
 
 if isinstance(advisories, list):
     for v in advisories:
+        # Skip advisories with no dependency path (phantom/false positives)
+        paths = v.get("paths", v.get("findings", []))
+        if isinstance(paths, list) and len(paths) == 0:
+            continue
         sev = str(v.get("severity", "medium")).lower()
         if sev not in summary:
             sev = "medium"
@@ -204,6 +208,11 @@ if isinstance(advisories, list):
 elif isinstance(advisories, dict):
     for key, v in advisories.items():
         if isinstance(v, dict):
+            # Skip advisories with no dependency path (phantom/false positives)
+            nodes = v.get("nodes", [])
+            effects = v.get("effects", [])
+            if (not nodes or len(nodes) == 0) and (not effects or len(effects) == 0):
+                continue
             sev = str(v.get("severity", "medium")).lower()
             if sev not in summary:
                 sev = "medium"
@@ -262,7 +271,7 @@ import json, datetime
 with open("$REPORT_PATH") as f:
     report = json.load(f)
 
-report["timestamp"] = datetime.datetime.utcnow().isoformat() + "Z"
+report["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
 with open("$REPORT_PATH", "w") as f:
     json.dump(report, f, indent=2)
