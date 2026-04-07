@@ -417,6 +417,7 @@ mod tenant_settings_tests {
         let settings = TenantSettings::default();
         assert!(settings.logo_url.is_none());
         assert!(settings.primary_color.is_none());
+        assert!(settings.ocr_provider.is_none());
         assert_eq!(settings.timezone, "UTC");
         assert_eq!(settings.default_currency, "USD");
     }
@@ -439,6 +440,7 @@ mod tenant_settings_tests {
             company_name: "Test Corp".to_string(),
             timezone: "America/New_York".to_string(),
             default_currency: "USD".to_string(),
+            ocr_provider: Some("tesseract".to_string()),
             features: TenantFeatures {
                 advanced_ocr: true,
                 api_access: true,
@@ -454,8 +456,69 @@ mod tenant_settings_tests {
         assert_eq!(deserialized.logo_url, settings.logo_url);
         assert_eq!(deserialized.primary_color, settings.primary_color);
         assert_eq!(deserialized.company_name, settings.company_name);
+        assert_eq!(deserialized.ocr_provider, Some("tesseract".to_string()));
         assert!(deserialized.features.advanced_ocr);
         assert!(!deserialized.features.sso_enabled);
+    }
+
+    #[test]
+    fn test_tenant_settings_deserialize_without_ocr_provider() {
+        // JSON from an existing tenant that doesn't have ocr_provider key
+        let json = serde_json::json!({
+            "logo_url": null,
+            "primary_color": null,
+            "company_name": "Legacy Corp",
+            "timezone": "UTC",
+            "default_currency": "EUR",
+            "features": {
+                "advanced_ocr": false,
+                "api_access": false,
+                "custom_workflows": false,
+                "audit_logs": false,
+                "sso_enabled": false
+            }
+        });
+
+        let settings: TenantSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.company_name, "Legacy Corp");
+        assert_eq!(settings.default_currency, "EUR");
+        assert!(settings.ocr_provider.is_none());
+    }
+
+    #[test]
+    fn test_tenant_settings_deserialize_with_ocr_provider() {
+        let json = serde_json::json!({
+            "logo_url": null,
+            "primary_color": null,
+            "company_name": "Modern Corp",
+            "timezone": "UTC",
+            "default_currency": "USD",
+            "ocr_provider": "aws_textract",
+            "features": {
+                "advanced_ocr": false,
+                "api_access": false,
+                "custom_workflows": false,
+                "audit_logs": false,
+                "sso_enabled": false
+            }
+        });
+
+        let settings: TenantSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.ocr_provider, Some("aws_textract".to_string()));
+    }
+
+    #[test]
+    fn test_ocr_provider_fallback_to_global_default() {
+        // When tenant ocr_provider is None, the fallback pattern should use the global default
+        let tenant_provider: Option<&str> = None;
+        let global_provider = "tesseract";
+        let resolved = tenant_provider.unwrap_or(global_provider);
+        assert_eq!(resolved, "tesseract");
+
+        // When tenant has an override, it should be used instead
+        let tenant_provider: Option<&str> = Some("aws_textract");
+        let resolved = tenant_provider.unwrap_or(global_provider);
+        assert_eq!(resolved, "aws_textract");
     }
 }
 
@@ -1135,5 +1198,44 @@ mod approval_limit_tests {
         let allowed = limit.department_restrictions.as_ref().unwrap();
         assert!(allowed.contains(&"Engineering".to_string()));
         assert!(!allowed.contains(&"Marketing".to_string()));
+    }
+}
+
+// ============================================================================
+// Tenant FK Constraint Migration Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tenant_fk_constraint_tests {
+    /// Smoke test: verify the migration file contains the expected ALTER TABLE
+    /// statements for users, vendors, and invoices with ON DELETE CASCADE.
+    #[test]
+    fn test_migration_contains_all_three_fk_constraints() {
+        let sql = include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql");
+
+        assert!(sql.contains("ALTER TABLE users"), "Missing ALTER TABLE users");
+        assert!(sql.contains("ALTER TABLE vendors"), "Missing ALTER TABLE vendors");
+        assert!(sql.contains("ALTER TABLE invoices"), "Missing ALTER TABLE invoices");
+
+        assert!(sql.contains("fk_users_tenant_id"), "Missing fk_users_tenant_id constraint");
+        assert!(sql.contains("fk_vendors_tenant_id"), "Missing fk_vendors_tenant_id constraint");
+        assert!(sql.contains("fk_invoices_tenant_id"), "Missing fk_invoices_tenant_id constraint");
+    }
+
+    #[test]
+    fn test_migration_specifies_on_delete_cascade() {
+        let sql = include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql");
+
+        // Count occurrences of ON DELETE CASCADE - should be 3 (one per table)
+        let count = sql.matches("ON DELETE CASCADE").count();
+        assert_eq!(count, 3, "Expected 3 ON DELETE CASCADE clauses, found {}", count);
+    }
+
+    #[test]
+    fn test_migration_references_tenants_id() {
+        let sql = include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql");
+
+        let count = sql.matches("REFERENCES tenants(id)").count();
+        assert_eq!(count, 3, "Expected 3 REFERENCES tenants(id) clauses, found {}", count);
     }
 }

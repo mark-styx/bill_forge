@@ -232,6 +232,13 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run integration webhook migration: {}", e)))?;
 
+        // Core tenant FK constraints (users, vendors, invoices -> tenants)
+        tracing::debug!("Running migration: 071_add_core_tenant_fk_constraints.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run core tenant FK migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }
