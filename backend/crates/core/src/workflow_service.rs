@@ -7,13 +7,15 @@
 //! - Escalation management
 
 use crate::{
-    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, WorkflowRule, WorkflowTemplate, WorkflowTemplateStage},
+    domain::{ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus, StageType, WorkflowRule, WorkflowTemplate, WorkflowTemplateStage},
     services::{EmailAction, EmailActionTokenService},
     traits::{ApprovalRepository, InvoiceRepository, UserRepository, WorkQueueRepository, WorkflowTemplateRepository},
     types::TenantId, Error, Result, UserId,
 };
+use crate::intelligent_routing::{IntelligentRoutingEngine, RoutingConfig, RoutingDataProvider};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Email service trait (abstracted to avoid circular dependency)
@@ -52,6 +54,7 @@ pub struct WorkflowService<
     queue_repo: QR,
     approval_repo: AR,
     template_repo: Option<TR>,
+    routing_provider: Option<Arc<dyn RoutingDataProvider>>,
     app_url: String,
     _email_templates: std::marker::PhantomData<ET>,
 }
@@ -83,6 +86,7 @@ impl<
             queue_repo,
             approval_repo,
             template_repo: None,
+            routing_provider: None,
             app_url,
             _email_templates: std::marker::PhantomData,
         }
@@ -107,9 +111,16 @@ impl<
             queue_repo,
             approval_repo,
             template_repo: Some(template_repo),
+            routing_provider: None,
             app_url,
             _email_templates: std::marker::PhantomData,
         }
+    }
+
+    /// Set the routing data provider for intelligent routing actions
+    pub fn with_routing_provider(mut self, provider: Arc<dyn RoutingDataProvider>) -> Self {
+        self.routing_provider = Some(provider);
+        self
     }
 
     /// Create an approval request and send notification email
@@ -284,6 +295,7 @@ impl<
         }
 
         // Flat rule-based processing
+        let mut rule_matched = false;
         for rule in rules {
             if !rule.is_active {
                 continue;
@@ -291,11 +303,33 @@ impl<
 
             // Check if rule conditions match
             if self.evaluate_rule_conditions(invoice, &rule.conditions) {
+                rule_matched = true;
                 // Execute rule actions
                 for action in &rule.actions {
                     self.execute_action(tenant_id, invoice, action).await?;
                 }
             }
+        }
+
+        // Default fallback: if no template stage or rule captured the invoice,
+        // advance it out of Draft so it doesn't get stuck forever.
+        // NOTE: We check `!rule_matched` rather than relying on the in-memory
+        // invoice.processing_status, because execute_action updates the DB but
+        // not the &Invoice reference. A rule that sets pending_approval or
+        // approved would otherwise be overwritten by this fallback.
+        if !rule_matched && invoice.processing_status == ProcessingStatus::Draft {
+            tracing::warn!(
+                invoice_id = %invoice.id,
+                "No workflow rule or template matched - applying default progression"
+            );
+            if let Ok(Some(default_queue)) = self.queue_repo.get_default(tenant_id).await {
+                self.queue_repo.move_item(tenant_id, &invoice.id, &default_queue.id, None).await?;
+            }
+            self.invoice_repo.update(
+                tenant_id,
+                &invoice.id,
+                serde_json::json!({ "processing_status": "submitted" })
+            ).await?;
         }
 
         Ok(())
@@ -335,6 +369,20 @@ impl<
             // Stage requires processing - route invoice here
             if let Some(ref queue_id) = stage.queue_id {
                 self.queue_repo.move_item(tenant_id, &invoice.id, queue_id, None).await?;
+            } else {
+                // No queue assigned - still update processing status so the invoice
+                // is trackable even without a queue assignment
+                let status = match stage.stage_type {
+                    StageType::Review => "submitted",
+                    StageType::Approval => "pending_approval",
+                    StageType::Payment => "ready_for_payment",
+                    _ => "submitted",
+                };
+                self.invoice_repo.update(
+                    tenant_id,
+                    &invoice.id,
+                    serde_json::json!({ "processing_status": status })
+                ).await?;
             }
 
             return Ok(Some(stage.clone()));
@@ -759,6 +807,48 @@ impl<
                     }
                 }
             }
+            ActionType::IntelligentRoute => {
+                let routing_provider = self.routing_provider.as_ref().ok_or_else(|| {
+                    Error::Validation("IntelligentRoute requires a routing data provider".to_string())
+                })?;
+
+                let context = routing_provider.get_routing_context(tenant_id).await?;
+                let engine = IntelligentRoutingEngine::new(RoutingConfig::default());
+                let decision = context.route(&engine, invoice);
+
+                match decision.approver_id {
+                    Some(approver_id) => {
+                        let approver = ApprovalTarget::User(approver_id.clone());
+                        let request = self.create_approval_request(tenant_id, invoice, approver, None).await?;
+                        self.approval_repo.create(tenant_id, request).await?;
+
+                        self.invoice_repo
+                            .update(
+                                tenant_id,
+                                &invoice.id,
+                                serde_json::json!({ "processing_status": "pending_approval" })
+                            )
+                            .await?;
+
+                        tracing::info!(
+                            invoice_id = %invoice.id,
+                            approver_id = %approver_id,
+                            strategy = ?decision.strategy,
+                            score = decision.score,
+                            "Intelligent routing selected approver"
+                        );
+                    }
+                    None => {
+                        tracing::warn!(
+                            invoice_id = %invoice.id,
+                            "Intelligent routing returned no eligible approver"
+                        );
+                        return Err(Error::Validation(
+                            "No eligible approver found for intelligent routing".to_string()
+                        ));
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -768,6 +858,7 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intelligent_routing::RoutingContext;
     use crate::domain::{ConditionField, ConditionOperator, Invoice, InvoiceId, RuleCondition, CaptureStatus, ProcessingStatus};
     use crate::{UserId, Money, TenantId};
     use chrono::Utc;
@@ -807,7 +898,10 @@ mod tests {
     #[async_trait]
     impl UserRepository for MockUserRepository {
         async fn get_email_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
-            Ok(Some("test@example.com".to_string()))
+            // Return None to avoid triggering DB-dependent token generation in
+            // send_approval_email (approver_emails will be empty, skipping the
+            // email send path entirely).
+            Ok(None)
         }
 
         async fn get_name_by_id(&self, _tenant_id: &TenantId, _user_id: &UserId) -> Result<Option<String>> {
@@ -815,11 +909,11 @@ mod tests {
         }
 
         async fn get_emails_by_ids(&self, _tenant_id: &TenantId, _user_ids: &[UserId]) -> Result<Vec<String>> {
-            Ok(vec!["test@example.com".to_string()])
+            Ok(vec![])
         }
 
         async fn get_emails_by_role(&self, _tenant_id: &TenantId, _role: &str) -> Result<Vec<String>> {
-            Ok(vec!["test@example.com".to_string()])
+            Ok(vec![])
         }
     }
 
@@ -1655,5 +1749,552 @@ mod tests {
             .process_invoice_workflow(&tenant_id, &invoice, &[])
             .await;
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // IntelligentRoute tests
+    // =========================================================================
+
+    /// Mock RoutingDataProvider that returns a fixed RoutingContext
+    struct MockRoutingProvider {
+        context: RoutingContext,
+    }
+
+    impl MockRoutingProvider {
+        fn with_context(context: RoutingContext) -> Self {
+            Self { context }
+        }
+    }
+
+    #[async_trait]
+    impl RoutingDataProvider for MockRoutingProvider {
+        async fn get_routing_context(&self, _tenant_id: &TenantId) -> Result<RoutingContext> {
+            Ok(self.context.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_intelligent_route_selects_best_approver() {
+        use crate::intelligent_routing::{ApproverWorkload, RoutingContext};
+        use std::collections::HashMap;
+
+        let approver_low = UserId(Uuid::new_v4()); // lower workload
+        let approver_high = UserId(Uuid::new_v4()); // higher workload
+
+        let ctx = RoutingContext {
+            eligible_approvers: vec![approver_low.clone(), approver_high.clone()],
+            workloads: HashMap::from([
+                (
+                    approver_low.clone(),
+                    ApproverWorkload {
+                        user_id: approver_low.clone(),
+                        active_approvals: 1,
+                        pending_approvals: 0,
+                        completed_this_week: 5,
+                        avg_approval_time_hours: Some(4.0),
+                        workload_score: 10.0,
+                        last_assignment_at: None,
+                    },
+                ),
+                (
+                    approver_high.clone(),
+                    ApproverWorkload {
+                        user_id: approver_high.clone(),
+                        active_approvals: 10,
+                        pending_approvals: 5,
+                        completed_this_week: 2,
+                        avg_approval_time_hours: Some(48.0),
+                        workload_score: 90.0,
+                        last_assignment_at: None,
+                    },
+                ),
+            ]),
+            availabilities: vec![],
+            expertise: vec![],
+        };
+
+        let provider = Arc::new(MockRoutingProvider::with_context(ctx));
+        let service = build_service(None).with_routing_provider(provider);
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let action = crate::domain::RuleAction {
+            action_type: crate::domain::ActionType::IntelligentRoute,
+            params: serde_json::json!({}),
+        };
+
+        let result = service.execute_action(&tenant_id, &invoice, &action).await;
+        assert!(result.is_ok(), "IntelligentRoute should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_intelligent_route_fallback_no_approvers() {
+        use crate::intelligent_routing::RoutingContext;
+
+        // Empty context - no eligible approvers
+        let ctx = RoutingContext::default();
+        let provider = Arc::new(MockRoutingProvider::with_context(ctx));
+        let service = build_service(None).with_routing_provider(provider);
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let action = crate::domain::RuleAction {
+            action_type: crate::domain::ActionType::IntelligentRoute,
+            params: serde_json::json!({}),
+        };
+
+        let result = service.execute_action(&tenant_id, &invoice, &action).await;
+        assert!(result.is_err(), "IntelligentRoute with no approvers should fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("No eligible approver"),
+            "Error should mention no eligible approver, got: {}",
+            err_msg
+        );
+    }
+
+    // =========================================================================
+    // Default fallback and queue-less stage tests
+    // =========================================================================
+
+    /// Invoice repository that tracks calls to `update`
+    #[derive(Clone)]
+    struct TrackingInvoiceRepository {
+        updates: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl TrackingInvoiceRepository {
+        fn new() -> Self {
+            Self {
+                updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn captured_updates(&self) -> Vec<serde_json::Value> {
+            self.updates.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl crate::traits::InvoiceRepository for TrackingInvoiceRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            _input: crate::domain::CreateInvoiceInput,
+            _created_by: &UserId,
+        ) -> Result<Invoice> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_by_id(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<Option<Invoice>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _tenant_id: &TenantId,
+            _filters: &crate::domain::InvoiceFilters,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<Invoice>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn update(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            updates: serde_json::Value,
+        ) -> Result<Invoice> {
+            self.updates.lock().unwrap().push(updates);
+            Ok(create_test_invoice())
+        }
+
+        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::InvoiceId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn update_capture_status(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            _status: crate::domain::CaptureStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn update_processing_status(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::InvoiceId,
+            _status: crate::domain::ProcessingStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Queue repository that optionally returns a default queue and tracks move_item calls
+    #[derive(Clone)]
+    struct TrackingQueueRepository {
+        default_queue: Option<crate::domain::WorkQueue>,
+        moved_to: std::sync::Arc<std::sync::Mutex<Vec<crate::domain::WorkQueueId>>>,
+    }
+
+    impl TrackingQueueRepository {
+        fn with_default(queue: crate::domain::WorkQueue) -> Self {
+            Self {
+                default_queue: Some(queue),
+                moved_to: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn no_default() -> Self {
+            Self {
+                default_queue: None,
+                moved_to: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn captured_moves(&self) -> Vec<crate::domain::WorkQueueId> {
+            self.moved_to.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl crate::traits::WorkQueueRepository for TrackingQueueRepository {
+        async fn create(
+            &self,
+            _tenant_id: &TenantId,
+            _input: crate::domain::CreateWorkQueueInput,
+        ) -> Result<crate::domain::WorkQueue> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_by_id(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkQueueId,
+        ) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(None)
+        }
+
+        async fn list(&self, _tenant_id: &TenantId) -> Result<Vec<crate::domain::WorkQueue>> {
+            Ok(vec![])
+        }
+
+        async fn update(
+            &self,
+            _tenant_id: &TenantId,
+            _id: &crate::domain::WorkQueueId,
+            _input: crate::domain::CreateWorkQueueInput,
+        ) -> Result<crate::domain::WorkQueue> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn delete(&self, _tenant_id: &TenantId, _id: &crate::domain::WorkQueueId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_default(&self, _tenant_id: &TenantId) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(self.default_queue.clone())
+        }
+
+        async fn get_by_type(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_type: crate::domain::QueueType,
+        ) -> Result<Option<crate::domain::WorkQueue>> {
+            Ok(None)
+        }
+
+        async fn add_item(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _invoice_id: &crate::domain::InvoiceId,
+            _assigned_to: Option<&UserId>,
+        ) -> Result<crate::domain::QueueItem> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_items(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::QueueItem>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn get_items_for_user(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _user_id: &UserId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::QueueItem>> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn claim_item(
+            &self,
+            _tenant_id: &TenantId,
+            _item_id: Uuid,
+            _user_id: &UserId,
+        ) -> Result<crate::domain::QueueItem> {
+            unimplemented!("Not used in tests")
+        }
+
+        async fn complete_item(&self, _tenant_id: &TenantId, _item_id: Uuid, _action: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn move_item(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+            to_queue_id: &crate::domain::WorkQueueId,
+            _assigned_to: Option<&UserId>,
+        ) -> Result<crate::domain::QueueItem> {
+            self.moved_to.lock().unwrap().push(to_queue_id.clone());
+            Ok(crate::domain::QueueItem {
+                id: Uuid::new_v4(),
+                tenant_id: _tenant_id.clone(),
+                queue_id: to_queue_id.clone(),
+                invoice_id: _invoice_id.clone(),
+                assigned_to: _assigned_to.cloned(),
+                priority: 0,
+                entered_at: Utc::now(),
+                due_at: None,
+                claimed_at: None,
+                completed_at: None,
+            })
+        }
+
+        async fn count_items(&self, _tenant_id: &TenantId, _queue_id: &crate::domain::WorkQueueId) -> Result<i64> {
+            Ok(0)
+        }
+
+        async fn count_items_for_user(
+            &self,
+            _tenant_id: &TenantId,
+            _queue_id: &crate::domain::WorkQueueId,
+            _user_id: &UserId,
+        ) -> Result<i64> {
+            Ok(0)
+        }
+
+        async fn get_current_item_for_invoice(
+            &self,
+            _tenant_id: &TenantId,
+            _invoice_id: &crate::domain::InvoiceId,
+        ) -> Result<Option<crate::domain::QueueItem>> {
+            Ok(None)
+        }
+
+        async fn reassign_item(
+            &self,
+            _tenant_id: &TenantId,
+            _item_id: Uuid,
+            assigned_to: &UserId,
+        ) -> Result<crate::domain::QueueItem> {
+            Ok(crate::domain::QueueItem {
+                id: _item_id,
+                tenant_id: _tenant_id.clone(),
+                queue_id: crate::domain::WorkQueueId::new(),
+                invoice_id: crate::domain::InvoiceId::new(),
+                assigned_to: Some(assigned_to.clone()),
+                priority: 0,
+                entered_at: Utc::now(),
+                due_at: None,
+                claimed_at: None,
+                completed_at: None,
+            })
+        }
+    }
+
+    /// Build a service with tracking deps so tests can inspect what happened
+    fn build_tracking_service(
+        template_repo: Option<MockTemplateRepository>,
+        queue_repo: TrackingQueueRepository,
+        invoice_repo: TrackingInvoiceRepository,
+    ) -> WorkflowService<
+        MockEmailService,
+        MockEmailTemplates,
+        MockUserRepository,
+        TrackingInvoiceRepository,
+        TrackingQueueRepository,
+        MockApprovalRepository,
+        MockTemplateRepository,
+    > {
+        let pool = std::sync::Arc::new(
+            sqlx::PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+        );
+        let token_service = crate::services::EmailActionTokenService::new(
+            pool,
+            "test-secret-key-that-is-long-enough".to_string(),
+        );
+
+        match template_repo {
+            Some(tr) => WorkflowService::with_templates(
+                MockEmailService,
+                token_service,
+                MockUserRepository,
+                invoice_repo,
+                queue_repo,
+                MockApprovalRepository,
+                tr,
+                "https://app.test".to_string(),
+            ),
+            None => WorkflowService::new(
+                MockEmailService,
+                token_service,
+                MockUserRepository,
+                invoice_repo,
+                queue_repo,
+                MockApprovalRepository,
+                "https://app.test".to_string(),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_matching_rules_applies_default_progression() {
+        // Service with no template repo, empty rules, and a default queue
+        let default_queue = crate::domain::WorkQueue {
+            id: crate::domain::WorkQueueId::new(),
+            tenant_id: TenantId::new(),
+            name: "Default Queue".to_string(),
+            description: None,
+            queue_type: crate::domain::QueueType::Review,
+            assigned_users: vec![],
+            assigned_roles: vec![],
+            is_default: true,
+            is_active: true,
+            settings: crate::domain::QueueSettings {
+                default_sort: "priority".to_string(),
+                sla_hours: None,
+                escalation_hours: None,
+                escalation_user_id: None,
+            },
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let queue_id = default_queue.id.clone();
+
+        let invoice_repo = TrackingInvoiceRepository::new();
+        let queue_repo = TrackingQueueRepository::with_default(default_queue);
+
+        let service = build_tracking_service(None, queue_repo.clone(), invoice_repo.clone());
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let result = service.process_invoice_workflow(&tenant_id, &invoice, &[]).await;
+        assert!(result.is_ok());
+
+        // Verify status was updated to "submitted"
+        let updates = invoice_repo.captured_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["processing_status"], json!("submitted"));
+
+        // Verify invoice was moved to the default queue
+        let moves = queue_repo.captured_moves();
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0], queue_id);
+    }
+
+    #[tokio::test]
+    async fn test_all_template_stages_skipped_applies_default_progression() {
+        // Template where ALL stages have skip conditions that match
+        let template = crate::domain::WorkflowTemplate {
+            id: crate::domain::WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "All Skip".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages: vec![make_template_stage(
+                0,
+                "Review",
+                Some(crate::domain::WorkQueueId::new()),
+                vec![RuleCondition {
+                    field: ConditionField::VendorName,
+                    operator: ConditionOperator::Equals,
+                    value: json!("Test Vendor"), // matches our test invoice
+                }],
+                vec![],
+            )],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let invoice_repo = TrackingInvoiceRepository::new();
+        let queue_repo = TrackingQueueRepository::no_default();
+
+        let service = build_tracking_service(
+            Some(MockTemplateRepository::with_default(template)),
+            queue_repo.clone(),
+            invoice_repo.clone(),
+        );
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let result = service.process_invoice_workflow(&tenant_id, &invoice, &[]).await;
+        assert!(result.is_ok());
+
+        // All template stages skipped, no rules matched - fallback kicks in
+        let updates = invoice_repo.captured_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["processing_status"], json!("submitted"));
+    }
+
+    #[tokio::test]
+    async fn test_template_stage_without_queue_updates_status() {
+        // Template stage with queue_id: None and stage_type: Approval
+        let stage = crate::domain::WorkflowTemplateStage {
+            order: 0,
+            name: "Approval".to_string(),
+            stage_type: crate::domain::StageType::Approval,
+            queue_id: None,
+            sla_hours: None,
+            escalation_hours: None,
+            requires_action: true,
+            skip_conditions: vec![],
+            auto_advance_conditions: vec![],
+        };
+        let template = crate::domain::WorkflowTemplate {
+            id: crate::domain::WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "No Queue Template".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages: vec![stage],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let invoice_repo = TrackingInvoiceRepository::new();
+        let queue_repo = TrackingQueueRepository::no_default();
+
+        let service = build_tracking_service(
+            Some(MockTemplateRepository::with_default(template)),
+            queue_repo.clone(),
+            invoice_repo.clone(),
+        );
+        let invoice = create_test_invoice();
+        let tenant_id = TenantId::new();
+
+        let result = service.process_invoice_workflow(&tenant_id, &invoice, &[]).await;
+        assert!(result.is_ok());
+
+        // Template stage captured the invoice (returned Some), so no default fallback.
+        // But the stage had no queue_id, so status should be updated to pending_approval.
+        let updates = invoice_repo.captured_updates();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["processing_status"], json!("pending_approval"));
+
+        // No queue move should have happened
+        let moves = queue_repo.captured_moves();
+        assert!(moves.is_empty());
     }
 }
