@@ -41,23 +41,5 @@
     "@testing-library/jest-native": "^5.4.0",
     "react-test-renderer": "18.3.1",
     "@types/jest": "^29.5.0"
-  },
-  "jest": {
-    "testMatch": [
-      "<rootDir>/__tests__/**/*.{test,spec}.{ts,tsx}"
-    ],
-    "transform": {
-      "^.+\\.tsx?$": "ts-jest"
-    },
-    "transformIgnorePatterns": [
-      "node_modules/(?!(expo|expo-router|@tanstack|zustand|react-native|@react-navigation)/)"
-    ],
-    "moduleFileExtensions": [
-      "ts",
-      "tsx",
-      "js",
-      "jsx",
-      "json"
-    ]
   }
 }

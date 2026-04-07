@@ -6,6 +6,45 @@
  * and approve/reject interactions.
  */
 
+// Mock react-native with lightweight stubs (RN 0.76 platform resolution doesn't work in Jest without Metro)
+jest.mock('react-native', () => {
+  const React = require('react');
+  const View = (p) => React.createElement('View', p, p && p.children);
+  const Text = (p) => React.createElement('Text', p, p && p.children);
+  const FlatList = (p) => {
+    const content = p && p.data && p.data.length > 0
+      ? p.data.map((item, i) => p.renderItem({ item, index: i }))
+      : (p && p.ListEmptyComponent) || null;
+    return React.createElement('FlatList', p, content);
+  };
+  const TouchableOpacity = (p) => React.createElement('TouchableOpacity', p, p && p.children);
+  const RefreshControl = (p) => React.createElement('RefreshControl', p);
+  return {
+    View, Text, FlatList, TouchableOpacity, RefreshControl,
+    StyleSheet: { create: (s) => s },
+    Alert: { alert: jest.fn() },
+    Animated: { Value: class { constructor() {} }, View },
+  };
+});
+
+jest.mock('@testing-library/react-native', () => {
+  const renderer = require('react-test-renderer');
+  function render(ui) {
+    const tree = renderer.create(ui);
+    function queryByText(textOrRegex) {
+      const nodes = tree.root.findAll((node) =>
+        node.children.some((c) => {
+          if (typeof c !== 'string') return false;
+          return typeof textOrRegex === 'string' ? c === textOrRegex : textOrRegex.test(c);
+        })
+      );
+      return nodes.length > 0 ? nodes[0] : null;
+    }
+    return { queryByText };
+  }
+  return { render, fireEvent: {} };
+});
+
 // Mock expo modules
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
