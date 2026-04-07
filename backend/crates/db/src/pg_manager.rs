@@ -225,6 +225,13 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run intelligent routing migration: {}", e)))?;
 
+        // Integration webhook support (nonces table + webhook_secret columns)
+        tracing::debug!("Running migration: 070_add_integration_webhook_support.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/070_add_integration_webhook_support.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run integration webhook migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }

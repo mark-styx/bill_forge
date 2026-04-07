@@ -26,11 +26,14 @@ use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
+    body::Bytes,
     extract::State,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
+use billforge_core::webhook::{self, WebhookEnvelope};
 use billforge_bill_com::{BillComAuth, BillComAuthConfig, BillComClient, BillComEnvironment};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -51,6 +54,10 @@ pub fn routes() -> Router<AppState> {
         .route("/pay/bulk", post(pay_bulk))
         .route("/payments", get(list_payments))
         .route("/funding-accounts", get(list_funding_accounts))
+        // Webhook secret configuration (requires auth)
+        .route("/webhook/configure", post(configure_bill_com_webhook))
+        // Webhook (no auth - verified via HMAC signature; tenant_id in path)
+        .route("/webhook/:tenant_id", post(bill_com_webhook))
 }
 
 // ──────────────────────────── Types ────────────────────────────
@@ -896,4 +903,111 @@ async fn list_funding_accounts(
         .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
 
     Ok(Json(result.data))
+}
+
+/// Request body for configuring a webhook secret
+#[derive(Debug, Deserialize)]
+struct ConfigureWebhookRequest {
+    webhook_secret: String,
+}
+
+/// Configure the webhook secret for Bill.com integration.
+async fn configure_bill_com_webhook(
+    State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
+    Json(body): Json<ConfigureWebhookRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    sqlx::query(
+        "UPDATE bill_com_connections SET webhook_secret = $2 WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&body.webhook_secret)
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to update webhook secret: {}", e)))?;
+
+    Ok(Json(serde_json::json!({ "status": "configured" })))
+}
+
+/// Receive and verify Bill.com webhook notifications.
+///
+/// Bill.com signs webhooks with HMAC-SHA256 using a shared secret.
+/// The signature is hex-encoded in the `x-bill-signature` header.
+/// The tenant_id is embedded in the webhook URL registered with Bill.com.
+async fn bill_com_webhook(
+    State(state): State<AppState>,
+    axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    let signature = headers
+        .get("x-bill-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let tenant_id: billforge_core::TenantId = tenant_id_str.parse().map_err(|_| {
+        tracing::error!("Bill.com webhook invalid tenant_id in path");
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+        tracing::error!("Failed to get tenant pool: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let webhook_secret: Option<String> = sqlx::query_scalar(
+        "SELECT webhook_secret FROM bill_com_connections WHERE tenant_id = $1",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(&*tenant_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch webhook secret: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let secret = webhook_secret
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            tracing::warn!("Bill.com webhook rejected: no webhook secret configured");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    if !webhook::verify_webhook_signature(&body, signature, &secret) {
+        tracing::warn!("Bill.com webhook signature verification failed");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let (event_type, nonce) = match serde_json::from_slice::<WebhookEnvelope>(&body) {
+        Ok(envelope) => {
+            if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
+                tracing::warn!(timestamp = %envelope.timestamp, "Bill.com webhook timestamp too old or in future");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let nonce = envelope.nonce.unwrap_or_else(|| webhook::compute_payload_nonce(&body));
+            (envelope.event_type, nonce)
+        }
+        Err(_) => ("provider_native".to_string(), webhook::compute_payload_nonce(&body)),
+    };
+
+    if !webhook::check_replay_nonce(&*tenant_pool, "bill_com", *tenant_id.as_uuid(), &nonce)
+        .await
+        .map_err(|e| {
+            tracing::error!("Replay nonce check failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    {
+        tracing::warn!(nonce = %nonce, "Bill.com webhook replay detected");
+        return Err(StatusCode::CONFLICT);
+    }
+
+    tracing::info!(
+        event_type = %event_type,
+        tenant_id = %tenant_id_str,
+        "Bill.com webhook received and verified"
+    );
+
+    Ok(StatusCode::OK)
 }

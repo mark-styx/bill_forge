@@ -15,6 +15,7 @@ pub mod workflow_evaluator;
 pub mod workflow_service;
 pub mod workload_balancer;
 pub mod approver_availability;
+pub mod webhook;
 
 #[cfg(test)]
 mod tests;

@@ -11,12 +11,15 @@ use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
+    body::Bytes,
     extract::{Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Redirect},
     routing::{get, post},
     Router,
 };
 use billforge_core::TenantId;
+use billforge_core::webhook::{self, WebhookEnvelope};
 use billforge_quickbooks::{QuickBooksClient, QuickBooksOAuth, QuickBooksOAuthConfig, QuickBooksEnvironment};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -38,6 +41,10 @@ pub fn routes() -> Router<AppState> {
         // Mapping endpoints
         .route("/mappings/accounts", get(get_account_mappings))
         .route("/mappings/accounts", post(update_account_mappings))
+        // Webhook secret configuration (requires auth)
+        .route("/webhook/configure", post(configure_quickbooks_webhook))
+        // Webhook (no auth - verified via HMAC signature; tenant_id in path)
+        .route("/webhook/:tenant_id", post(quickbooks_webhook))
 }
 
 /// QuickBooks connection status
@@ -1042,4 +1049,114 @@ async fn get_authenticated_qb_client(
         ))?;
 
     Ok(QuickBooksClient::new(access_token, company_id, qb_environment(qb_config)))
+}
+
+/// Request body for configuring a webhook secret
+#[derive(Debug, Deserialize)]
+struct ConfigureWebhookRequest {
+    webhook_secret: String,
+}
+
+/// Configure the webhook secret for QuickBooks integration (admin only).
+/// This must be called before QuickBooks webhook delivery will be accepted.
+async fn configure_quickbooks_webhook(
+    State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
+    Json(body): Json<ConfigureWebhookRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    sqlx::query(
+        "UPDATE quickbooks_connections SET webhook_secret = $2 WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&body.webhook_secret)
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to update webhook secret: {}", e)))?;
+
+    Ok(Json(serde_json::json!({ "status": "configured" })))
+}
+
+/// Receive and verify QuickBooks webhook notifications.
+///
+/// QuickBooks signs webhooks with HMAC-SHA256 using a verifier token.
+/// The signature is base64-encoded in the `intuit-signature` header.
+/// The tenant_id is embedded in the webhook URL registered with QuickBooks.
+async fn quickbooks_webhook(
+    State(state): State<AppState>,
+    axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    let signature = headers
+        .get("intuit-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let tenant_id: TenantId = tenant_id_str.parse().map_err(|_| {
+        tracing::error!("QuickBooks webhook invalid tenant_id in path");
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let tenant_pool = state.db.tenant(&tenant_id).await.map_err(|e| {
+        tracing::error!("Failed to get tenant pool: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Fail closed: reject if no webhook secret is configured
+    let webhook_secret: Option<String> = sqlx::query_scalar(
+        "SELECT webhook_secret FROM quickbooks_connections WHERE tenant_id = $1",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(&*tenant_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch webhook secret: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let secret = webhook_secret
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            tracing::warn!("QuickBooks webhook rejected: no webhook secret configured");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    if !webhook::verify_webhook_signature(&body, signature, &secret) {
+        tracing::warn!("QuickBooks webhook signature verification failed");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Parse envelope if possible; provider-native payloads may not match our format
+    let (event_type, nonce) = match serde_json::from_slice::<WebhookEnvelope>(&body) {
+        Ok(envelope) => {
+            if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
+                tracing::warn!(timestamp = %envelope.timestamp, "QuickBooks webhook timestamp too old or in future");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            let nonce = envelope.nonce.unwrap_or_else(|| webhook::compute_payload_nonce(&body));
+            (envelope.event_type, nonce)
+        }
+        Err(_) => ("provider_native".to_string(), webhook::compute_payload_nonce(&body)),
+    };
+
+    if !webhook::check_replay_nonce(&*tenant_pool, "quickbooks", *tenant_id.as_uuid(), &nonce)
+        .await
+        .map_err(|e| {
+            tracing::error!("Replay nonce check failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    {
+        tracing::warn!(nonce = %nonce, "QuickBooks webhook replay detected");
+        return Err(StatusCode::CONFLICT);
+    }
+
+    tracing::info!(
+        event_type = %event_type,
+        tenant_id = %tenant_id_str,
+        "QuickBooks webhook received and verified"
+    );
+
+    Ok(StatusCode::OK)
 }

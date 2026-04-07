@@ -22,6 +22,12 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/v1/auth/refresh",
     "/api/v1/actions/",
     "/api/v1/edi/webhook/",
+    "/api/v1/quickbooks/webhook/",
+    "/api/v1/xero/webhook/",
+    "/api/v1/salesforce/webhook/",
+    "/api/v1/bill-com/webhook/",
+    "/api/v1/workday/webhook/",
+    "/api/v1/sage-intacct/webhook/",
     "/api/v1/billing/plans",
 ];
 
