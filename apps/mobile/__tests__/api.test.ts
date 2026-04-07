@@ -8,14 +8,33 @@
 // Mock expo-secure-store before importing api (which registers a token getter)
 jest.mock('expo-secure-store', () => ({}));
 
-import { api, ApiClientError, registerTokenGetter } from '../lib/api';
+import {
+  api,
+  ApiClientError,
+  registerTokenGetter,
+  registerRefreshTokenGetter,
+  registerTokenSetter,
+  registerLogoutHandler,
+} from '../lib/api';
 
 // ---- Test helpers ----
 
 let mockToken: string | null = null;
+let mockRefreshToken: string | null = null;
+let logoutCalled = false;
 
-// Register a synchronous token getter for tests
+// Register test callbacks
 registerTokenGetter(async () => mockToken);
+registerRefreshTokenGetter(async () => mockRefreshToken);
+registerTokenSetter(async (access, refresh) => {
+  mockToken = access;
+  mockRefreshToken = refresh;
+});
+registerLogoutHandler(async () => {
+  logoutCalled = true;
+  mockToken = null;
+  mockRefreshToken = null;
+});
 
 function mockFetchResponse(status: number, body: unknown): void {
   (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -28,6 +47,8 @@ function mockFetchResponse(status: number, body: unknown): void {
 beforeEach(() => {
   jest.clearAllMocks();
   mockToken = null;
+  mockRefreshToken = null;
+  logoutCalled = false;
   (global.fetch as jest.Mock) = jest.fn();
 });
 
@@ -179,10 +200,10 @@ describe('api.deltaSync', () => {
 });
 
 describe('error handling', () => {
-  it('throws ApiClientError with parsed body on error response', async () => {
+  it('throws ApiClientError with parsed body on non-401 error response', async () => {
     mockToken = 'tok';
-    mockFetchResponse(401, {
-      error: { code: 'unauthorized', message: 'Invalid or expired token' },
+    mockFetchResponse(403, {
+      error: { code: 'forbidden', message: 'Access denied' },
     });
 
     try {
@@ -191,9 +212,10 @@ describe('error handling', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiClientError);
       const apiErr = err as ApiClientError;
-      expect(apiErr.status).toBe(401);
-      expect(apiErr.body?.error?.code).toBe('unauthorized');
-      expect(apiErr.message).toBe('Invalid or expired token');
+      expect(apiErr.status).toBe(403);
+      expect(apiErr.body?.error?.code).toBe('forbidden');
+      expect(apiErr.code).toBe('forbidden');
+      expect(apiErr.message).toBe('Access denied');
     }
   });
 
@@ -213,5 +235,205 @@ describe('error handling', () => {
       expect((err as ApiClientError).status).toBe(502);
       expect((err as ApiClientError).body).toBeNull();
     }
+  });
+
+  it('exposes code and fieldErrors from error body', async () => {
+    mockToken = 'tok';
+    mockFetchResponse(422, {
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        field_errors: { amount: ['must be positive'], currency: ['is required'] },
+      },
+    });
+
+    try {
+      await api.approveInvoice('inv-1');
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.code).toBe('VALIDATION_ERROR');
+      expect(apiErr.fieldErrors).toEqual({
+        amount: ['must be positive'],
+        currency: ['is required'],
+      });
+    }
+  });
+
+  it('defaults code to UNKNOWN when absent', async () => {
+    mockToken = 'tok';
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => { throw new Error('no json'); },
+    });
+
+    try {
+      await api.getDashboard();
+      fail('Expected error');
+    } catch (err) {
+      expect((err as ApiClientError).code).toBe('UNKNOWN');
+      expect((err as ApiClientError).fieldErrors).toBeUndefined();
+    }
+  });
+});
+
+describe('token refresh on 401', () => {
+  it('retries request after successful token refresh', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = 'valid-refresh';
+
+    // First call returns 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Token expired' } });
+    // Refresh call succeeds
+    mockFetchResponse(200, { access_token: 'new-tok', refresh_token: 'new-refresh' });
+    // Retry succeeds
+    mockFetchResponse(200, []);
+
+    const result = await api.getApprovals();
+
+    expect(result).toEqual([]);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    // Verify refresh was called
+    const refreshCall = (global.fetch as jest.Mock).mock.calls[1];
+    expect(refreshCall[0]).toContain('/api/v1/auth/refresh');
+    expect(JSON.parse(refreshCall[1].body).refresh_token).toBe('valid-refresh');
+    // Verify tokens were updated
+    expect(mockToken).toBe('new-tok');
+    expect(mockRefreshToken).toBe('new-refresh');
+  });
+
+  it('triggers logout when refresh token is invalid (terminal failure)', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = 'bad-refresh';
+
+    // First call returns 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Token expired' } });
+    // Refresh call returns 401 (invalid refresh token)
+    mockFetchResponse(401, { error: { code: 'invalid_token', message: 'Refresh token invalid' } });
+
+    try {
+      await api.getApprovals();
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.status).toBe(401);
+      expect(apiErr.code).toBe('SESSION_EXPIRED');
+      expect(apiErr.message).toBe('Session expired. Please login again.');
+    }
+
+    expect(logoutCalled).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not logout on transient refresh failure (5xx)', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = 'valid-refresh';
+
+    // First call returns 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Token expired' } });
+    // Refresh call returns 500 (server error, transient)
+    mockFetchResponse(500, { error: { code: 'internal', message: 'Server error' } });
+
+    try {
+      await api.getApprovals();
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.status).toBe(401);
+      // Should get the original 401, not SESSION_EXPIRED
+      expect(apiErr.body?.error?.code).toBe('unauthorized');
+    }
+
+    // Should NOT have logged out
+    expect(logoutCalled).toBe(false);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not logout on network error during refresh', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = 'valid-refresh';
+
+    // First call returns 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Token expired' } });
+    // Refresh call throws network error
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network request failed'));
+
+    try {
+      await api.getApprovals();
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.status).toBe(401);
+    }
+
+    expect(logoutCalled).toBe(false);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not attempt refresh when no refresh token is available', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = null;
+
+    // First call returns 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Token expired' } });
+
+    try {
+      await api.getApprovals();
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.status).toBe(401);
+      expect(apiErr.code).toBe('SESSION_EXPIRED');
+    }
+
+    expect(logoutCalled).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not attempt refresh for login requests', async () => {
+    mockToken = null;
+    mockRefreshToken = 'some-refresh';
+
+    // Login returns 401 (wrong credentials)
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'Bad credentials' } });
+
+    try {
+      await api.login('tenant-1', 'bad@email.com', 'wrong');
+      fail('Expected error');
+    } catch (err) {
+      const apiErr = err as ApiClientError;
+      expect(apiErr.status).toBe(401);
+      expect(apiErr.code).toBe('unauthorized');
+      expect(apiErr.message).toBe('Bad credentials');
+    }
+
+    // Should NOT have tried to refresh or called logout
+    expect(logoutCalled).toBe(false);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent refresh attempts', async () => {
+    mockToken = 'expired-tok';
+    mockRefreshToken = 'valid-refresh';
+
+    // Both calls return 401
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'expired' } });
+    mockFetchResponse(401, { error: { code: 'unauthorized', message: 'expired' } });
+    // Single refresh call succeeds
+    mockFetchResponse(200, { access_token: 'new-tok', refresh_token: 'new-refresh' });
+    // Both retries succeed
+    mockFetchResponse(200, []);
+    mockFetchResponse(200, { pending_approvals: 0, pending_review: 0, requires_attention: 0, upcoming_due_dates: [], recent_activity: [] });
+
+    const [approvals, dashboard] = await Promise.all([
+      api.getApprovals(),
+      api.getDashboard(),
+    ]);
+
+    expect(approvals).toEqual([]);
+    expect(dashboard.pending_approvals).toBe(0);
+    // 2 initial + 1 refresh + 2 retries = 5 calls
+    expect(global.fetch).toHaveBeenCalledTimes(5);
   });
 });

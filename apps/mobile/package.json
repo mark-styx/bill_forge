@@ -43,10 +43,12 @@
     "@types/jest": "^29.5.0"
   },
   "jest": {
-    "preset": "react-native",
     "testMatch": [
       "<rootDir>/__tests__/**/*.{test,spec}.{ts,tsx}"
     ],
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
     "transformIgnorePatterns": [
       "node_modules/(?!(expo|expo-router|@tanstack|zustand|react-native|@react-navigation)/)"
     ],

@@ -8,7 +8,7 @@
 
 // Mock expo modules
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() })),
+  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
 }));
 
 jest.mock('expo-secure-store', () => ({}));

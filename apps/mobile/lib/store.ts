@@ -9,7 +9,12 @@
 
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
-import { registerTokenGetter } from './api';
+import {
+  registerTokenGetter,
+  registerRefreshTokenGetter,
+  registerTokenSetter,
+  registerLogoutHandler,
+} from './api';
 
 // ---- Auth slice ----
 
@@ -55,6 +60,17 @@ interface AppStore extends AuthState, SyncState, BadgeState {
 export const useAppStore = create<AppStore>((set) => {
   // Register the token getter so api.ts can read the current token.
   registerTokenGetter(async () => useAppStore.getState().token);
+  registerRefreshTokenGetter(async () => useAppStore.getState().refreshToken);
+  registerTokenSetter(async (accessToken, refreshToken) => {
+    await Promise.all([
+      SecureStore.setItemAsync(SECURE_TOKEN_KEY, accessToken),
+      SecureStore.setItemAsync(SECURE_REFRESH_KEY, refreshToken),
+    ]);
+    set({ token: accessToken, refreshToken });
+  });
+  registerLogoutHandler(async () => {
+    await useAppStore.getState().logout();
+  });
 
   return {
     // Auth initial

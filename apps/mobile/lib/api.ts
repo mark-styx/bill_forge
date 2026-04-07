@@ -104,6 +104,7 @@ export interface ApiErrorBody {
     code: string;
     message: string;
     details?: unknown;
+    field_errors?: Record<string, string[]>;
   };
 }
 
@@ -113,28 +114,103 @@ const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 /** Retrieve the stored JWT. Exported so tests can inject via store mock. */
 let _getToken: () => Promise<string | null> = async () => null;
+let _getRefreshToken: () => Promise<string | null> = async () => null;
+let _setTokens: (accessToken: string, refreshToken: string) => Promise<void> = async () => {};
+let _onLogout: () => Promise<void> = async () => {};
 
 /** Allow the store to register its token getter after initialisation. */
 export function registerTokenGetter(getter: () => Promise<string | null>) {
   _getToken = getter;
 }
 
+/** Register the refresh token getter so the client can attempt silent refresh. */
+export function registerRefreshTokenGetter(getter: () => Promise<string | null>) {
+  _getRefreshToken = getter;
+}
+
+/** Register a callback to persist new tokens after a successful refresh. */
+export function registerTokenSetter(setter: (accessToken: string, refreshToken: string) => Promise<void>) {
+  _setTokens = setter;
+}
+
+/** Register a callback invoked when token refresh fails (forces re-login). */
+export function registerLogoutHandler(handler: () => Promise<void>) {
+  _onLogout = handler;
+}
+
 class ApiClientError extends Error {
   status: number;
+  code: string;
   body: ApiErrorBody | null;
+  fieldErrors: Record<string, string[]> | undefined;
 
   constructor(status: number, body: ApiErrorBody | null) {
     super(body?.error?.message ?? `API error ${status}`);
+    this.name = 'ApiClientError';
     this.status = status;
+    this.code = body?.error?.code ?? 'UNKNOWN';
     this.body = body;
+    this.fieldErrors = body?.error?.field_errors ?? undefined;
   }
 }
 
 export { ApiClientError };
 
+// ---- Token refresh with concurrent request coalescing ----
+
+let _isRefreshing = false;
+let _refreshPromise: Promise<RefreshResult> | null = null;
+
+/** Refresh result: 'ok' = new tokens stored, 'terminal' = invalid refresh token (logout),
+ *  'transient' = network/server error (don't logout, surface the original 401). */
+type RefreshResult = 'ok' | 'terminal' | 'transient';
+
+async function doRefresh(): Promise<RefreshResult> {
+  try {
+    const refreshToken = await _getRefreshToken();
+    if (!refreshToken) return 'terminal';
+
+    const response = await fetch(`${BASE_URL}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (!response.ok) {
+      // 401/403 = refresh token is invalid or revoked, force logout
+      if (response.status === 401 || response.status === 403) return 'terminal';
+      // 5xx or other = transient, don't logout
+      return 'transient';
+    }
+
+    const data = await response.json();
+    await _setTokens(data.access_token, data.refresh_token);
+    return 'ok';
+  } catch {
+    // Network error = transient
+    return 'transient';
+  }
+}
+
+async function refreshAccessToken(): Promise<RefreshResult> {
+  if (_isRefreshing && _refreshPromise) {
+    return _refreshPromise;
+  }
+
+  _isRefreshing = true;
+  _refreshPromise = doRefresh();
+
+  try {
+    return await _refreshPromise;
+  } finally {
+    _isRefreshing = false;
+    _refreshPromise = null;
+  }
+}
+
 async function request<T>(
   path: string,
-  options: RequestInit & { token?: string } = {},
+  options: RequestInit & { token?: string; _skipRefresh?: boolean } = {},
 ): Promise<T> {
   const token = options.token ?? (await _getToken());
   const headers: Record<string, string> = {
@@ -149,6 +225,21 @@ async function request<T>(
     ...options,
     headers,
   });
+
+  // On 401, attempt a silent token refresh and retry once
+  if (res.status === 401 && !options._skipRefresh && options.token === undefined) {
+    const result = await refreshAccessToken();
+    if (result === 'ok') {
+      return request<T>(path, { ...options, _skipRefresh: true });
+    }
+    if (result === 'terminal') {
+      await _onLogout();
+      throw new ApiClientError(401, {
+        error: { code: 'SESSION_EXPIRED', message: 'Session expired. Please login again.' },
+      });
+    }
+    // transient: don't logout, throw the original 401 so caller can retry
+  }
 
   if (!res.ok) {
     let body: ApiErrorBody | null = null;
@@ -180,6 +271,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ tenant_id: tenantId, email, password }),
       token: undefined,
+      _skipRefresh: true,
     });
   },
 
