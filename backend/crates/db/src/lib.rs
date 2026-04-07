@@ -37,6 +37,7 @@ pub mod migrations;
 pub mod tenant_db;
 pub mod metadata_db;
 pub mod repositories;
+pub mod routing_repository;
 pub mod storage;
 pub mod seed;
 
@@ -47,3 +48,4 @@ pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, cr
 #[cfg(feature = "s3")]
 pub use storage::S3StorageService;
 pub use repositories::AuditRepositoryImpl;
+pub use routing_repository::RoutingRepository;

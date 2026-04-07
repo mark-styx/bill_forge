@@ -49,6 +49,13 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    let redis_client5 = redis_client.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_routing_optimization_task(redis_client5).await {
+            error!("Routing optimization scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -230,6 +237,43 @@ async fn enqueue_anomaly_detection_job(conn: &mut redis::aio::Connection) -> Res
     conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
         .await
         .context("Failed to enqueue anomaly detection job")?;
+
+    Ok(())
+}
+
+/// Schedule routing optimization jobs every 6 hours
+async fn schedule_routing_optimization_task(redis_client: redis::Client) -> Result<()> {
+    // Run every 6 hours
+    let mut interval = interval(Duration::from_secs(6 * 60 * 60));
+
+    info!("Routing optimization scheduler started (every 6 hours)");
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_routing_optimization_job(&mut conn).await {
+            Ok(_) => info!("Enqueued routing optimization job"),
+            Err(e) => error!("Failed to enqueue routing optimization job: {}", e),
+        }
+    }
+}
+
+/// Enqueue a routing optimization job
+async fn enqueue_routing_optimization_job(conn: &mut redis::aio::Connection) -> Result<()> {
+    let job = Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        job_type: JobType::RoutingOptimization,
+        tenant_id: "system".to_string(),
+        payload: serde_json::json!({}),
+        created_at: chrono::Utc::now(),
+        retry_count: 0,
+    };
+
+    let job_json = serde_json::to_string(&job)?;
+    conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+        .await
+        .context("Failed to enqueue routing optimization job")?;
 
     Ok(())
 }
