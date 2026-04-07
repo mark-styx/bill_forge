@@ -51,13 +51,13 @@ jest.mock('@tanstack/react-query', () => {
   };
 });
 
-jest.mock('../../lib/store', () => ({
+jest.mock('../lib/store', () => ({
   useAppStore: jest.fn((selector: (s: Record<string, unknown>) => unknown) =>
     selector({ pendingCount: 2, setPendingCount: jest.fn() }),
   ),
 }));
 
-jest.mock('../../lib/api', () => ({
+jest.mock('../lib/api', () => ({
   api: {
     getApprovals: jest.fn(),
     approveInvoice: jest.fn(() => Promise.resolve({ success: true })),
