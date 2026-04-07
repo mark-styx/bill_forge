@@ -178,6 +178,8 @@ pub enum ActionType {
     AddTag,
     /// Escalate to user
     Escalate,
+    /// Use intelligent routing engine to determine assignment
+    IntelligentRoute,
 }
 
 /// Work queue for organizing invoices
