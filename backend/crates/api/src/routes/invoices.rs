@@ -14,6 +14,7 @@ use billforge_core::{
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -208,7 +209,7 @@ pub struct UploadResponse {
     path = "/invoices/upload",
     tag = "Invoices",
     responses(
-        (status = 200, description = "Invoice uploaded and processed", body = UploadResponse),
+        (status = 200, description = "Invoice uploaded and OCR processing queued", body = UploadResponse),
         (status = 400, description = "Invalid upload"),
         (status = 401, description = "Unauthorized")
     )
@@ -237,88 +238,22 @@ async fn upload_invoice(
 
             let storage_key = format!("{}/{}", tenant.tenant_id.as_str(), document_id);
 
-            // Run OCR on the document (use configured provider)
-            let ocr_provider = ocr::create_provider(&state.config.ocr_provider);
-            let ocr_result = ocr_provider.extract(&data, &content_type).await;
-
-            // Determine capture status and invoice data based on OCR result
-            let (capture_status, vendor_name, invoice_number, total_amount, ocr_confidence, ocr_error, invoice_date, due_date, po_number) =
-                match &ocr_result {
-                    Ok(result) => {
-                        let confidence = [
-                            result.invoice_number.confidence,
-                            result.vendor_name.confidence,
-                            result.total_amount.confidence,
-                        ].iter().sum::<f32>() / 3.0;
-
-                        // If confidence is too low, mark as failed
-                        let status = if confidence < 0.3 {
-                            CaptureStatus::Failed
-                        } else {
-                            CaptureStatus::ReadyForReview
-                        };
-
-                        (
-                            status,
-                            result.vendor_name.value.clone().unwrap_or_else(|| "Unknown Vendor".to_string()),
-                            result.invoice_number.value.clone().unwrap_or_else(|| format!("UPLOAD-{}", &document_id.to_string()[..8].to_uppercase())),
-                            Money::usd(result.total_amount.value.unwrap_or(0.0)),
-                            Some(confidence),
-                            None,
-                            result.invoice_date.value,
-                            result.due_date.value,
-                            result.po_number.value.clone(),
-                        )
-                    }
-                    Err(e) => {
-                        tracing::warn!("OCR failed for document {}: {}", document_id, e);
-                        (
-                            CaptureStatus::Failed,
-                            "Unknown Vendor".to_string(),
-                            format!("UPLOAD-{}", &document_id.to_string()[..8].to_uppercase()),
-                            Money::new(0, "USD".to_string()),
-                            None,
-                            Some(e.to_string()),
-                            None,
-                            None,
-                            None,
-                        )
-                    }
-                };
-
-            // Extract structured OCR fields (line items, subtotal, tax, currency)
-            let (line_items, subtotal, tax_amount, currency) = match &ocr_result {
-                Ok(result) => (
-                    ocr_line_items_to_input(&result.line_items),
-                    result.subtotal.value.map(Money::usd),
-                    result.tax_amount.value.map(Money::usd),
-                    result.currency.value.clone().unwrap_or_else(|| "USD".to_string()),
-                ),
-                Err(_) => (vec![], None, None, "USD".to_string()),
-            };
-
-            // Build notes with OCR error if applicable
-            let notes = match ocr_error {
-                Some(err) => Some(format!("Uploaded file: {}. OCR Error: {}", file_name, err)),
-                None => Some(format!("Uploaded file: {}", file_name)),
-            };
-
-            // Create invoice from OCR result (or fallback values)
+            // Create invoice with Processing status (placeholder data until OCR completes)
             let invoice_input = CreateInvoiceInput {
                 vendor_id: None,
-                vendor_name,
-                invoice_number,
-                invoice_date,
-                due_date,
-                po_number,
-                subtotal,
-                tax_amount,
-                total_amount,
-                currency,
-                line_items,
+                vendor_name: "Processing...".to_string(),
+                invoice_number: format!("UPLOAD-{}", document_id),
+                invoice_date: None,
+                due_date: None,
+                po_number: None,
+                subtotal: None,
+                tax_amount: None,
+                total_amount: Money::new(0, "USD".to_string()),
+                currency: "USD".to_string(),
+                line_items: vec![],
                 document_id,
-                ocr_confidence,
-                notes,
+                ocr_confidence: None,
+                notes: Some(format!("Uploaded file: {}", file_name)),
                 tags: vec![],
                 department: None,
                 gl_code: None,
@@ -326,92 +261,60 @@ async fn upload_invoice(
             };
 
             let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+            let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
             let invoice = repo.create(&tenant.tenant_id, invoice_input, &user.user_id).await?;
 
-            // Update capture status
-            repo.update_capture_status(&tenant.tenant_id, &invoice.id, capture_status).await?;
+            // Set capture status to Processing
+            repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing).await?;
 
-            // If OCR failed, move to error queue
-            if capture_status == CaptureStatus::Failed {
-                let pool = state.db.tenant(&tenant.tenant_id).await?;
-                let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
-
-                match billforge_core::traits::WorkQueueRepository::get_by_type(
-                    &queue_repo,
-                    &tenant.tenant_id,
-                    QueueType::OcrError,
-                ).await {
-                    Ok(Some(error_queue)) => {
-                        if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(
-                            &queue_repo,
-                            &tenant.tenant_id,
-                            &invoice.id,
-                            &error_queue.id,
-                            None,
-                        ).await {
-                            tracing::warn!(
-                                invoice_id = %invoice.id,
-                                queue_id = %error_queue.id,
-                                error = %e,
-                                "Failed to create OCR error queue item"
-                            );
-                        }
-
-                        if let Err(e) = sqlx::query(
-                            "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
-                        )
-                        .bind(error_queue.id.0)
-                        .bind(invoice.id.as_uuid())
-                        .execute(&*pool)
-                        .await
-                        {
-                            tracing::warn!(
-                                invoice_id = %invoice.id,
-                                error = %e,
-                                "Failed to update invoice current_queue_id"
-                            );
-                        }
-                    }
-                    Ok(None) => {
-                        tracing::error!(
-                            invoice_id = %invoice.id,
-                            "No OcrError queue found for tenant, invoice will not appear in any queue"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            invoice_id = %invoice.id,
-                            error = %e,
-                            "Failed to look up OcrError queue, invoice will not appear in any queue"
-                        );
-                    }
-                }
-            }
-
-            // Store document metadata in the tenant database
-            let pool = state.db.tenant(&tenant.tenant_id).await?;
-
+            // Store document metadata
             sqlx::query(
                 "INSERT INTO documents (id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'invoice_original', $8, NOW())"
             )
             .bind(document_id)
             .bind(*tenant.tenant_id.as_uuid())
-            .bind(file_name)
-            .bind(content_type)
+            .bind(&file_name)
+            .bind(&content_type)
             .bind(data.len() as i64)
-            .bind(storage_key)
+            .bind(&storage_key)
             .bind(invoice.id.as_uuid())
             .bind(user.user_id.as_uuid())
             .execute(&*pool)
             .await
             .map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
 
-            let message = if capture_status == CaptureStatus::Failed {
-                format!("File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.", file_name_for_msg)
+            // Enqueue async OCR job if Redis is available, otherwise fall back to sync
+            let message = if let Some(ref redis_client) = state.redis {
+                match enqueue_ocr_job(
+                    redis_client,
+                    &tenant.tenant_id,
+                    &invoice.id,
+                    document_id,
+                    &content_type,
+                ).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            invoice_id = %invoice.id,
+                            "OCR job enqueued for async processing"
+                        );
+                        format!("File '{}' uploaded. OCR processing queued - poll GET /invoices/{} for status.", file_name_for_msg, invoice.id)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            invoice_id = %invoice.id,
+                            error = %e,
+                            "Failed to enqueue OCR job, falling back to sync"
+                        );
+                        // Fall back to synchronous OCR
+                        let status = run_sync_ocr(&state, &tenant.tenant_id, &invoice.id, &data, &content_type, &repo, &pool).await;
+                        sync_ocr_message(&file_name_for_msg, status)
+                    }
+                }
             } else {
-                format!("File '{}' uploaded and processed. Invoice ready for review.", file_name_for_msg)
+                // No Redis configured, run OCR synchronously
+                let status = run_sync_ocr(&state, &tenant.tenant_id, &invoice.id, &data, &content_type, &repo, &pool).await;
+                sync_ocr_message(&file_name_for_msg, status)
             };
 
             return Ok(Json(UploadResponse {
@@ -425,6 +328,187 @@ async fn upload_invoice(
     Err(billforge_core::Error::Validation("No file provided".to_string()).into())
 }
 
+/// Enqueue an OCR processing job to the Redis job queue.
+async fn enqueue_ocr_job(
+    redis_client: &redis::Client,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    document_id: Uuid,
+    content_type: &str,
+) -> Result<(), billforge_core::Error> {
+    let job = serde_json::json!({
+        "id": Uuid::new_v4().to_string(),
+        "job_type": "ocr_process",
+        "tenant_id": tenant_id.to_string(),
+        "payload": {
+            "invoice_id": invoice_id.to_string(),
+            "document_id": document_id.to_string(),
+            "content_type": content_type,
+        },
+        "created_at": chrono::Utc::now(),
+        "retry_count": 0,
+    });
+
+    let job_json = serde_json::to_string(&job)
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to serialize OCR job: {}", e)))?;
+
+    let mut conn = redis_client
+        .get_async_connection()
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Redis connection failed: {}", e)))?;
+
+    conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to enqueue OCR job: {}", e)))?;
+
+    Ok(())
+}
+
+/// Synchronous OCR fallback when Redis is unavailable.
+/// Runs OCR inline and updates the invoice with results.
+/// Returns the resulting capture status.
+async fn run_sync_ocr(
+    state: &AppState,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    data: &[u8],
+    content_type: &str,
+    repo: &billforge_db::repositories::InvoiceRepositoryImpl,
+    pool: &std::sync::Arc<sqlx::PgPool>,
+) -> CaptureStatus {
+    let ocr_provider = ocr::create_provider(&state.config.ocr_provider);
+    let ocr_result = ocr_provider.extract(data, content_type).await;
+
+    let capture_status = match &ocr_result {
+        Ok(result) => {
+            let confidence = [
+                result.invoice_number.confidence,
+                result.vendor_name.confidence,
+                result.total_amount.confidence,
+            ]
+            .iter()
+            .sum::<f32>()
+                / 3.0;
+
+            let status = if confidence < 0.3 {
+                CaptureStatus::Failed
+            } else {
+                CaptureStatus::ReadyForReview
+            };
+
+            let vendor_name = result.vendor_name.value.clone()
+                .unwrap_or_else(|| "Unknown Vendor".to_string());
+            let invoice_number = result.invoice_number.value.clone()
+                .unwrap_or_else(|| format!("UPLOAD-{}", &Uuid::new_v4().to_string()[..8].to_uppercase()));
+            let total_amount = Money::usd(result.total_amount.value.unwrap_or(0.0));
+            let currency = result.currency.value.clone().unwrap_or_else(|| "USD".to_string());
+
+            // Use repo.update() for fields it supports
+            let mut updates = serde_json::json!({
+                "vendor_name": vendor_name,
+                "invoice_number": invoice_number,
+                "total_amount": {
+                    "amount": total_amount.amount,
+                    "currency": currency,
+                },
+            });
+            if let Some(date) = result.invoice_date.value {
+                updates["invoice_date"] = serde_json::json!(date.format("%Y-%m-%d").to_string());
+            }
+            if let Some(date) = result.due_date.value {
+                updates["due_date"] = serde_json::json!(date.format("%Y-%m-%d").to_string());
+            }
+            if let Some(ref po) = result.po_number.value {
+                updates["po_number"] = serde_json::json!(po);
+            }
+
+            if let Err(e) = repo.update(tenant_id, invoice_id, updates).await {
+                tracing::error!(invoice_id = %invoice_id, error = %e, "Failed to update invoice with OCR results");
+            }
+
+            // Update OCR-specific fields via raw SQL
+            let subtotal_cents = result.subtotal.value.map(|v| Money::usd(v).amount);
+            let tax_cents = result.tax_amount.value.map(|v| Money::usd(v).amount);
+            let line_items_json: serde_json::Value = result
+                .line_items
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "description": item.description.value.clone().unwrap_or_default(),
+                        "quantity": item.quantity.value,
+                        "unit_price_cents": item.unit_price.value.map(|v| Money::usd(v).amount),
+                        "amount_cents": Money::usd(item.amount.value.unwrap_or(0.0)).amount,
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into();
+
+            if let Err(e) = sqlx::query(
+                r#"UPDATE invoices
+                   SET ocr_confidence = $1,
+                       subtotal_cents = COALESCE($2, subtotal_cents),
+                       tax_amount_cents = COALESCE($3, tax_amount_cents),
+                       line_items = $4,
+                       updated_at = NOW()
+                   WHERE id = $5 AND tenant_id = $6"#,
+            )
+            .bind(confidence)
+            .bind(subtotal_cents)
+            .bind(tax_cents)
+            .bind(&line_items_json)
+            .bind(invoice_id.as_uuid())
+            .bind(*tenant_id.as_uuid())
+            .execute(&**pool)
+            .await
+            {
+                tracing::warn!(invoice_id = %invoice_id, error = %e, "Failed to update OCR-specific fields");
+            }
+
+            status
+        }
+        Err(e) => {
+            tracing::warn!(invoice_id = %invoice_id, error = %e, "Sync OCR failed");
+            let _ = repo.update(
+                tenant_id,
+                invoice_id,
+                serde_json::json!({ "notes": format!("OCR Error: {}", e) }),
+            ).await;
+            CaptureStatus::Failed
+        }
+    };
+
+    if let Err(e) = repo.update_capture_status(tenant_id, invoice_id, capture_status).await {
+        tracing::error!(invoice_id = %invoice_id, error = %e, "Failed to update capture status");
+    }
+
+    // Move to error queue if OCR failed
+    if capture_status == CaptureStatus::Failed {
+        let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+        if let Ok(Some(error_queue)) = billforge_core::traits::WorkQueueRepository::get_by_type(
+            &queue_repo,
+            tenant_id,
+            QueueType::OcrError,
+        ).await {
+            let _ = billforge_core::traits::WorkQueueRepository::move_item(
+                &queue_repo,
+                tenant_id,
+                invoice_id,
+                &error_queue.id,
+                None,
+            ).await;
+            let _ = sqlx::query(
+                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
+            )
+            .bind(error_queue.id.0)
+            .bind(invoice_id.as_uuid())
+            .execute(&**pool)
+            .await;
+        }
+    }
+
+    capture_status
+}
+
 #[utoipa::path(
     post,
     path = "/invoices/{id}/ocr",
@@ -433,7 +517,7 @@ async fn upload_invoice(
         ("id" = String, Path, description = "Invoice ID")
     ),
     responses(
-        (status = 200, description = "OCR reprocessing completed"),
+        (status = 200, description = "OCR reprocessing queued or completed"),
         (status = 404, description = "Invoice not found"),
         (status = 401, description = "Unauthorized")
     )
@@ -443,20 +527,64 @@ async fn rerun_ocr(
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let invoice_id = id.parse()
+    let invoice_id: billforge_core::domain::InvoiceId = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
 
-    // Create the invoice capture service
-    let invoice_repo = std::sync::Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool));
+    // Verify invoice exists and get its document_id
+    let invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Look up the stored MIME type for this invoice's primary document
+    let mime_type: String = sqlx::query_scalar(
+        "SELECT mime_type FROM documents WHERE id = $1 AND tenant_id = $2"
+    )
+    .bind(invoice.document_id)
+    .bind(*tenant.tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to look up document MIME type: {}", e)))?
+    .unwrap_or_else(|| "application/pdf".to_string());
+
+    // Mark as Processing
+    repo.update_capture_status(&tenant.tenant_id, &invoice_id, CaptureStatus::Processing).await?;
+
+    // Try async via Redis, fall back to sync
+    if let Some(ref redis_client) = state.redis {
+        match enqueue_ocr_job(
+            redis_client,
+            &tenant.tenant_id,
+            &invoice_id,
+            invoice.document_id,
+            &mime_type,
+        ).await {
+            Ok(_) => {
+                tracing::info!(invoice_id = %invoice_id, "OCR reprocessing job enqueued");
+                return Ok(Json(serde_json::json!({
+                    "message": "OCR reprocessing queued",
+                    "invoice_id": id,
+                    "status": "processing",
+                })));
+            }
+            Err(e) => {
+                tracing::warn!(invoice_id = %invoice_id, error = %e, "Failed to enqueue OCR rerun, falling back to sync");
+            }
+        }
+    }
+
+    // Synchronous fallback
+    let invoice_repo = std::sync::Arc::new(repo);
     let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
         &state.config.ocr_provider,
         invoice_repo,
         state.storage.clone(),
     );
 
-    // Run OCR reprocessing
     let ocr_result = capture_service.reprocess_ocr(&tenant.tenant_id, &invoice_id).await?;
 
     Ok(Json(serde_json::json!({
@@ -500,6 +628,13 @@ async fn submit_for_processing(
             resource_type: "Invoice".to_string(),
             id: id.clone(),
         })?;
+
+    // Block submission while OCR is still running asynchronously
+    if invoice.capture_status == CaptureStatus::Processing {
+        return Err(billforge_core::Error::Validation(
+            "Invoice is still being processed by OCR. Please wait for processing to complete before submitting.".to_string(),
+        ).into());
+    }
 
     // Update status to Submitted
     invoice_repo.update_processing_status(
@@ -825,6 +960,15 @@ async fn suggest_categories(
     };
 
     Ok(Json(categorization))
+}
+
+/// Build response message based on sync OCR result status.
+fn sync_ocr_message(file_name: &str, status: CaptureStatus) -> String {
+    if status == CaptureStatus::Failed {
+        format!("File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.", file_name)
+    } else {
+        format!("File '{}' uploaded and processed. Invoice ready for review.", file_name)
+    }
 }
 
 /// Convert OCR-extracted line items into CreateLineItemInput values.

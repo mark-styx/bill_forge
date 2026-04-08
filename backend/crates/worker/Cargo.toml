@@ -49,6 +49,7 @@ billforge-email = { path = "../email" }
 billforge-reporting = { path = "../reporting" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-analytics = { path = "../analytics" }
+billforge-invoice-capture = { path = "../invoice-capture" }
 
 # Metrics
 prometheus = "0.13"

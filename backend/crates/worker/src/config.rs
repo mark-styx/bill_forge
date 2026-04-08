@@ -11,6 +11,10 @@ pub struct WorkerConfig {
     pub max_concurrent_jobs: usize,
     /// Multi-tenant database manager
     pub pg_manager: Arc<PgManager>,
+    /// Base data directory (parent of tenant DBs, contains documents/)
+    pub storage_base_path: String,
+    /// OCR provider name (tesseract, aws_textract, google_vision)
+    pub ocr_provider: String,
 }
 
 impl WorkerConfig {
@@ -39,6 +43,18 @@ impl WorkerConfig {
                 .parse()
                 .context("Invalid MAX_CONCURRENT_JOBS")?,
             pg_manager: Arc::new(pg_manager),
+            storage_base_path: {
+                // Use same derivation as the API: parent of TENANT_DB_PATH
+                let tenant_db_path = std::env::var("TENANT_DB_PATH")
+                    .unwrap_or_else(|_| "./data/tenants".to_string());
+                std::path::Path::new(&tenant_db_path)
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("./data"))
+                    .to_string_lossy()
+                    .into_owned()
+            },
+            ocr_provider: std::env::var("OCR_PROVIDER")
+                .unwrap_or_else(|_| "tesseract".to_string()),
         })
     }
 }

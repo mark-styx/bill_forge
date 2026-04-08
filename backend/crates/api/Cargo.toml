@@ -59,6 +59,9 @@ validator = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
 
+# Redis job queue (for enqueuing OCR jobs)
+redis = { version = "0.24", features = ["tokio-comp"] }
+
 # Validation
 regex = "1.10"
 

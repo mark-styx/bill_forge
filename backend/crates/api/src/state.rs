@@ -20,6 +20,8 @@ pub struct AppState {
     pub audit: Arc<AuditRepositoryImpl>,
     pub email: Arc<dyn EmailService>,
     pub config: Arc<Config>,
+    /// Redis client for enqueuing background jobs (None = sync fallback)
+    pub redis: Option<redis::Client>,
 }
 
 impl FromRef<AppState> for Arc<AuthService> {
@@ -69,6 +71,24 @@ impl AppState {
             Arc::new(MockEmailService::new())
         };
 
+        // Initialize Redis client for background job queue (optional)
+        let redis = match &config.redis_url {
+            Some(url) => match redis::Client::open(url.as_str()) {
+                Ok(client) => {
+                    tracing::info!("Redis client initialized for job queue");
+                    Some(client)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize Redis client, OCR will run synchronously: {}", e);
+                    None
+                }
+            },
+            None => {
+                tracing::info!("REDIS_URL not set, OCR will run synchronously");
+                None
+            }
+        };
+
         // Initialize sandbox data if needed
         Self::init_sandbox(&db, &auth, &audit).await?;
 
@@ -83,6 +103,7 @@ impl AppState {
             audit,
             email,
             config: Arc::new(config.clone()),
+            redis,
         })
     }
 

@@ -15,6 +15,7 @@ pub mod categorization_training;
 pub mod routing_optimization;
 pub mod forecast_refresh;
 pub mod anomaly_detection;
+pub mod ocr_processing;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -44,6 +45,7 @@ pub enum JobType {
     EdiSendRemittance,
     EdiSendAck,
     EdiCheckAckStatus,
+    OcrProcess,
 }
 
 impl std::fmt::Display for JobType {
@@ -64,6 +66,7 @@ impl std::fmt::Display for JobType {
             JobType::EdiSendRemittance => write!(f, "EdiSendRemittance"),
             JobType::EdiSendAck => write!(f, "EdiSendAck"),
             JobType::EdiCheckAckStatus => write!(f, "EdiCheckAckStatus"),
+            JobType::OcrProcess => write!(f, "OcrProcess"),
         }
     }
 }
@@ -201,6 +204,14 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             // Payload: { "tenant_id": "..." }
             info!("EDI check ack status job - payload: {}", job.payload);
             Ok(())
+        }
+        JobType::OcrProcess => {
+            ocr_processing::process_ocr(
+                &job.tenant_id,
+                &job.payload,
+                config,
+                job.retry_count,
+            ).await
         }
     }
 }

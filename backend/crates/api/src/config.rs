@@ -42,6 +42,8 @@ pub struct Config {
     pub fcm: Option<FcmConfig>,
     /// APNS (Apple Push Notification Service) configuration (None if push notifications are disabled)
     pub apns: Option<ApnsConfig>,
+    /// Redis URL for job queue (None disables async OCR, falling back to sync)
+    pub redis_url: Option<String>,
 }
 
 /// QuickBooks Online integration configuration
@@ -414,6 +416,7 @@ impl Config {
             bill_com,
             fcm,
             apns,
+            redis_url: std::env::var("REDIS_URL").ok(),
         })
     }
 }
