@@ -37,6 +37,21 @@ pub struct ExportQuery {
     pub vendor_id: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/export/invoices/csv",
+    tag = "Export",
+    params(
+        ("start_date" = Option<String>, Query, description = "Start date filter (YYYY-MM-DD)"),
+        ("end_date" = Option<String>, Query, description = "End date filter (YYYY-MM-DD)"),
+        ("status" = Option<String>, Query, description = "Status filter"),
+        ("vendor_id" = Option<String>, Query, description = "Vendor ID filter"),
+    ),
+    responses(
+        (status = 200, description = "Invoice CSV file", content_type = "text/csv"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn export_invoices_csv(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
@@ -100,6 +115,15 @@ async fn export_invoices_csv(
     Ok(response.into_response())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/export/invoices/json",
+    tag = "Export",
+    responses(
+        (status = 200, description = "Invoice JSON file", content_type = "application/json"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn export_invoices_json(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
@@ -172,6 +196,15 @@ async fn export_invoices_json(
     Ok(response.into_response())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/export/vendors/csv",
+    tag = "Export",
+    responses(
+        (status = 200, description = "Vendor CSV file", content_type = "text/csv"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn export_vendors_csv(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,

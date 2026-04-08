@@ -27,6 +27,8 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// List all available sandbox personas
+#[utoipa::path(get, path = "/api/v1/sandbox/personas", tag = "Sandbox",
+    responses((status = 200, description = "Available personas")))]
 async fn list_personas(
     State(_state): State<AppState>,
 ) -> ApiResult<Json<Vec<PersonaInfo>>> {
@@ -39,6 +41,8 @@ async fn list_personas(
 }
 
 /// Get the current persona for the authenticated tenant
+#[utoipa::path(get, path = "/api/v1/sandbox/personas/current", tag = "Sandbox",
+    responses((status = 200, description = "Current persona"), (status = 401, description = "Unauthorized")))]
 async fn get_current_persona(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -91,6 +95,8 @@ pub struct SwitchPersonaResponse {
 }
 
 /// Switch the tenant to a different persona (updates enabled modules)
+#[utoipa::path(post, path = "/api/v1/sandbox/personas/switch", tag = "Sandbox", request_body = serde_json::Value,
+    responses((status = 200, description = "Persona switched"), (status = 403, description = "Admin only")))]
 async fn switch_persona(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -171,6 +177,8 @@ pub struct TenantSettingsResponse {
 }
 
 /// Get full tenant context with all module and role information
+#[utoipa::path(get, path = "/api/v1/sandbox/context", tag = "Sandbox",
+    responses((status = 200, description = "Tenant context"), (status = 401, description = "Unauthorized")))]
 async fn get_tenant_context(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,

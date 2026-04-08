@@ -68,6 +68,9 @@ struct MatchResponse {
     summary: ReconciliationSummary,
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{vendor_id}/statements", tag = "Vendor Statements", request_body = serde_json::Value,
+    params(("vendor_id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Statement created")))]
 async fn create_statement(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -114,6 +117,9 @@ async fn create_statement(
     }))
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors/{vendor_id}/statements", tag = "Vendor Statements",
+    params(("vendor_id" = String, Path,)),
+    responses((status = 200, description = "Statement list")))]
 async fn list_statements(
     State(state): State<AppState>,
     VendorMgmtAccess(_user, tenant): VendorMgmtAccess,
@@ -149,6 +155,9 @@ async fn list_statements(
     }))
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors/{vendor_id}/statements/{statement_id}", tag = "Vendor Statements",
+    params(("vendor_id" = String, Path,), ("statement_id" = String, Path,)),
+    responses((status = 200, description = "Statement details"), (status = 404, description = "Not found")))]
 async fn get_statement(
     State(state): State<AppState>,
     VendorMgmtAccess(_user, tenant): VendorMgmtAccess,
@@ -175,6 +184,9 @@ async fn get_statement(
     }))
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{vendor_id}/statements/{statement_id}/match", tag = "Vendor Statements", request_body = serde_json::Value,
+    params(("vendor_id" = String, Path,), ("statement_id" = String, Path,)),
+    responses((status = 200, description = "Match results")))]
 async fn run_auto_match(
     State(state): State<AppState>,
     VendorMgmtAccess(_user, tenant): VendorMgmtAccess,
@@ -210,6 +222,9 @@ async fn run_auto_match(
     Ok(Json(MatchResponse { results, summary }))
 }
 
+#[utoipa::path(put, path = "/api/v1/vendors/{vendor_id}/statements/{statement_id}/lines/{line_id}", tag = "Vendor Statements", request_body = serde_json::Value,
+    params(("vendor_id" = String, Path,), ("statement_id" = String, Path,), ("line_id" = String, Path,)),
+    responses((status = 200, description = "Line updated")))]
 async fn update_line(
     State(state): State<AppState>,
     VendorMgmtAccess(_user, tenant): VendorMgmtAccess,
@@ -263,6 +278,9 @@ async fn update_line(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{vendor_id}/statements/{statement_id}/reconcile", tag = "Vendor Statements", request_body = serde_json::Value,
+    params(("vendor_id" = String, Path,), ("statement_id" = String, Path,)),
+    responses((status = 200, description = "Statement reconciled")))]
 async fn reconcile_statement(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,

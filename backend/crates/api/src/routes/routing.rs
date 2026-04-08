@@ -44,6 +44,9 @@ struct RouteInvoiceResponse {
 }
 
 /// Get a routing decision for an invoice
+#[utoipa::path(post, path = "/api/v1/routing/invoices/{invoice_id}/route", tag = "Routing", request_body = serde_json::Value,
+    params(("invoice_id" = String, Path, description = "Invoice ID")),
+    responses((status = 200, description = "Routing decision"), (status = 404, description = "Invoice not found")))]
 async fn route_invoice(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -127,6 +130,8 @@ struct ApproverWorkloadSummary {
 }
 
 /// Get workload distribution statistics
+#[utoipa::path(get, path = "/api/v1/routing/workload", tag = "Routing",
+    responses((status = 200, description = "Workload stats")))]
 async fn get_workload_stats(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -173,6 +178,8 @@ struct SetAvailabilityRequest {
 }
 
 /// Set approver availability (admin or self only)
+#[utoipa::path(post, path = "/api/v1/routing/availability", tag = "Routing", request_body = serde_json::Value,
+    responses((status = 204, description = "Availability set"), (status = 403, description = "Forbidden")))]
 async fn set_availability(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -227,6 +234,8 @@ struct RoutingConfigResponse {
 }
 
 /// Get routing configuration
+#[utoipa::path(get, path = "/api/v1/routing/config", tag = "Routing",
+    responses((status = 200, description = "Routing configuration")))]
 async fn get_routing_config(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -278,6 +287,8 @@ struct UpdateRoutingConfigRequest {
 }
 
 /// Update routing configuration (admin only)
+#[utoipa::path(put, path = "/api/v1/routing/config", tag = "Routing", request_body = serde_json::Value,
+    responses((status = 200, description = "Configuration updated"), (status = 403, description = "Admin only")))]
 async fn update_routing_config(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

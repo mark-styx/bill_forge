@@ -40,6 +40,9 @@ pub struct ListVendorsQuery {
     pub search: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors", tag = "Vendors",
+    params(("page" = Option<u32>, Query,), ("per_page" = Option<u32>, Query,), ("status" = Option<String>, Query,), ("search" = Option<String>, Query,)),
+    responses((status = 200, description = "Paginated vendor list"), (status = 401, description = "Unauthorized")))]
 async fn list_vendors(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -62,6 +65,9 @@ async fn list_vendors(
     Ok(Json(vendors))
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors/{id}", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Vendor details"), (status = 404, description = "Vendor not found")))]
 async fn get_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -81,6 +87,8 @@ async fn get_vendor(
     Ok(Json(vendor))
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors", tag = "Vendors", request_body = serde_json::Value,
+    responses((status = 200, description = "Vendor created"), (status = 401, description = "Unauthorized")))]
 async fn create_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -93,6 +101,9 @@ async fn create_vendor(
     Ok(Json(vendor))
 }
 
+#[utoipa::path(put, path = "/api/v1/vendors/{id}", tag = "Vendors", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Vendor updated"), (status = 404, description = "Vendor not found")))]
 async fn update_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -109,6 +120,9 @@ async fn update_vendor(
     Ok(Json(vendor))
 }
 
+#[utoipa::path(delete, path = "/api/v1/vendors/{id}", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Vendor deleted"), (status = 404, description = "Vendor not found")))]
 async fn delete_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -124,6 +138,9 @@ async fn delete_vendor(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{id}/contacts", tag = "Vendors", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Contact added"), (status = 404, description = "Vendor not found")))]
 async fn add_contact(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -140,6 +157,9 @@ async fn add_contact(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(delete, path = "/api/v1/vendors/{id}/contacts/{contact_id}", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID"), ("contact_id" = String, Path, description = "Contact ID")),
+    responses((status = 200, description = "Contact removed")))]
 async fn remove_contact(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -157,6 +177,9 @@ async fn remove_contact(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors/{id}/documents", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Tax documents list")))]
 async fn list_tax_documents(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -184,6 +207,10 @@ async fn list_tax_documents(
     Ok(Json(result))
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{id}/documents", tag = "Vendors",
+    request_body(content = inline(String), content_type = "multipart/form-data"),
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Document uploaded")))]
 async fn upload_tax_document(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -232,6 +259,9 @@ async fn upload_tax_document(
     Err(billforge_core::Error::Validation("No file uploaded".to_string()).into())
 }
 
+#[utoipa::path(get, path = "/api/v1/vendors/{id}/messages", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Vendor messages")))]
 async fn list_messages(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -264,6 +294,9 @@ pub struct SendMessageInput {
     pub body: String,
 }
 
+#[utoipa::path(post, path = "/api/v1/vendors/{id}/messages", tag = "Vendors", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Message sent")))]
 async fn send_message(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,

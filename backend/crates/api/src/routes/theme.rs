@@ -165,6 +165,7 @@ pub fn org_routes() -> Router<AppState> {
         .route("/import", post(import_theme))
 }
 
+#[utoipa::path(get, path = "/api/v1/organization/theme", tag = "Theme", responses((status = 200, description = "Organization theme")))]
 async fn get_org_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -185,6 +186,7 @@ async fn get_org_theme(
     })
 }
 
+#[utoipa::path(post, path = "/api/v1/organization/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme created")))]
 async fn create_org_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -208,6 +210,7 @@ async fn create_org_theme(
     })
 }
 
+#[utoipa::path(put, path = "/api/v1/organization/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme updated")))]
 async fn update_org_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -231,6 +234,7 @@ async fn update_org_theme(
     })
 }
 
+#[utoipa::path(delete, path = "/api/v1/organization/theme", tag = "Theme", responses((status = 200, description = "Theme deleted")))]
 async fn delete_org_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -239,6 +243,7 @@ async fn delete_org_theme(
     Json(serde_json::json!({ "success": true }))
 }
 
+#[utoipa::path(post, path = "/api/v1/organization/theme/logo", tag = "Theme", request_body = serde_json::Value, responses((status = 501, description = "Not implemented")))]
 async fn upload_logo(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -247,6 +252,7 @@ async fn upload_logo(
     axum::http::StatusCode::NOT_IMPLEMENTED
 }
 
+#[utoipa::path(delete, path = "/api/v1/organization/theme/logo/{logo_type}", tag = "Theme", params(("logo_type" = String, Path,)), responses((status = 200, description = "Logo deleted")))]
 async fn delete_logo(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -256,6 +262,7 @@ async fn delete_logo(
     Json(serde_json::json!({ "success": true }))
 }
 
+#[utoipa::path(post, path = "/api/v1/organization/theme/preview", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme preview CSS")))]
 async fn preview_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -264,6 +271,7 @@ async fn preview_theme(
     Json(serde_json::json!({ "css_variables": {} }))
 }
 
+#[utoipa::path(get, path = "/api/v1/organization/theme/export", tag = "Theme", responses((status = 200, description = "Theme export JSON")))]
 async fn export_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -276,6 +284,7 @@ async fn export_theme(
     }))
 }
 
+#[utoipa::path(post, path = "/api/v1/organization/theme/import", tag = "Theme", request_body = serde_json::Value, responses((status = 501, description = "Not implemented")))]
 async fn import_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -294,6 +303,7 @@ pub fn user_routes() -> Router<AppState> {
         .route("/effective", get(get_effective_theme))
 }
 
+#[utoipa::path(get, path = "/api/v1/user/theme", tag = "Theme", responses((status = 200, description = "User theme preference")))]
 async fn get_user_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -310,6 +320,7 @@ async fn get_user_theme(
     })
 }
 
+#[utoipa::path(post, path = "/api/v1/user/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme preference created")))]
 async fn create_user_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -327,6 +338,7 @@ async fn create_user_theme(
     })
 }
 
+#[utoipa::path(put, path = "/api/v1/user/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme preference updated")))]
 async fn update_user_theme(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -344,6 +356,7 @@ async fn update_user_theme(
     })
 }
 
+#[utoipa::path(delete, path = "/api/v1/user/theme", tag = "Theme", responses((status = 200, description = "Theme preference deleted")))]
 async fn delete_user_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -351,6 +364,7 @@ async fn delete_user_theme(
     Json(serde_json::json!({ "success": true }))
 }
 
+#[utoipa::path(get, path = "/api/v1/user/theme/effective", tag = "Theme", responses((status = 200, description = "Effective theme (org + user)")))]
 async fn get_effective_theme(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,

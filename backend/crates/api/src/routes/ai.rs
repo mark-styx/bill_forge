@@ -34,6 +34,8 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// POST /ai/chat
+#[utoipa::path(post, path = "/api/v1/ai/chat", tag = "AI Assistant", request_body = serde_json::Value,
+    responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
 async fn chat_handler(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -60,6 +62,8 @@ async fn chat_handler(
 }
 
 /// GET /ai/conversations
+#[utoipa::path(get, path = "/api/v1/ai/conversations", tag = "AI Assistant",
+    responses((status = 200, description = "Conversation list"), (status = 401, description = "Unauthorized")))]
 async fn list_conversations_handler(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -85,6 +89,9 @@ async fn list_conversations_handler(
 }
 
 /// POST /ai/conversations/:id/messages
+#[utoipa::path(post, path = "/api/v1/ai/conversations/{id}/messages", tag = "AI Assistant", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Conversation ID")),
+    responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
 async fn continue_conversation_handler(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

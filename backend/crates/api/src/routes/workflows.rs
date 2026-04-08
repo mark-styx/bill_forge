@@ -91,6 +91,7 @@ pub struct ListRulesQuery {
     pub rule_type: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/rules", tag = "Workflows", responses((status = 200, description = "Workflow rules")))]
 async fn list_rules(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -102,6 +103,7 @@ async fn list_rules(
     Ok(Json(rules))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/rules/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Rule details")))]
 async fn get_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -121,6 +123,7 @@ async fn get_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/rules", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Rule created")))]
 async fn create_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -132,6 +135,7 @@ async fn create_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/rules/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Rule updated")))]
 async fn update_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -147,6 +151,7 @@ async fn update_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/rules/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Rule deleted")))]
 async fn delete_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -161,6 +166,7 @@ async fn delete_rule(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/rules/{id}/activate", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Rule activated")))]
 async fn activate_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -175,6 +181,7 @@ async fn activate_rule(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/rules/{id}/deactivate", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Rule deactivated")))]
 async fn deactivate_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -193,6 +200,7 @@ async fn deactivate_rule(
 // Work Queue Handlers
 // ============================================================================
 
+#[utoipa::path(get, path = "/api/v1/workflows/queues", tag = "Workflows", responses((status = 200, description = "Work queues")))]
 async fn list_queues(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -203,6 +211,7 @@ async fn list_queues(
     Ok(Json(queues))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/queues/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Queue details")))]
 async fn get_queue(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -222,6 +231,7 @@ async fn get_queue(
     Ok(Json(queue))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/queues", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Queue created")))]
 async fn create_queue(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -233,6 +243,7 @@ async fn create_queue(
     Ok(Json(queue))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/queues/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Queue updated")))]
 async fn update_queue(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -248,6 +259,7 @@ async fn update_queue(
     Ok(Json(queue))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/queues/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Queue deleted")))]
 async fn delete_queue(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -268,6 +280,7 @@ pub struct QueueItemsQuery {
     pub per_page: Option<u32>,
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/queues/{id}/items", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Queue items")))]
 async fn list_queue_items(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -288,6 +301,7 @@ async fn list_queue_items(
     Ok(Json(result.data))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/queues/{id}/items/{item_id}/claim", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,), ("item_id" = String, Path,)), responses((status = 200, description = "Item claimed")))]
 async fn claim_item(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
@@ -307,6 +321,7 @@ pub struct CompleteItemInput {
     pub action: String,
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/queues/{id}/items/{item_id}/complete", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,), ("item_id" = String, Path,)), responses((status = 200, description = "Item completed")))]
 async fn complete_item(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -326,6 +341,7 @@ async fn complete_item(
 // Assignment Rule Handlers
 // ============================================================================
 
+#[utoipa::path(get, path = "/api/v1/workflows/assignment-rules", tag = "Workflows", responses((status = 200, description = "Assignment rules")))]
 async fn list_assignment_rules(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -336,6 +352,7 @@ async fn list_assignment_rules(
     Ok(Json(rules))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/assignment-rules/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Assignment rule")))]
 async fn get_assignment_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -355,6 +372,7 @@ async fn get_assignment_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/assignment-rules", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Rule created")))]
 async fn create_assignment_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -366,6 +384,7 @@ async fn create_assignment_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/assignment-rules/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Rule updated")))]
 async fn update_assignment_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -381,6 +400,7 @@ async fn update_assignment_rule(
     Ok(Json(rule))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/assignment-rules/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Rule deleted")))]
 async fn delete_assignment_rule(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -475,6 +495,7 @@ pub struct PendingApprovalResponse {
     pub total_amount: Option<f64>,
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/approvals/pending", tag = "Workflows", responses((status = 200, description = "Pending approvals")))]
 async fn list_pending_approvals(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -532,6 +553,7 @@ async fn list_pending_approvals(
     Ok(Json(approvals))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/approvals/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Approval details")))]
 async fn get_approval(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -619,6 +641,7 @@ pub struct ApprovalInput {
     pub comments: Option<String>,
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/approvals/{id}/approve", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice approved")))]
 async fn approve(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
@@ -784,6 +807,7 @@ async fn approve(
     })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/approvals/{id}/reject", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice rejected")))]
 async fn reject(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
@@ -889,6 +913,7 @@ async fn reject(
 // Workflow Template Handlers
 // ============================================================================
 
+#[utoipa::path(get, path = "/api/v1/workflows/templates", tag = "Workflows", responses((status = 200, description = "Templates")))]
 async fn list_templates(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -899,6 +924,7 @@ async fn list_templates(
     Ok(Json(templates))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/templates/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Template details")))]
 async fn get_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -918,6 +944,7 @@ async fn get_template(
     Ok(Json(template))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/templates", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Template created")))]
 async fn create_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -929,6 +956,7 @@ async fn create_template(
     Ok(Json(template))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/templates/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Template updated")))]
 async fn update_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -944,6 +972,7 @@ async fn update_template(
     Ok(Json(template))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/templates/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Template deleted")))]
 async fn delete_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -958,6 +987,7 @@ async fn delete_template(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/templates/{id}/activate", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Template activated")))]
 async fn activate_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -972,6 +1002,7 @@ async fn activate_template(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/templates/{id}/deactivate", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Template deactivated")))]
 async fn deactivate_template(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -990,6 +1021,7 @@ async fn deactivate_template(
 // Bulk Operations Handler
 // ============================================================================
 
+#[utoipa::path(post, path = "/api/v1/workflows/bulk", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Bulk operation result")))]
 async fn bulk_operation(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1069,6 +1101,7 @@ pub struct HoldInput {
     pub reason: String,
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/invoices/{id}/hold", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice on hold")))]
 async fn put_on_hold(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1089,6 +1122,7 @@ async fn put_on_hold(
     Ok(Json(serde_json::json!({ "message": "Invoice placed on hold" })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/invoices/{id}/release", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice released")))]
 async fn release_from_hold(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1108,6 +1142,7 @@ async fn release_from_hold(
     Ok(Json(serde_json::json!({ "message": "Invoice released from hold" })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/invoices/{id}/void", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice voided")))]
 async fn void_invoice(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1127,6 +1162,7 @@ async fn void_invoice(
     Ok(Json(serde_json::json!({ "message": "Invoice voided" })))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/invoices/{id}/ready-for-payment", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Marked ready for payment")))]
 async fn mark_ready_for_payment(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1152,6 +1188,7 @@ pub struct MoveToQueueInput {
     pub assign_to: Option<String>,
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/invoices/{id}/move-to-queue", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Moved to queue")))]
 async fn move_to_queue(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1269,6 +1306,7 @@ async fn validate_delegation_input(
     Ok(())
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/delegations", tag = "Workflows", responses((status = 200, description = "Delegations")))]
 async fn list_delegations(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1279,6 +1317,7 @@ async fn list_delegations(
     Ok(Json(delegations))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/delegations/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Delegation details")))]
 async fn get_delegation(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1298,6 +1337,7 @@ async fn get_delegation(
     Ok(Json(delegation))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/delegations", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Delegation created")))]
 async fn create_delegation(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1310,6 +1350,7 @@ async fn create_delegation(
     Ok(Json(delegation))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/delegations/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Delegation updated")))]
 async fn update_delegation(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1326,6 +1367,7 @@ async fn update_delegation(
     Ok(Json(delegation))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/delegations/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Delegation deleted")))]
 async fn delete_delegation(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1344,6 +1386,7 @@ async fn delete_delegation(
 // Approval Limit Handlers
 // ============================================================================
 
+#[utoipa::path(get, path = "/api/v1/workflows/approval-limits", tag = "Workflows", responses((status = 200, description = "Approval limits")))]
 async fn list_approval_limits(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1354,6 +1397,7 @@ async fn list_approval_limits(
     Ok(Json(limits))
 }
 
+#[utoipa::path(get, path = "/api/v1/workflows/approval-limits/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Approval limit")))]
 async fn get_approval_limit(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1373,6 +1417,7 @@ async fn get_approval_limit(
     Ok(Json(limit))
 }
 
+#[utoipa::path(post, path = "/api/v1/workflows/approval-limits", tag = "Workflows", request_body = serde_json::Value, responses((status = 200, description = "Limit created")))]
 async fn create_approval_limit(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1384,6 +1429,7 @@ async fn create_approval_limit(
     Ok(Json(limit))
 }
 
+#[utoipa::path(put, path = "/api/v1/workflows/approval-limits/{id}", tag = "Workflows", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Limit updated")))]
 async fn update_approval_limit(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
@@ -1399,6 +1445,7 @@ async fn update_approval_limit(
     Ok(Json(limit))
 }
 
+#[utoipa::path(delete, path = "/api/v1/workflows/approval-limits/{id}", tag = "Workflows", params(("id" = String, Path,)), responses((status = 200, description = "Limit deleted")))]
 async fn delete_approval_limit(
     State(state): State<AppState>,
     InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,

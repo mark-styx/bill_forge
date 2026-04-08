@@ -43,6 +43,16 @@ fn feedback_file_path() -> PathBuf {
     path
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/feedback",
+    tag = "Feedback",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Feedback submitted"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn submit_feedback(
     State(_state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -84,6 +94,15 @@ async fn submit_feedback(
     Ok(Json(entry))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/feedback",
+    tag = "Feedback",
+    responses(
+        (status = 200, description = "Feedback entries"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn list_feedback(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,

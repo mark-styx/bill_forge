@@ -46,6 +46,9 @@ pub struct SlackInstallResponse {
 }
 
 /// Install Slack for a tenant
+#[utoipa::path(post, path = "/api/v1/notifications/slack/install", tag = "Notifications",
+    params(("redirect_url" = Option<String>, Query, description = "Custom redirect URL")),
+    responses((status = 200, description = "Slack OAuth URL generated")))]
 async fn install_slack(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -102,6 +105,8 @@ pub struct SlackCallbackResponse {
     pub slack_team_name: String,
 }
 
+#[utoipa::path(get, path = "/api/v1/notifications/slack/callback", tag = "Notifications",
+    responses((status = 200, description = "Slack OAuth callback")))]
 async fn slack_callback(
     State(state): State<AppState>,
     Query(query): Query<SlackCallbackRequest>,
@@ -235,6 +240,8 @@ pub struct ConfigureTeamsResponse {
     pub webhook_id: Uuid,
 }
 
+#[utoipa::path(post, path = "/api/v1/notifications/teams/configure", tag = "Notifications", request_body = serde_json::Value,
+    responses((status = 200, description = "Teams webhook configured")))]
 async fn configure_teams(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -276,6 +283,8 @@ async fn configure_teams(
 }
 
 /// Get user notification preferences
+#[utoipa::path(get, path = "/api/v1/notifications/preferences", tag = "Notifications",
+    responses((status = 200, description = "User notification preferences")))]
 async fn get_notification_preferences(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -323,6 +332,8 @@ pub struct UpdatePreferencesRequest {
     pub quiet_hours_timezone: Option<String>,
 }
 
+#[utoipa::path(put, path = "/api/v1/notifications/preferences", tag = "Notifications", request_body = serde_json::Value,
+    responses((status = 200, description = "Preferences updated")))]
 async fn update_notification_preferences(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -362,6 +373,8 @@ async fn update_notification_preferences(
 }
 
 /// Get Slack connection status
+#[utoipa::path(get, path = "/api/v1/notifications/slack/status", tag = "Notifications",
+    responses((status = 200, description = "Slack connection status")))]
 async fn get_slack_status(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -392,6 +405,8 @@ async fn get_slack_status(
 }
 
 /// Get Teams webhook status
+#[utoipa::path(get, path = "/api/v1/notifications/teams/status", tag = "Notifications",
+    responses((status = 200, description = "Teams connection status")))]
 async fn get_teams_status(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -422,6 +437,8 @@ async fn get_teams_status(
 }
 
 /// Disconnect Slack
+#[utoipa::path(post, path = "/api/v1/notifications/slack/disconnect", tag = "Notifications", request_body = serde_json::Value,
+    responses((status = 200, description = "Slack disconnected")))]
 async fn disconnect_slack(
     auth_user: AuthUser,
     State(state): State<AppState>,
@@ -442,6 +459,8 @@ async fn disconnect_slack(
 }
 
 /// Disconnect Teams
+#[utoipa::path(post, path = "/api/v1/notifications/teams/disconnect", tag = "Notifications", request_body = serde_json::Value,
+    responses((status = 200, description = "Teams disconnected")))]
 async fn disconnect_teams(
     auth_user: AuthUser,
     State(state): State<AppState>,

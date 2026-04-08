@@ -68,6 +68,8 @@ pub struct MatchResponse {
 
 // ──────────────────────────── Handlers ────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/edi/purchase-orders", tag = "Purchase Orders",
+    responses((status = 200, description = "Purchase order list")))]
 async fn list_purchase_orders(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -106,6 +108,8 @@ async fn list_purchase_orders(
     })))
 }
 
+#[utoipa::path(post, path = "/api/v1/edi/purchase-orders", tag = "Purchase Orders", request_body = serde_json::Value,
+    responses((status = 200, description = "Purchase order created")))]
 async fn create_purchase_order(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -130,6 +134,9 @@ async fn create_purchase_order(
     Ok(Json(serde_json::json!(po)))
 }
 
+#[utoipa::path(get, path = "/api/v1/edi/purchase-orders/{id}", tag = "Purchase Orders",
+    params(("id" = String, Path, description = "Purchase order ID")),
+    responses((status = 200, description = "Purchase order details"), (status = 404, description = "Not found")))]
 async fn get_purchase_order(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -158,6 +165,9 @@ async fn get_purchase_order(
     }
 }
 
+#[utoipa::path(delete, path = "/api/v1/edi/purchase-orders/{id}", tag = "Purchase Orders",
+    params(("id" = String, Path, description = "Purchase order ID")),
+    responses((status = 200, description = "Purchase order deleted")))]
 async fn delete_purchase_order(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -183,6 +193,9 @@ async fn delete_purchase_order(
 }
 
 /// Run 3-way match: compare an invoice against this PO (and any receiving records)
+#[utoipa::path(post, path = "/api/v1/edi/purchase-orders/{id}/match", tag = "Purchase Orders", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Purchase order ID")),
+    responses((status = 200, description = "Match result")))]
 async fn run_match(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,

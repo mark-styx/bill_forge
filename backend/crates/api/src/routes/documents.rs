@@ -45,6 +45,9 @@ pub struct UploadQuery {
 }
 
 /// Upload a document
+#[utoipa::path(post, path = "/api/v1/documents", tag = "Documents",
+    request_body(content = inline(String), content_type = "multipart/form-data"),
+    responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_document(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -145,6 +148,10 @@ async fn upload_document(
 }
 
 /// Upload a document for a specific invoice
+#[utoipa::path(post, path = "/api/v1/documents/invoice/{invoice_id}", tag = "Documents",
+    request_body(content = inline(String), content_type = "multipart/form-data"),
+    params(("invoice_id" = String, Path, description = "Invoice ID")),
+    responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_invoice_document(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -211,6 +218,9 @@ async fn upload_invoice_document(
 }
 
 /// Download a document
+#[utoipa::path(get, path = "/api/v1/documents/{id}", tag = "Documents",
+    params(("id" = String, Path, description = "Document ID")),
+    responses((status = 200, description = "Document file"), (status = 404, description = "Not found")))]
 async fn download_document(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -254,6 +264,9 @@ async fn download_document(
 }
 
 /// Get document metadata
+#[utoipa::path(get, path = "/api/v1/documents/{id}/metadata", tag = "Documents",
+    params(("id" = String, Path, description = "Document ID")),
+    responses((status = 200, description = "Document metadata"), (status = 404, description = "Not found")))]
 async fn get_document_metadata(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -298,6 +311,9 @@ pub struct DocumentMetadataResponse {
 }
 
 /// Delete a document
+#[utoipa::path(delete, path = "/api/v1/documents/{id}", tag = "Documents",
+    params(("id" = String, Path, description = "Document ID")),
+    responses((status = 200, description = "Document deleted"), (status = 404, description = "Not found")))]
 async fn delete_document(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -322,6 +338,9 @@ async fn delete_document(
 }
 
 /// List documents for an invoice
+#[utoipa::path(get, path = "/api/v1/documents/invoice/{invoice_id}", tag = "Documents",
+    params(("invoice_id" = String, Path, description = "Invoice ID")),
+    responses((status = 200, description = "Invoice documents")))]
 async fn list_invoice_documents(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

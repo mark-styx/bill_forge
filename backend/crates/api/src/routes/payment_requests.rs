@@ -102,6 +102,8 @@ pub struct PaymentRequestSummaryResponse {
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(post, path = "/api/v1/payment-requests", tag = "Payment Requests", request_body = serde_json::Value,
+    responses((status = 200, description = "Payment request created"), (status = 401, description = "Unauthorized")))]
 async fn create_payment_request(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
@@ -131,6 +133,9 @@ async fn create_payment_request(
     Ok(Json(to_response(request, items)))
 }
 
+#[utoipa::path(get, path = "/api/v1/payment-requests", tag = "Payment Requests",
+    params(("page" = Option<u32>, Query,), ("per_page" = Option<u32>, Query,), ("status" = Option<String>, Query,)),
+    responses((status = 200, description = "Payment request list")))]
 async fn list_payment_requests(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -165,6 +170,9 @@ async fn list_payment_requests(
     }))
 }
 
+#[utoipa::path(get, path = "/api/v1/payment-requests/{id}", tag = "Payment Requests",
+    params(("id" = String, Path, description = "Payment request ID")),
+    responses((status = 200, description = "Payment request details"), (status = 404, description = "Not found")))]
 async fn get_payment_request(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -184,6 +192,9 @@ async fn get_payment_request(
     Ok(Json(to_response(request, items)))
 }
 
+#[utoipa::path(post, path = "/api/v1/payment-requests/{id}/invoices", tag = "Payment Requests", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Payment request ID")),
+    responses((status = 200, description = "Invoices added")))]
 async fn add_invoices(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
@@ -199,6 +210,9 @@ async fn add_invoices(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+#[utoipa::path(post, path = "/api/v1/payment-requests/{id}/submit", tag = "Payment Requests", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Payment request ID")),
+    responses((status = 200, description = "Payment request submitted")))]
 async fn submit_request(
     State(state): State<AppState>,
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,

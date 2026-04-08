@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/digests/:id", delete(delete_digest))
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/dashboard/summary", tag = "Reports", responses((status = 200, description = "Dashboard summary")))]
 async fn dashboard_summary(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -62,6 +63,7 @@ pub struct InvoicesByVendor {
     pub total_amount: f64,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/invoices/by-vendor", tag = "Reports", responses((status = 200, description = "Invoices grouped by vendor")))]
 async fn invoices_by_vendor(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -103,6 +105,7 @@ pub struct InvoicesByStatus {
     pub total_amount: f64,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/invoices/by-status", tag = "Reports", responses((status = 200, description = "Invoice status distribution")))]
 async fn invoices_by_status(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -129,6 +132,7 @@ pub struct AgingBucket {
     pub total_amount: f64,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/invoices/aging", tag = "Reports", responses((status = 200, description = "Invoice aging buckets")))]
 async fn invoice_aging(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -156,6 +160,7 @@ pub struct VendorSpend {
     pub invoice_count: u64,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/vendors/spend", tag = "Reports", responses((status = 200, description = "Vendor spend totals")))]
 async fn vendor_spend(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -220,6 +225,7 @@ pub struct WorkflowMetrics {
     pub invoices_processed_this_week: u64,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/workflows/metrics", tag = "Reports", responses((status = 200, description = "Workflow processing metrics")))]
 async fn workflow_metrics(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -252,6 +258,7 @@ pub struct CustomReportQuery {
     pub group_by: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/custom", tag = "Reports", responses((status = 200, description = "Custom report data")))]
 async fn custom_report(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -325,6 +332,7 @@ pub struct SpendTrendsQuery {
     pub group_by: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/spend/trends", tag = "Reports", responses((status = 200, description = "Spend trends")))]
 async fn spend_trends(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -358,6 +366,7 @@ pub struct CategoryBreakdownQuery {
     pub end_date: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/categories/breakdown", tag = "Reports", responses((status = 200, description = "Category breakdown")))]
 async fn category_breakdown(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -387,6 +396,7 @@ pub struct VendorPerformanceQuery {
     pub limit: Option<u32>,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/vendors/performance", tag = "Reports", responses((status = 200, description = "Vendor performance")))]
 async fn vendor_performance(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -412,6 +422,7 @@ pub struct ApprovalAnalyticsQuery {
     pub end_date: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/approvals/analytics", tag = "Reports", responses((status = 200, description = "Approval analytics")))]
 async fn approval_analytics(
     State(state): State<AppState>,
     ReportingAccess(user, tenant): ReportingAccess,
@@ -435,6 +446,7 @@ async fn approval_analytics(
     Ok(Json(analytics))
 }
 
+#[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]
 async fn list_digests(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -448,6 +460,7 @@ async fn list_digests(
     Ok(Json(digests))
 }
 
+#[utoipa::path(post, path = "/api/v1/reports/digests", tag = "Reports", request_body = serde_json::Value, responses((status = 200, description = "Digest created")))]
 async fn create_digest(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -462,6 +475,7 @@ async fn create_digest(
     Ok(Json(digest))
 }
 
+#[utoipa::path(delete, path = "/api/v1/reports/digests/{id}", tag = "Reports", params(("id" = String, Path,)), responses((status = 200, description = "Digest deleted")))]
 async fn delete_digest(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

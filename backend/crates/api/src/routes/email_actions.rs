@@ -32,6 +32,9 @@ pub struct ActionQuery {
 }
 
 /// Handle approve action from email
+#[utoipa::path(get, path = "/api/v1/actions/approve", tag = "Email Actions",
+    params(("t" = String, Query, description = "Action token")),
+    responses((status = 200, description = "Invoice approved"), (status = 400, description = "Invalid token")))]
 async fn handle_approve(
     State(state): State<AppState>,
     Query(query): Query<ActionQuery>,
@@ -40,6 +43,9 @@ async fn handle_approve(
 }
 
 /// Handle reject action from email
+#[utoipa::path(get, path = "/api/v1/actions/reject", tag = "Email Actions",
+    params(("t" = String, Query, description = "Action token")),
+    responses((status = 200, description = "Invoice rejected"), (status = 400, description = "Invalid token")))]
 async fn handle_reject(
     State(state): State<AppState>,
     Query(query): Query<ActionQuery>,
@@ -48,6 +54,9 @@ async fn handle_reject(
 }
 
 /// Handle hold action from email
+#[utoipa::path(get, path = "/api/v1/actions/hold", tag = "Email Actions",
+    params(("t" = String, Query, description = "Action token")),
+    responses((status = 200, description = "Invoice placed on hold"), (status = 400, description = "Invalid token")))]
 async fn handle_hold(
     State(state): State<AppState>,
     Query(query): Query<ActionQuery>,
@@ -56,6 +65,9 @@ async fn handle_hold(
 }
 
 /// Handle view action from email (redirects to invoice detail page)
+#[utoipa::path(get, path = "/api/v1/actions/view", tag = "Email Actions",
+    params(("t" = String, Query, description = "Action token")),
+    responses((status = 302, description = "Redirect to invoice")))]
 async fn handle_view(
     State(state): State<AppState>,
     Query(query): Query<ActionQuery>,

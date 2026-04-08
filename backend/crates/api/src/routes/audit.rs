@@ -32,6 +32,23 @@ pub struct AuditQueryParams {
     to_date: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/audit",
+    tag = "Audit",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+        ("user_id" = Option<String>, Query, description = "Filter by user ID"),
+        ("action" = Option<String>, Query, description = "Filter by action"),
+        ("resource_type" = Option<String>, Query, description = "Filter by resource type"),
+    ),
+    responses(
+        (status = 200, description = "Audit log entries"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden - admin only"),
+    )
+)]
 async fn list_audit_logs(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

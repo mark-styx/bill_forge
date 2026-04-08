@@ -127,47 +127,43 @@ fn test_openapi_covers_all_mounted_route_groups() {
     let spec_paths = parsed["paths"].as_object()
         .expect("paths should be a JSON object");
 
-    // Route groups that are already documented in the OpenAPI spec.
+    // Route groups that are documented in the OpenAPI spec.
     // For each group we list one or more path prefixes that prove coverage.
-    // Note: auth and invoice paths are relative (e.g. "/auth/login"),
-    // while dashboard, quickbooks, and xero use absolute paths (e.g. "/api/v1/dashboard/metrics").
     let documented_groups: &[(&str, &[&str])] = &[
         ("auth", &["/auth/login", "/auth/register"]),
         ("invoices", &["/invoices", "/invoices/{id}"]),
         ("dashboard", &["/api/v1/dashboard/metrics", "/api/v1/dashboard/metrics/invoices"]),
         ("quickbooks", &["/api/v1/quickbooks/connect", "/api/v1/quickbooks/status"]),
         ("xero", &["/api/v1/xero/connect", "/api/v1/xero/status"]),
+        ("sage-intacct", &["/api/v1/sage-intacct/connect", "/api/v1/sage-intacct/status"]),
+        ("salesforce", &["/api/v1/salesforce/connect", "/api/v1/salesforce/status"]),
+        ("workday", &["/api/v1/workday/connect", "/api/v1/workday/status"]),
+        ("bill-com", &["/api/v1/bill-com/connect", "/api/v1/bill-com/status"]),
+        ("vendors", &["/api/v1/vendors", "/api/v1/vendors/{id}"]),
+        ("workflows", &["/api/v1/workflows/rules", "/api/v1/workflows/queues"]),
+        ("reports", &["/api/v1/reports/dashboard/summary", "/api/v1/reports/invoices/by-vendor"]),
+        ("export", &["/api/v1/export/invoices/csv"]),
+        ("documents", &["/api/v1/documents", "/api/v1/documents/{id}"]),
+        ("audit", &["/api/v1/audit"]),
+        ("sandbox", &["/api/v1/sandbox/personas"]),
+        ("edi", &["/api/v1/edi/status", "/api/v1/edi/documents"]),
+        ("purchase-orders", &["/api/v1/edi/purchase-orders"]),
+        ("notifications", &["/api/v1/notifications/slack/install"]),
+        ("predictive", &["/api/v1/analytics/predictive/forecasts"]),
+        ("mobile", &["/api/v1/mobile/dashboard", "/api/v1/mobile/devices"]),
+        ("settings", &["/api/v1/settings"]),
+        ("feedback", &["/api/v1/feedback"]),
+        ("theme", &["/api/v1/organization/theme", "/api/v1/user/theme"]),
+        ("email-actions", &["/api/v1/actions/approve"]),
+        ("ai", &["/api/v1/ai/chat"]),
+        ("billing", &["/api/v1/billing/plans"]),
+        ("vendor-statements", &["/api/v1/vendors/{vendor_id}/statements"]),
+        ("payment-requests", &["/api/v1/payment-requests"]),
+        ("routing", &["/api/v1/routing/workload"]),
     ];
 
-    // Route groups that are NOT yet documented. These need utoipa
-    // #[utoipa::path()] annotations added to their handler functions.
-    // When annotations are added, move the group to `documented_groups`.
-    let known_gaps: &[&str] = &[
-        "vendors",
-        "workflows",
-        "reports",
-        "export",
-        "documents",
-        "audit",
-        "sandbox",
-        "sage-intacct",
-        "salesforce",
-        "workday",
-        "bill-com",
-        "edi",
-        "purchase-orders",
-        "notifications",
-        "predictive",
-        "mobile",
-        "settings",
-        "feedback",
-        "theme",
-        "email-actions",
-        "ai",
-        "billing",
-        "vendor-statements",
-        "payment-requests",
-    ];
+    // Route groups that are NOT yet documented. All groups are now documented.
+    let known_gaps: &[&str] = &[];
 
     // Verify documented groups are actually present in the spec
     for (group, sample_paths) in documented_groups {
@@ -212,6 +208,7 @@ fn test_openapi_covers_all_mounted_route_groups() {
         "billing",
         "vendor-statements",
         "payment-requests",
+        "routing",
     ];
 
     let documented_names: Vec<&str> = documented_groups.iter().map(|(n, _)| *n).collect();

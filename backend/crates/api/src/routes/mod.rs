@@ -1,16 +1,16 @@
 //! API routes
 
-mod audit;
+pub(crate) mod audit;
 pub mod auth;
 pub mod dashboard;
-mod documents;
+pub(crate) mod documents;
 mod health;
 pub mod invoices;
-mod vendors;
-mod workflows;
-mod reports;
-mod export;
-mod sandbox;
+pub(crate) mod vendors;
+pub(crate) mod workflows;
+pub(crate) mod reports;
+pub(crate) mod export;
+pub(crate) mod sandbox;
 pub mod email_actions;
 pub mod quickbooks;
 pub mod xero;
@@ -25,8 +25,8 @@ pub mod vendor_statements;
 pub mod notifications;
 pub mod predictive;
 pub mod mobile;
-mod settings;
-mod feedback;
+pub(crate) mod settings;
+pub(crate) mod feedback;
 pub mod theme;
 pub mod ai;
 pub mod billing;

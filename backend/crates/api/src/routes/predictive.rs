@@ -87,6 +87,7 @@ pub fn routes() -> Router<AppState> {
 //     ),
 //     security(("bearer_auth" = []))
 // )]
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/forecasts", tag = "Predictive Analytics", responses((status = 200, description = "Forecasts")))]
 async fn get_forecasts(
     State(state): State<AppState>,
     user: AuthUser,
@@ -169,6 +170,7 @@ async fn get_forecasts(
 
 /// Generate a new forecast
 // TODO: Add utoipa documentation once ToSchema is implemented
+#[utoipa::path(post, path = "/api/v1/analytics/predictive/forecasts", tag = "Predictive Analytics", request_body = serde_json::Value, responses((status = 200, description = "Forecast generated")))]
 async fn generate_forecast(
     State(state): State<AppState>,
     user: AuthUser,
@@ -222,6 +224,7 @@ async fn generate_forecast(
 }
 
 /// Get forecast by ID
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/forecasts/{id}", tag = "Predictive Analytics", params(("id" = String, Path,)), responses((status = 200, description = "Forecast detail")))]
 async fn get_forecast_by_id(
     State(state): State<AppState>,
     user: AuthUser,
@@ -285,6 +288,7 @@ async fn get_forecast_by_id(
 
 /// Get anomalies for tenant
 // TODO: Add utoipa documentation once ToSchema is implemented
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/anomalies", tag = "Predictive Analytics", responses((status = 200, description = "Detected anomalies")))]
 async fn get_anomalies(
     State(state): State<AppState>,
     user: AuthUser,
@@ -360,6 +364,7 @@ async fn get_anomalies(
 }
 
 /// Acknowledge an anomaly
+#[utoipa::path(post, path = "/api/v1/analytics/predictive/anomalies/{id}/acknowledge", tag = "Predictive Analytics", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Anomaly acknowledged")))]
 async fn acknowledge_anomaly(
     State(state): State<AppState>,
     user: AuthUser,
@@ -399,6 +404,7 @@ async fn acknowledge_anomaly(
 }
 
 /// Detect anomalies (manual trigger)
+#[utoipa::path(post, path = "/api/v1/analytics/predictive/anomalies/detect", tag = "Predictive Analytics", request_body = serde_json::Value, responses((status = 200, description = "Anomaly detection triggered")))]
 async fn detect_anomalies(
     State(state): State<AppState>,
     user: AuthUser,
@@ -423,6 +429,7 @@ async fn detect_anomalies(
 }
 
 /// Get budget alerts
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/budget-alerts", tag = "Predictive Analytics", responses((status = 200, description = "Budget alerts")))]
 async fn get_budget_alerts(
     State(state): State<AppState>,
     user: AuthUser,
@@ -472,6 +479,7 @@ async fn get_budget_alerts(
 }
 
 /// Dismiss a budget alert
+#[utoipa::path(post, path = "/api/v1/analytics/predictive/budget-alerts/{id}/dismiss", tag = "Predictive Analytics", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Alert dismissed")))]
 async fn dismiss_alert(
     State(state): State<AppState>,
     user: AuthUser,
@@ -506,6 +514,7 @@ async fn dismiss_alert(
 }
 
 /// Get anomaly rules
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/anomaly-rules", tag = "Predictive Analytics", responses((status = 200, description = "Anomaly rules")))]
 async fn get_anomaly_rules(
     State(state): State<AppState>,
     user: AuthUser,
@@ -550,6 +559,7 @@ async fn get_anomaly_rules(
 }
 
 /// Configure anomaly rule
+#[utoipa::path(post, path = "/api/v1/analytics/predictive/anomaly-rules", tag = "Predictive Analytics", request_body = serde_json::Value, responses((status = 200, description = "Rule configured")))]
 async fn configure_anomaly_rule(
     State(state): State<AppState>,
     user: AuthUser,
@@ -603,6 +613,7 @@ async fn configure_anomaly_rule(
 }
 
 /// Get anomaly rule by ID
+#[utoipa::path(get, path = "/api/v1/analytics/predictive/anomaly-rules/{id}", tag = "Predictive Analytics", params(("id" = String, Path,)), responses((status = 200, description = "Anomaly rule")))]
 async fn get_anomaly_rule(
     State(state): State<AppState>,
     user: AuthUser,
@@ -647,6 +658,7 @@ async fn get_anomaly_rule(
 }
 
 /// Update anomaly rule
+#[utoipa::path(put, path = "/api/v1/analytics/predictive/anomaly-rules/{id}", tag = "Predictive Analytics", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Rule updated")))]
 async fn update_anomaly_rule(
     State(state): State<AppState>,
     user: AuthUser,

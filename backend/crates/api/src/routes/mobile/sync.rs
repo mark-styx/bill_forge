@@ -42,6 +42,7 @@ pub struct SyncQuery {
 }
 
 /// Delta sync - fetch changes since last sync
+#[utoipa::path(get, path = "/api/v1/mobile/sync/invoices", tag = "Mobile", responses((status = 200, description = "Invoice sync data")))]
 pub async fn sync_invoices(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
@@ -135,6 +136,7 @@ pub struct BulkQuery {
 }
 
 /// Bulk fetch - initial sync or full refresh
+#[utoipa::path(get, path = "/api/v1/mobile/sync/bulk", tag = "Mobile", responses((status = 200, description = "Bulk sync data")))]
 pub async fn sync_bulk(
     AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,

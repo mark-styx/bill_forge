@@ -37,6 +37,8 @@ struct UpdateSettingsInput {
     default_currency: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/settings", tag = "Settings",
+    responses((status = 200, description = "Tenant settings"), (status = 401, description = "Unauthorized")))]
 async fn get_settings(
     State(_state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -51,6 +53,8 @@ async fn get_settings(
     })
 }
 
+#[utoipa::path(put, path = "/api/v1/settings", tag = "Settings", request_body = serde_json::Value,
+    responses((status = 200, description = "Settings updated"), (status = 401, description = "Unauthorized")))]
 async fn update_settings(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -93,6 +97,8 @@ struct ListStatusesQuery {
     category: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/v1/settings/invoice-statuses", tag = "Settings",
+    responses((status = 200, description = "Invoice status definitions")))]
 async fn list_invoice_statuses(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -109,6 +115,8 @@ async fn list_invoice_statuses(
     Ok(Json(statuses))
 }
 
+#[utoipa::path(put, path = "/api/v1/settings/invoice-statuses", tag = "Settings", request_body = serde_json::Value,
+    responses((status = 200, description = "Statuses updated")))]
 async fn update_invoice_statuses(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -125,6 +133,8 @@ async fn update_invoice_statuses(
     Ok(Json(statuses))
 }
 
+#[utoipa::path(post, path = "/api/v1/settings/invoice-statuses/seed-defaults", tag = "Settings", request_body = serde_json::Value,
+    responses((status = 200, description = "Defaults seeded")))]
 async fn seed_default_statuses(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -140,6 +150,9 @@ async fn seed_default_statuses(
     Ok(Json(serde_json::json!({ "message": "Default statuses seeded" })))
 }
 
+#[utoipa::path(delete, path = "/api/v1/settings/invoice-statuses/{status_key}", tag = "Settings",
+    params(("status_key" = String, Path, description = "Status key to delete")),
+    responses((status = 200, description = "Status deleted")))]
 async fn delete_invoice_status(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,

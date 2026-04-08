@@ -65,6 +65,7 @@ pub struct DeviceResponse {
 }
 
 /// Register a new device token
+#[utoipa::path(post, path = "/api/v1/mobile/devices/register", tag = "Mobile", request_body = serde_json::Value, responses((status = 200, description = "Device registered")))]
 async fn register_device(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -128,6 +129,7 @@ async fn register_device(
 }
 
 /// List user's registered devices
+#[utoipa::path(get, path = "/api/v1/mobile/devices", tag = "Mobile", responses((status = 200, description = "Device list")))]
 async fn list_devices(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -173,6 +175,7 @@ pub struct UpdateDeviceRequest {
 }
 
 /// Update device information
+#[utoipa::path(put, path = "/api/v1/mobile/devices/{device_id}", tag = "Mobile", request_body = serde_json::Value, params(("device_id" = String, Path,)), responses((status = 200, description = "Device updated")))]
 async fn update_device(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -216,6 +219,7 @@ async fn update_device(
 }
 
 /// Unregister a device
+#[utoipa::path(delete, path = "/api/v1/mobile/devices/{device_id}", tag = "Mobile", params(("device_id" = String, Path,)), responses((status = 200, description = "Device unregistered")))]
 async fn unregister_device(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -244,6 +248,7 @@ async fn unregister_device(
 // ===== Mobile Dashboard =====
 
 /// Get mobile dashboard summary
+#[utoipa::path(get, path = "/api/v1/mobile/dashboard", tag = "Mobile", responses((status = 200, description = "Mobile dashboard")))]
 async fn get_dashboard(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -337,6 +342,7 @@ pub struct ListInvoicesQuery {
 }
 
 /// List invoices (mobile-optimized)
+#[utoipa::path(get, path = "/api/v1/mobile/invoices", tag = "Mobile", responses((status = 200, description = "Invoice list")))]
 async fn list_invoices(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -392,6 +398,7 @@ pub struct GetInvoiceQuery {
 }
 
 /// Get single invoice with field selection
+#[utoipa::path(get, path = "/api/v1/mobile/invoices/{id}", tag = "Mobile", params(("id" = String, Path,)), responses((status = 200, description = "Invoice detail")))]
 async fn get_invoice(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -458,6 +465,7 @@ async fn get_invoice(
 // ===== Approvals =====
 
 /// List pending approvals
+#[utoipa::path(get, path = "/api/v1/mobile/approvals", tag = "Mobile", responses((status = 200, description = "Pending approvals")))]
 async fn list_approvals(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -525,6 +533,7 @@ pub struct ApproveRequest {
 }
 
 /// Quick approve an invoice
+#[utoipa::path(post, path = "/api/v1/mobile/approvals/{id}/approve", tag = "Mobile", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice approved")))]
 async fn approve_invoice(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -576,6 +585,7 @@ pub struct RejectRequest {
 }
 
 /// Quick reject an invoice
+#[utoipa::path(post, path = "/api/v1/mobile/approvals/{id}/reject", tag = "Mobile", request_body = serde_json::Value, params(("id" = String, Path,)), responses((status = 200, description = "Invoice rejected")))]
 async fn reject_invoice(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -629,6 +639,7 @@ pub struct SearchQuery {
 }
 
 /// Global search (invoices, vendors)
+#[utoipa::path(get, path = "/api/v1/mobile/search", tag = "Mobile", responses((status = 200, description = "Search results")))]
 async fn search(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,

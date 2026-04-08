@@ -16,6 +16,14 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// GET /billing/plans - return all public plans
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/plans",
+    tag = "Billing",
+    responses(
+        (status = 200, description = "Available billing plans"),
+    )
+)]
 async fn list_plans() -> Json<Value> {
     let plans = Plan::all_public();
     Json(json!({
@@ -24,6 +32,15 @@ async fn list_plans() -> Json<Value> {
 }
 
 /// GET /billing/subscription - return current subscription (default free)
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/subscription",
+    tag = "Billing",
+    responses(
+        (status = 200, description = "Current subscription"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 async fn get_subscription(
     AuthUser(user): AuthUser,
     State(_state): State<AppState>,

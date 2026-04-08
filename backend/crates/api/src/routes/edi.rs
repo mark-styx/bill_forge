@@ -119,6 +119,8 @@ pub struct ListDocumentsQuery {
 /// 4. Store EDI document record (status: processing)
 /// 5. For 810 invoices: look up trading partner, map to invoice, create in DB
 /// 6. Update EDI document (status: mapped, link invoice_id)
+#[utoipa::path(post, path = "/api/v1/edi/webhook/inbound", tag = "EDI", request_body = serde_json::Value,
+    responses((status = 200, description = "Document received"), (status = 401, description = "Invalid signature")))]
 async fn webhook_inbound(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -982,6 +984,8 @@ async fn webhook_inbound(
 
 // ──────────────────────────── Connection Management ────────────────────────────
 
+#[utoipa::path(post, path = "/api/v1/edi/connect", tag = "EDI", request_body = serde_json::Value,
+    responses((status = 200, description = "EDI connected")))]
 async fn edi_connect(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1053,6 +1057,8 @@ async fn edi_connect(
     })))
 }
 
+#[utoipa::path(post, path = "/api/v1/edi/disconnect", tag = "EDI", request_body = serde_json::Value,
+    responses((status = 200, description = "EDI disconnected")))]
 async fn edi_disconnect(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1081,6 +1087,8 @@ async fn edi_disconnect(
     Ok(Json(serde_json::json!({ "connected": false })))
 }
 
+#[utoipa::path(get, path = "/api/v1/edi/status", tag = "EDI",
+    responses((status = 200, description = "EDI connection status")))]
 async fn edi_status(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1136,6 +1144,8 @@ async fn edi_status(
 
 // ──────────────────────────── Documents ────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/edi/documents", tag = "EDI",
+    responses((status = 200, description = "EDI document list")))]
 async fn list_documents(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1188,6 +1198,9 @@ async fn list_documents(
     })))
 }
 
+#[utoipa::path(get, path = "/api/v1/edi/documents/{id}", tag = "EDI",
+    params(("id" = String, Path, description = "Document ID")),
+    responses((status = 200, description = "EDI document detail"), (status = 404, description = "Not found")))]
 async fn get_document(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1237,6 +1250,9 @@ pub struct SendRemittanceRequest {
 ///
 /// The invoice must be in "paid" status and have an associated vendor
 /// with a trading partner mapping (edi_trading_partners.vendor_id).
+#[utoipa::path(post, path = "/api/v1/edi/send-remittance/{invoice_id}", tag = "EDI", request_body = serde_json::Value,
+    params(("invoice_id" = String, Path, description = "Invoice ID")),
+    responses((status = 200, description = "Remittance sent")))]
 async fn send_remittance(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1360,6 +1376,8 @@ async fn send_remittance(
 }
 
 /// List outbound EDI documents with ack status
+#[utoipa::path(get, path = "/api/v1/edi/outbound", tag = "EDI",
+    responses((status = 200, description = "Outbound EDI documents")))]
 async fn list_outbound(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1419,6 +1437,8 @@ async fn list_outbound(
 }
 
 /// Check for outbound documents with overdue ack responses
+#[utoipa::path(get, path = "/api/v1/edi/ack-timeouts", tag = "EDI",
+    responses((status = 200, description = "Documents awaiting acknowledgment")))]
 async fn get_ack_timeouts(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1443,6 +1463,8 @@ async fn get_ack_timeouts(
 
 // ──────────────────────────── Trading Partners ────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/edi/partners", tag = "EDI",
+    responses((status = 200, description = "Trading partner list")))]
 async fn list_partners(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1477,6 +1499,8 @@ async fn list_partners(
     Ok(Json(serde_json::json!(partners)))
 }
 
+#[utoipa::path(post, path = "/api/v1/edi/partners", tag = "EDI", request_body = serde_json::Value,
+    responses((status = 200, description = "Partner created")))]
 async fn create_partner(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1511,6 +1535,9 @@ async fn create_partner(
     })))
 }
 
+#[utoipa::path(put, path = "/api/v1/edi/partners/{id}", tag = "EDI", request_body = serde_json::Value,
+    params(("id" = String, Path, description = "Partner ID")),
+    responses((status = 200, description = "Partner updated")))]
 async fn update_partner(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
@@ -1552,6 +1579,9 @@ async fn update_partner(
     Ok(Json(serde_json::json!({ "id": id, "updated": true })))
 }
 
+#[utoipa::path(delete, path = "/api/v1/edi/partners/{id}", tag = "EDI",
+    params(("id" = String, Path, description = "Partner ID")),
+    responses((status = 200, description = "Partner deleted")))]
 async fn delete_partner(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
