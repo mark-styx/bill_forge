@@ -239,6 +239,13 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run core tenant FK migration: {}", e)))?;
 
+        // Feedback correction rules + confidence calibration
+        tracing::debug!("Running migration: 072_add_feedback_correction_rules.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/072_add_feedback_correction_rules.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run feedback correction rules migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }

@@ -11,6 +11,7 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use super::categorization::{CategorySuggestion, CategoryType, SuggestionSource, LineItemInput};
+use super::feedback_loop::{CorrectionRule, FeedbackLearning};
 
 /// ML-based categorizer using OpenAI embeddings
 pub struct MLCategorizer {
@@ -105,6 +106,11 @@ impl MLCategorizer {
             CategoryType::CostCenter => "cost_center",
         };
 
+        // Fetch more candidates than needed so the usage_count re-ranking
+        // can promote frequently-chosen values even if they aren't the
+        // closest cosine match.  We pull 3x the limit, re-rank, then trim.
+        let fetch_limit = (limit * 3).max(10) as i32;
+
         let rows = sqlx::query_as::<_, (String, f32, Option<String>, i32)>(
             r#"
             SELECT
@@ -122,20 +128,30 @@ impl MLCategorizer {
         .bind(embedding.to_vec())
         .bind(tenant_id)
         .bind(category_type_str)
-        .bind(limit as i32)
+        .bind(fetch_limit)
         .fetch_all(&self.pool)
         .await
         .context("Failed to search similar categories")?;
 
-        Ok(rows
+        // Re-rank by blending cosine similarity with a log-scaled usage
+        // boost so that categories users frequently pick float higher.
+        let mut matches: Vec<SimilarityMatch> = rows
             .into_iter()
-            .map(|(value, similarity, description, usage_count)| SimilarityMatch {
-                category_type: category_type.clone(),
-                value,
-                similarity,
-                description,
+            .map(|(value, similarity, description, usage_count)| {
+                let usage_boost = (1.0 + usage_count as f32).ln() * 0.02;
+                SimilarityMatch {
+                    category_type: category_type.clone(),
+                    value,
+                    similarity: (similarity + usage_boost).min(1.0),
+                    description,
+                }
             })
-            .collect())
+            .collect();
+
+        matches.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        matches.truncate(limit);
+
+        Ok(matches)
     }
 
     /// Find similar vendor embeddings
@@ -272,7 +288,28 @@ impl MLCategorizer {
         let department = self.pick_best_suggestion(&suggestions, CategoryType::Department);
         let cost_center = self.pick_best_suggestion(&suggestions, CategoryType::CostCenter);
 
-        // 5. Calculate overall confidence
+        // 5. Apply learned correction rules from user feedback
+        let feedback = FeedbackLearning::new(self.pool.clone());
+        let correction_rules = feedback
+            .get_active_correction_rules(tenant_id)
+            .await
+            .unwrap_or_default();
+
+        let gl_code = self.apply_correction(&gl_code, &correction_rules);
+        let department = self.apply_correction(&department, &correction_rules);
+        let cost_center = self.apply_correction(&cost_center, &correction_rules);
+
+        // 6. Apply confidence calibration offset
+        let calibration_offset = feedback
+            .get_calibration_offset(tenant_id)
+            .await
+            .unwrap_or(0.0);
+
+        let gl_code = self.apply_calibration(gl_code, calibration_offset);
+        let department = self.apply_calibration(department, calibration_offset);
+        let cost_center = self.apply_calibration(cost_center, calibration_offset);
+
+        // 7. Calculate overall confidence
         let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
 
         Ok(InvoiceCategorization {
@@ -368,6 +405,66 @@ impl MLCategorizer {
         .context("Failed to cache vendor embedding")?;
 
         Ok(())
+    }
+
+    /// If a correction rule matches the suggestion, swap the value and boost
+    /// confidence (users have validated this mapping). Otherwise return as-is.
+    fn apply_correction(
+        &self,
+        suggestion: &Option<CategorySuggestion>,
+        rules: &[CorrectionRule],
+    ) -> Option<CategorySuggestion> {
+        let s = suggestion.as_ref()?;
+        let matching_rule = rules.iter().find(|r| {
+            r.category_type == s.category_type && r.suggested_value == s.value
+        });
+
+        match matching_rule {
+            Some(rule) => Some(CategorySuggestion {
+                category_type: s.category_type.clone(),
+                value: rule.correct_value.clone(),
+                // Boost confidence: the correction is user-validated
+                confidence: (s.confidence * 1.1).min(0.95),
+                source: SuggestionSource::VendorHistory,
+                reasoning: Some(format!(
+                    "Corrected from '{}' based on {} user corrections",
+                    s.value, rule.frequency
+                )),
+            }),
+            None => suggestion.clone(),
+        }
+    }
+
+    /// Adjust confidence using the stored calibration offset.
+    ///
+    /// When the offset is small (model can't distinguish correct from
+    /// incorrect), dampen confidence toward a conservative midpoint.
+    /// When the offset is large and positive, confidence is well-calibrated.
+    fn apply_calibration(
+        &self,
+        suggestion: Option<CategorySuggestion>,
+        calibration_offset: f32,
+    ) -> Option<CategorySuggestion> {
+        // No offset stored, or no suggestion - nothing to adjust
+        if calibration_offset == 0.0 {
+            return suggestion;
+        }
+
+        suggestion.map(|mut s| {
+            // If offset < 0.1, model can't separate good from bad predictions.
+            // Dampen confidence toward 0.5 by blending.
+            if calibration_offset < 0.1 {
+                let damping = 0.8; // pull 20% toward 0.5
+                s.confidence = s.confidence * damping + 0.5 * (1.0 - damping);
+            }
+            // If offset is negative (wrong predictions are MORE confident),
+            // apply a stronger damping.
+            if calibration_offset < 0.0 {
+                s.confidence *= 0.85;
+            }
+            s.confidence = s.confidence.min(0.95);
+            s
+        })
     }
 
     /// Calculate confidence score based on similarity and context
@@ -520,5 +617,197 @@ mod tests {
             overall == 0.0,
             "No fields should yield 0.0, got {overall}"
         );
+    }
+
+    // ========================================================================
+    // Correction rule application tests
+    // ========================================================================
+
+    fn make_correction_rule(
+        cat: CategoryType,
+        suggested: &str,
+        correct: &str,
+        freq: i32,
+    ) -> CorrectionRule {
+        CorrectionRule {
+            category_type: cat,
+            suggested_value: suggested.to_string(),
+            correct_value: correct.to_string(),
+            frequency: freq,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_swaps_value() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let suggestion = Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "5000-Supplies".to_string(),
+            confidence: 0.80,
+            source: SuggestionSource::LineItemAnalysis,
+            reasoning: None,
+        });
+
+        let rules = vec![make_correction_rule(
+            CategoryType::GlCode,
+            "5000-Supplies",
+            "6000-Software",
+            10,
+        )];
+
+        let result = c.apply_correction(&suggestion, &rules);
+        let r = result.unwrap();
+        assert_eq!(r.value, "6000-Software");
+        assert!(r.confidence > 0.80, "Confidence should be boosted, got {}", r.confidence);
+        assert!(r.confidence <= 0.95, "Confidence should not exceed 0.95, got {}", r.confidence);
+        assert!(r.reasoning.unwrap().contains("user corrections"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_no_match_leaves_unchanged() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let suggestion = Some(make_suggestion(0.85));
+        let rules = vec![make_correction_rule(
+            CategoryType::GlCode,
+            "7000-Marketing",
+            "7100-Digital-Ads",
+            5,
+        )];
+
+        let result = c.apply_correction(&suggestion, &rules);
+        let r = result.unwrap();
+        assert_eq!(r.value, "6000-Software"); // unchanged
+        assert_eq!(r.confidence, 0.85);
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_none_suggestion() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let rules = vec![make_correction_rule(
+            CategoryType::GlCode,
+            "5000-Supplies",
+            "6000-Software",
+            10,
+        )];
+
+        let result = c.apply_correction(&None, &rules);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_respects_category_type() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let suggestion = Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.80,
+            source: SuggestionSource::LineItemAnalysis,
+            reasoning: None,
+        });
+
+        // Rule is for GlCode, not Department - should NOT match
+        let rules = vec![make_correction_rule(
+            CategoryType::GlCode,
+            "Engineering",
+            "IT",
+            10,
+        )];
+
+        let result = c.apply_correction(&suggestion, &rules);
+        let r = result.unwrap();
+        assert_eq!(r.value, "Engineering"); // unchanged
+    }
+
+    // ========================================================================
+    // Confidence calibration application tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_apply_calibration_zero_offset_no_change() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let s = Some(make_suggestion(0.90));
+        let result = c.apply_calibration(s, 0.0);
+        assert_eq!(result.unwrap().confidence, 0.90);
+    }
+
+    #[tokio::test]
+    async fn test_apply_calibration_good_offset_no_damping() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Offset >= 0.1 means model is well-calibrated
+        let s = Some(make_suggestion(0.90));
+        let result = c.apply_calibration(s, 0.25);
+        assert_eq!(result.unwrap().confidence, 0.90);
+    }
+
+    #[tokio::test]
+    async fn test_apply_calibration_low_offset_dampens() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Offset < 0.1 means model can't distinguish correct from incorrect
+        let s = Some(make_suggestion(0.90));
+        let result = c.apply_calibration(s, 0.05);
+        let conf = result.unwrap().confidence;
+        // 0.90 * 0.8 + 0.5 * 0.2 = 0.72 + 0.10 = 0.82
+        assert!(
+            (conf - 0.82).abs() < 0.01,
+            "Low offset should dampen: expected ~0.82, got {conf}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_calibration_negative_offset_strong_damping() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Negative offset: wrong predictions are MORE confident than correct ones
+        let s = Some(make_suggestion(0.90));
+        let result = c.apply_calibration(s, -0.15);
+        let conf = result.unwrap().confidence;
+        // First: 0.90 * 0.8 + 0.5 * 0.2 = 0.82 (low offset damping)
+        // Then: 0.82 * 0.85 = 0.697 (negative offset damping)
+        assert!(
+            conf < 0.75,
+            "Negative offset should dampen strongly: expected < 0.75, got {conf}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_calibration_none_suggestion() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        let result = c.apply_calibration(None, -0.15);
+        assert!(result.is_none());
     }
 }

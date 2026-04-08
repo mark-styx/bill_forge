@@ -238,7 +238,7 @@ impl EmbeddingCache {
     }
 
     /// Upsert category embedding
-    async fn upsert_category_embedding(
+    pub async fn upsert_category_embedding(
         &self,
         tenant_id: &str,
         category_type: CategoryType,

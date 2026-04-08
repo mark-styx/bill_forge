@@ -18,4 +18,4 @@ pub use categorization::{CategorizationEngine, CategorySuggestion, InvoiceCatego
 pub use categorization_ml::MLCategorizer;
 pub use embedding_cache::{CacheStats, EmbeddingCache};
 pub use engine::WorkflowEngine;
-pub use feedback_loop::{AccuracyMetrics, CategorizationFeedback, FeedbackLearning, FeedbackType};
+pub use feedback_loop::{AccuracyMetrics, CategorizationFeedback, CorrectionRule, FeedbackLearning, FeedbackType};

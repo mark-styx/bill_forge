@@ -78,6 +78,15 @@ pub struct ConfidenceCalibration {
     pub total_samples: i32,
 }
 
+/// A stored correction rule derived from repeated user corrections
+#[derive(Debug, Clone, Serialize)]
+pub struct CorrectionRule {
+    pub category_type: CategoryType,
+    pub suggested_value: String,
+    pub correct_value: String,
+    pub frequency: i32,
+}
+
 impl FeedbackLearning {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -364,6 +373,264 @@ impl FeedbackLearning {
             corrected_suggestions: row.2,
             rejected_suggestions: row.3,
         })
+    }
+
+    // ------------------------------------------------------------------
+    // Methods that APPLY feedback insights back into the ML model
+    // ------------------------------------------------------------------
+
+    /// Upsert correction rules from analyzed category adjustments.
+    ///
+    /// Only adjustments with frequency >= `min_frequency` are stored as active
+    /// rules. Rules that no longer appear in the current training window (or
+    /// drop below `min_frequency`) are deactivated so they stop influencing
+    /// future suggestions.  Returns the number of active rules written.
+    pub async fn apply_category_corrections(
+        &self,
+        tenant_id: &str,
+        adjustments: &[CategoryAdjustment],
+        min_frequency: i32,
+    ) -> Result<usize> {
+        // 1. Deactivate all existing rules for this tenant. Rules that are
+        //    still valid will be re-activated in the upsert loop below.
+        sqlx::query(
+            r#"
+            UPDATE category_correction_rules
+            SET active = false, updated_at = NOW()
+            WHERE tenant_id = $1 AND active = true
+            "#,
+        )
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to deactivate stale correction rules")?;
+
+        // 2. Upsert rules that meet the frequency threshold
+        let mut applied = 0usize;
+
+        for adj in adjustments {
+            if adj.frequency < min_frequency {
+                continue;
+            }
+
+            let category_type_str = match adj.category_type {
+                CategoryType::GlCode => "gl_code",
+                CategoryType::Department => "department",
+                CategoryType::CostCenter => "cost_center",
+            };
+
+            sqlx::query(
+                r#"
+                INSERT INTO category_correction_rules
+                    (tenant_id, category_type, suggested_value, correct_value, frequency, active)
+                VALUES ($1, $2, $3, $4, $5, true)
+                ON CONFLICT (tenant_id, category_type, suggested_value, correct_value)
+                DO UPDATE SET
+                    frequency = EXCLUDED.frequency,
+                    active = true,
+                    updated_at = NOW()
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(category_type_str)
+            .bind(&adj.suggested_value)
+            .bind(&adj.correct_value)
+            .bind(adj.frequency)
+            .execute(&self.pool)
+            .await
+            .context("Failed to upsert correction rule")?;
+
+            applied += 1;
+        }
+
+        Ok(applied)
+    }
+
+    /// Persist confidence calibration so the ML model can adjust scores.
+    ///
+    /// The `calibration_offset` is computed as:
+    /// `avg_confidence_when_correct - avg_confidence_when_wrong`.
+    /// A large positive offset means the model's confidence is well-separated;
+    /// a near-zero offset means it can't distinguish correct from incorrect,
+    /// and raw scores should be damped.
+    pub async fn apply_confidence_calibration(
+        &self,
+        tenant_id: &str,
+        calibration: &ConfidenceCalibration,
+    ) -> Result<()> {
+        if calibration.total_samples == 0 {
+            // No recent feedback: reset the stored calibration so stale
+            // offsets from a previous window don't keep damping scores.
+            sqlx::query(
+                "DELETE FROM categorization_confidence_calibration WHERE tenant_id = $1",
+            )
+            .bind(tenant_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear stale calibration")?;
+            return Ok(());
+        }
+
+        let offset =
+            calibration.avg_confidence_when_correct - calibration.avg_confidence_when_wrong;
+
+        sqlx::query(
+            r#"
+            INSERT INTO categorization_confidence_calibration
+                (tenant_id, avg_confidence_when_correct, avg_confidence_when_wrong,
+                 total_samples, calibration_offset)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (tenant_id)
+            DO UPDATE SET
+                avg_confidence_when_correct = EXCLUDED.avg_confidence_when_correct,
+                avg_confidence_when_wrong = EXCLUDED.avg_confidence_when_wrong,
+                total_samples = EXCLUDED.total_samples,
+                calibration_offset = EXCLUDED.calibration_offset,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(calibration.avg_confidence_when_correct)
+        .bind(calibration.avg_confidence_when_wrong)
+        .bind(calibration.total_samples)
+        .bind(offset)
+        .execute(&self.pool)
+        .await
+        .context("Failed to persist confidence calibration")?;
+
+        Ok(())
+    }
+
+    /// Boost `usage_count` in `category_embeddings` for values that users
+    /// actually choose, making them rank higher in similarity searches.
+    pub async fn boost_category_usage(
+        &self,
+        tenant_id: &str,
+        adjustments: &[CategoryAdjustment],
+    ) -> Result<usize> {
+        let mut boosted = 0usize;
+
+        for adj in adjustments {
+            let category_type_str = match adj.category_type {
+                CategoryType::GlCode => "gl_code",
+                CategoryType::Department => "department",
+                CategoryType::CostCenter => "cost_center",
+            };
+
+            let rows_affected = sqlx::query(
+                r#"
+                UPDATE category_embeddings
+                SET usage_count = usage_count + $1,
+                    updated_at = NOW()
+                WHERE tenant_id = $2
+                AND category_type = $3
+                AND category_value = $4
+                "#,
+            )
+            .bind(adj.frequency)
+            .bind(tenant_id)
+            .bind(category_type_str)
+            .bind(&adj.correct_value)
+            .execute(&self.pool)
+            .await
+            .context("Failed to boost category usage count")?
+            .rows_affected();
+
+            if rows_affected > 0 {
+                boosted += 1;
+            }
+        }
+
+        Ok(boosted)
+    }
+
+    /// Retrieve the best active correction rule for a given suggestion.
+    ///
+    /// Returns the `correct_value` from the highest-frequency active rule,
+    /// or `None` if no rule applies.
+    pub async fn get_correction_for(
+        &self,
+        tenant_id: &str,
+        category_type: &str,
+        suggested_value: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            r#"
+            SELECT correct_value
+            FROM category_correction_rules
+            WHERE tenant_id = $1
+            AND category_type = $2
+            AND suggested_value = $3
+            AND active = true
+            ORDER BY frequency DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(category_type)
+        .bind(suggested_value)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to look up correction rule")?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    /// Load all active correction rules for a tenant (used by the
+    /// suggestion pipeline to batch-check in memory).
+    pub async fn get_active_correction_rules(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<CorrectionRule>> {
+        let rows = sqlx::query_as::<_, (String, String, String, i32)>(
+            r#"
+            SELECT category_type, suggested_value, correct_value, frequency
+            FROM category_correction_rules
+            WHERE tenant_id = $1
+            AND active = true
+            ORDER BY frequency DESC
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load active correction rules")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(cat_type, suggested, correct, freq)| {
+                let category_type = match cat_type.as_str() {
+                    "gl_code" => CategoryType::GlCode,
+                    "department" => CategoryType::Department,
+                    "cost_center" => CategoryType::CostCenter,
+                    _ => CategoryType::GlCode,
+                };
+                CorrectionRule {
+                    category_type,
+                    suggested_value: suggested,
+                    correct_value: correct,
+                    frequency: freq,
+                }
+            })
+            .collect())
+    }
+
+    /// Load the stored confidence calibration offset for a tenant.
+    /// Returns 0.0 if no calibration data exists.
+    pub async fn get_calibration_offset(&self, tenant_id: &str) -> Result<f32> {
+        let row = sqlx::query_as::<_, (f32,)>(
+            r#"
+            SELECT calibration_offset
+            FROM categorization_confidence_calibration
+            WHERE tenant_id = $1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load calibration offset")?;
+
+        Ok(row.map(|(v,)| v).unwrap_or(0.0))
     }
 }
 

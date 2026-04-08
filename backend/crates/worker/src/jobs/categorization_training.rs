@@ -71,6 +71,40 @@ async fn process_tenant_feedback(pg_manager: &PgManager, tenant_id: &str) -> Res
         "Analyzed categorization feedback"
     );
 
+    // Apply category corrections: upsert rules for patterns with freq >= 3
+    let rules_applied = learning
+        .apply_category_corrections(&tenant_id_str, &insights.category_adjustments, 3)
+        .await
+        .context("Failed to apply category corrections")?;
+
+    if rules_applied > 0 {
+        info!(
+            tenant_id = %tenant_id,
+            rules = rules_applied,
+            "Applied correction rules from user feedback"
+        );
+    }
+
+    // Boost usage_count for correct values in category_embeddings
+    let boosted = learning
+        .boost_category_usage(&tenant_id_str, &insights.category_adjustments)
+        .await
+        .context("Failed to boost category usage counts")?;
+
+    if boosted > 0 {
+        info!(
+            tenant_id = %tenant_id,
+            boosted = boosted,
+            "Boosted embedding usage counts for corrected categories"
+        );
+    }
+
+    // Persist confidence calibration for the ML model
+    learning
+        .apply_confidence_calibration(&tenant_id_str, &insights.confidence_calibration)
+        .await
+        .context("Failed to apply confidence calibration")?;
+
     // Log significant adjustments
     for adjustment in &insights.category_adjustments {
         if adjustment.frequency >= 5 {
