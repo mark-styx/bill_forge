@@ -54,7 +54,13 @@ impl AuditService for AuditRepositoryImpl {
         .bind(&action_str)
         .bind(&resource_type_str)
         .bind(&entry.resource_id)
-        .bind(&entry.metadata) // Store in changes column for now
+        .bind(&serde_json::json!({
+            "description": entry.description,
+            "old_value": entry.old_value,
+            "new_value": entry.new_value,
+            "user_email": entry.user_email,
+            "metadata": entry.metadata,
+        }))
         .bind(&entry.ip_address)
         .bind(&entry.user_agent)
         .bind(entry.created_at)
@@ -222,18 +228,32 @@ struct AuditRow {
 
 impl AuditRow {
     fn into_entry(self) -> AuditEntry {
+        // Unpack the structured changes JSON written by log()
+        let (description, old_value, new_value, user_email, metadata) =
+            if let Some(ref changes) = self.changes {
+                (
+                    changes.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    changes.get("old_value").cloned().filter(|v| !v.is_null()),
+                    changes.get("new_value").cloned().filter(|v| !v.is_null()),
+                    changes.get("user_email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    changes.get("metadata").cloned().filter(|v| !v.is_null()),
+                )
+            } else {
+                (String::new(), None, None, None, None)
+            };
+
         AuditEntry {
             id: self.id,
             tenant_id: TenantId(self.tenant_id),
             user_id: self.user_id.map(billforge_core::UserId),
-            user_email: None,
+            user_email,
             action: serde_json::from_str(&format!("\"{}\"", self.action)).unwrap_or(AuditAction::Read),
             resource_type: serde_json::from_str(&format!("\"{}\"", self.resource_type)).unwrap_or(ResourceType::Invoice),
             resource_id: self.resource_id,
-            description: String::new(),
-            old_value: None,
-            new_value: None,
-            metadata: self.changes,
+            description,
+            old_value,
+            new_value,
+            metadata,
             ip_address: self.ip_address,
             user_agent: self.user_agent,
             request_id: None,

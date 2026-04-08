@@ -9,8 +9,8 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus, QueueType},
-    traits::InvoiceRepository,
+    domain::{AuditAction, AuditEntry, CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus, QueueType, ResourceType},
+    traits::{AuditService, InvoiceRepository},
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
@@ -134,8 +134,20 @@ async fn create_invoice(
     Json(input): Json<CreateInvoiceInput>,
 ) -> ApiResult<Json<Invoice>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     let invoice = repo.create(&tenant.tenant_id, input, &user.user_id).await?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Create, ResourceType::Invoice,
+        invoice.id.to_string(),
+        format!("Created invoice {}", invoice.invoice_number),
+    ).with_user_email(&user.email)
+     .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     Ok(Json(invoice))
 }
@@ -155,16 +167,33 @@ async fn create_invoice(
 )]
 async fn update_invoice(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
     Json(updates): Json<serde_json::Value>,
 ) -> ApiResult<Json<Invoice>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    let old_invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?;
     let invoice = repo.update(&tenant.tenant_id, &invoice_id, updates).await?;
+
+    let mut audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Update, ResourceType::Invoice,
+        invoice.id.to_string(),
+        format!("Updated invoice {}", invoice.invoice_number),
+    ).with_user_email(&user.email)
+     .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
+    if let Some(old) = old_invoice {
+        audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
+    }
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     Ok(Json(invoice))
 }
@@ -184,15 +213,30 @@ async fn update_invoice(
 )]
 async fn delete_invoice(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    let old_invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?;
     repo.delete(&tenant.tenant_id, &invoice_id).await?;
+
+    let mut audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Delete, ResourceType::Invoice,
+        id.clone(), "Deleted invoice",
+    ).with_user_email(&user.email);
+    if let Some(old) = old_invoice {
+        audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
+    }
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -283,6 +327,23 @@ async fn upload_invoice(
             .execute(&*pool)
             .await
             .map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
+
+            // Audit: invoice created via upload
+            let audit_entry = AuditEntry::new(
+                tenant.tenant_id.clone(), Some(user.user_id.clone()),
+                AuditAction::Create, ResourceType::Invoice,
+                invoice.id.to_string(),
+                format!("Uploaded invoice from file '{}'", file_name),
+            ).with_user_email(&user.email)
+             .with_metadata(serde_json::json!({
+                 "document_id": document_id.to_string(),
+                 "file_name": file_name,
+                 "content_type": content_type,
+             }));
+            let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+            if let Err(e) = audit_repo.log(audit_entry).await {
+                tracing::warn!(error = %e, "Failed to log audit entry");
+            }
 
             // Enqueue async OCR job if Redis is available, otherwise fall back to sync
             let message = if let Some(ref redis_client) = state.redis {
@@ -524,7 +585,7 @@ async fn run_sync_ocr(
 )]
 async fn rerun_ocr(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id: billforge_core::domain::InvoiceId = id.parse()
@@ -553,6 +614,16 @@ async fn rerun_ocr(
 
     // Mark as Processing
     repo.update_capture_status(&tenant.tenant_id, &invoice_id, CaptureStatus::Processing).await?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::OcrRerun, ResourceType::Invoice,
+        id.clone(), format!("Reran OCR for invoice {}", invoice.invoice_number),
+    ).with_user_email(&user.email);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     // Try async via Redis, fall back to sync
     if let Some(ref redis_client) = state.redis {
@@ -613,7 +684,7 @@ async fn rerun_ocr(
 )]
 async fn submit_for_processing(
     State(state): State<AppState>,
-    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let invoice_id = id.parse()
@@ -782,6 +853,18 @@ async fn submit_for_processing(
         &invoice_id,
         final_status,
     ).await?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::InvoiceSubmitted, ResourceType::Invoice,
+        id.clone(),
+        format!("Submitted invoice for processing, status: {:?}", final_status),
+    ).with_user_email(&user.email)
+     .with_metadata(serde_json::json!({ "processing_status": format!("{:?}", final_status) }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     // Assign invoice to the appropriate workflow queue based on final_status
     let target_queue_type = match final_status {

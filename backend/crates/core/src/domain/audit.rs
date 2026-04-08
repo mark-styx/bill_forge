@@ -225,6 +225,9 @@ pub enum ResourceType {
     Export,
     Settings,
     Session,
+    WorkflowTemplate,
+    ApprovalDelegation,
+    ApprovalLimit,
 }
 
 impl ResourceType {
@@ -243,6 +246,9 @@ impl ResourceType {
             ResourceType::Export => "Export",
             ResourceType::Settings => "Settings",
             ResourceType::Session => "Session",
+            ResourceType::WorkflowTemplate => "Workflow Template",
+            ResourceType::ApprovalDelegation => "Approval Delegation",
+            ResourceType::ApprovalLimit => "Approval Limit",
         }
     }
 }

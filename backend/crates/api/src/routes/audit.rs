@@ -10,7 +10,7 @@ use axum::{
 };
 use billforge_core::{
     domain::AuditEntry,
-    traits::AuditFilters,
+    traits::{AuditFilters, AuditService},
     types::{Pagination, PaginatedResponse, Role},
     Error,
 };
@@ -84,8 +84,9 @@ async fn list_audit_logs(
             .map(|dt| dt.with_timezone(&chrono::Utc)),
     };
 
-    let audit_service = state.audit_service();
-    let result = audit_service.query(&user.tenant_id, filters, &pagination).await?;
+    let pool = state.db.tenant(&user.tenant_id).await?;
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    let result = audit_repo.query(&user.tenant_id, filters, &pagination).await?;
 
     Ok(Json(result))
 }
