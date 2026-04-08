@@ -476,8 +476,9 @@ mod s3_storage {
             Ok(document_id)
         }
 
-        async fn download(&self, storage_key: &str) -> Result<Vec<u8>> {
-            let key = self.build_key(storage_key);
+        async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
 
             let output = self.client
                 .get_object()
@@ -496,8 +497,9 @@ mod s3_storage {
             Ok(bytes.to_vec())
         }
 
-        async fn delete(&self, storage_key: &str) -> Result<()> {
-            let key = self.build_key(storage_key);
+        async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
 
             self.client
                 .delete_object()
@@ -507,8 +509,26 @@ mod s3_storage {
                 .await
                 .map_err(|e| Error::Storage(format!("Failed to delete from S3: {}", e)))?;
 
-            tracing::debug!("Deleted document from S3: {}", key);
+            tracing::debug!("Deleted document {} from S3: {}", file_id, key);
             Ok(())
+        }
+
+        async fn get_url(&self, tenant_id: &TenantId, file_id: Uuid, expires_in_secs: u64) -> Result<String> {
+            let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+            let key = self.build_key(&storage_key);
+
+            let presigning_config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
+                .map_err(|e| Error::Storage(format!("Invalid presigning duration: {}", e)))?;
+
+            let presigned = self.client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .presigned(presigning_config)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to generate presigned URL: {}", e)))?;
+
+            Ok(presigned.uri().to_string())
         }
 
         async fn health_check(&self) -> Result<()> {
@@ -526,3 +546,77 @@ mod s3_storage {
 
 #[cfg(feature = "s3")]
 pub use s3_storage::S3StorageService;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use billforge_core::types::TenantId;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn local_storage_upload_scopes_by_tenant() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorageService::new(dir.path()).await.unwrap();
+
+        let tenant_a = TenantId::new();
+        let tenant_b = TenantId::new();
+
+        let file_id_a = storage
+            .upload(&tenant_a, "test.pdf", b"data-a", "application/pdf")
+            .await
+            .unwrap();
+
+        let file_id_b = storage
+            .upload(&tenant_b, "test.pdf", b"data-b", "application/pdf")
+            .await
+            .unwrap();
+
+        // Each tenant can only download their own file
+        let data_a = storage.download(&tenant_a, file_id_a).await.unwrap();
+        assert_eq!(data_a, b"data-a");
+
+        let data_b = storage.download(&tenant_b, file_id_b).await.unwrap();
+        assert_eq!(data_b, b"data-b");
+
+        // Cross-tenant access fails (tenant_a trying to get tenant_b's file)
+        let cross_access = storage.download(&tenant_a, file_id_b).await;
+        assert!(cross_access.is_err());
+    }
+
+    #[tokio::test]
+    async fn local_storage_delete_scopes_by_tenant() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorageService::new(dir.path()).await.unwrap();
+
+        let tenant_a = TenantId::new();
+        let tenant_b = TenantId::new();
+
+        let file_id = storage
+            .upload(&tenant_a, "test.pdf", b"data-a", "application/pdf")
+            .await
+            .unwrap();
+
+        // Tenant B cannot delete tenant A's file
+        let cross_delete = storage.delete(&tenant_b, file_id).await;
+        assert!(cross_delete.is_err());
+
+        // Tenant A can delete their own file
+        storage.delete(&tenant_a, file_id).await.unwrap();
+    }
+
+    #[test]
+    fn local_storage_key_includes_tenant_prefix() {
+        let storage = LocalStorageService {
+            base_path: PathBuf::from("/tmp/test-storage"),
+        };
+        let tenant_id = TenantId::new();
+        let file_id = Uuid::new_v4();
+
+        let key = format!("{}/{}", tenant_id.as_str(), file_id);
+        let path = storage.get_path(&key);
+
+        // Path must include tenant ID
+        assert!(path.to_string_lossy().contains(&tenant_id.as_str()));
+        assert!(path.to_string_lossy().contains(&file_id.to_string()));
+    }
+}
