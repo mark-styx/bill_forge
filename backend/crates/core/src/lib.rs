@@ -16,6 +16,7 @@ pub mod workflow_service;
 pub mod workload_balancer;
 pub mod approver_availability;
 pub mod webhook;
+pub mod http_retry;
 
 #[cfg(test)]
 mod tests;

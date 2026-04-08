@@ -20,50 +20,10 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio::time::sleep;
 
-/// Errors returned by the Bill.com API client
-#[derive(Debug)]
-pub enum ClientError {
-    /// 401 Unauthorized - session expired or invalid
-    TokenExpired { body: String },
-    /// 429 Too Many Requests - rate limited
-    RateLimited { retry_after: Option<u64> },
-    /// Other API error (4xx/5xx not handled above)
-    ApiError { status: u16, body: String },
-    /// Network/transport error
-    Transport(anyhow::Error),
-}
+/// Re-export shared HTTP retry error type as ClientError for backward compatibility
+pub use billforge_core::http_retry::HttpRetryError as ClientError;
 
-impl std::fmt::Display for ClientError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ClientError::TokenExpired { body } => {
-                write!(f, "Session expired: {}", body)
-            }
-            ClientError::RateLimited { retry_after } => {
-                write!(
-                    f,
-                    "Rate limited (retry_after: {:?})",
-                    retry_after
-                )
-            }
-            ClientError::ApiError { status, body } => {
-                write!(f, "API error (status {}): {}", status, body)
-            }
-            ClientError::Transport(err) => write!(f, "Transport error: {}", err),
-        }
-    }
-}
-
-impl std::error::Error for ClientError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ClientError::Transport(err) => Some(err.as_ref()),
-            _ => None,
-        }
-    }
-}
-
-const MAX_RETRIES: u32 = 3;
+use billforge_core::http_retry::{self, RetryConfig};
 
 /// Bill.com REST API client
 pub struct BillComClient {
@@ -114,56 +74,29 @@ impl BillComClient {
         Ok(headers)
     }
 
-    /// Compute backoff duration for a given attempt number.
-    /// Uses exponential backoff: min(2^attempt * 500ms, 30s) + random jitter (0-500ms).
-    /// If `retry_after_secs` is provided (from Retry-After header), use that capped at 60s.
-    fn compute_backoff(attempt: u32, retry_after_secs: Option<u64>) -> Duration {
-        if let Some(secs) = retry_after_secs {
-            let capped = secs.min(60);
-            return Duration::from_secs(capped);
-        }
-        let base_ms: u64 = 500 * (1u64 << attempt);
-        let capped_ms = base_ms.min(30_000);
-        // Simple jitter: use current time nanos modulo 500ms
-        let jitter_ms = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos()
-            % 500_000_000) as u64
-            / 1_000_000;
-        Duration::from_millis(capped_ms + jitter_ms)
-    }
-
     /// Execute a request with retry logic for 429 (rate limit) and 5xx (transient server errors).
-    /// Bill.com uses session-based auth; a 401 means the session expired and needs
-    /// re-login, which is out of scope for the client - just return the error.
+    /// Bill.com uses session-based auth; 401 means session expired (no auto-refresh).
     async fn execute_with_retry(
         &self,
         request_fn: impl Fn(HeaderMap) -> reqwest::RequestBuilder,
     ) -> std::result::Result<reqwest::Response, ClientError> {
+        let config = RetryConfig::default();
         let mut attempt = 0u32;
 
         loop {
-            let headers = self.build_headers().map_err(|e| ClientError::Transport(e))?;
+            let headers = self.build_headers().map_err(|e| ClientError::Transport(e.to_string()))?;
 
             let result = request_fn(headers).send().await;
 
             let response = match result {
                 Ok(resp) => resp,
                 Err(err) => {
-                    // Transport/network error: retry once
                     if attempt == 0 {
-                        tracing::warn!(
-                            attempt,
-                            error = %err,
-                            "Transport error, retrying once"
-                        );
+                        tracing::warn!(attempt, error = %err, "Transport error, retrying once");
                         attempt += 1;
                         continue;
                     }
-                    return Err(ClientError::Transport(
-                        anyhow::Error::from(err).context("Transport error after retry"),
-                    ));
+                    return Err(ClientError::Transport(format!("Transport error after retry: {}", err)));
                 }
             };
 
@@ -174,63 +107,30 @@ impl BillComClient {
                 return Ok(response);
             }
 
-            // Extract Retry-After before consuming the body
-            let retry_after_header = response
-                .headers()
-                .get("Retry-After")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok());
-
-            // Read the body for error reporting
+            let retry_after_header = http_retry::parse_retry_after(
+                response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+            );
             let body_text = response.text().await.unwrap_or_default();
 
             if status_code == 401 {
-                // Bill.com uses session-based auth; 401 means session expired.
-                // Session refresh (re-login) is handled outside the client.
                 return Err(ClientError::TokenExpired { body: body_text });
             }
 
-            if status_code == 429 {
+            if http_retry::is_retryable_status(status_code) {
                 attempt += 1;
-                if attempt >= MAX_RETRIES {
-                    return Err(ClientError::RateLimited { retry_after: retry_after_header });
+                if attempt >= config.max_retries {
+                    if status_code == 429 {
+                        return Err(ClientError::RateLimited { retry_after: retry_after_header });
+                    }
+                    return Err(ClientError::ApiError { status: status_code, body: body_text });
                 }
-                let backoff = Self::compute_backoff(attempt, retry_after_header);
-                tracing::warn!(
-                    attempt,
-                    ?backoff,
-                    retry_after = retry_after_header,
-                    "Rate limited, retrying"
-                );
+                let backoff = http_retry::compute_backoff(&config, attempt, if status_code == 429 { retry_after_header } else { None });
+                tracing::warn!(attempt, status_code, ?backoff, "Retryable error, backing off");
                 sleep(backoff).await;
                 continue;
             }
 
-            if status.is_server_error() {
-                // 5xx: retry with backoff
-                attempt += 1;
-                if attempt >= MAX_RETRIES {
-                    return Err(ClientError::ApiError {
-                        status: status_code,
-                        body: body_text,
-                    });
-                }
-                let backoff = Self::compute_backoff(attempt, None);
-                tracing::warn!(
-                    attempt,
-                    status_code,
-                    ?backoff,
-                    "Server error, retrying"
-                );
-                sleep(backoff).await;
-                continue;
-            }
-
-            // Other 4xx: permanent client error, fail immediately
-            return Err(ClientError::ApiError {
-                status: status_code,
-                body: body_text,
-            });
+            return Err(ClientError::ApiError { status: status_code, body: body_text });
         }
     }
 
@@ -374,6 +274,6 @@ impl BillComClient {
         response
             .text()
             .await
-            .map_err(|e| ClientError::Transport(anyhow::Error::from(e)))
+            .map_err(|e| ClientError::Transport(e.to_string()))
     }
 }

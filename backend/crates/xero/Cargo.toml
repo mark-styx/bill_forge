@@ -29,5 +29,8 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # URL encoding
 urlencoding = "2.1"
 
+# Shared core types
+billforge-core = { path = "../core" }
+
 [dev-dependencies]
 wiremock = "0.6"

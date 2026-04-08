@@ -11,6 +11,8 @@
 use crate::auth::SageIntacctSession;
 use crate::types::*;
 use anyhow::{Context, Result};
+use billforge_core::http_retry::{self, RetryConfig};
+use tokio::time::sleep;
 
 /// Sage Intacct API client
 pub struct SageIntacctClient {
@@ -57,28 +59,62 @@ impl SageIntacctClient {
         )
     }
 
-    /// Send an XML request and return the raw response body
+    /// Send an XML request with retry logic for 429/5xx errors.
     async fn send_request(&self, request_xml: &str) -> Result<String> {
-        let response = self
-            .http_client
-            .post(&self.session.endpoint)
-            .header("Content-Type", "application/xml")
-            .body(request_xml.to_string())
-            .send()
-            .await
-            .context("Failed to send request to Sage Intacct")?;
+        let config = RetryConfig::default();
+        let mut attempt = 0u32;
+        let body_owned = request_xml.to_string();
 
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .context("Failed to read Sage Intacct response")?;
+        loop {
+            let result = self
+                .http_client
+                .post(&self.session.endpoint)
+                .header("Content-Type", "application/xml")
+                .body(body_owned.clone())
+                .send()
+                .await;
 
-        if !status.is_success() {
+            let response = match result {
+                Ok(resp) => resp,
+                Err(err) => {
+                    if attempt == 0 {
+                        tracing::warn!(attempt, error = %err, "Sage Intacct transport error, retrying once");
+                        attempt += 1;
+                        continue;
+                    }
+                    anyhow::bail!("Sage Intacct transport error after retry: {}", err);
+                }
+            };
+
+            let status = response.status();
+            let status_code = status.as_u16();
+
+            if status.is_success() {
+                let body = response
+                    .text()
+                    .await
+                    .context("Failed to read Sage Intacct response")?;
+                return Ok(body);
+            }
+
+            if http_retry::is_retryable_status(status_code) {
+                let retry_after = http_retry::parse_retry_after(
+                    response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                );
+                attempt += 1;
+                if attempt >= config.max_retries {
+                    let body = response.text().await.unwrap_or_default();
+                    anyhow::bail!("Sage Intacct API failed after {} retries ({}): {}", attempt, status_code, body);
+                }
+                let backoff = http_retry::compute_backoff(&config, attempt, retry_after);
+                tracing::warn!(attempt, status_code, ?backoff, "Sage Intacct retryable error, backing off");
+                sleep(backoff).await;
+                continue;
+            }
+
+            let body = response.text().await.unwrap_or_default();
             anyhow::bail!("Sage Intacct API request failed (HTTP {}): {}", status, body);
         }
-
-        Ok(body)
     }
 
     // ──────────────────────────── Vendor Operations ────────────────────────────

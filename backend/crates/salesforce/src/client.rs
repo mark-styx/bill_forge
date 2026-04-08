@@ -11,9 +11,11 @@
 
 use crate::types::*;
 use anyhow::{Context, Result};
+use billforge_core::http_retry::{self, RetryConfig};
 use reqwest::header::CONTENT_TYPE;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tokio::time::sleep;
 
 /// Salesforce API version
 const API_VERSION: &str = "v59.0";
@@ -46,24 +48,68 @@ impl SalesforceClient {
         )
     }
 
+    /// Send an HTTP request with retry logic for 429/5xx errors.
+    async fn send_with_retry(
+        &self,
+        request_fn: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let config = RetryConfig::default();
+        let mut attempt = 0u32;
+
+        loop {
+            let result = request_fn().send().await;
+
+            let response = match result {
+                Ok(resp) => resp,
+                Err(err) => {
+                    if attempt == 0 {
+                        tracing::warn!(attempt, error = %err, "Salesforce transport error, retrying once");
+                        attempt += 1;
+                        continue;
+                    }
+                    anyhow::bail!("Salesforce transport error after retry: {}", err);
+                }
+            };
+
+            let status = response.status();
+            let status_code = status.as_u16();
+
+            if status.is_success() {
+                return Ok(response);
+            }
+
+            if http_retry::is_retryable_status(status_code) {
+                let retry_after = http_retry::parse_retry_after(
+                    response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                );
+                attempt += 1;
+                if attempt >= config.max_retries {
+                    let body = response.text().await.unwrap_or_default();
+                    anyhow::bail!("Salesforce API request failed after {} retries ({}): {}", attempt, status_code, body);
+                }
+                let backoff = http_retry::compute_backoff(&config, attempt, retry_after);
+                tracing::warn!(attempt, status_code, ?backoff, "Salesforce retryable error, backing off");
+                sleep(backoff).await;
+                continue;
+            }
+
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Salesforce API request failed ({}): {}", status, error_text);
+        }
+    }
+
     /// Make a GET request to Salesforce API
     async fn get<T: DeserializeOwned>(&self, resource: &str) -> Result<T> {
         let url = self.build_url(resource);
 
         let response = self
-            .http_client
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .header(CONTENT_TYPE, "application/json")
-            .send()
-            .await
-            .context("Failed to send GET request to Salesforce API")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Salesforce API request failed ({}): {}", status, error_text);
-        }
+            .send_with_retry(|| {
+                self.http_client
+                    .get(&url)
+                    .bearer_auth(&self.access_token)
+                    .header(CONTENT_TYPE, "application/json")
+            })
+            .await?;
 
         response
             .json()
@@ -78,22 +124,17 @@ impl SalesforceClient {
         body: &B,
     ) -> Result<T> {
         let url = self.build_url(resource);
+        let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
         let response = self
-            .http_client
-            .post(&url)
-            .bearer_auth(&self.access_token)
-            .header(CONTENT_TYPE, "application/json")
-            .json(body)
-            .send()
-            .await
-            .context("Failed to send POST request to Salesforce API")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Salesforce API request failed ({}): {}", status, error_text);
-        }
+            .send_with_retry(|| {
+                self.http_client
+                    .post(&url)
+                    .bearer_auth(&self.access_token)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(reqwest::Body::from(body_bytes.clone()))
+            })
+            .await?;
 
         response
             .json()
@@ -104,26 +145,16 @@ impl SalesforceClient {
     /// Make a PATCH request to Salesforce API (for updates)
     async fn patch<B: Serialize>(&self, resource: &str, body: &B) -> Result<()> {
         let url = self.build_url(resource);
+        let body_bytes = serde_json::to_vec(body).context("Failed to serialize PATCH body")?;
 
-        let response = self
-            .http_client
-            .patch(&url)
-            .bearer_auth(&self.access_token)
-            .header(CONTENT_TYPE, "application/json")
-            .json(body)
-            .send()
-            .await
-            .context("Failed to send PATCH request to Salesforce API")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Salesforce API update failed ({}): {}",
-                status,
-                error_text
-            );
-        }
+        self.send_with_retry(|| {
+            self.http_client
+                .patch(&url)
+                .bearer_auth(&self.access_token)
+                .header(CONTENT_TYPE, "application/json")
+                .body(reqwest::Body::from(body_bytes.clone()))
+        })
+        .await?;
 
         Ok(())
     }
@@ -143,18 +174,13 @@ impl SalesforceClient {
         let url = format!("{}{}", self.instance_url, next_url);
 
         let response = self
-            .http_client
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .header(CONTENT_TYPE, "application/json")
-            .send()
-            .await
-            .context("Failed to fetch next page from Salesforce")?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Salesforce query pagination failed: {}", error_text);
-        }
+            .send_with_retry(|| {
+                self.http_client
+                    .get(&url)
+                    .bearer_auth(&self.access_token)
+                    .header(CONTENT_TYPE, "application/json")
+            })
+            .await?;
 
         response
             .json()
@@ -295,12 +321,12 @@ impl SalesforceClient {
         let url = format!("{}/services/oauth2/userinfo", self.instance_url);
 
         let response = self
-            .http_client
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .send()
-            .await
-            .context("Failed to get Salesforce user info")?;
+            .send_with_retry(|| {
+                self.http_client
+                    .get(&url)
+                    .bearer_auth(&self.access_token)
+            })
+            .await?;
 
         response
             .json()
