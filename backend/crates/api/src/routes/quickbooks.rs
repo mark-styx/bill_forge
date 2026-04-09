@@ -548,10 +548,11 @@ async fn sync_vendors(
             let vendor_type = if qb_vendor.CompanyName.is_some() { "business" } else { "contractor" };
 
             if let Err(e) = sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())"
+                "INSERT INTO vendors (id, tenant_id, name, vendor_type, email, phone, status, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())"
             )
             .bind(vendor_id)
+            .bind(tenant.tenant_id.as_uuid())
             .bind(&qb_vendor.DisplayName)
             .bind(vendor_type)
             .bind(email)
