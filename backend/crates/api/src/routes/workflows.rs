@@ -23,8 +23,31 @@ use billforge_core::{
     types::Pagination,
 };
 use billforge_email::EmailTemplates;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Persist an audit entry or, if that fails, emit an ERROR-level log with a
+/// replayable fingerprint so SOX auditors can spot and reconcile the gap.
+async fn log_audit_or_record_gap(pool: &std::sync::Arc<sqlx::PgPool>, entry: AuditEntry) {
+    let fingerprint = serde_json::json!({
+        "id": entry.id,
+        "tenant_id": entry.tenant_id,
+        "action": entry.action,
+        "resource_type": entry.resource_type,
+        "resource_id": entry.resource_id,
+        "old_value": entry.old_value,
+        "new_value": entry.new_value,
+    });
+    let repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = repo.log(entry).await {
+        tracing::error!(
+            error = %e,
+            audit_entry = %fingerprint,
+            "SOX: failed to persist audit entry — manual reconciliation required"
+        );
+    }
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -159,17 +182,24 @@ async fn update_rule(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_rule = WorkflowRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "WorkflowRule".to_string(),
+            id: id.clone(),
+        })?;
+
     let rule = WorkflowRuleRepository::update(&repo, &tenant.tenant_id, &rule_id, input).await?;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Update, ResourceType::WorkflowRule,
         id.clone(), format!("Updated workflow rule '{}'", rule.name),
-    ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    ).with_user_email(&user.email)
+     .with_old_value(serde_json::to_value(&old_rule).unwrap_or(serde_json::Value::Null))
+     .with_new_value(serde_json::to_value(&rule).unwrap_or(serde_json::Value::Null));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(rule))
 }
@@ -185,17 +215,20 @@ async fn delete_rule(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Capture before-state for SOX audit trail (what was destroyed)
+    let old_rule = WorkflowRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?;
     WorkflowRuleRepository::delete(&repo, &tenant.tenant_id, &rule_id).await?;
 
-    let audit_entry = AuditEntry::new(
+    let mut audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Delete, ResourceType::WorkflowRule,
         id.clone(), "Deleted workflow rule",
     ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
+    if let Some(old) = old_rule {
+        audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or(serde_json::Value::Null));
     }
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -211,6 +244,14 @@ async fn activate_rule(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_rule = WorkflowRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "WorkflowRule".to_string(),
+            id: id.clone(),
+        })?;
+
     WorkflowRuleRepository::set_active(&repo, &tenant.tenant_id, &rule_id, true).await?;
 
     let audit_entry = AuditEntry::new(
@@ -218,11 +259,9 @@ async fn activate_rule(
         AuditAction::Update, ResourceType::WorkflowRule,
         id.clone(), "Activated workflow rule",
     ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "active": true }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+     .with_old_value(serde_json::json!({ "is_active": old_rule.is_active }))
+     .with_new_value(serde_json::json!({ "is_active": true }));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -238,6 +277,14 @@ async fn deactivate_rule(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_rule = WorkflowRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "WorkflowRule".to_string(),
+            id: id.clone(),
+        })?;
+
     WorkflowRuleRepository::set_active(&repo, &tenant.tenant_id, &rule_id, false).await?;
 
     let audit_entry = AuditEntry::new(
@@ -245,11 +292,9 @@ async fn deactivate_rule(
         AuditAction::Update, ResourceType::WorkflowRule,
         id.clone(), "Deactivated workflow rule",
     ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "active": false }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+     .with_old_value(serde_json::json!({ "is_active": old_rule.is_active }))
+     .with_new_value(serde_json::json!({ "is_active": false }));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -520,17 +565,24 @@ async fn update_assignment_rule(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::AssignmentRuleRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_rule = AssignmentRuleRepository::get_by_id(&repo, &tenant.tenant_id, &rule_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "AssignmentRule".to_string(),
+            id: id.clone(),
+        })?;
+
     let rule = AssignmentRuleRepository::update(&repo, &tenant.tenant_id, &rule_id, input).await?;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Update, ResourceType::AssignmentRule,
         id.clone(), format!("Updated assignment rule '{}'", rule.name),
-    ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    ).with_user_email(&user.email)
+     .with_old_value(serde_json::to_value(&old_rule).unwrap_or(serde_json::Value::Null))
+     .with_new_value(serde_json::to_value(&rule).unwrap_or(serde_json::Value::Null));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(rule))
 }
@@ -623,6 +675,86 @@ pub(crate) async fn resolve_invoice_approval_status(
         .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
 
     Ok(Some(new_status))
+}
+
+// ============================================================================
+// ERP Sync Enqueue (on approval completion)
+// ============================================================================
+
+/// Pure decision function: returns true only when the invoice just transitioned
+/// to Approved status, indicating an ERP sync job should be enqueued.
+pub(crate) fn should_enqueue_erp_sync(new_status: &Option<billforge_core::domain::ProcessingStatus>) -> bool {
+    matches!(new_status, Some(billforge_core::domain::ProcessingStatus::Approved))
+}
+
+/// Enqueue a QuickBooks invoice export job to the Redis job queue.
+/// Modeled on `enqueue_ocr_job` in invoices.rs. Redis failure is non-fatal:
+/// logs the error and returns Ok so the approval still succeeds.
+async fn enqueue_erp_sync_job(
+    redis_client: &redis::Client,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: Uuid,
+) -> Result<(), billforge_core::Error> {
+    let job = serde_json::json!({
+        "id": Uuid::new_v4().to_string(),
+        "job_type": "quick_books_invoice_export",
+        "tenant_id": tenant_id.to_string(),
+        "payload": {
+            "invoice_id": invoice_id.to_string(),
+        },
+        "created_at": chrono::Utc::now(),
+        "retry_count": 0,
+    });
+
+    let job_json = match serde_json::to_string(&job) {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to serialize ERP sync job — swallowing");
+            return Ok(());
+        }
+    };
+
+    match redis_client.get_async_connection().await {
+        Ok(mut conn) => {
+            match conn.lpush::<_, _, ()>("billforge:jobs:queue", &job_json).await {
+                Ok(()) => {
+                    tracing::info!(%invoice_id, "ERP sync job enqueued for approved invoice");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to LPUSH ERP sync job — swallowing");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Redis connection failed for ERP sync enqueue — swallowing");
+        }
+    }
+
+    Ok(())
+}
+
+/// Wrapper that calls `resolve_invoice_approval_status` and, if the invoice
+/// just transitioned to Approved, enqueues an ERP sync job via Redis.
+/// The `redis_client` is `Option` so callers without Redis still work.
+/// IMPORTANT: call this AFTER `tx.commit()` so Redis work happens outside
+/// the DB transaction and the invoice state is durable before the worker wakes.
+#[allow(dead_code)]
+pub(crate) async fn resolve_invoice_approval_status_and_enqueue_sync(
+    executor: &mut sqlx::PgConnection,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: Uuid,
+    redis_client: Option<&redis::Client>,
+) -> Result<Option<billforge_core::domain::ProcessingStatus>, billforge_core::Error> {
+    let new_status = resolve_invoice_approval_status(executor, tenant_id, invoice_id).await?;
+
+    if should_enqueue_erp_sync(&new_status) {
+        if let Some(client) = redis_client {
+            // Non-fatal: fire-and-forget; errors are logged and swallowed inside.
+            let _ = enqueue_erp_sync_job(client, tenant_id, invoice_id).await;
+        }
+    }
+
+    Ok(new_status)
 }
 
 // ============================================================================
@@ -899,6 +1031,22 @@ async fn approve(
     let mut tx = pool.begin().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
+    // Capture before-state for SOX audit trail (inside transaction for consistency)
+    #[derive(sqlx::FromRow)]
+    struct ApprovalBeforeState {
+        status: String,
+        responded_by: Option<uuid::Uuid>,
+        responded_at: Option<chrono::DateTime<chrono::Utc>>,
+        comments: Option<String>,
+    }
+    let old_approval = sqlx::query_as::<_, ApprovalBeforeState>(
+        "SELECT status, responded_by, responded_at, comments FROM approval_requests WHERE id = $1"
+    )
+    .bind(approval_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
     // Update approval request status (only if still pending)
     let updated = sqlx::query_scalar::<_, uuid::Uuid>(
         "UPDATE approval_requests SET status = 'approved', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3 AND status = 'pending' RETURNING id"
@@ -918,10 +1066,17 @@ async fn approve(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let _new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
+    let new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
+
+    // Enqueue ERP sync if invoice just transitioned to Approved (after commit so state is durable)
+    if should_enqueue_erp_sync(&new_status) {
+        if let Some(ref redis_client) = state.redis {
+            let _ = enqueue_erp_sync_job(redis_client, &tenant.tenant_id, info.invoice_id).await;
+        }
+    }
 
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
@@ -945,20 +1100,31 @@ async fn approve(
         });
     }
 
+    let old_value = old_approval.map(|oa| serde_json::json!({
+        "status": oa.status,
+        "responded_by": oa.responded_by.map(|u| u.to_string()),
+        "responded_at": oa.responded_at.map(|t| t.to_rfc3339()),
+        "comments": oa.comments,
+    })).unwrap_or(serde_json::Value::Null);
+
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::InvoiceApproved, ResourceType::ApprovalRequest,
         id.clone(),
         format!("Approved invoice {}", info.invoice_number),
     ).with_user_email(&user.email)
+     .with_old_value(old_value)
+     .with_new_value(serde_json::json!({
+         "status": "approved",
+         "responded_by": user.user_id.to_string(),
+         "responded_at": chrono::Utc::now().to_rfc3339(),
+         "comments": input.comments,
+     }))
      .with_metadata(serde_json::json!({
          "invoice_id": info.invoice_id.to_string(),
          "comments": input.comments,
      }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(serde_json::json!({
         "message": "Approved",
@@ -1014,6 +1180,22 @@ async fn reject(
     let mut tx = pool.begin().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
+    // Capture before-state for SOX audit trail (inside transaction for consistency)
+    #[derive(sqlx::FromRow)]
+    struct ApprovalBeforeState {
+        status: String,
+        responded_by: Option<uuid::Uuid>,
+        responded_at: Option<chrono::DateTime<chrono::Utc>>,
+        comments: Option<String>,
+    }
+    let old_approval = sqlx::query_as::<_, ApprovalBeforeState>(
+        "SELECT status, responded_by, responded_at, comments FROM approval_requests WHERE id = $1"
+    )
+    .bind(approval_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
     // Update approval request status (only if still pending)
     let updated = sqlx::query_scalar::<_, uuid::Uuid>(
         "UPDATE approval_requests SET status = 'rejected', responded_by = $1, responded_at = NOW(), comments = $2 WHERE id = $3 AND status = 'pending' RETURNING id"
@@ -1033,10 +1215,18 @@ async fn reject(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let _new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
+    let new_status = resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
+
+    // Enqueue ERP sync if invoice just transitioned to Approved (after commit so state is durable).
+    // This will not fire for rejections, but the pattern is kept consistent with the approve handler.
+    if should_enqueue_erp_sync(&new_status) {
+        if let Some(ref redis_client) = state.redis {
+            let _ = enqueue_erp_sync_job(redis_client, &tenant.tenant_id, info.invoice_id).await;
+        }
+    }
 
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
@@ -1061,20 +1251,31 @@ async fn reject(
         });
     }
 
+    let old_value = old_approval.map(|oa| serde_json::json!({
+        "status": oa.status,
+        "responded_by": oa.responded_by.map(|u| u.to_string()),
+        "responded_at": oa.responded_at.map(|t| t.to_rfc3339()),
+        "comments": oa.comments,
+    })).unwrap_or(serde_json::Value::Null);
+
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::InvoiceRejected, ResourceType::ApprovalRequest,
         id.clone(),
         format!("Rejected invoice {}", info.invoice_number),
     ).with_user_email(&user.email)
+     .with_old_value(old_value)
+     .with_new_value(serde_json::json!({
+         "status": "rejected",
+         "responded_by": user.user_id.to_string(),
+         "responded_at": chrono::Utc::now().to_rfc3339(),
+         "comments": reason,
+     }))
      .with_metadata(serde_json::json!({
          "invoice_id": info.invoice_id.to_string(),
          "reason": reason,
      }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(serde_json::json!({
         "message": "Rejected",
@@ -1155,17 +1356,24 @@ async fn update_template(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_template = WorkflowTemplateRepository::get_by_id(&repo, &tenant.tenant_id, &template_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "WorkflowTemplate".to_string(),
+            id: id.clone(),
+        })?;
+
     let template = WorkflowTemplateRepository::update(&repo, &tenant.tenant_id, &template_id, input).await?;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Update, ResourceType::WorkflowTemplate,
         id.clone(), format!("Updated workflow template '{}'", template.name),
-    ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    ).with_user_email(&user.email)
+     .with_old_value(serde_json::to_value(&old_template).unwrap_or(serde_json::Value::Null))
+     .with_new_value(serde_json::to_value(&template).unwrap_or(serde_json::Value::Null));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(template))
 }
@@ -1677,17 +1885,24 @@ async fn update_delegation(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     validate_delegation_input(&pool, &tenant.tenant_id, &input, Some(delegation_id)).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_delegation = ApprovalDelegationRepository::get_by_id(&repo, &tenant.tenant_id, delegation_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "ApprovalDelegation".to_string(),
+            id: id.clone(),
+        })?;
+
     let delegation = ApprovalDelegationRepository::update(&repo, &tenant.tenant_id, delegation_id, input).await?;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Update, ResourceType::ApprovalDelegation,
         id.clone(), "Updated approval delegation",
-    ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    ).with_user_email(&user.email)
+     .with_old_value(serde_json::to_value(&old_delegation).unwrap_or(serde_json::Value::Null))
+     .with_new_value(serde_json::to_value(&delegation).unwrap_or(serde_json::Value::Null));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(delegation))
 }
@@ -1788,17 +2003,24 @@ async fn update_approval_limit(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+
+    // Fetch before-state for SOX audit trail
+    let old_limit = ApprovalLimitRepository::get_by_id(&repo, &tenant.tenant_id, limit_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "ApprovalLimit".to_string(),
+            id: id.clone(),
+        })?;
+
     let limit = ApprovalLimitRepository::update(&repo, &tenant.tenant_id, limit_id, input).await?;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Update, ResourceType::ApprovalLimit,
         id.clone(), "Updated approval limit",
-    ).with_user_email(&user.email);
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
-    }
+    ).with_user_email(&user.email)
+     .with_old_value(serde_json::to_value(&old_limit).unwrap_or(serde_json::Value::Null))
+     .with_new_value(serde_json::to_value(&limit).unwrap_or(serde_json::Value::Null));
+    log_audit_or_record_gap(&pool, audit_entry).await;
 
     Ok(Json(limit))
 }
