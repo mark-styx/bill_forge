@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
-import { useMutation } from '@tanstack/react-query';
 import { invoicesApi } from '@/lib/api';
 import { toast } from 'sonner';
 import {
@@ -13,6 +12,7 @@ import {
   X,
   Loader2,
   CheckCircle,
+  AlertCircle,
   Image,
   File,
   ArrowLeft,
@@ -22,44 +22,68 @@ import {
   ClipboardCheck,
 } from 'lucide-react';
 
+type UploadEntry = {
+  id: string;
+  file: File;
+  status: 'queued' | 'uploading' | 'success' | 'error';
+  invoiceId?: string;
+  error?: string;
+};
+
+async function runBatch(
+  batchEntries: UploadEntry[],
+  limit: number,
+  onUpdate: (id: string, patch: Partial<UploadEntry>) => void
+) {
+  const queue = [...batchEntries];
+  const workers = Array.from(
+    { length: Math.min(limit, queue.length) },
+    async () => {
+      while (queue.length) {
+        const entry = queue.shift()!;
+        onUpdate(entry.id, { status: 'uploading' });
+        try {
+          const result = await invoicesApi.upload(entry.file);
+          onUpdate(entry.id, { status: 'success', invoiceId: result.invoice_id });
+        } catch (e: any) {
+          onUpdate(entry.id, { status: 'error', error: e?.message ?? 'Upload failed' });
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+}
+
 export default function UploadInvoicePage() {
   const router = useRouter();
-  const [files, setFiles] = useState<File[]>([]);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [entries, setEntries] = useState<UploadEntry[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const entriesRef = useRef<UploadEntry[]>([]);
+  entriesRef.current = entries;
 
-  const uploadMutation = useMutation({
-    mutationFn: async (file: File) => {
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setUploadProgress((prev) => Math.min(prev + 10, 90));
-      }, 200);
+  const updateEntry = useCallback(
+    (id: string, patch: Partial<UploadEntry>) => {
+      setEntries((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, ...patch } : e))
+      );
+    },
+    []
+  );
 
-      try {
-        const result = await invoicesApi.upload(file);
-        clearInterval(progressInterval);
-        setUploadProgress(100);
-        return result;
-      } catch (error) {
-        clearInterval(progressInterval);
-        throw error;
-      }
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      const newEntries: UploadEntry[] = acceptedFiles.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        status: 'queued' as const,
+      }));
+      setEntries((prev) => {
+        const combined = [...prev, ...newEntries];
+        return combined.slice(0, 50);
+      });
     },
-    onSuccess: (data) => {
-      toast.success('Invoice uploaded successfully!');
-      setTimeout(() => {
-        router.push(`/invoices/${data.invoice_id}`);
-      }, 500);
-    },
-    onError: (error: any) => {
-      setUploadProgress(0);
-      toast.error(error.message || 'Upload failed');
-    },
-  });
-
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles(acceptedFiles);
-    setUploadProgress(0);
-  }, []);
+    []
+  );
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
@@ -69,29 +93,70 @@ export default function UploadInvoicePage() {
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/tiff': ['.tiff', '.tif'],
     },
-    maxFiles: 1,
+    maxFiles: 50,
     maxSize: 10 * 1024 * 1024, // 10MB
   });
 
-  const handleUpload = () => {
-    if (files.length === 0) return;
-    uploadMutation.mutate(files[0]);
+  const removeEntry = (id: string) => {
+    setEntries((prev) => prev.filter((e) => e.id !== id));
   };
 
-  const removeFile = () => {
-    setFiles([]);
-    setUploadProgress(0);
+  const handleUpload = async () => {
+    const queued = entries.filter((e) => e.status === 'queued');
+    if (queued.length === 0) return;
+
+    setIsUploading(true);
+    await runBatch(queued, 3, updateEntry);
+    setIsUploading(false);
+
+    // Check final state after batch completes
+    const finalEntries = entriesRef.current;
+    const succeeded = finalEntries.filter((e) => e.status === 'success');
+    const failed = finalEntries.filter((e) => e.status === 'error');
+
+    if (failed.length === 0) {
+      toast.success(`${succeeded.length} invoice${succeeded.length > 1 ? 's' : ''} uploaded`);
+    } else {
+      toast.error(`${succeeded.length} of ${succeeded.length + failed.length} uploaded, ${failed.length} failed`);
+    }
+
+    // Single file success → redirect (preserves existing UX)
+    if (finalEntries.length === 1 && succeeded.length === 1) {
+      router.push(`/invoices/${succeeded[0].invoiceId}`);
+    }
   };
 
   const getFileIcon = (file: File) => {
     if (file.type === 'application/pdf') {
-      return <FileText className="w-8 h-8 text-error" />;
+      return <FileText className="w-6 h-6 text-error" />;
     }
     if (file.type.startsWith('image/')) {
-      return <Image className="w-8 h-8 text-capture" />;
+      return <Image className="w-6 h-6 text-capture" />;
     }
-    return <File className="w-8 h-8 text-muted-foreground" />;
+    return <File className="w-6 h-6 text-muted-foreground" />;
   };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  };
+
+  const statusIcon = (entry: UploadEntry) => {
+    switch (entry.status) {
+      case 'uploading':
+        return <Loader2 className="w-4 h-4 text-capture animate-spin" />;
+      case 'success':
+        return <CheckCircle className="w-4 h-4 text-success" />;
+      case 'error':
+        return <AlertCircle className="w-4 h-4 text-error" />;
+      default:
+        return null;
+    }
+  };
+
+  const isDone = entries.length > 0 && entries.every((e) => e.status === 'success' || e.status === 'error');
+  const succeededCount = entries.filter((e) => e.status === 'success').length;
+  const failedCount = entries.filter((e) => e.status === 'error').length;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -106,7 +171,7 @@ export default function UploadInvoicePage() {
         </Link>
         <h1 className="text-2xl font-semibold text-foreground">Upload Invoice</h1>
         <p className="text-muted-foreground mt-0.5">
-          Upload an invoice document for automatic OCR processing
+          Upload invoice documents for automatic OCR processing
         </p>
       </div>
 
@@ -114,7 +179,7 @@ export default function UploadInvoicePage() {
       <div className="card overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-capture to-capture/50" />
         <div className="p-6">
-          {files.length === 0 ? (
+          {entries.length === 0 ? (
             <div
               {...getRootProps()}
               className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all duration-200 ${
@@ -127,20 +192,24 @@ export default function UploadInvoicePage() {
             >
               <input {...getInputProps()} />
               <div className="flex flex-col items-center">
-                <div className={`p-4 rounded-2xl mb-4 transition-colors ${
-                  isDragActive ? 'bg-capture/10' : 'bg-secondary'
-                }`}>
-                  <Upload className={`w-10 h-10 ${isDragActive ? 'text-capture' : 'text-muted-foreground'}`} />
+                <div
+                  className={`p-4 rounded-2xl mb-4 transition-colors ${
+                    isDragActive ? 'bg-capture/10' : 'bg-secondary'
+                  }`}
+                >
+                  <Upload
+                    className={`w-10 h-10 ${isDragActive ? 'text-capture' : 'text-muted-foreground'}`}
+                  />
                 </div>
                 <p className="text-lg font-medium text-foreground mb-2">
                   {isDragReject
                     ? 'File type not supported'
                     : isDragActive
-                    ? 'Drop your invoice here'
-                    : 'Drag & drop your invoice'}
+                    ? 'Drop your invoices here'
+                    : 'Drag & drop your invoices'}
                 </p>
                 <p className="text-sm text-muted-foreground mb-4">
-                  or click to browse your files
+                  or click to browse (up to 50 files)
                 </p>
                 <div className="flex flex-wrap justify-center gap-2">
                   {['PDF', 'PNG', 'JPEG', 'TIFF'].map((format) => (
@@ -153,56 +222,89 @@ export default function UploadInvoicePage() {
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-3">
-                  Maximum file size: 10MB
+                  Maximum file size: 10MB per file
                 </p>
               </div>
             </div>
           ) : (
             <div className="space-y-4">
-              {/* File Preview */}
-              <div className="flex items-center p-4 bg-secondary/50 rounded-xl border border-border">
-                <div className="p-3 bg-card rounded-lg shadow-sm mr-4">
-                  {getFileIcon(files[0])}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground truncate">
-                    {files[0].name}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {(files[0].size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                </div>
-                {!uploadMutation.isPending && (
-                  <button
-                    onClick={removeFile}
-                    className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+              {/* File List */}
+              <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+                {entries.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center p-3 bg-secondary/50 rounded-xl border border-border"
                   >
-                    <X className="w-5 h-5" />
-                  </button>
-                )}
+                    <div className="p-2 bg-card rounded-lg shadow-sm mr-3">
+                      {getFileIcon(entry.file)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground truncate text-sm">
+                        {entry.file.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatSize(entry.file.size)}
+                      </p>
+                      {entry.status === 'error' && entry.error && (
+                        <p className="text-xs text-error mt-0.5">{entry.error}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-3">
+                      {statusIcon(entry)}
+                      {entry.status === 'queued' && !isUploading && (
+                        <button
+                          onClick={() => removeEntry(entry.id)}
+                          className="p-1 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              {/* Progress Bar */}
-              {uploadMutation.isPending && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Processing...</span>
-                    <span className="font-medium text-foreground">{uploadProgress}%</span>
+              {/* Add more files (while not uploading) */}
+              {!isUploading && !isDone && (
+                <div
+                  {...getRootProps()}
+                  className="border border-dashed border-border rounded-lg p-3 text-center cursor-pointer hover:border-capture/50 hover:bg-capture/5 transition-colors"
+                >
+                  <input {...getInputProps()} />
+                  <p className="text-sm text-muted-foreground">
+                    Add more files ({entries.length}/50)
+                  </p>
+                </div>
+              )}
+
+              {/* Batch Summary (shown when done) */}
+              {isDone && (
+                <div className="flex items-center justify-between p-4 bg-secondary/50 rounded-xl border border-border">
+                  <div className="flex items-center gap-2">
+                    {failedCount === 0 ? (
+                      <CheckCircle className="w-5 h-5 text-success" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-warning" />
+                    )}
+                    <span className="text-sm font-medium text-foreground">
+                      {succeededCount} of {entries.length} uploaded
+                      {failedCount > 0 && `, ${failedCount} failed`}
+                    </span>
                   </div>
-                  <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-capture to-capture/70 rounded-full transition-all duration-300"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
+                  <Link
+                    href="/invoices"
+                    className="text-sm text-capture hover:text-capture/80 transition-colors font-medium"
+                  >
+                    View Invoices
+                  </Link>
                 </div>
               )}
 
               {/* Actions */}
-              {!uploadMutation.isPending && (
+              {!isUploading && !isDone && (
                 <div className="flex justify-end gap-3">
                   <button
-                    onClick={removeFile}
+                    onClick={() => setEntries([])}
                     className="btn btn-secondary"
                   >
                     Cancel
@@ -212,16 +314,17 @@ export default function UploadInvoicePage() {
                     className="btn bg-capture text-capture-foreground hover:bg-capture/90 shadow-sm"
                   >
                     <ScanLine className="w-4 h-4 mr-2" />
-                    Upload & Process
+                    Upload &amp; Process ({entries.length})
                   </button>
                 </div>
               )}
 
-              {/* Success State */}
-              {uploadProgress === 100 && (
-                <div className="flex items-center justify-center gap-2 text-success p-4">
-                  <CheckCircle className="w-5 h-5" />
-                  <span className="font-medium">Upload complete! Redirecting...</span>
+              {/* Uploading indicator */}
+              {isUploading && (
+                <div className="flex items-center justify-center gap-2 p-3 text-sm text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Uploading {entries.filter((e) => e.status === 'uploading').length} of{' '}
+                  {entries.filter((e) => e.status === 'queued' || e.status === 'uploading').length} remaining...
                 </div>
               )}
             </div>
@@ -246,7 +349,7 @@ export default function UploadInvoicePage() {
             {
               icon: Upload,
               title: 'Upload',
-              description: 'Your invoice is securely uploaded',
+              description: 'Your invoices are securely uploaded',
             },
             {
               icon: ScanLine,
