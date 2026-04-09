@@ -99,14 +99,7 @@ export interface DeviceResponse {
 
 // ---- API error shape ----
 
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-    field_errors?: Record<string, string[]>;
-  };
-}
+export type { ApiErrorBody } from '@billforge/shared-types';
 
 // ---- Helpers ----
 

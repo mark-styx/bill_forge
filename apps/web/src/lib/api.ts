@@ -2,15 +2,7 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-    field_errors?: Record<string, string[]>;
-  };
-}
+export type { ApiErrorBody } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
   status: number;
