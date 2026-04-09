@@ -2,6 +2,7 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
+import type { ApiErrorBody } from '@billforge/shared-types';
 export type { ApiErrorBody } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
@@ -1463,4 +1464,609 @@ export const vendorStatementsApi = {
   /** Mark a statement as reconciled */
   reconcile: (vendorId: string, statementId: string) =>
     api.post<{ success: boolean; status: string }>(`/api/v1/vendors/${vendorId}/statements/${statementId}/reconcile`, {}),
+};
+
+// ---------------------------------------------------------------------------
+// Dashboard Metrics Types
+// ---------------------------------------------------------------------------
+
+export interface DashboardInvoiceMetrics {
+  total_invoices: number;
+  pending_ocr: number;
+  ready_for_review: number;
+  submitted: number;
+  approved: number;
+  rejected: number;
+  paid: number;
+  avg_processing_time_hours: number;
+  total_value: number;
+  this_month: number;
+  trend_vs_last_month: number;
+}
+
+export interface DashboardApprovalMetrics {
+  pending_approvals: number;
+  approved_today: number;
+  rejected_today: number;
+  avg_approval_time_hours: number;
+  approval_rate: number;
+  escalated: number;
+  overdue: number;
+}
+
+export interface DashboardTopVendor {
+  vendor_id: string;
+  vendor_name: string;
+  invoice_count: number;
+  total_amount: number;
+}
+
+export interface DashboardVendorMetrics {
+  total_vendors: number;
+  new_this_month: number;
+  top_vendors: DashboardTopVendor[];
+  concentration_percentage: number;
+}
+
+export interface DashboardTeamMemberStats {
+  user_id: string;
+  user_name: string;
+  approvals_this_month: number;
+  rejections_this_month: number;
+  avg_response_time_hours: number;
+}
+
+export interface DashboardTeamMetrics {
+  members: DashboardTeamMemberStats[];
+  avg_approvals_per_member: number;
+  total_pending_actions: number;
+}
+
+export interface DashboardMetrics {
+  invoices: DashboardInvoiceMetrics;
+  approvals: DashboardApprovalMetrics;
+  vendors: DashboardVendorMetrics;
+  team: DashboardTeamMetrics;
+}
+
+// Dashboard API
+export const dashboardApi = {
+  /** Alias kept for backward compatibility with existing consumers */
+  metrics: () =>
+    api.get<DashboardMetrics>('/api/v1/dashboard/metrics'),
+
+  getMetrics: () =>
+    api.get<DashboardMetrics>('/api/v1/dashboard/metrics'),
+
+  getInvoiceMetrics: () =>
+    api.get<DashboardInvoiceMetrics>('/api/v1/dashboard/metrics/invoices'),
+
+  getApprovalMetrics: () =>
+    api.get<DashboardApprovalMetrics>('/api/v1/dashboard/metrics/approvals'),
+
+  getVendorMetrics: () =>
+    api.get<DashboardVendorMetrics>('/api/v1/dashboard/metrics/vendors'),
+
+  getTeamMetrics: () =>
+    api.get<DashboardTeamMetrics>('/api/v1/dashboard/metrics/team'),
+};
+
+// ---------------------------------------------------------------------------
+// Audit Log Types
+// ---------------------------------------------------------------------------
+
+export interface AuditEntry {
+  id: string;
+  tenant_id: string;
+  user_id: string | null;
+  user_email: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  description: string;
+  old_value: unknown | null;
+  new_value: unknown | null;
+  metadata: unknown | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  created_at: string;
+}
+
+export interface AuditQueryParams {
+  page?: number;
+  per_page?: number;
+  user_id?: string;
+  action?: string;
+  resource_type?: string;
+  resource_id?: string;
+  from_date?: string;
+  to_date?: string;
+}
+
+export interface AuditListResponse {
+  data: AuditEntry[];
+  pagination: PaginationMeta;
+}
+
+// Audit API
+export const auditApi = {
+  list: (params?: AuditQueryParams) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.get<AuditListResponse>(`/api/v1/audit?${qs}`);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Billing Types
+// ---------------------------------------------------------------------------
+
+export interface BillingPlanModule {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface BillingPlanFeatures {
+  max_users: number;
+  max_invoices_per_month: number;
+  max_vendors: number;
+  storage_gb: number;
+  modules: BillingPlanModule[];
+  advanced_ocr: boolean;
+  api_access: boolean;
+  custom_workflows: boolean;
+  priority_support: boolean;
+  sso_enabled: boolean;
+  audit_log_retention_days: number;
+}
+
+export interface BillingPlan {
+  id: string;
+  name: string;
+  description: string;
+  monthly_price_cents: number;
+  annual_price_cents: number;
+  features: BillingPlanFeatures;
+  stripe_monthly_price_id: string | null;
+  stripe_annual_price_id: string | null;
+  is_public: boolean;
+}
+
+export interface BillingSubscription {
+  id: string;
+  tenant_id: string;
+  plan_id: string;
+  status: string;
+  billing_cycle: string;
+  started_at: string;
+  current_period_start: string;
+  current_period_end: string;
+  canceled_at: string | null;
+  trial_end: string | null;
+  stripe_subscription_id: string | null;
+  stripe_customer_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Billing API
+export const billingApi = {
+  listPlans: () =>
+    api.get<{ plans: BillingPlan[] }>('/api/v1/billing/plans'),
+
+  getSubscription: () =>
+    api.get<{ subscription: BillingSubscription }>('/api/v1/billing/subscription'),
+};
+
+// ---------------------------------------------------------------------------
+// Notifications Types
+// ---------------------------------------------------------------------------
+
+export interface SlackInstallResponse {
+  authorize_url: string;
+  state: string;
+}
+
+export interface SlackCallbackResponse {
+  success: boolean;
+  slack_team_name: string;
+}
+
+export interface SlackStatus {
+  slack_team_id: string;
+  slack_team_name: string;
+  installed_at: string;
+  is_active: boolean;
+}
+
+export interface TeamsConfigureResponse {
+  success: boolean;
+  webhook_id: string;
+}
+
+export interface TeamsStatus {
+  id: string;
+  channel_name: string | null;
+  created_at: string;
+  is_active: boolean;
+}
+
+export interface NotificationPreference {
+  channel: string;
+  enabled: boolean;
+  notification_types: string[] | null;
+  priority_filter: string | null;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+  quiet_hours_timezone: string | null;
+}
+
+export interface UpdateNotificationPreferencesInput {
+  channel: string;
+  enabled: boolean;
+  notification_types?: string[];
+  priority_filter?: string;
+  quiet_hours_start?: string;
+  quiet_hours_end?: string;
+  quiet_hours_timezone?: string;
+}
+
+// Notifications API
+export const notificationsApi = {
+  // Slack
+  installSlack: (redirectUrl?: string) => {
+    const qs = redirectUrl ? `?redirect_url=${encodeURIComponent(redirectUrl)}` : '';
+    return api.post<SlackInstallResponse>(`/api/v1/notifications/slack/install${qs}`);
+  },
+
+  slackCallback: (code: string, state: string) =>
+    api.get<SlackCallbackResponse>(`/api/v1/notifications/slack/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`),
+
+  getSlackStatus: () =>
+    api.get<SlackStatus | null>('/api/v1/notifications/slack/status'),
+
+  disconnectSlack: () =>
+    api.post<{ success: boolean }>('/api/v1/notifications/slack/disconnect'),
+
+  // Teams
+  configureTeams: (data: { webhook_url: string; channel_name?: string }) =>
+    api.post<TeamsConfigureResponse>('/api/v1/notifications/teams/configure', data),
+
+  getTeamsStatus: () =>
+    api.get<TeamsStatus | null>('/api/v1/notifications/teams/status'),
+
+  disconnectTeams: () =>
+    api.post<{ success: boolean }>('/api/v1/notifications/teams/disconnect'),
+
+  // Preferences
+  getPreferences: () =>
+    api.get<NotificationPreference[]>('/api/v1/notifications/preferences'),
+
+  updatePreferences: (data: UpdateNotificationPreferencesInput) =>
+    api.put<{ success: boolean }>('/api/v1/notifications/preferences', data),
+};
+
+// ---------------------------------------------------------------------------
+// Predictive Analytics Types
+// ---------------------------------------------------------------------------
+
+export type PredictiveEntityType = 'vendor' | 'department' | 'gl_code' | 'tenant' | 'approver';
+export type ForecastHorizon = 'days_30' | 'days_60' | 'days_90';
+export type AnomalyType = 'invoice_amount_outlier' | 'duplicate_invoice' | 'vendor_volume_spike' | 'approval_time_anomaly' | 'budget_threshold' | 'vendor_concentration';
+export type AnomalySeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export interface Forecast {
+  entity_id: string;
+  entity_type: PredictiveEntityType;
+  metric_name: string;
+  horizon: ForecastHorizon;
+  predicted_value: number;
+  confidence_lower: number;
+  confidence_upper: number;
+  confidence_level: number;
+  generated_at: string;
+  model_version: string;
+  seasonality_detected: boolean;
+}
+
+export interface ForecastQuery {
+  entity_type: string;
+  entity_id: string;
+  horizon: string;
+}
+
+export interface Anomaly {
+  id: string;
+  tenant_id: string;
+  anomaly_type: AnomalyType;
+  entity_id: string;
+  entity_type: PredictiveEntityType;
+  severity: AnomalySeverity;
+  detected_value: number;
+  expected_range: [number, number];
+  deviation_score: number;
+  detected_at: string;
+  metadata: Record<string, unknown>;
+  acknowledged: boolean;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export interface BudgetAlert {
+  id: string;
+  alert_type: string;
+  severity: string;
+  entity_id: string | null;
+  entity_type: string | null;
+  title: string;
+  message: string;
+  threshold_value: number | null;
+  current_value: number | null;
+  threshold_percentage: number | null;
+  recommended_action: string | null;
+  triggered_at: string;
+  dismissed: boolean;
+}
+
+export interface AnomalyRule {
+  id: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  anomaly_type: string;
+  zscore_threshold: number | null;
+  iqr_multiplier: number | null;
+  volume_spike_threshold: number | null;
+  notification_channels: string[] | null;
+  notify_on_severity: string[] | null;
+  enabled: boolean;
+}
+
+export interface ConfigureAnomalyRuleInput {
+  entity_type?: string;
+  entity_id?: string;
+  anomaly_type: string;
+  zscore_threshold?: number;
+  iqr_multiplier?: number;
+  volume_spike_threshold?: number;
+  notification_channels?: string[];
+  notify_on_severity?: string[];
+  enabled?: boolean;
+}
+
+// Predictive Analytics API
+export const predictiveApi = {
+  // Forecasts
+  getForecasts: (query: ForecastQuery) => {
+    const qs = new URLSearchParams({
+      entity_type: query.entity_type,
+      entity_id: query.entity_id,
+      horizon: query.horizon,
+    });
+    return api.get<Forecast[]>(`/api/v1/analytics/predictive/forecasts?${qs}`);
+  },
+
+  generateForecast: (query: ForecastQuery) =>
+    api.post<Forecast>('/api/v1/analytics/predictive/forecasts/generate', query),
+
+  getForecastById: (id: string) =>
+    api.get<Forecast>(`/api/v1/analytics/predictive/forecasts/${id}`),
+
+  // Anomalies
+  getAnomalies: () =>
+    api.get<Anomaly[]>('/api/v1/analytics/predictive/anomalies'),
+
+  acknowledgeAnomaly: (id: string, notes?: string) =>
+    api.post<null>(`/api/v1/analytics/predictive/anomalies/${id}/acknowledge`, { notes }),
+
+  detectAnomalies: () =>
+    api.post<Anomaly[]>('/api/v1/analytics/predictive/anomalies/detect'),
+
+  // Budget Alerts
+  getBudgetAlerts: () =>
+    api.get<BudgetAlert[]>('/api/v1/analytics/predictive/alerts'),
+
+  dismissAlert: (id: string) =>
+    api.post<null>(`/api/v1/analytics/predictive/alerts/${id}/dismiss`),
+
+  // Anomaly Rules
+  getAnomalyRules: () =>
+    api.get<AnomalyRule[]>('/api/v1/analytics/predictive/rules'),
+
+  configureAnomalyRule: (data: ConfigureAnomalyRuleInput) =>
+    api.post<string>('/api/v1/analytics/predictive/rules', data),
+
+  getAnomalyRule: (id: string) =>
+    api.get<AnomalyRule>(`/api/v1/analytics/predictive/rules/${id}`),
+
+  updateAnomalyRule: (id: string, data: ConfigureAnomalyRuleInput) =>
+    api.post<null>(`/api/v1/analytics/predictive/rules/${id}/update`, data),
+};
+
+// ---------------------------------------------------------------------------
+// Tenant Settings Types
+// ---------------------------------------------------------------------------
+
+export interface TenantSettings {
+  company_name: string;
+  timezone: string;
+  default_currency: string;
+  logo_url: string | null;
+  primary_color: string | null;
+}
+
+export interface UpdateTenantSettingsInput {
+  company_name?: string;
+  timezone?: string;
+  default_currency?: string;
+}
+
+// Settings API
+export const settingsApi = {
+  get: () =>
+    api.get<TenantSettings>('/api/v1/settings'),
+
+  update: (data: UpdateTenantSettingsInput) =>
+    api.put<TenantSettings>('/api/v1/settings', data),
+};
+
+// ---------------------------------------------------------------------------
+// Purchase Order Types
+// ---------------------------------------------------------------------------
+
+export interface PurchaseOrderMoney {
+  amount: number;
+  currency: string;
+}
+
+export interface POLineItem {
+  id: string;
+  line_number: number;
+  description: string;
+  quantity: number;
+  unit_of_measure: string;
+  unit_price: PurchaseOrderMoney;
+  total: PurchaseOrderMoney;
+  product_id: string | null;
+  received_quantity: number;
+  invoiced_quantity: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  tenant_id: string;
+  po_number: string;
+  vendor_id: string;
+  vendor_name: string;
+  order_date: string;
+  expected_delivery: string | null;
+  status: string;
+  line_items: POLineItem[];
+  total_amount: PurchaseOrderMoney;
+  ship_to_address: string | null;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePOLineItemInput {
+  line_number?: number;
+  description: string;
+  quantity: number;
+  unit_of_measure: string;
+  unit_price: PurchaseOrderMoney;
+  total: PurchaseOrderMoney;
+  product_id?: string;
+}
+
+export interface CreatePurchaseOrderInput {
+  po_number: string;
+  vendor_id: string;
+  vendor_name: string;
+  order_date: string;
+  expected_delivery?: string;
+  line_items: CreatePOLineItemInput[];
+  total_amount: PurchaseOrderMoney;
+  ship_to_address?: string;
+  notes?: string;
+}
+
+export interface PurchaseOrderListQuery {
+  page?: number;
+  per_page?: number;
+  vendor_id?: string;
+  status?: string;
+  search?: string;
+}
+
+export interface PurchaseOrderListResponse {
+  data: PurchaseOrder[];
+  pagination: PaginationMeta;
+}
+
+export interface MatchTolerancesInput {
+  price_variance_pct?: number;
+  quantity_variance_pct?: number;
+  auto_approve_below_cents?: number;
+}
+
+export interface RunMatchRequest {
+  invoice_id: string;
+  tolerances?: MatchTolerancesInput;
+}
+
+export interface PurchaseOrderMatchResponse {
+  match_type: string;
+  price_variance_pct: number;
+  quantity_variance_pct: number;
+  match_result_id: string;
+  details: Record<string, unknown>;
+}
+
+// Purchase Orders API
+export const purchaseOrdersApi = {
+  list: (params?: PurchaseOrderListQuery) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.get<PurchaseOrderListResponse>(`/api/v1/edi/purchase-orders?${qs}`);
+  },
+
+  create: (data: CreatePurchaseOrderInput) =>
+    api.post<PurchaseOrder>('/api/v1/edi/purchase-orders', data),
+
+  get: (id: string) =>
+    api.get<PurchaseOrder>(`/api/v1/edi/purchase-orders/${id}`),
+
+  delete: (id: string) =>
+    api.delete<{ deleted: boolean }>(`/api/v1/edi/purchase-orders/${id}`),
+
+  runMatch: (id: string, data: RunMatchRequest) =>
+    api.post<PurchaseOrderMatchResponse>(`/api/v1/edi/purchase-orders/${id}/match`, data),
+};
+
+// ---------------------------------------------------------------------------
+// Export Types
+// ---------------------------------------------------------------------------
+
+export interface ExportQueryParams {
+  start_date?: string;
+  end_date?: string;
+  status?: string;
+  vendor_id?: string;
+}
+
+// Export API
+export const exportApi = {
+  exportInvoicesCsv: (params?: ExportQueryParams) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.downloadBlob(`/api/v1/export/invoices/csv?${qs}`);
+  },
+
+  exportInvoicesJson: (params?: ExportQueryParams) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) qs.set(k, String(v));
+      }
+    }
+    return api.downloadBlob(`/api/v1/export/invoices/json?${qs}`);
+  },
+
+  exportVendorsCsv: () =>
+    api.downloadBlob('/api/v1/export/vendors/csv'),
 };

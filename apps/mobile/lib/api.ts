@@ -99,6 +99,7 @@ export interface DeviceResponse {
 
 // ---- API error shape ----
 
+import type { ApiErrorBody } from '@billforge/shared-types';
 export type { ApiErrorBody } from '@billforge/shared-types';
 
 // ---- Helpers ----
