@@ -453,3 +453,86 @@ async fn test_daily_metrics_update(pool: PgPool) -> Result<()> {
 
     Ok(())
 }
+
+/// Regression test for #123: confidence calibration SQL must branch on feedback_type, not accepted_gl_code.
+/// The production schema (migration 048) stores accepted_gl_code as TEXT, so using it as a boolean
+/// causes Postgres to reject the query. This test uses the real schema to catch that class of bug.
+#[sqlx::test]
+#[ignore = "requires migrated PostgreSQL with pgvector"]
+async fn test_confidence_calibration_uses_real_schema(pool: PgPool) -> Result<()> {
+    let tenant_id = TenantId::new();
+    let tenant_id_str = tenant_id.as_str();
+
+    // Create a minimal tenant row so FK constraints are satisfied
+    sqlx::query(
+        "INSERT INTO tenants (id, name, subdomain, active, created_at)
+         VALUES ($1, 'Calibration Test', 'cal-test', true, NOW())",
+    )
+    .bind(tenant_id.as_uuid())
+    .execute(&pool)
+    .await?;
+
+    // Create the categorization_feedback table matching production migration 048 exactly
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS categorization_feedback (
+            id UUID PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            invoice_id UUID NOT NULL,
+            vendor_id UUID,
+            vendor_name TEXT,
+            suggested_gl_code TEXT,
+            accepted_gl_code TEXT,
+            suggestion_confidence FLOAT,
+            feedback_type TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    // Insert 4 rows: 2 acceptances (confidences 0.9, 0.8) and 2 corrections (confidences 0.4, 0.5)
+    let vendor_id = Uuid::new_v4();
+    for (feedback_type, confidence) in [
+        ("acceptance", 0.9f32),
+        ("acceptance", 0.8),
+        ("correction", 0.4),
+        ("correction", 0.5),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO categorization_feedback
+                (id, tenant_id, invoice_id, vendor_id, vendor_name,
+                 suggested_gl_code, accepted_gl_code, suggestion_confidence, feedback_type, created_at)
+            VALUES ($1, $2, $3, $4, 'Test Vendor', '6100', '6100', $5, $6, NOW())
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(&tenant_id_str)
+        .bind(Uuid::new_v4())
+        .bind(vendor_id)
+        .bind(confidence)
+        .bind(feedback_type)
+        .execute(&pool)
+        .await?;
+    }
+
+    let learning = FeedbackLearning::new(pool);
+    let insights = learning.analyze_feedback(&tenant_id_str, 7).await?;
+
+    let cal = &insights.confidence_calibration;
+    assert_eq!(cal.total_samples, 4, "total_samples should count all 4 rows");
+    assert!(
+        (cal.avg_confidence_when_correct - 0.85).abs() < 0.01,
+        "avg_confidence_when_correct should be 0.85, got {}",
+        cal.avg_confidence_when_correct
+    );
+    assert!(
+        (cal.avg_confidence_when_wrong - 0.45).abs() < 0.01,
+        "avg_confidence_when_wrong should be 0.45, got {}",
+        cal.avg_confidence_when_wrong
+    );
+
+    Ok(())
+}

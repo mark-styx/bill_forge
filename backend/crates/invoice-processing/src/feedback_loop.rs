@@ -231,13 +231,13 @@ impl FeedbackLearning {
         let row = sqlx::query_as::<_, (Option<f32>, Option<f32>, Option<i64>)>(
             r#"
             SELECT
-                AVG(CASE WHEN accepted_gl_code THEN suggestion_confidence ELSE NULL END) as avg_conf_correct,
-                AVG(CASE WHEN NOT accepted_gl_code THEN suggestion_confidence ELSE NULL END) as avg_conf_wrong,
-                COUNT(*) as total_samples
+                AVG(CASE WHEN feedback_type = 'acceptance' THEN suggestion_confidence END) AS avg_conf_correct,
+                AVG(CASE WHEN feedback_type IN ('correction', 'rejection') THEN suggestion_confidence END) AS avg_conf_wrong,
+                COUNT(*) FILTER (WHERE feedback_type IN ('acceptance', 'correction', 'rejection')) AS total_samples
             FROM categorization_feedback
             WHERE tenant_id = $1
-            AND created_at >= $2
-            AND suggestion_confidence IS NOT NULL
+              AND created_at >= $2
+              AND suggestion_confidence IS NOT NULL
             "#,
         )
         .bind(tenant_id)
