@@ -277,3 +277,73 @@ fn test_update_account_mappings_response_zero_errors() {
     assert_eq!(json["status"], "updated");
     assert_eq!(json["errors"], 0);
 }
+
+#[test]
+fn test_update_bill_request_body_shape() {
+    use billforge_quickbooks::types::{QBBill, QBBillLine, QBReference};
+    use billforge_quickbooks::UpdateBillRequest;
+
+    let bill = QBBill {
+        Id: "bill-1".to_string(),
+        VendorRef: QBReference {
+            value: "1".to_string(),
+            name: Some("Acme Corp".to_string()),
+        },
+        CurrencyRef: None,
+        DueDate: "2026-04-15".to_string(),
+        TotalAmt: 10000,
+        Balance: 10000,
+        Line: vec![QBBillLine {
+            Id: Some("line-1".to_string()),
+            LineNum: Some(1),
+            Description: Some("Test item".to_string()),
+            Amount: 10000,
+            AccountBasedExpenseLineDetail: None,
+        }],
+        SyncToken: "3".to_string(),
+        PrivateNote: None,
+        MetaData: None,
+    };
+
+    let request = UpdateBillRequest {
+        sparse: true,
+        bill,
+    };
+
+    let json = serde_json::to_value(&request).unwrap();
+
+    assert_eq!(json["sparse"], true, "sparse flag must be true");
+    assert_eq!(json["Id"], "bill-1", "Id must be present at top level");
+    assert_eq!(json["SyncToken"], "3", "SyncToken must be present at top level");
+    assert_eq!(json["TotalAmt"], 10000, "domain fields must be flattened into top level");
+}
+
+#[test]
+fn test_update_vendor_request_body_shape() {
+    use billforge_quickbooks::types::QBVendor;
+    use billforge_quickbooks::UpdateVendorRequest;
+
+    let vendor = QBVendor {
+        Id: "vendor-42".to_string(),
+        DisplayName: "Acme Corp".to_string(),
+        CompanyName: Some("Acme Corporation".to_string()),
+        PrimaryEmailAddr: None,
+        PrimaryPhone: None,
+        Balance: 0,
+        Active: true,
+        SyncToken: "7".to_string(),
+        MetaData: None,
+    };
+
+    let request = UpdateVendorRequest {
+        sparse: true,
+        vendor,
+    };
+
+    let json = serde_json::to_value(&request).unwrap();
+
+    assert_eq!(json["sparse"], true, "sparse flag must be true");
+    assert_eq!(json["Id"], "vendor-42", "Id must be present at top level");
+    assert_eq!(json["SyncToken"], "7", "SyncToken must be present at top level");
+    assert_eq!(json["DisplayName"], "Acme Corp", "domain fields must be flattened into top level");
+}

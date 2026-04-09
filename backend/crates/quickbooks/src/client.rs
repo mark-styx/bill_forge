@@ -5,7 +5,7 @@ use crate::types::*;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::RwLock;
@@ -20,6 +20,36 @@ type TokenRefresher = Box<
 >;
 
 use billforge_core::http_retry::{self, RetryConfig};
+
+/// Request wrapper for sparse bill updates.
+/// `sparse: true` tells QuickBooks to only modify the supplied fields
+/// instead of overwriting unset fields with defaults.
+#[derive(Debug, Serialize)]
+pub struct UpdateBillRequest {
+    pub sparse: bool,
+    #[serde(flatten)]
+    pub bill: QBBill,
+}
+
+/// Response envelope for bill update operations.
+#[derive(Debug, Deserialize)]
+pub struct UpdateBillResponse {
+    pub Bill: QBBill,
+}
+
+/// Request wrapper for sparse vendor updates.
+#[derive(Debug, Serialize)]
+pub struct UpdateVendorRequest {
+    pub sparse: bool,
+    #[serde(flatten)]
+    pub vendor: QBVendor,
+}
+
+/// Response envelope for vendor update operations.
+#[derive(Debug, Deserialize)]
+pub struct UpdateVendorResponse {
+    pub Vendor: QBVendor,
+}
 
 /// QuickBooks API client
 pub struct QuickBooksClient {
@@ -281,6 +311,40 @@ impl QuickBooksClient {
             .QueryResponse
             .map(|qr| qr.results)
             .unwrap_or_default())
+    }
+
+    /// Update a bill in QuickBooks using sparse update.
+    ///
+    /// The caller must populate `Id` and `SyncToken` from a prior fetch (e.g. `query_bills`);
+    /// QuickBooks uses SyncToken for optimistic concurrency — stale tokens return 400.
+    pub async fn update_bill(&self, bill: &QBBill) -> Result<QBBill> {
+        let request = UpdateBillRequest {
+            sparse: true,
+            bill: bill.clone(),
+        };
+
+        let response: UpdateBillResponse = self
+            .post("bill?operation=update", &request)
+            .await?;
+
+        Ok(response.Bill)
+    }
+
+    /// Update a vendor in QuickBooks.
+    ///
+    /// The caller must populate `Id` and `SyncToken` from a prior fetch (e.g. `query_vendors`);
+    /// QuickBooks uses SyncToken for optimistic concurrency — stale tokens return 400.
+    pub async fn update_vendor(&self, vendor: &QBVendor) -> Result<QBVendor> {
+        let request = UpdateVendorRequest {
+            sparse: true,
+            vendor: vendor.clone(),
+        };
+
+        let response: UpdateVendorResponse = self
+            .post("vendor?operation=update", &request)
+            .await?;
+
+        Ok(response.Vendor)
     }
 
     /// Get company info
