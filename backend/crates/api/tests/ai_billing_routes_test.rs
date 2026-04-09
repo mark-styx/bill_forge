@@ -66,9 +66,10 @@ fn test_plans_serialize_to_json() {
 // Billing service default subscription
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn test_default_subscription_is_free() {
-    let service = BillingService::new(BillingConfig::default());
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_default_subscription_is_free(pool: sqlx::PgPool) {
+    let pool = std::sync::Arc::new(pool);
+    let service = BillingService::new(BillingConfig::default(), pool);
     let tenant_id = TenantId::from_uuid(Uuid::nil());
     let sub = service.get_subscription(&tenant_id).await.expect("get subscription");
     assert_eq!(sub.plan_id, PlanId::Free);

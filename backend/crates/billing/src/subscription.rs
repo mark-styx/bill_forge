@@ -1,7 +1,7 @@
 //! Subscription management
 
 use billforge_core::TenantId;
-use chrono::{DateTime, Utc};
+use chrono::{Datelike, DateTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -45,6 +45,14 @@ impl BillingCycle {
             BillingCycle::Annual => "annual",
         }
     }
+
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "monthly" => Ok(BillingCycle::Monthly),
+            "annual" => Ok(BillingCycle::Annual),
+            _ => Err(format!("Unknown billing cycle: {}", s)),
+        }
+    }
 }
 
 /// Subscription status
@@ -74,6 +82,18 @@ impl SubscriptionStatus {
             SubscriptionStatus::Canceled => "canceled",
             SubscriptionStatus::Expired => "expired",
             SubscriptionStatus::Paused => "paused",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "active" => Ok(SubscriptionStatus::Active),
+            "trialing" => Ok(SubscriptionStatus::Trialing),
+            "past_due" => Ok(SubscriptionStatus::PastDue),
+            "canceled" => Ok(SubscriptionStatus::Canceled),
+            "expired" => Ok(SubscriptionStatus::Expired),
+            "paused" => Ok(SubscriptionStatus::Paused),
+            _ => Err(format!("Unknown subscription status: {}", s)),
         }
     }
 
@@ -123,6 +143,14 @@ impl Subscription {
     /// Create a new free subscription for a tenant
     pub fn new_free(tenant_id: TenantId) -> Self {
         let now = Utc::now();
+        // Anchor to start of current month so usage queries include invoices
+        // that already exist (rather than only future invoices).
+        let period_start = now
+            .with_day(1).unwrap()
+            .with_hour(0).unwrap()
+            .with_minute(0).unwrap()
+            .with_second(0).unwrap()
+            .with_nanosecond(0).unwrap();
         Self {
             id: SubscriptionId::new(),
             tenant_id,
@@ -130,7 +158,7 @@ impl Subscription {
             status: SubscriptionStatus::Active,
             billing_cycle: BillingCycle::Monthly,
             started_at: now,
-            current_period_start: now,
+            current_period_start: period_start,
             current_period_end: now + chrono::Duration::days(365 * 100), // Effectively unlimited
             canceled_at: None,
             trial_end: None,
@@ -287,6 +315,19 @@ mod tests {
 
         let days = sub.trial_days_remaining().unwrap();
         assert!((13..=14).contains(&days));
+    }
+
+    #[test]
+    fn test_new_free_subscription_period_starts_at_month_boundary() {
+        let tenant_id = TenantId::new();
+        let sub = Subscription::new_free(tenant_id);
+
+        assert_eq!(sub.current_period_start.day(), 1);
+        assert_eq!(sub.current_period_start.hour(), 0);
+        assert_eq!(sub.current_period_start.minute(), 0);
+        assert_eq!(sub.current_period_start.second(), 0);
+        // period_start must be in the past or equal to now (never in the future)
+        assert!(sub.current_period_start <= Utc::now());
     }
 
     #[test]

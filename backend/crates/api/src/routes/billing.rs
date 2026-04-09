@@ -45,16 +45,17 @@ async fn list_plans() -> Json<Value> {
 )]
 async fn get_subscription(
     AuthUser(user): AuthUser,
-    State(_state): State<AppState>,
-) -> Json<Value> {
+    State(state): State<AppState>,
+) -> ApiResult<Json<Value>> {
     let tenant_id = user.tenant_id;
-    let service = BillingService::new(BillingConfig::default());
+    let pool = state.db.metadata();
+    let service = BillingService::new(BillingConfig::default(), pool);
     let sub = service.get_subscription(&tenant_id).await.unwrap_or_else(|_| {
         billforge_billing::Subscription::new_free(tenant_id)
     });
-    Json(json!({
+    Ok(Json(json!({
         "subscription": sub,
-    }))
+    })))
 }
 
 /// GET /billing/usage - return per-tenant invoice and vendor counts for the current billing period
@@ -74,7 +75,7 @@ async fn get_usage(
     let tenant_id = user.tenant_id;
     let pool = state.db.tenant(&tenant_id).await?;
 
-    let service = BillingService::new(BillingConfig::default());
+    let service = BillingService::new(BillingConfig::default(), state.db.metadata());
     let sub = service.get_subscription(&tenant_id).await.unwrap_or_else(|_| {
         billforge_billing::Subscription::new_free(tenant_id.clone())
     });
