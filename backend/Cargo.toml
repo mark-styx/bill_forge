@@ -17,6 +17,7 @@ members = [
     "crates/salesforce",
     "crates/workday",
     "crates/bill-com",
+    "crates/netsuite",
     "crates/worker",
     "crates/analytics",
     "crates/feedback",
