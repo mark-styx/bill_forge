@@ -45,7 +45,7 @@ pub struct RefreshRequest {
     tag = "Authentication",
     request_body = LoginRequest,
     responses(
-        (status = 200, description = "Login successful"),
+        (status = 200, description = "Login successful", body = crate::openapi::LoginResponse),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Invalid credentials")
     )
@@ -85,7 +85,7 @@ pub struct ProvisionRequest {
     tag = "Authentication",
     request_body = ProvisionRequest,
     responses(
-        (status = 200, description = "Tenant provisioned successfully"),
+        (status = 200, description = "Tenant provisioned successfully", body = crate::openapi::LoginResponse),
         (status = 400, description = "Invalid request")
     )
 )]
@@ -144,7 +144,7 @@ async fn provision(
     tag = "Authentication",
     request_body = RegisterRequest,
     responses(
-        (status = 200, description = "Registration successful"),
+        (status = 200, description = "Registration successful", body = crate::openapi::LoginResponse),
         (status = 400, description = "Invalid request")
     )
 )]
@@ -175,7 +175,7 @@ async fn register(
     tag = "Authentication",
     request_body = RefreshRequest,
     responses(
-        (status = 200, description = "Token refreshed"),
+        (status = 200, description = "Token refreshed", body = crate::openapi::LoginResponse),
         (status = 401, description = "Invalid refresh token")
     )
 )]

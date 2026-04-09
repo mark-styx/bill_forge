@@ -225,3 +225,115 @@ fn test_openapi_covers_all_mounted_route_groups() {
         );
     }
 }
+
+/// Pin test: the LoginResponse OpenAPI component schema must exactly match the JSON shape
+/// produced by a real `billforge_auth::AuthResponse`. This catches future drift between
+/// the mirror structs in openapi.rs and the actual auth types.
+#[test]
+fn test_login_response_schema_matches_auth_response_shape() {
+    use billforge_auth::{AuthResponse, TenantInfo, TenantSettingsInfo, UserInfo};
+    use billforge_core::{TenantId, UserId};
+
+    // Construct a sample AuthResponse with representative values
+    let sample = AuthResponse {
+        access_token: "test_access".to_string(),
+        refresh_token: "test_refresh".to_string(),
+        user: UserInfo {
+            id: UserId::new(),
+            tenant_id: TenantId::new(),
+            email: "test@example.com".to_string(),
+            name: "Test User".to_string(),
+            roles: vec![billforge_core::Role::ApUser],
+        },
+        tenant: TenantInfo {
+            id: TenantId::new(),
+            name: "Test Corp".to_string(),
+            enabled_modules: vec!["invoices".to_string()],
+            settings: TenantSettingsInfo {
+                logo_url: None,
+                primary_color: None,
+                company_name: "Test Corp".to_string(),
+                timezone: "UTC".to_string(),
+                default_currency: "USD".to_string(),
+            },
+        },
+    };
+
+    // Serialize to JSON value and collect top-level keys
+    let serialized = serde_json::to_value(&sample).expect("AuthResponse should serialize");
+    let obj = serialized.as_object().expect("AuthResponse should be a JSON object");
+    let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
+    actual_keys.sort();
+
+    // Parse the OpenAPI spec and extract LoginResponse schema properties
+    let spec = ApiDoc::openapi();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let schema_props = parsed["components"]["schemas"]["LoginResponse"]["properties"]
+        .as_object()
+        .expect("LoginResponse should have properties in the spec");
+    let mut schema_keys: Vec<String> = schema_props.keys().cloned().collect();
+    schema_keys.sort();
+
+    // Regression guard: fictional fields must NOT appear
+    assert!(
+        !schema_keys.contains(&"token_type".to_string()),
+        "token_type must NOT appear in LoginResponse schema (was fictional)"
+    );
+    assert!(
+        !schema_keys.contains(&"expires_in".to_string()),
+        "expires_in must NOT appear in LoginResponse schema (was fictional)"
+    );
+
+    // Assert expected fields ARE present
+    for expected in &["access_token", "refresh_token", "user", "tenant"] {
+        assert!(
+            schema_keys.contains(&expected.to_string()),
+            "LoginResponse schema must contain field '{}'",
+            expected
+        );
+    }
+
+    // The key sets must match exactly
+    assert_eq!(
+        actual_keys, schema_keys,
+        "LoginResponse schema properties must match real AuthResponse JSON keys"
+    );
+}
+
+/// Verify that the 200 response on each auth endpoint references LoginResponse.
+#[test]
+fn test_auth_paths_200_reference_login_response() {
+    let spec = ApiDoc::openapi();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let paths_to_check = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/provision"];
+
+    for path in &paths_to_check {
+        let response_ref = parsed["paths"][path]["post"]["responses"]["200"]
+            .get("content")
+            .and_then(|c| c["application/json"]["schema"]["$ref"].as_str())
+            .or_else(|| {
+                // If body= was used without content negotiation, utoipa may put $ref directly
+                parsed["paths"][path]["post"]["responses"]["200"]["content"]
+                    .get("application/json")
+                    .and_then(|v| v["schema"]["$ref"].as_str())
+            });
+
+        let ref_str = response_ref.unwrap_or_else(|| {
+            panic!(
+                "Path {} 200 response should have a $ref to LoginResponse",
+                path
+            )
+        });
+
+        assert!(
+            ref_str.ends_with("/LoginResponse"),
+            "Path {} 200 response $ref should end with /LoginResponse, got: {}",
+            path,
+            ref_str
+        );
+    }
+}

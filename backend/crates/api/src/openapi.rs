@@ -374,6 +374,8 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
             RegisterRequest,
             RefreshRequest,
             UserInfo,
+            TenantInfo,
+            TenantSettingsInfo,
             Invoice,
             InvoiceList,
             Vendor,
@@ -409,19 +411,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-/// Login response with JWT tokens
+/// Login response mirroring billforge_auth::AuthResponse
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct LoginResponse {
     /// JWT access token for API authentication
     pub access_token: String,
     /// JWT refresh token for obtaining new access tokens
     pub refresh_token: String,
-    /// Token type (always "Bearer")
-    #[schema(example = "Bearer")]
-    pub token_type: String,
-    /// Access token expiration in seconds
-    #[schema(example = 86400)]
-    pub expires_in: u64,
+    /// Authenticated user information
+    pub user: UserInfo,
+    /// Tenant information
+    pub tenant: TenantInfo,
 }
 
 /// User registration request
@@ -444,19 +444,47 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-/// Authenticated user information
+/// Authenticated user information mirroring billforge_auth::UserInfo
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UserInfo {
     /// User ID (UUID)
     pub id: String,
-    /// Tenant ID
+    /// Tenant ID (UUID)
     pub tenant_id: String,
-    /// User email
+    /// User email address
     pub email: String,
     /// User display name
     pub name: String,
     /// User roles (e.g., tenant_admin, ap_user, approver)
     pub roles: Vec<String>,
+}
+
+/// Tenant information mirroring billforge_auth::TenantInfo
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TenantInfo {
+    /// Tenant ID (UUID)
+    pub id: String,
+    /// Tenant/company name
+    pub name: String,
+    /// List of enabled module names
+    pub enabled_modules: Vec<String>,
+    /// Tenant settings
+    pub settings: TenantSettingsInfo,
+}
+
+/// Tenant settings mirroring billforge_auth::TenantSettingsInfo
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TenantSettingsInfo {
+    /// URL to company logo (optional)
+    pub logo_url: Option<String>,
+    /// Primary brand color hex code (optional)
+    pub primary_color: Option<String>,
+    /// Legal company name
+    pub company_name: String,
+    /// Tenant timezone (e.g., "UTC", "America/New_York")
+    pub timezone: String,
+    /// Default currency code (e.g., "USD", "EUR")
+    pub default_currency: String,
 }
 
 // ============================================================================
