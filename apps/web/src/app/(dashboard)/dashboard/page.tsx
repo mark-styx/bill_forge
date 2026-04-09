@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { reportsApi } from '@/lib/api';
+import { reportsApi, dashboardApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
@@ -38,6 +38,11 @@ export default function DashboardPage() {
   const { data: summary, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => reportsApi.dashboardSummary(),
+  });
+
+  const { data: metrics, isLoading: metricsLoading, isError: metricsError } = useQuery({
+    queryKey: ['dashboard-metrics'],
+    queryFn: () => dashboardApi.metrics(),
   });
 
   // Stats based on enabled modules
@@ -322,6 +327,72 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Insights - Rich Metrics */}
+      {hasModule('reporting') && !metricsError && (
+        <div className="space-y-4">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            Insights
+          </h2>
+          {metricsLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="card p-5 space-y-3">
+                  <span className="inline-block w-16 h-4 bg-secondary animate-pulse rounded" />
+                  <span className="block w-12 h-7 bg-secondary animate-pulse rounded" />
+                </div>
+              ))}
+            </div>
+          ) : metrics && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Avg Processing Time</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    {metrics.invoices.avg_processing_time_hours.toFixed(1)}h
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Approval Rate</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    {metrics.approvals.approval_rate.toFixed(1)}%
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Overdue Approvals</p>
+                  <p className="text-2xl font-semibold text-red-500 mt-1">
+                    {metrics.approvals.overdue}
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Trend vs Last Month</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    {metrics.invoices.trend_vs_last_month > 0 ? '+' : ''}
+                    {metrics.invoices.trend_vs_last_month.toFixed(1)}%
+                  </p>
+                </div>
+              </div>
+              {metrics.vendors.top_vendors.length > 0 && (
+                <div className="card p-5">
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Top Vendors</p>
+                  <div className="space-y-2">
+                    {metrics.vendors.top_vendors.slice(0, 5).map((vendor) => (
+                      <div key={vendor.vendor_id} className="flex items-center justify-between text-sm">
+                        <span className="text-foreground">{vendor.vendor_name}</span>
+                        <div className="flex items-center gap-4 text-muted-foreground">
+                          <span>{vendor.invoice_count} invoices</span>
+                          <span>${(vendor.total_amount / 100).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Module Overview Cards */}
       {(hasModule('invoice_capture') || hasModule('invoice_processing') || hasModule('vendor_management')) && (
