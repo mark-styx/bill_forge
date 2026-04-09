@@ -23,7 +23,6 @@ use billforge_core::{
     types::Pagination,
 };
 use billforge_email::EmailTemplates;
-use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -678,86 +677,6 @@ pub(crate) async fn resolve_invoice_approval_status(
 }
 
 // ============================================================================
-// ERP Sync Enqueue (on approval completion)
-// ============================================================================
-
-/// Pure decision function: returns true only when the invoice just transitioned
-/// to Approved status, indicating an ERP sync job should be enqueued.
-pub(crate) fn should_enqueue_erp_sync(new_status: &Option<billforge_core::domain::ProcessingStatus>) -> bool {
-    matches!(new_status, Some(billforge_core::domain::ProcessingStatus::Approved))
-}
-
-/// Enqueue a QuickBooks invoice export job to the Redis job queue.
-/// Modeled on `enqueue_ocr_job` in invoices.rs. Redis failure is non-fatal:
-/// logs the error and returns Ok so the approval still succeeds.
-async fn enqueue_erp_sync_job(
-    redis_client: &redis::Client,
-    tenant_id: &billforge_core::TenantId,
-    invoice_id: Uuid,
-) -> Result<(), billforge_core::Error> {
-    let job = serde_json::json!({
-        "id": Uuid::new_v4().to_string(),
-        "job_type": "quick_books_invoice_export",
-        "tenant_id": tenant_id.to_string(),
-        "payload": {
-            "invoice_id": invoice_id.to_string(),
-        },
-        "created_at": chrono::Utc::now(),
-        "retry_count": 0,
-    });
-
-    let job_json = match serde_json::to_string(&job) {
-        Ok(j) => j,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to serialize ERP sync job — swallowing");
-            return Ok(());
-        }
-    };
-
-    match redis_client.get_async_connection().await {
-        Ok(mut conn) => {
-            match conn.lpush::<_, _, ()>("billforge:jobs:queue", &job_json).await {
-                Ok(()) => {
-                    tracing::info!(%invoice_id, "ERP sync job enqueued for approved invoice");
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to LPUSH ERP sync job — swallowing");
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Redis connection failed for ERP sync enqueue — swallowing");
-        }
-    }
-
-    Ok(())
-}
-
-/// Wrapper that calls `resolve_invoice_approval_status` and, if the invoice
-/// just transitioned to Approved, enqueues an ERP sync job via Redis.
-/// The `redis_client` is `Option` so callers without Redis still work.
-/// IMPORTANT: call this AFTER `tx.commit()` so Redis work happens outside
-/// the DB transaction and the invoice state is durable before the worker wakes.
-#[allow(dead_code)]
-pub(crate) async fn resolve_invoice_approval_status_and_enqueue_sync(
-    executor: &mut sqlx::PgConnection,
-    tenant_id: &billforge_core::TenantId,
-    invoice_id: Uuid,
-    redis_client: Option<&redis::Client>,
-) -> Result<Option<billforge_core::domain::ProcessingStatus>, billforge_core::Error> {
-    let new_status = resolve_invoice_approval_status(executor, tenant_id, invoice_id).await?;
-
-    if should_enqueue_erp_sync(&new_status) {
-        if let Some(client) = redis_client {
-            // Non-fatal: fire-and-forget; errors are logged and swallowed inside.
-            let _ = enqueue_erp_sync_job(client, tenant_id, invoice_id).await;
-        }
-    }
-
-    Ok(new_status)
-}
-
-// ============================================================================
 // Approval Handlers
 // ============================================================================
 
@@ -1071,13 +990,6 @@ async fn approve(
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
 
-    // Enqueue ERP sync if invoice just transitioned to Approved (after commit so state is durable)
-    if should_enqueue_erp_sync(&new_status) {
-        if let Some(ref redis_client) = state.redis {
-            let _ = enqueue_erp_sync_job(redis_client, &tenant.tenant_id, info.invoice_id).await;
-        }
-    }
-
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
         let approver_name = user.email.clone(); // Use email as name for now
@@ -1219,14 +1131,6 @@ async fn reject(
 
     tx.commit().await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit transaction: {}", e)))?;
-
-    // Enqueue ERP sync if invoice just transitioned to Approved (after commit so state is durable).
-    // This will not fire for rejections, but the pattern is kept consistent with the approve handler.
-    if should_enqueue_erp_sync(&new_status) {
-        if let Some(ref redis_client) = state.redis {
-            let _ = enqueue_erp_sync_job(redis_client, &tenant.tenant_id, info.invoice_id).await;
-        }
-    }
 
     // Send email notification to submitter
     if let Some(submitter_email) = info.submitter_email {
