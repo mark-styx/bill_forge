@@ -192,6 +192,21 @@ impl FeedbackLearning {
             AND suggested_department != accepted_department
             GROUP BY suggested_department, accepted_department
 
+            UNION ALL
+
+            SELECT
+                'cost_center' as category_type,
+                suggested_cost_center as suggested,
+                accepted_cost_center as correct,
+                COUNT(*) as frequency
+            FROM categorization_feedback
+            WHERE tenant_id = $1
+            AND created_at >= $2
+            AND feedback_type = 'correction'
+            AND suggested_cost_center IS NOT NULL
+            AND suggested_cost_center != accepted_cost_center
+            GROUP BY suggested_cost_center, accepted_cost_center
+
             ORDER BY frequency DESC
             LIMIT 50
             "#,
@@ -269,7 +284,42 @@ impl FeedbackLearning {
             AND vendor_id = $2
             AND created_at >= $3
             AND feedback_type = 'correction'
+            AND suggested_gl_code IS NOT NULL
+            AND suggested_gl_code != accepted_gl_code
             GROUP BY suggested_gl_code, accepted_gl_code
+
+            UNION ALL
+
+            SELECT
+                'department' as category_type,
+                suggested_department as suggested,
+                accepted_department as correct,
+                COUNT(*) as frequency
+            FROM categorization_feedback
+            WHERE tenant_id = $1
+            AND vendor_id = $2
+            AND created_at >= $3
+            AND feedback_type = 'correction'
+            AND suggested_department IS NOT NULL
+            AND suggested_department != accepted_department
+            GROUP BY suggested_department, accepted_department
+
+            UNION ALL
+
+            SELECT
+                'cost_center' as category_type,
+                suggested_cost_center as suggested,
+                accepted_cost_center as correct,
+                COUNT(*) as frequency
+            FROM categorization_feedback
+            WHERE tenant_id = $1
+            AND vendor_id = $2
+            AND created_at >= $3
+            AND feedback_type = 'correction'
+            AND suggested_cost_center IS NOT NULL
+            AND suggested_cost_center != accepted_cost_center
+            GROUP BY suggested_cost_center, accepted_cost_center
+
             ORDER BY frequency DESC
             LIMIT 10
             "#,
@@ -287,11 +337,19 @@ impl FeedbackLearning {
             vendor_id: Some(vendor_id),
             category_adjustments: adjustments
                 .into_iter()
-                .map(|(cat_type, suggested, correct, freq)| CategoryAdjustment {
-                    category_type: CategoryType::GlCode,
-                    suggested_value: suggested,
-                    correct_value: correct,
-                    frequency: freq,
+                .map(|(cat_type, suggested, correct, freq)| {
+                    let category_type = match cat_type.as_str() {
+                        "gl_code" => CategoryType::GlCode,
+                        "department" => CategoryType::Department,
+                        "cost_center" => CategoryType::CostCenter,
+                        _ => CategoryType::GlCode,
+                    };
+                    CategoryAdjustment {
+                        category_type,
+                        suggested_value: suggested,
+                        correct_value: correct,
+                        frequency: freq,
+                    }
                 })
                 .collect(),
             confidence_calibration: calibration,

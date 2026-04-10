@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { reportsApi, dashboardApi } from '@/lib/api';
+import { reportsApi, dashboardApi, auditApi, type AuditEntry } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
@@ -24,7 +24,10 @@ import {
   Zap,
   BarChart3,
   Target,
+  Info,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 
 export default function DashboardPage() {
@@ -44,6 +47,55 @@ export default function DashboardPage() {
     queryKey: ['dashboard-metrics'],
     queryFn: () => dashboardApi.metrics(),
   });
+
+  const { data: auditData } = useQuery({
+    queryKey: ['audit-recent'],
+    queryFn: () => auditApi.list({ per_page: 5 }),
+  });
+
+  const staticFallback = [
+    { action: 'AWS-2024-JAN approved', time: '2 min ago', icon: CheckCircle as LucideIcon, colorKey: 'success' },
+    { action: '6 invoices uploaded via OCR', time: '15 min ago', icon: Upload as LucideIcon, colorKey: 'capture' },
+    { action: 'MMA-Q1-2024 sent for approval', time: '1 hour ago', icon: AlertCircle as LucideIcon, colorKey: 'warning' },
+    { action: 'DevOps Solutions LLC added', time: '3 hours ago', icon: Users as LucideIcon, colorKey: 'vendor' },
+  ];
+
+  function mapAuditToActivity(entry: AuditEntry) {
+    const actionToStyle: Record<string, { icon: LucideIcon; colorKey: string }> = {
+      invoice_approved: { icon: CheckCircle, colorKey: 'success' },
+      invoice_rejected: { icon: AlertCircle, colorKey: 'error' },
+      invoice_submitted: { icon: FileText, colorKey: 'processing' },
+      invoice_paid: { icon: DollarSign, colorKey: 'success' },
+      invoice_voided: { icon: AlertCircle, colorKey: 'warning' },
+      invoice_put_on_hold: { icon: Clock, colorKey: 'warning' },
+      invoice_released_from_hold: { icon: CheckCircle, colorKey: 'success' },
+      invoice_marked_for_payment: { icon: DollarSign, colorKey: 'accent' },
+      ocr_completed: { icon: Upload, colorKey: 'capture' },
+      ocr_started: { icon: Upload, colorKey: 'capture' },
+      ocr_failed: { icon: AlertCircle, colorKey: 'error' },
+      ocr_rerun: { icon: Upload, colorKey: 'capture' },
+      vendor_activated: { icon: Users, colorKey: 'vendor' },
+      vendor_deactivated: { icon: Users, colorKey: 'warning' },
+      create: { icon: Plus, colorKey: 'success' },
+      update: { icon: Info, colorKey: 'processing' },
+      delete: { icon: AlertCircle, colorKey: 'error' },
+      login: { icon: Users, colorKey: 'vendor' },
+      data_exported: { icon: BarChart3, colorKey: 'reporting' },
+      settings_changed: { icon: Info, colorKey: 'processing' },
+    };
+    const style = actionToStyle[entry.action] ?? { icon: Info as LucideIcon, colorKey: 'primary' };
+    const time = formatDistanceToNow(new Date(entry.created_at), { addSuffix: true });
+    return {
+      action: entry.description,
+      time,
+      icon: style.icon,
+      colorKey: style.colorKey,
+    };
+  }
+
+  const activityItems = auditData?.data?.length
+    ? auditData.data.map(mapAuditToActivity)
+    : staticFallback;
 
   // Stats based on enabled modules
   const allStats = [
@@ -301,12 +353,7 @@ export default function DashboardPage() {
           </h2>
           <div className="card p-4">
             <div className="space-y-4">
-              {[
-                { action: 'AWS-2024-JAN approved', time: '2 min ago', icon: CheckCircle, colorKey: 'success' },
-                { action: '6 invoices uploaded via OCR', time: '15 min ago', icon: Upload, colorKey: 'capture' },
-                { action: 'MMA-Q1-2024 sent for approval', time: '1 hour ago', icon: AlertCircle, colorKey: 'warning' },
-                { action: 'DevOps Solutions LLC added', time: '3 hours ago', icon: Users, colorKey: 'vendor' },
-              ].map((activity, i) => {
+              {activityItems.map((activity, i) => {
                 const colorValue = getColorValue(activity.colorKey);
                 return (
                   <div key={i} className="flex items-start gap-3 animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
