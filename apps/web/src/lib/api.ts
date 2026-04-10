@@ -2,8 +2,8 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-import type { ApiErrorBody } from '@billforge/shared-types';
-export type { ApiErrorBody } from '@billforge/shared-types';
+import type { ApiErrorBody, PaginationMeta } from '@billforge/shared-types';
+export type { ApiErrorBody, PaginationMeta } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
   status: number;
@@ -828,13 +828,6 @@ export interface CreateApprovalLimitInput {
   max_amount: { amount: number; currency: string };
   vendor_restrictions?: string[];
   department_restrictions?: string[];
-}
-
-export interface PaginationMeta {
-  page: number;
-  per_page: number;
-  total_items: number;
-  total_pages: number;
 }
 
 export interface DashboardSummary {

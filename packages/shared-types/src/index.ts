@@ -1,7 +1,7 @@
 /**
  * @billforge/shared-types — cross-app TypeScript contract shared between
  * apps/web and apps/mobile. Migrate duplicated types here one-at-a-time
- * per follow-up to issue #126. First migration: ApiErrorBody.
+ * per follow-up to issue #126. Migrated: ApiErrorBody, PaginationMeta.
  */
 export interface ApiErrorBody {
   error: {
@@ -10,4 +10,11 @@ export interface ApiErrorBody {
     details?: unknown;
     field_errors?: Record<string, string[]>;
   };
+}
+
+export interface PaginationMeta {
+  page: number;
+  per_page: number;
+  total_items: number;
+  total_pages: number;
 }
