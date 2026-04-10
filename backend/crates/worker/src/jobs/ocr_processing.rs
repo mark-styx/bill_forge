@@ -13,6 +13,7 @@ use billforge_core::{
 };
 use billforge_db::{LocalStorageService, repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl}};
 use billforge_invoice_capture::ocr;
+use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
 use serde::Deserialize;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -83,9 +84,21 @@ pub async fn process_ocr(
         }
     };
 
-    // Run OCR
-    let ocr_provider = ocr::create_provider(&config.ocr_provider);
-    let ocr_result = ocr_provider.extract(&doc_bytes, &payload.content_type).await;
+    // Run OCR (with optional fallback provider)
+    let ocr_result = if let Some(ref fallback_name) = config.ocr_fallback_provider {
+        if fallback_name != &config.ocr_provider {
+            let primary = ocr::create_provider(&config.ocr_provider);
+            let fallback = ocr::create_provider(fallback_name);
+            let engine = OcrWithFallback::new(primary, fallback);
+            engine.extract_with_fallback(&doc_bytes, &payload.content_type).await
+        } else {
+            let ocr_provider = ocr::create_provider(&config.ocr_provider);
+            ocr_provider.extract(&doc_bytes, &payload.content_type).await
+        }
+    } else {
+        let ocr_provider = ocr::create_provider(&config.ocr_provider);
+        ocr_provider.extract(&doc_bytes, &payload.content_type).await
+    };
 
     // Process OCR result and update the invoice
     let capture_status = match &ocr_result {

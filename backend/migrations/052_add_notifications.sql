@@ -127,13 +127,19 @@ CREATE INDEX idx_notification_deliveries_user ON notification_deliveries(user_id
 CREATE INDEX idx_notification_deliveries_tenant ON notification_deliveries(tenant_id);
 CREATE INDEX idx_notification_deliveries_sent_at ON notification_deliveries(delivered_at);
 
--- Insert default templates
-INSERT INTO notification_templates (tenant_id, notification_type, channel, template_name, title_template, body_template, is_default) VALUES
-('00000000-0000-0000-0000-000000000000', 'approval_request', 'slack', 'Default Approval Request', 'Invoice Approval Required', 'Invoice {invoice_number} from {vendor_name} for {amount} requires your approval.', true),
-('00000000-0000-0000-0000-000000000000', 'approval_request', 'teams', 'Default Approval Request', 'Invoice Approval Required', 'Invoice {invoice_number} from {vendor_name} for {amount} requires your approval.', true),
-('00000000-0000-0000-0000-000000000000', 'approval_reminder', 'slack', 'Default Reminder', 'Reminder: Invoice Approval Pending', 'Invoice {invoice_number} has been pending for {days_pending} days.', true),
-('00000000-0000-0000-0000-000000000000', 'approval_completed', 'slack', 'Default Completed', 'Invoice Approved', 'Invoice {invoice_number} has been {action} by {approver_name}.', true),
-('00000000-0000-0000-0000-000000000000', 'payment_due', 'slack', 'Default Payment Due', 'Payment Due Soon', 'Payment of {amount} to {vendor_name} is due on {due_date}.', true);
+-- Insert default templates (only if system tenant exists, e.g. production seed)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM tenants WHERE id = '00000000-0000-0000-0000-000000000000') THEN
+        INSERT INTO notification_templates (tenant_id, notification_type, channel, template_name, title_template, body_template, is_default) VALUES
+        ('00000000-0000-0000-0000-000000000000', 'approval_request', 'slack', 'Default Approval Request', 'Invoice Approval Required', 'Invoice {invoice_number} from {vendor_name} for {amount} requires your approval.', true),
+        ('00000000-0000-0000-0000-000000000000', 'approval_request', 'teams', 'Default Approval Request', 'Invoice Approval Required', 'Invoice {invoice_number} from {vendor_name} for {amount} requires your approval.', true),
+        ('00000000-0000-0000-0000-000000000000', 'approval_reminder', 'slack', 'Default Reminder', 'Reminder: Invoice Approval Pending', 'Invoice {invoice_number} has been pending for {days_pending} days.', true),
+        ('00000000-0000-0000-0000-000000000000', 'approval_completed', 'slack', 'Default Completed', 'Invoice Approved', 'Invoice {invoice_number} has been {action} by {approver_name}.', true),
+        ('00000000-0000-0000-0000-000000000000', 'payment_due', 'slack', 'Default Payment Due', 'Payment Due Soon', 'Payment of {amount} to {vendor_name} is due on {due_date}.', true);
+    END IF;
+END
+$$;
 
 -- Trigger to update updated_at timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()

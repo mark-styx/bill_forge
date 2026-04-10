@@ -19,13 +19,13 @@ billforge-invoice-capture = { path = "../invoice-capture" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-vendor-mgmt = { path = "../vendor-mgmt" }
 billforge-reporting = { path = "../reporting" }
-billforge-quickbooks = { path = "../quickbooks" }
-billforge-xero = { path = "../xero" }
-billforge-sage-intacct = { path = "../sage-intacct" }
-billforge-salesforce = { path = "../salesforce" }
-billforge-workday = { path = "../workday" }
-billforge-bill-com = { path = "../bill-com" }
-billforge-edi = { path = "../edi" }
+billforge-quickbooks = { path = "../quickbooks", optional = true }
+billforge-xero = { path = "../xero", optional = true }
+billforge-sage-intacct = { path = "../sage-intacct", optional = true }
+billforge-salesforce = { path = "../salesforce", optional = true }
+billforge-workday = { path = "../workday", optional = true }
+billforge-bill-com = { path = "../bill-com", optional = true }
+billforge-edi = { path = "../edi", optional = true }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
 billforge-analytics = { path = "../analytics" }
@@ -76,6 +76,16 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 # Metrics
 prometheus = "0.13"
 lazy_static = "1.4"
+
+[features]
+default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi"]
+quickbooks = ["dep:billforge-quickbooks"]
+xero = ["dep:billforge-xero"]
+sage-intacct = ["dep:billforge-sage-intacct"]
+salesforce = ["dep:billforge-salesforce"]
+workday = ["dep:billforge-workday"]
+bill-com = ["dep:billforge-bill-com"]
+edi = ["dep:billforge-edi"]
 
 [dev-dependencies]
 tokio-test = "0.4"

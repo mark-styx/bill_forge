@@ -1,6 +1,9 @@
 -- Sprint 13 Feature #1: ML-Based Invoice Categorization
 -- Add tables for embedding storage, feedback learning, and ML model tracking
 
+-- Enable pgvector extension for cosine similarity searches (must be before ivfflat indexes)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Store pre-computed embeddings for vendors
 CREATE TABLE IF NOT EXISTS vendor_embeddings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -46,7 +49,7 @@ CREATE TABLE IF NOT EXISTS categorization_feedback (
     -- What the user actually chose
     accepted_gl_code TEXT,
     accepted_department TEXT,
-    accepted_cost_center BOOLEAN DEFAULT FALSE, -- Did user accept the suggestion?
+    accepted_cost_center TEXT, -- What the user chose for cost_center
 
     -- Context for learning
     line_items_summary TEXT, -- Concatenated line item descriptions
@@ -84,9 +87,7 @@ CREATE TABLE IF NOT EXISTS categorization_ml_metrics (
 
 -- Create indexes for efficient queries
 CREATE INDEX idx_vendor_embeddings_tenant ON vendor_embeddings(tenant_id);
-CREATE INDEX idx_vendor_embeddings_vector ON vendor_embeddings USING ivfflat (embedding_vector vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX idx_category_embeddings_tenant_type ON category_embeddings(tenant_id, category_type);
-CREATE INDEX idx_category_embeddings_vector ON category_embeddings USING ivfflat (embedding_vector vector_cosine_ops) WITH (lists = 100);
 
 CREATE INDEX idx_categorization_feedback_tenant ON categorization_feedback(tenant_id, created_at DESC);
 CREATE INDEX idx_categorization_feedback_vendor ON categorization_feedback(vendor_id);
@@ -94,5 +95,3 @@ CREATE INDEX idx_categorization_feedback_invoice ON categorization_feedback(invo
 
 CREATE INDEX idx_categorization_ml_metrics_tenant_date ON categorization_ml_metrics(tenant_id, metric_date DESC);
 
--- Enable pgvector extension for cosine similarity searches
-CREATE EXTENSION IF NOT EXISTS vector;

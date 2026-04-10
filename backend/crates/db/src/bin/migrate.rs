@@ -4,8 +4,9 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use sqlx::migrate::Migrator;
 use sqlx::PgPool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "migrate")]
@@ -35,18 +36,24 @@ enum Commands {
         /// Migration name
         name: String,
     },
+
+    /// Mark all migrations as applied without running them (for existing databases)
+    Baseline,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let database_url = cli.database_url
-        .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be provided or set as env var"))?;
+        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be provided via --database-url or env var"))?;
 
     match cli.command {
         Commands::Up => {
             println!("Running migrations...");
-            run_migrations(&database_url).await?;
+            let pool = PgPool::connect(&database_url).await?;
+            sqlx::migrate!("../../migrations").run(&pool).await?;
+            pool.close().await;
             println!("Migrations completed successfully!");
         }
         Commands::Down => {
@@ -58,93 +65,85 @@ async fn main() -> Result<()> {
         Commands::Create { name } => {
             create_migration(&name)?;
         }
+        Commands::Baseline => {
+            run_baseline(&database_url).await?;
+        }
     }
 
-    Ok(())
-}
-
-async fn run_migrations(database_url: &str) -> Result<()> {
-    let pool = PgPool::connect(database_url).await?;
-
-    // TODO: Use sqlx::migrate!() macro once migrations are set up
-    // For now, manually run migration files
-
-    println!("Running 001_create_tenants.sql...");
-    let migration_001 = include_str!("../../../../migrations/001_create_tenants.sql");
-    sqlx::raw_sql(migration_001)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 002_create_users.sql...");
-    let migration_002 = include_str!("../../../../migrations/002_create_users.sql");
-    sqlx::raw_sql(migration_002)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 003_create_vendors.sql...");
-    let migration_003 = include_str!("../../../../migrations/003_create_vendors.sql");
-    sqlx::raw_sql(migration_003)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 004_create_invoices.sql...");
-    let migration_004 = include_str!("../../../../migrations/004_create_invoices.sql");
-    sqlx::raw_sql(migration_004)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 005_create_workflow_tables.sql...");
-    let migration_005 = include_str!("../../../../migrations/005_create_workflow_tables.sql");
-    sqlx::raw_sql(migration_005)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 006_create_quickbooks_tables.sql...");
-    let migration_006 = include_str!("../../../../migrations/006_create_quickbooks_tables.sql");
-    sqlx::raw_sql(migration_006)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 007_create_vendor_documents.sql...");
-    let migration_007 = include_str!("../../../../migrations/007_create_vendor_documents.sql");
-    sqlx::raw_sql(migration_007)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 008_create_vendor_contacts.sql...");
-    let migration_008 = include_str!("../../../../migrations/008_create_vendor_contacts.sql");
-    sqlx::raw_sql(migration_008)
-        .execute(&pool)
-        .await?;
-
-    println!("Running 009_create_email_notifications.sql...");
-    let migration_009 = include_str!("../../../../migrations/009_create_email_notifications.sql");
-    sqlx::raw_sql(migration_009)
-        .execute(&pool)
-        .await?;
-
-    println!("All migrations completed successfully!");
-
-    pool.close().await;
     Ok(())
 }
 
 async fn show_status(database_url: &str) -> Result<()> {
     let pool = PgPool::connect(database_url).await?;
 
-    // Check if migrations table exists
-    let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
-    )
-    .fetch_all(&pool)
-    .await?;
+    let result: Result<Vec<(i64, String, bool, chrono::DateTime<chrono::Utc>)>, sqlx::Error> =
+        sqlx::query_as(
+            "SELECT version, description, success, installed_on FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await;
 
-    println!("Database tables:");
-    for (table,) in tables {
-        println!("  - {}", table);
+    match result {
+        Ok(rows) => {
+            if rows.is_empty() {
+                println!("No migrations applied yet.");
+            } else {
+                println!("{:<10} {:<45} {:<10} {}", "Version", "Description", "Success", "Installed On");
+                for (version, description, success, installed_on) in rows {
+                    println!("{:<10} {:<45} {:<10} {}", version, description, success, installed_on);
+                }
+            }
+        }
+        Err(e) => {
+            if e.to_string().contains("42P01") || e.to_string().contains("does not exist") {
+                println!("No migrations applied yet (_sqlx_migrations table does not exist).");
+            } else {
+                return Err(e.into());
+            }
+        }
     }
 
     pool.close().await;
+    Ok(())
+}
+
+async fn run_baseline(database_url: &str) -> Result<()> {
+    let pool = PgPool::connect(database_url).await?;
+
+    // Create the _sqlx_migrations table matching sqlx's expected schema
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            success BOOLEAN NOT NULL,
+            checksum BYTEA NOT NULL,
+            execution_time BIGINT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    // Load migrations from the migrations directory
+    let migrator = Migrator::new(Path::new("./backend/migrations")).await?;
+
+    for migration in migrator.iter() {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time)
+             VALUES ($1, $2, NOW(), true, $3, 0)
+             ON CONFLICT (version) DO NOTHING",
+        )
+        .bind(migration.version)
+        .bind(migration.description.as_ref())
+        .bind(migration.checksum.as_ref())
+        .execute(&pool)
+        .await?;
+
+        println!("Baselined migration {}: {}", migration.version, migration.description);
+    }
+
+    pool.close().await;
+    println!("Baseline complete. All migrations marked as applied.");
     Ok(())
 }
 

@@ -34,6 +34,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_reconciliation_migrations(pool).await?;
     run_purchase_order_migrations(pool).await?;
     run_edi_outbound_migrations(pool).await?;
+    run_categorization_migrations(pool).await?;
 
     Ok(())
 }
@@ -78,7 +79,7 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
             user_id UUID NOT NULL REFERENCES users(id),
             action TEXT NOT NULL,
             resource_type TEXT NOT NULL,
-            resource_id UUID,
+            resource_id TEXT,
             changes JSONB,
             ip_address TEXT,
             user_agent TEXT,
@@ -127,7 +128,6 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);
-        CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
 
         -- EDI connections
         CREATE TABLE IF NOT EXISTS edi_connections (
@@ -268,6 +268,7 @@ async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
         -- Vendor statements
         CREATE TABLE IF NOT EXISTS vendor_statements (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
             vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
             settings_id UUID REFERENCES vendor_statement_settings(id),
             statement_period_start DATE NOT NULL,
@@ -302,8 +303,9 @@ async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
         CREATE INDEX IF NOT EXISTS idx_vendor_contacts_vendor ON vendor_contacts(vendor_id);
         CREATE INDEX IF NOT EXISTS idx_vendor_bank_accounts_vendor ON vendor_bank_accounts(vendor_id);
+        CREATE INDEX IF NOT EXISTS idx_vendor_statements_tenant ON vendor_statements(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_vendor_statements_vendor ON vendor_statements(vendor_id);
-        CREATE INDEX IF NOT EXISTS idx_vendor_statements_status ON vendor_statements(status);
+        CREATE INDEX IF NOT EXISTS idx_vendor_statements_status ON vendor_statements(tenant_id, status);
         "#,
     )
     .execute(pool)
@@ -336,6 +338,29 @@ pub async fn run_edi_outbound_migrations(pool: &PgPool) -> Result<()> {
             e
         ))
     })?;
+
+    Ok(())
+}
+
+/// Run categorization ML migrations (vendor embeddings, feedback, metrics)
+async fn run_categorization_migrations(pool: &PgPool) -> Result<()> {
+    // Enable pgvector extension
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+        .execute(pool)
+        .await
+        .map_err(|e| Error::Migration(format!("Failed to enable vector extension: {}", e)))?;
+
+    let migration_048 = include_str!("../../../migrations/048_add_categorization_ml.sql");
+    sqlx::raw_sql(migration_048)
+        .execute(pool)
+        .await
+        .map_err(|e| Error::Migration(format!("Failed to run categorization migration 048: {}", e)))?;
+
+    let migration_049 = include_str!("../../../migrations/049_add_categorization_confidence.sql");
+    sqlx::raw_sql(migration_049)
+        .execute(pool)
+        .await
+        .map_err(|e| Error::Migration(format!("Failed to run categorization migration 049: {}", e)))?;
 
     Ok(())
 }

@@ -12,13 +12,21 @@ pub(crate) mod reports;
 pub(crate) mod export;
 pub(crate) mod sandbox;
 pub mod email_actions;
+#[cfg(feature = "quickbooks")]
 pub mod quickbooks;
+#[cfg(feature = "xero")]
 pub mod xero;
+#[cfg(feature = "sage-intacct")]
 pub mod sage_intacct;
+#[cfg(feature = "salesforce")]
 pub mod salesforce;
+#[cfg(feature = "workday")]
 pub mod workday;
+#[cfg(feature = "bill-com")]
 pub mod bill_com;
+#[cfg(feature = "edi")]
 pub mod edi;
+#[cfg(feature = "edi")]
 pub mod purchase_orders;
 pub mod payment_requests;
 pub mod vendor_statements;
@@ -71,7 +79,7 @@ async fn landing_page() -> axum::response::Html<String> {
 
 /// API v1 routes
 fn api_routes(state: AppState) -> Router<AppState> {
-    Router::new()
+    let router = Router::new()
         // Authentication (rate limited: 20 requests per 60 seconds per source IP)
         .nest("/auth", auth::routes()
             .layer(middleware::from_fn(rate_limit_auth))
@@ -93,23 +101,28 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Audit logs
         .nest("/audit", audit::routes())
         // Sandbox/Development persona management
-        .nest("/sandbox", sandbox::routes())
-        // QuickBooks integration
-        .nest("/quickbooks", quickbooks::routes())
-        // Xero integration
-        .nest("/xero", xero::routes())
-        // Sage Intacct integration
-        .nest("/sage-intacct", sage_intacct::routes())
-        // Salesforce CRM integration
-        .nest("/salesforce", salesforce::routes())
-        // Workday Financial Management integration
-        .nest("/workday", workday::routes())
-        // Bill.com AP payments integration
-        .nest("/bill-com", bill_com::routes())
-        // EDI (Electronic Data Interchange)
-        .nest("/edi", edi::routes())
-        // Purchase Orders (EDI Phase 2)
-        .nest("/edi/purchase-orders", purchase_orders::routes())
+        .nest("/sandbox", sandbox::routes());
+    // Conditionally include ERP/integration routes
+    let router = {
+        #[cfg(feature = "quickbooks")]
+        let router = router.nest("/quickbooks", quickbooks::routes());
+        #[cfg(feature = "xero")]
+        let router = router.nest("/xero", xero::routes());
+        #[cfg(feature = "sage-intacct")]
+        let router = router.nest("/sage-intacct", sage_intacct::routes());
+        #[cfg(feature = "salesforce")]
+        let router = router.nest("/salesforce", salesforce::routes());
+        #[cfg(feature = "workday")]
+        let router = router.nest("/workday", workday::routes());
+        #[cfg(feature = "bill-com")]
+        let router = router.nest("/bill-com", bill_com::routes());
+        #[cfg(feature = "edi")]
+        let router = router.nest("/edi", edi::routes());
+        #[cfg(feature = "edi")]
+        let router = router.nest("/edi/purchase-orders", purchase_orders::routes());
+        router
+    };
+    router
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)

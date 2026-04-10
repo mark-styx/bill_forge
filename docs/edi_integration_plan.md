@@ -1,5 +1,39 @@
 # EDI Integration Plan - BillForge
 
+## Status: PARKED - Outside Northstar Scope
+
+**PARKED as of 2026-04-09.** See [`northstar.md`](northstar.md) for the canonical product direction.
+
+### Why parked
+
+This subsystem conflicts with the current northstar in three concrete ways:
+
+- **ICP mismatch.** Northstar targets mid-market AP teams using QuickBooks + spreadsheets, not enterprise retail trading partners. EDI serves a fundamentally different buyer persona.
+- **Integrations list omission.** Northstar lists QuickBooks, Xero, email, Slack, Teams, and mobile push as the integration surface. EDI is not among them.
+- **Phase 3 deferral of 3-way matching.** Northstar explicitly defers 3-way PO matching to "Phase 3," yet `crates/edi/src/matching.rs` (404 LOC) implements exactly that today, ahead of schedule and without product alignment.
+
+### Reactivation criteria
+
+All three gates must be met before this subsystem is un-parked:
+
+1. **Customer demand:** ≥3 pilot customers from the current ICP request EDI inbound integration.
+2. **Roadmap alignment:** Phase 3 entry per the northstar roadmap, with 3-way matching as an explicit deliverable.
+3. **Product owner signoff:** Written approval that EDI does not contradict the "SMB-grade simplicity" pillar.
+
+### Code disposition
+
+- `crates/edi/` remains in-tree but is **not part of pilot GTM**.
+- No new features land until reactivation criteria are satisfied.
+- Existing tests must keep passing so the code does not bit-rot.
+- See `crates/edi/src/lib.rs` for the in-code parked notice.
+
+### Owner
+
+- Parking decision: engineering, 2026-04-09
+- Next review: 2026-07-09 (quarterly cadence)
+
+---
+
 ## Strategy: API-Based EDI via Middleware
 
 **Do not build an X12 parser.** Use an API-based EDI platform (Stedi, Orderful, or SPS Commerce) as the translation layer. BillForge receives/sends normalized JSON via webhooks. The middleware handles X12 parsing, AS2/SFTP transport, and trading partner management.

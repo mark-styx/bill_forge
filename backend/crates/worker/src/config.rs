@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct WorkerConfig {
     pub redis_url: String,
     pub job_poll_interval_secs: u64,
+    #[allow(dead_code)]
     pub max_concurrent_jobs: usize,
     /// Multi-tenant database manager
     pub pg_manager: Arc<PgManager>,
@@ -15,6 +16,15 @@ pub struct WorkerConfig {
     pub storage_base_path: String,
     /// OCR provider name (tesseract, aws_textract, google_vision)
     pub ocr_provider: String,
+    /// Optional fallback OCR provider — if set and different from `ocr_provider`,
+    /// the OCR job will attempt the fallback provider when the primary fails.
+    pub ocr_fallback_provider: Option<String>,
+    /// QuickBooks OAuth client ID (required for token refresh)
+    pub qb_client_id: Option<String>,
+    /// QuickBooks OAuth client secret (required for token refresh)
+    pub qb_client_secret: Option<String>,
+    /// QuickBooks environment: "production" or "sandbox"
+    pub qb_environment: String,
 }
 
 impl WorkerConfig {
@@ -55,6 +65,11 @@ impl WorkerConfig {
             },
             ocr_provider: std::env::var("OCR_PROVIDER")
                 .unwrap_or_else(|_| "tesseract".to_string()),
+            ocr_fallback_provider: std::env::var("OCR_FALLBACK_PROVIDER").ok(),
+            qb_client_id: std::env::var("QUICKBOOKS_CLIENT_ID").ok(),
+            qb_client_secret: std::env::var("QUICKBOOKS_CLIENT_SECRET").ok(),
+            qb_environment: std::env::var("QUICKBOOKS_ENVIRONMENT")
+                .unwrap_or_else(|_| "production".to_string()),
         })
     }
 }

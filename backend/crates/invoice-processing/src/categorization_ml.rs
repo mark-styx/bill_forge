@@ -13,6 +13,11 @@ use std::collections::HashMap;
 use super::categorization::{CategorySuggestion, CategoryType, SuggestionSource, LineItemInput};
 use super::feedback_loop::{CorrectionRule, FeedbackLearning};
 
+/// Internal confidence ceiling. Must be strictly greater than the STP
+/// auto-approval threshold (0.95 in engine.rs) so that well-calibrated,
+/// high-signal predictions can actually cross the STP gate.
+const CONFIDENCE_CEILING: f32 = 0.99;
+
 /// ML-based categorizer using OpenAI embeddings
 pub struct MLCategorizer {
     pool: PgPool,
@@ -213,7 +218,7 @@ impl MLCategorizer {
                     suggestions.push(CategorySuggestion {
                         category_type: CategoryType::GlCode,
                         value: match_item.value,
-                        confidence: (match_item.similarity * 0.95).min(0.95), // Cap at 95%
+                        confidence: match_item.similarity.min(CONFIDENCE_CEILING),
                         source: SuggestionSource::VendorHistory,
                         reasoning: Some(format!(
                             "Based on similar invoices from this vendor (similarity: {:.2})",
@@ -424,7 +429,7 @@ impl MLCategorizer {
                 category_type: s.category_type.clone(),
                 value: rule.correct_value.clone(),
                 // Boost confidence: the correction is user-validated
-                confidence: (s.confidence * 1.1).min(0.95),
+                confidence: (s.confidence * 1.1).min(CONFIDENCE_CEILING),
                 source: SuggestionSource::VendorHistory,
                 reasoning: Some(format!(
                     "Corrected from '{}' based on {} user corrections",
@@ -451,18 +456,28 @@ impl MLCategorizer {
         }
 
         suggestion.map(|mut s| {
+            let mut damped = false;
             // If offset < 0.1, model can't separate good from bad predictions.
             // Dampen confidence toward 0.5 by blending.
             if calibration_offset < 0.1 {
                 let damping = 0.8; // pull 20% toward 0.5
                 s.confidence = s.confidence * damping + 0.5 * (1.0 - damping);
+                damped = true;
             }
             // If offset is negative (wrong predictions are MORE confident),
             // apply a stronger damping.
             if calibration_offset < 0.0 {
                 s.confidence *= 0.85;
+                damped = true;
             }
-            s.confidence = s.confidence.min(0.95);
+            // Only clamp to the STP-exclusion band when we damped; a
+            // well-calibrated model (offset >= 0.1) must be allowed to
+            // cross the STP threshold.
+            if damped {
+                s.confidence = s.confidence.min(0.95);
+            } else {
+                s.confidence = s.confidence.min(CONFIDENCE_CEILING);
+            }
             s
         })
     }
@@ -477,10 +492,10 @@ impl MLCategorizer {
             confidence *= 1.1;
         }
 
-        // Apply sigmoid function to normalize between 0.4 and 0.95
-        let normalized = 0.4 + (0.55 / (1.0 + (-10.0 * (confidence - 0.5)).exp()));
+        // Apply sigmoid function to normalize between 0.4 and ~0.99
+        let normalized = 0.4 + (0.59 / (1.0 + (-10.0 * (confidence - 0.5)).exp()));
 
-        normalized.min(0.95)
+        normalized.min(CONFIDENCE_CEILING)
     }
 }
 
@@ -497,7 +512,7 @@ mod tests {
 
         // High similarity with description
         let conf1 = categorizer.calculate_embedding_confidence(0.92, Some("Software subscriptions"));
-        assert!(conf1 > 0.85 && conf1 <= 0.95);
+        assert!(conf1 > 0.85 && conf1 <= CONFIDENCE_CEILING);
 
         // Medium similarity without description
         let conf2 = categorizer.calculate_embedding_confidence(0.65, None);
@@ -663,7 +678,7 @@ mod tests {
         let r = result.unwrap();
         assert_eq!(r.value, "6000-Software");
         assert!(r.confidence > 0.80, "Confidence should be boosted, got {}", r.confidence);
-        assert!(r.confidence <= 0.95, "Confidence should not exceed 0.95, got {}", r.confidence);
+        assert!(r.confidence <= 0.99, "Confidence should not exceed internal ceiling, got {}", r.confidence);
         assert!(r.reasoning.unwrap().contains("user corrections"));
     }
 
@@ -809,5 +824,90 @@ mod tests {
 
         let result = c.apply_calibration(None, -0.15);
         assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // STP reachability regression tests (#149)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_apply_calibration_well_calibrated_allows_stp_reach() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Well-calibrated model (offset = 0.25): confidence 0.97 must NOT be
+        // clamped to 0.95 — it should pass through unchanged so it can cross
+        // the STP auto-approval gate in engine.rs.
+        let s = Some(make_suggestion(0.97));
+        let result = c.apply_calibration(s, 0.25);
+        let conf = result.unwrap().confidence;
+        assert!(
+            (conf - 0.97).abs() < 0.001,
+            "Well-calibrated path should preserve 0.97, got {conf}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_calibration_damped_still_capped_at_0_95() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Low offset (0.05) triggers damping; confidence should be pulled down
+        // and then capped at 0.95 (the damping safety band).
+        let s = Some(make_suggestion(0.98));
+        let result = c.apply_calibration(s, 0.05);
+        let conf = result.unwrap().confidence;
+        // 0.98 * 0.8 + 0.5 * 0.2 = 0.784 + 0.10 = 0.884
+        let expected = 0.98_f32 * 0.8 + 0.5 * 0.2;
+        assert!(
+            (conf - expected).abs() < 0.01,
+            "Damped confidence expected ~{expected}, got {conf}"
+        );
+        assert!(
+            conf <= 0.95,
+            "Damped path must retain safety cap at 0.95, got {conf}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_overall_confidence_reaches_stp_threshold_when_all_fields_strong() {
+        let c = MLCategorizer::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+            "test-key".to_string(),
+        );
+
+        // Three uniformly strong fields at 0.97 should yield overall >= 0.95,
+        // proving STP is reachable when all categorization fields are strong.
+        let gl = Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "6000-Software".to_string(),
+            confidence: 0.97,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+        let dept = Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.97,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+        let cc = Some(CategorySuggestion {
+            category_type: CategoryType::CostCenter,
+            value: "CC-100".to_string(),
+            confidence: 0.97,
+            source: SuggestionSource::VendorHistory,
+            reasoning: None,
+        });
+
+        let overall = c.calculate_overall_confidence(&gl, &dept, &cc);
+        assert!(
+            overall >= 0.95,
+            "Three fields at 0.97 should yield overall >= 0.95, got {overall}"
+        );
     }
 }

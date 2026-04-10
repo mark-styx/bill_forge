@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS receiving_records (
     tenant_id UUID NOT NULL,
     po_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
     received_date DATE NOT NULL,
-    edi_document_id UUID REFERENCES edi_documents(id),
+    edi_document_id UUID,
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -87,4 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_match_results_po ON match_results(po_id);
 CREATE INDEX IF NOT EXISTS idx_match_results_tenant ON match_results(tenant_id);
 
 -- Add po_id reference to edi_documents for linking 850/856 docs
-ALTER TABLE edi_documents ADD COLUMN IF NOT EXISTS po_id UUID REFERENCES purchase_orders(id);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'edi_documents') THEN
+        ALTER TABLE edi_documents ADD COLUMN IF NOT EXISTS po_id UUID REFERENCES purchase_orders(id);
+    END IF;
+END
+$$;

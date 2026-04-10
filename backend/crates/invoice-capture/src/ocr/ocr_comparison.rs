@@ -123,7 +123,7 @@ impl OcrComparison {
             return Err(Error::Ocr("No OCR providers configured for comparison".to_string()));
         }
 
-        let start = Instant::now();
+        let _start = Instant::now();
         let mut provider_results = HashMap::new();
 
         // Run OCR on all providers concurrently
@@ -216,7 +216,7 @@ impl OcrComparison {
         let mut weight = 0.0;
 
         // Weight fields by importance
-        let field_weights = [
+        let _field_weights = [
             ("invoice_number", 2.0),
             ("total_amount", 2.0),
             ("vendor_name", 1.5),
@@ -581,5 +581,92 @@ mod tests {
         assert_eq!(OcrProvider::Tesseract.as_str(), "tesseract");
         assert_eq!(OcrProvider::AwsTextract.as_str(), "aws_textract");
         assert_eq!(OcrProvider::GoogleVision.as_str(), "google_vision");
+    }
+
+    // --- OcrWithFallback tests ---
+
+    use billforge_core::domain::ExtractedField;
+    use billforge_core::traits::OcrService;
+    use billforge_core::Result;
+
+    /// Minimal mock OCR service for testing
+    struct MockOcr {
+        name: &'static str,
+        result: std::result::Result<OcrExtractionResult, billforge_core::Error>,
+    }
+
+    #[async_trait::async_trait]
+    impl OcrService for MockOcr {
+        async fn extract(&self, _document_bytes: &[u8], _mime_type: &str) -> Result<OcrExtractionResult> {
+            match &self.result {
+                Ok(r) => Ok(r.clone()),
+                Err(_) => Err(billforge_core::Error::Ocr("mock error".into())),
+            }
+        }
+
+        fn supported_formats(&self) -> Vec<&'static str> {
+            vec!["application/pdf"]
+        }
+
+        fn provider_name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    fn sample_extraction_result() -> OcrExtractionResult {
+        OcrExtractionResult {
+            invoice_number: ExtractedField::with_value("INV-001".to_string(), 0.95),
+            invoice_date: ExtractedField::empty(),
+            due_date: ExtractedField::empty(),
+            vendor_name: ExtractedField::with_value("Test Corp".to_string(), 0.9),
+            vendor_address: ExtractedField::empty(),
+            subtotal: ExtractedField::empty(),
+            tax_amount: ExtractedField::empty(),
+            total_amount: ExtractedField::with_value(100.0, 0.9),
+            currency: ExtractedField::with_value("USD".to_string(), 0.99),
+            po_number: ExtractedField::empty(),
+            line_items: vec![],
+            raw_text: String::new(),
+            processing_time_ms: 50,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fallback_uses_primary_on_success() {
+        let primary = MockOcr {
+            name: "primary",
+            result: Ok(sample_extraction_result()),
+        };
+        // Fallback would panic if called — we never invoke it
+        let fallback = MockOcr {
+            name: "fallback",
+            result: Err(billforge_core::Error::Ocr("should not be called".into())),
+        };
+
+        let engine = OcrWithFallback::new(Box::new(primary), Box::new(fallback));
+        let result = engine.extract_with_fallback(b"test", "application/pdf").await;
+
+        assert!(result.is_ok());
+        let extracted = result.unwrap();
+        assert_eq!(extracted.invoice_number.value.as_deref(), Some("INV-001"));
+    }
+
+    #[tokio::test]
+    async fn test_fallback_triggers_on_primary_error() {
+        let primary = MockOcr {
+            name: "primary",
+            result: Err(billforge_core::Error::Ocr("primary failed".into())),
+        };
+        let fallback = MockOcr {
+            name: "fallback",
+            result: Ok(sample_extraction_result()),
+        };
+
+        let engine = OcrWithFallback::new(Box::new(primary), Box::new(fallback));
+        let result = engine.extract_with_fallback(b"test", "application/pdf").await;
+
+        assert!(result.is_ok());
+        let extracted = result.unwrap();
+        assert_eq!(extracted.vendor_name.value.as_deref(), Some("Test Corp"));
     }
 }

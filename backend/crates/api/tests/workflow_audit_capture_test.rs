@@ -92,12 +92,12 @@ async fn insert_approval_request(
     sqlx::query(
         r#"INSERT INTO approval_requests (id, tenant_id, invoice_id, requested_from,
            status, created_at)
-           VALUES ($1, $2, $3, $4, 'pending', NOW())"#,
+           VALUES ($1, $2, $3, $4::jsonb, 'pending', NOW())"#,
     )
     .bind(approval_id)
     .bind(*tenant_id.as_uuid())
     .bind(invoice_id)
-    .bind(user_id)
+    .bind(serde_json::json!([user_id.to_string()]))
     .execute(pool)
     .await
     .expect("insert approval request");

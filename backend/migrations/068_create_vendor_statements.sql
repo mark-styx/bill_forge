@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS vendor_statements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
     vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
     statement_number TEXT,
     statement_date DATE NOT NULL,

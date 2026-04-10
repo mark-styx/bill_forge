@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { workflowsApi } from '@/lib/api';
@@ -10,7 +10,6 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  FileText,
   User,
   DollarSign,
   Calendar,
@@ -39,6 +38,9 @@ export default function ApprovalsPage() {
   const queryClient = useQueryClient();
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   const { data: approvals, isLoading } = useQuery({
     queryKey: ['pending-approvals'],
@@ -71,16 +73,6 @@ export default function ApprovalsPage() {
     },
   });
 
-  const handleApprove = (id: string) => {
-    setProcessingId(id);
-    approveMutation.mutate(id);
-  };
-
-  const handleReject = (id: string) => {
-    setProcessingId(id);
-    rejectMutation.mutate(id);
-  };
-
   const filteredApprovals = approvals?.filter((approval: ApprovalItem) => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
@@ -92,6 +84,83 @@ export default function ApprovalsPage() {
   });
 
   const pendingCount = approvals?.length || 0;
+
+  const visibleIds = filteredApprovals?.map((a: ApprovalItem) => a.id) ?? [];
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id: string) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
+  // Clear selection when search changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [searchQuery]);
+
+  // Sync indeterminate state on master checkbox
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected;
+    }
+  }, [someSelected]);
+
+  const toggleOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(visibleIds));
+    }
+  };
+
+  const bulkActionMutation = useMutation({
+    mutationFn: async ({ ids, action, reason }: { ids: string[]; action: 'approve' | 'reject'; reason?: string }) => {
+      setBulkProcessing(true);
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          action === 'approve'
+            ? workflowsApi.approve(id)
+            : workflowsApi.reject(id, reason ?? 'Bulk rejection'),
+        ),
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      return { total: ids.length, successful: ids.length - failed, failed };
+    },
+    onSuccess: (result, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['pending-approvals'] });
+      setSelectedIds(new Set());
+      setBulkProcessing(false);
+      if (result.failed === 0) {
+        toast.success(`${result.successful} invoice(s) ${vars.action === 'approve' ? 'approved' : 'rejected'}`);
+      } else if (result.successful === 0) {
+        toast.error(`Failed to ${vars.action} ${result.failed} invoice(s)`);
+      } else {
+        toast.warning(`${result.successful} succeeded, ${result.failed} failed`);
+      }
+    },
+    onError: (e: Error) => {
+      setBulkProcessing(false);
+      toast.error(e.message || 'Bulk operation failed');
+    },
+  });
+
+  const handleApprove = (id: string) => {
+    setProcessingId(id);
+    approveMutation.mutate(id);
+  };
+
+  const handleReject = (id: string) => {
+    setProcessingId(id);
+    rejectMutation.mutate(id);
+  };
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -203,92 +272,169 @@ export default function ApprovalsPage() {
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-border">
-            {filteredApprovals.map((approval: ApprovalItem) => {
-              const isProcessing = processingId === approval.id;
+          <>
+            {/* Bulk selection header */}
+            {filteredApprovals.length > 0 && (
+              <div className="flex items-center justify-between px-5 py-3 bg-secondary/30 border-b border-border">
+                <div className="flex items-center gap-3">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all approvals"
+                    className="w-4 h-4 rounded border-border"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {selectedIds.size > 0
+                      ? `${selectedIds.size} of ${filteredApprovals.length} selected`
+                      : 'Select all'}
+                  </span>
+                </div>
+                {selectedIds.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() =>
+                        bulkActionMutation.mutate({
+                          ids: Array.from(selectedIds),
+                          action: 'approve',
+                        })
+                      }
+                      disabled={bulkProcessing}
+                      className="btn bg-success text-success-foreground hover:bg-success/90 disabled:opacity-50 px-3 py-1.5 text-sm"
+                    >
+                      {bulkProcessing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <CheckCircle className="w-4 h-4 mr-1.5" />
+                          Approve Selected
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        const reason = window.prompt('Rejection reason:', 'Bulk rejection');
+                        if (reason !== null) {
+                          bulkActionMutation.mutate({
+                            ids: Array.from(selectedIds),
+                            action: 'reject',
+                            reason,
+                          });
+                        }
+                      }}
+                      disabled={bulkProcessing}
+                      className="btn px-3 py-1.5 text-sm bg-error/10 text-error hover:bg-error/20 disabled:opacity-50"
+                    >
+                      {bulkProcessing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <XCircle className="w-4 h-4 mr-1.5" />
+                          Reject Selected
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="divide-y divide-border">
+              {filteredApprovals.map((approval: ApprovalItem) => {
+                const isProcessing = processingId === approval.id;
 
-              return (
-                <div
-                  key={approval.id}
-                  className="p-5 hover:bg-secondary/30 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    {/* Left side - Invoice info */}
-                    <div className="flex items-start gap-4 flex-1 min-w-0">
-                      <div className="p-3 rounded-xl bg-warning/10 flex-shrink-0">
-                        <Clock className="w-5 h-5 text-warning" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <p className="font-semibold text-foreground">
-                            Invoice #{approval.invoice_number || approval.invoice_id.slice(0, 8)}
-                          </p>
-                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                return (
+                  <div
+                    key={approval.id}
+                    className="p-5 hover:bg-secondary/30 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      {/* Left side - Invoice info */}
+                      <div className="flex items-start gap-4 flex-1 min-w-0">
+                        <div className="flex items-center pt-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(approval.id)}
+                            onChange={() => toggleOne(approval.id)}
+                            aria-label={`Select approval ${approval.invoice_number || approval.id}`}
+                            className="w-4 h-4 rounded border-border"
+                          />
                         </div>
-
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                          {approval.vendor_name && (
-                            <span className="flex items-center gap-1.5">
-                              <User className="w-3.5 h-3.5" />
-                              {approval.vendor_name}
-                            </span>
-                          )}
-                          {approval.amount && (
-                            <span className="flex items-center gap-1.5">
-                              <DollarSign className="w-3.5 h-3.5" />
-                              {(approval.amount / 100).toLocaleString()} {approval.currency || 'USD'}
-                            </span>
-                          )}
-                          <span className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5" />
-                            Requested {new Date(approval.created_at).toLocaleDateString()}
-                          </span>
+                        <div className="p-3 rounded-xl bg-warning/10 flex-shrink-0">
+                          <Clock className="w-5 h-5 text-warning" />
                         </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-semibold text-foreground">
+                              Invoice #{approval.invoice_number || approval.invoice_id.slice(0, 8)}
+                            </p>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                          </div>
 
-                        {approval.notes && (
-                          <p className="text-sm text-muted-foreground mt-2 bg-secondary/50 rounded-lg px-3 py-2">
-                            {approval.notes}
-                          </p>
-                        )}
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                            {approval.vendor_name && (
+                              <span className="flex items-center gap-1.5">
+                                <User className="w-3.5 h-3.5" />
+                                {approval.vendor_name}
+                              </span>
+                            )}
+                            {approval.amount && (
+                              <span className="flex items-center gap-1.5">
+                                <DollarSign className="w-3.5 h-3.5" />
+                                {(approval.amount / 100).toLocaleString()} {approval.currency || 'USD'}
+                              </span>
+                            )}
+                            <span className="flex items-center gap-1.5">
+                              <Calendar className="w-3.5 h-3.5" />
+                              Requested {new Date(approval.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+
+                          {approval.notes && (
+                            <p className="text-sm text-muted-foreground mt-2 bg-secondary/50 rounded-lg px-3 py-2">
+                              {approval.notes}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Right side - Actions */}
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button
-                        onClick={() => handleReject(approval.id)}
-                        disabled={isProcessing}
-                        className="btn px-4 py-2 bg-error/10 text-error hover:bg-error/20 disabled:opacity-50"
-                      >
-                        {isProcessing && rejectMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <XCircle className="w-4 h-4 mr-1.5" />
-                            Reject
-                          </>
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleApprove(approval.id)}
-                        disabled={isProcessing}
-                        className="btn bg-success text-success-foreground hover:bg-success/90 disabled:opacity-50"
-                      >
-                        {isProcessing && approveMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <>
-                            <CheckCircle className="w-4 h-4 mr-1.5" />
-                            Approve
-                          </>
-                        )}
-                      </button>
+                      {/* Right side - Actions */}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => handleReject(approval.id)}
+                          disabled={isProcessing}
+                          className="btn px-4 py-2 bg-error/10 text-error hover:bg-error/20 disabled:opacity-50"
+                        >
+                          {isProcessing && rejectMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <>
+                              <XCircle className="w-4 h-4 mr-1.5" />
+                              Reject
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleApprove(approval.id)}
+                          disabled={isProcessing}
+                          className="btn bg-success text-success-foreground hover:bg-success/90 disabled:opacity-50"
+                        >
+                          {isProcessing && approveMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <>
+                              <CheckCircle className="w-4 h-4 mr-1.5" />
+                              Approve
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 

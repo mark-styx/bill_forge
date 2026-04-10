@@ -1,3 +1,17 @@
+//! # Status: PARKED
+//!
+//! **This crate is parked as of 2026-04-09 and is outside the current northstar scope.**
+//!
+//! Do NOT add new features, modules, or dependencies to this crate without
+//! explicit product owner approval. See the reactivation criteria in
+//! [`docs/edi_integration_plan.md`](../../docs/edi_integration_plan.md) and
+//! [`docs/northstar.md`](../../docs/northstar.md).
+//!
+//! WARNING: Extending this crate without satisfying the reactivation gates
+//! will be reverted. Existing tests must keep passing to prevent bit-rot.
+//!
+//! ---
+//!
 //! EDI (Electronic Data Interchange) integration for BillForge
 //!
 //! Integrates with API-based EDI middleware (Stedi, Orderful, SPS Commerce)

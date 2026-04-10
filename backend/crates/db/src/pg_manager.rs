@@ -246,6 +246,13 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run feedback correction rules migration: {}", e)))?;
 
+        // Vendor columns for QuickBooks sync (email, phone, vendor_type, status)
+        tracing::debug!("Running migration: 074_add_vendor_sync_columns.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/074_add_vendor_sync_columns.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run vendor sync columns migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }
