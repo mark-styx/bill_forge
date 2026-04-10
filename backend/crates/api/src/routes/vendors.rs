@@ -42,7 +42,7 @@ pub struct ListVendorsQuery {
 
 #[utoipa::path(get, path = "/api/v1/vendors", tag = "Vendors",
     params(("page" = Option<u32>, Query,), ("per_page" = Option<u32>, Query,), ("status" = Option<String>, Query,), ("search" = Option<String>, Query,)),
-    responses((status = 200, description = "Paginated vendor list"), (status = 401, description = "Unauthorized")))]
+    responses((status = 200, description = "Paginated vendor list", body = crate::openapi::VendorList), (status = 401, description = "Unauthorized")))]
 async fn list_vendors(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -67,7 +67,7 @@ async fn list_vendors(
 
 #[utoipa::path(get, path = "/api/v1/vendors/{id}", tag = "Vendors",
     params(("id" = String, Path, description = "Vendor ID")),
-    responses((status = 200, description = "Vendor details"), (status = 404, description = "Vendor not found")))]
+    responses((status = 200, description = "Vendor details", body = crate::openapi::Vendor), (status = 404, description = "Vendor not found")))]
 async fn get_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -88,7 +88,7 @@ async fn get_vendor(
 }
 
 #[utoipa::path(post, path = "/api/v1/vendors", tag = "Vendors", request_body = serde_json::Value,
-    responses((status = 200, description = "Vendor created"), (status = 401, description = "Unauthorized")))]
+    responses((status = 200, description = "Vendor created", body = crate::openapi::Vendor), (status = 401, description = "Unauthorized")))]
 async fn create_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -115,7 +115,7 @@ async fn create_vendor(
 
 #[utoipa::path(put, path = "/api/v1/vendors/{id}", tag = "Vendors", request_body = serde_json::Value,
     params(("id" = String, Path, description = "Vendor ID")),
-    responses((status = 200, description = "Vendor updated"), (status = 404, description = "Vendor not found")))]
+    responses((status = 200, description = "Vendor updated", body = crate::openapi::Vendor), (status = 404, description = "Vendor not found")))]
 async fn update_vendor(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,

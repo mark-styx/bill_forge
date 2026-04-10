@@ -56,7 +56,7 @@ pub struct ListInvoicesQuery {
         ("search" = Option<String>, Query, description = "Search term")
     ),
     responses(
-        (status = 200, description = "List of invoices"),
+        (status = 200, description = "List of invoices", body = crate::openapi::InvoiceList),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error")
     )
@@ -94,7 +94,7 @@ async fn list_invoices(
         ("id" = String, Path, description = "Invoice ID")
     ),
     responses(
-        (status = 200, description = "Invoice details"),
+        (status = 200, description = "Invoice details", body = crate::openapi::Invoice),
         (status = 404, description = "Invoice not found"),
         (status = 401, description = "Unauthorized")
     )
@@ -124,7 +124,7 @@ async fn get_invoice(
     tag = "Invoices",
     request_body = String,
     responses(
-        (status = 200, description = "Invoice created"),
+        (status = 200, description = "Invoice created", body = crate::openapi::Invoice),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Unauthorized")
     )
@@ -161,7 +161,7 @@ async fn create_invoice(
         ("id" = String, Path, description = "Invoice ID")
     ),
     responses(
-        (status = 200, description = "Invoice updated"),
+        (status = 200, description = "Invoice updated", body = crate::openapi::Invoice),
         (status = 404, description = "Invoice not found"),
         (status = 401, description = "Unauthorized")
     )

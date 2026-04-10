@@ -379,6 +379,10 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
             UserInfo,
             TenantInfo,
             TenantSettingsInfo,
+            MoneyInfo,
+            InvoiceLineItemInfo,
+            VendorAddressInfo,
+            VendorContactInfo,
             Invoice,
             InvoiceList,
             Vendor,
@@ -491,39 +495,96 @@ pub struct TenantSettingsInfo {
 }
 
 // ============================================================================
+// Supporting Schemas (mirrors of core domain value objects)
+// ============================================================================
+
+/// Money amount with currency
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MoneyInfo {
+    /// Amount in smallest currency unit (cents for USD)
+    #[schema(example = 125000)]
+    pub amount: i64,
+    /// ISO 4217 currency code
+    #[schema(example = "USD")]
+    pub currency: String,
+}
+
+/// Line item on an invoice
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InvoiceLineItemInfo {
+    pub id: String,
+    pub line_number: u32,
+    pub description: String,
+    pub quantity: Option<f64>,
+    pub unit_price: Option<MoneyInfo>,
+    pub amount: MoneyInfo,
+    pub gl_code: Option<String>,
+    pub department: Option<String>,
+    pub project: Option<String>,
+}
+
+/// Vendor address
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VendorAddressInfo {
+    pub line1: String,
+    pub line2: Option<String>,
+    pub city: String,
+    pub state: Option<String>,
+    pub postal_code: String,
+    pub country: String,
+}
+
+/// Vendor contact person
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VendorContactInfo {
+    pub id: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub is_primary: bool,
+}
+
+// ============================================================================
 // Invoice Schemas
 // ============================================================================
 
-/// Invoice record
+/// Invoice record mirroring billforge_core::domain::Invoice
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Invoice {
-    /// Invoice ID (UUID)
     pub id: String,
-    /// Vendor ID (optional, UUID)
+    pub tenant_id: String,
     pub vendor_id: Option<String>,
-    /// Vendor name
     pub vendor_name: String,
-    /// Invoice number
     #[schema(example = "INV-2024-0001")]
     pub invoice_number: String,
-    /// Invoice date (YYYY-MM-DD)
     #[schema(example = "2024-01-15")]
     pub invoice_date: Option<String>,
-    /// Due date (YYYY-MM-DD)
     #[schema(example = "2024-02-14")]
     pub due_date: Option<String>,
-    /// Total amount in cents
-    #[schema(example = 125000)]
-    pub total_amount: i64,
-    /// Currency code
-    #[schema(example = "USD")]
+    pub po_number: Option<String>,
+    pub subtotal: Option<MoneyInfo>,
+    pub tax_amount: Option<MoneyInfo>,
+    pub total_amount: MoneyInfo,
     pub currency: String,
-    /// Capture status (draft, pending_ocr, ready_for_review, reviewed, failed)
+    pub line_items: Vec<InvoiceLineItemInfo>,
     pub capture_status: String,
-    /// Processing status (submitted, pending_approval, approved, rejected, paid, voided)
     pub processing_status: String,
-    /// Creation timestamp
+    pub current_queue_id: Option<String>,
+    pub assigned_to: Option<String>,
+    pub document_id: String,
+    pub supporting_documents: Vec<String>,
+    pub ocr_confidence: Option<f32>,
+    pub categorization_confidence: Option<f32>,
+    pub department: Option<String>,
+    pub gl_code: Option<String>,
+    pub cost_center: Option<String>,
+    pub notes: Option<String>,
+    pub tags: Vec<String>,
+    pub custom_fields: serde_json::Value,
+    pub created_by: String,
     pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Paginated list of invoices
@@ -539,24 +600,37 @@ pub struct InvoiceList {
 // Vendor Schemas
 // ============================================================================
 
-/// Vendor record
+/// Vendor record mirroring billforge_core::domain::Vendor
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Vendor {
-    /// Vendor ID (UUID)
     pub id: String,
-    /// Vendor name
+    pub tenant_id: String,
     #[schema(example = "Acme Corporation")]
     pub name: String,
-    /// Vendor type (business, contractor, individual)
+    pub legal_name: Option<String>,
     pub vendor_type: String,
-    /// Contact email
-    pub email: Option<String>,
-    /// Contact phone
-    pub phone: Option<String>,
-    /// Vendor status (active, inactive)
     pub status: String,
-    /// Creation timestamp
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub website: Option<String>,
+    pub address: Option<VendorAddressInfo>,
+    pub tax_id: Option<String>,
+    pub tax_id_type: Option<String>,
+    pub w9_on_file: bool,
+    pub w9_received_date: Option<String>,
+    pub payment_terms: Option<String>,
+    pub default_payment_method: Option<String>,
+    pub bank_account: Option<serde_json::Value>,
+    pub vendor_code: Option<String>,
+    pub default_gl_code: Option<String>,
+    pub default_department: Option<String>,
+    pub primary_contact: Option<VendorContactInfo>,
+    pub contacts: Vec<VendorContactInfo>,
+    pub notes: Option<String>,
+    pub tags: Vec<String>,
+    pub custom_fields: serde_json::Value,
     pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Paginated list of vendors

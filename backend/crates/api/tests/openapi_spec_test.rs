@@ -302,6 +302,153 @@ fn test_login_response_schema_matches_auth_response_shape() {
     );
 }
 
+/// Pin test: the Invoice OpenAPI component schema must have exactly the same top-level keys
+/// as a serialized `billforge_core::domain::Invoice`. Catches drift between the mirror struct
+/// in openapi.rs and the real domain type.
+#[test]
+fn test_invoice_schema_matches_domain_invoice_shape() {
+    use billforge_core::domain::{CaptureStatus, Invoice, InvoiceLineItem, InvoiceId, ProcessingStatus};
+    use billforge_core::types::{Money, TenantId, UserId};
+
+    let sample = Invoice {
+        id: InvoiceId::new(),
+        tenant_id: TenantId::new(),
+        vendor_id: None,
+        vendor_name: "Test Vendor".to_string(),
+        invoice_number: "INV-001".to_string(),
+        invoice_date: None,
+        due_date: None,
+        po_number: None,
+        subtotal: None,
+        tax_amount: None,
+        total_amount: Money::usd(100.0),
+        currency: "USD".to_string(),
+        line_items: vec![InvoiceLineItem {
+            id: uuid::Uuid::new_v4(),
+            line_number: 1,
+            description: "Test item".to_string(),
+            quantity: Some(1.0),
+            unit_price: Some(Money::usd(100.0)),
+            amount: Money::usd(100.0),
+            gl_code: None,
+            department: None,
+            project: None,
+        }],
+        capture_status: CaptureStatus::Pending,
+        processing_status: ProcessingStatus::Draft,
+        current_queue_id: None,
+        assigned_to: None,
+        document_id: uuid::Uuid::new_v4(),
+        supporting_documents: vec![],
+        ocr_confidence: None,
+        categorization_confidence: None,
+        department: None,
+        gl_code: None,
+        cost_center: None,
+        notes: None,
+        tags: vec![],
+        custom_fields: serde_json::Value::Null,
+        created_by: UserId::new(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let serialized = serde_json::to_value(&sample).expect("Invoice should serialize");
+    let obj = serialized.as_object().expect("Invoice should be a JSON object");
+    let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
+    actual_keys.sort();
+
+    let spec = ApiDoc::openapi();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let schema_props = parsed["components"]["schemas"]["Invoice"]["properties"]
+        .as_object()
+        .expect("Invoice should have properties in the spec");
+    let mut schema_keys: Vec<String> = schema_props.keys().cloned().collect();
+    schema_keys.sort();
+
+    // Regression guard: critical fields must be present
+    for expected in &["line_items", "po_number", "subtotal", "document_id", "created_by", "updated_at"] {
+        assert!(
+            schema_keys.contains(&expected.to_string()),
+            "Invoice schema must contain field '{}'",
+            expected
+        );
+    }
+
+    assert_eq!(
+        actual_keys, schema_keys,
+        "Invoice schema properties must match real domain Invoice JSON keys"
+    );
+}
+
+/// Pin test: the Vendor OpenAPI component schema must have exactly the same top-level keys
+/// as a serialized `billforge_core::domain::Vendor`.
+#[test]
+fn test_vendor_schema_matches_domain_vendor_shape() {
+    use billforge_core::domain::{Vendor, VendorId, VendorType, VendorStatus};
+
+    let sample = Vendor {
+        id: VendorId::new(),
+        tenant_id: billforge_core::TenantId::new(),
+        name: "Test Vendor".to_string(),
+        legal_name: None,
+        vendor_type: VendorType::Business,
+        status: VendorStatus::Active,
+        email: None,
+        phone: None,
+        website: None,
+        address: None,
+        tax_id: None,
+        tax_id_type: None,
+        w9_on_file: false,
+        w9_received_date: None,
+        payment_terms: None,
+        default_payment_method: None,
+        bank_account: None,
+        vendor_code: None,
+        default_gl_code: None,
+        default_department: None,
+        primary_contact: None,
+        contacts: vec![],
+        notes: None,
+        tags: vec![],
+        custom_fields: serde_json::Value::Null,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let serialized = serde_json::to_value(&sample).expect("Vendor should serialize");
+    let obj = serialized.as_object().expect("Vendor should be a JSON object");
+    let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
+    actual_keys.sort();
+
+    let spec = ApiDoc::openapi();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let schema_props = parsed["components"]["schemas"]["Vendor"]["properties"]
+        .as_object()
+        .expect("Vendor should have properties in the spec");
+    let mut schema_keys: Vec<String> = schema_props.keys().cloned().collect();
+    schema_keys.sort();
+
+    // Regression guard: critical fields must be present
+    for expected in &["legal_name", "address", "contacts", "tax_id", "w9_on_file", "updated_at"] {
+        assert!(
+            schema_keys.contains(&expected.to_string()),
+            "Vendor schema must contain field '{}'",
+            expected
+        );
+    }
+
+    assert_eq!(
+        actual_keys, schema_keys,
+        "Vendor schema properties must match real domain Vendor JSON keys"
+    );
+}
+
 /// Verify that the 200 response on each auth endpoint references LoginResponse.
 #[test]
 fn test_auth_paths_200_reference_login_response() {
