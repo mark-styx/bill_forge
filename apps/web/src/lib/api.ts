@@ -2063,3 +2063,45 @@ export const exportApi = {
   exportVendorsCsv: () =>
     api.downloadBlob('/api/v1/export/vendors/csv'),
 };
+
+// ---------------------------------------------------------------------------
+// AI Assistant (Winston) Types
+// ---------------------------------------------------------------------------
+
+export interface AiMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  created_at: string;
+}
+
+export interface AiConversation {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  messages: AiMessage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiChatRequest {
+  message: string;
+  conversation_id?: string;
+}
+
+export interface AiChatResponse {
+  conversation_id: string;
+  message: AiMessage;
+}
+
+// AI Assistant API
+export const aiAssistantApi = {
+  chat: (body: AiChatRequest) =>
+    api.post<AiChatResponse>('/api/v1/ai/chat', body),
+
+  listConversations: () =>
+    api.get<AiConversation[]>('/api/v1/ai/conversations'),
+
+  continueConversation: (id: string, body: { message: string }) =>
+    api.post<AiChatResponse>(`/api/v1/ai/conversations/${id}/messages`, body),
+};
