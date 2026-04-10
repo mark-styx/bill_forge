@@ -47,5 +47,5 @@ pub use metadata_db::MetadataDatabase;
 pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, create_storage_service};
 #[cfg(feature = "s3")]
 pub use storage::S3StorageService;
-pub use repositories::AuditRepositoryImpl;
+pub use repositories::{AuditRepositoryImpl, PaymentRequestRepositoryImpl, WorkflowRepositoryImpl};
 pub use routing_repository::RoutingRepository;

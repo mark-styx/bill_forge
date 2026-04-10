@@ -537,9 +537,10 @@ impl PaymentRequestRepositoryImpl {
 
         // Fetch the expected invoice count from the payment request
         let invoice_count: (i32,) = sqlx::query_as(
-            "SELECT invoice_count FROM payment_requests WHERE id = $1",
+            "SELECT invoice_count FROM payment_requests WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id)
+        .bind(tenant_id.as_uuid())
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to fetch invoice count: {}", e)))?;

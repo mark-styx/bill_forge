@@ -1144,3 +1144,182 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
 
     teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
 }
+
+// ===========================================================================
+// submit_payment_request tenant isolation test
+// ===========================================================================
+
+/// Test: `submit_payment_request` should reject cross-tenant calls.
+/// Seeds a draft payment request under tenant A and verifies that tenant B
+/// cannot submit it (returns NotFound), while tenant A can.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn submit_payment_request_is_tenant_scoped() {
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("pr-submit").await;
+
+    let vendor_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let invoice_id = Uuid::new_v4();
+
+    // Seed tenant A: vendor, user, invoice (ready_for_payment)
+    seed_vendor(&pool_a, &tenant_a, vendor_id).await;
+    seed_user(&pool_a, &tenant_a, user_id).await;
+    seed_invoice(&pool_a, &tenant_a, invoice_id, vendor_id, user_id).await;
+    sqlx::query("UPDATE invoices SET processing_status = 'ready_for_payment' WHERE id = $1")
+        .bind(invoice_id)
+        .execute(&pool_a)
+        .await
+        .expect("set invoice to ready_for_payment");
+
+    // Create a draft payment request under tenant A
+    let repo = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    let pr = repo
+        .create_payment_request(&tenant_a, user_id, &[invoice_id], None)
+        .await
+        .expect("create payment request");
+    assert_eq!(pr.status, "draft");
+
+    // Cross-tenant submit with tenant B should return NotFound
+    let result = repo.submit_payment_request(&tenant_b, pr.id).await;
+    assert!(
+        matches!(result, Err(billforge_core::Error::NotFound { .. })),
+        "Cross-tenant submit should return NotFound, got {:?}",
+        result
+    );
+
+    // Same-tenant submit should succeed
+    let submitted = repo
+        .submit_payment_request(&tenant_a, pr.id)
+        .await
+        .expect("submit payment request");
+    assert_eq!(submitted.status, "submitted");
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
+
+// ===========================================================================
+// Workflow rule tenant isolation tests
+// ===========================================================================
+
+/// Insert a minimal workflow_rules row for the given tenant.
+async fn seed_workflow_rule(pool: &sqlx::PgPool, tenant_id: &TenantId, rule_id: Uuid) {
+    sqlx::query(
+        r#"INSERT INTO workflow_rules (
+            id, tenant_id, name, description, priority, is_active, rule_type,
+            conditions, actions, created_at, updated_at
+        ) VALUES ($1, $2, 'Test Rule', NULL, 1, true, 'approval',
+                  '[]'::jsonb, '[]'::jsonb, NOW(), NOW())"#,
+    )
+    .bind(rule_id)
+    .bind(*tenant_id.as_uuid())
+    .execute(pool)
+    .await
+    .expect("seed workflow rule");
+}
+
+/// Test: `get_by_id` on WorkflowRuleRepository should return None for cross-tenant access.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn workflow_rules_get_rejects_wrong_tenant() {
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("wf-rule-get").await;
+
+    let rule_id = Uuid::new_v4();
+    seed_workflow_rule(&pool_a, &tenant_a, rule_id).await;
+
+    let repo = billforge_db::WorkflowRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+
+    // Cross-tenant: should return None
+    use billforge_core::WorkflowRuleRepository;
+    let result = repo
+        .get_by_id(&tenant_b, &billforge_core::WorkflowRuleId(rule_id))
+        .await;
+    assert!(
+        matches!(result, Ok(None)),
+        "Cross-tenant workflow rule lookup should return Ok(None), got {:?}",
+        result
+    );
+
+    // Same-tenant: should find the rule
+    let result = repo
+        .get_by_id(&tenant_a, &billforge_core::WorkflowRuleId(rule_id))
+        .await;
+    assert!(
+        matches!(result, Ok(Some(_))),
+        "Same-tenant workflow rule lookup should return Ok(Some(_)), got {:?}",
+        result
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
+
+// ===========================================================================
+// Audit log tenant isolation tests
+// ===========================================================================
+
+/// Test: `query` on AuditRepository should only return entries for the given tenant.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn audit_log_list_excludes_other_tenant() {
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
+        setup_two_tenants("audit-list").await;
+
+    let now = chrono::Utc::now();
+
+    // Insert audit_log entry under tenant A
+    sqlx::query(
+        r#"INSERT INTO audit_log (
+            id, tenant_id, user_id, action, resource_type, resource_id,
+            changes, ip_address, user_agent, created_at
+        ) VALUES ($1, $2, NULL, 'read', 'invoice', 'test-resource',
+                  NULL, NULL, NULL, $3)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(*tenant_a.as_uuid())
+    .bind(now)
+    .execute(&pool_a)
+    .await
+    .expect("seed audit log tenant A");
+
+    // Insert audit_log entry under tenant B
+    sqlx::query(
+        r#"INSERT INTO audit_log (
+            id, tenant_id, user_id, action, resource_type, resource_id,
+            changes, ip_address, user_agent, created_at
+        ) VALUES ($1, $2, NULL, 'read', 'invoice', 'test-resource',
+                  NULL, NULL, NULL, $3)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(*tenant_b.as_uuid())
+    .bind(now)
+    .execute(&pool_b)
+    .await
+    .expect("seed audit log tenant B");
+
+    // Query as tenant A - should only see 1 entry
+    let repo = billforge_db::AuditRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    use billforge_core::AuditService;
+    let result = repo
+        .query(
+            &tenant_a,
+            billforge_core::AuditFilters::default(),
+            &billforge_core::Pagination::default(),
+        )
+        .await
+        .expect("query audit logs");
+
+    assert_eq!(
+        result.data.len(),
+        1,
+        "Tenant A should see exactly 1 audit log entry, got {}",
+        result.data.len()
+    );
+    assert_eq!(
+        result.pagination.total_items, 1,
+        "Total count should be 1, got {}",
+        result.pagination.total_items
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
