@@ -30,6 +30,19 @@ impl InvoiceCaptureService {
         }
     }
 
+    /// Construct with an injected OCR provider (for testing)
+    pub fn with_provider(
+        ocr_provider: Box<dyn OcrService>,
+        invoice_repo: Arc<dyn InvoiceRepository>,
+        storage: Arc<dyn StorageService>,
+    ) -> Self {
+        Self {
+            ocr_provider,
+            invoice_repo,
+            storage,
+        }
+    }
+
     /// Upload and process a new invoice document
     pub async fn upload_invoice(
         &self,
