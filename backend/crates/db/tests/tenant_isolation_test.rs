@@ -926,3 +926,221 @@ async fn test_reassign_item_cross_tenant_blocked() {
 
     teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
 }
+
+// ===========================================================================
+// Payment request items tenant isolation tests
+// ===========================================================================
+
+/// Test: `get_payment_request` items query should only return invoices owned by
+/// the same tenant, even if a stray cross-tenant `payment_request_items` row exists.
+///
+/// Defense-in-depth: the JOIN on `invoices` now includes `i.tenant_id = $2`, so a
+/// corrupted item row pointing at another tenant's invoice is silently excluded.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn payment_request_items_query_is_tenant_scoped() {
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
+        setup_two_tenants("pr-items-scope").await;
+
+    let vendor_id_a = Uuid::new_v4();
+    let user_id_a = Uuid::new_v4();
+    let invoice_id_a = Uuid::new_v4();
+
+    let vendor_id_b = Uuid::new_v4();
+    let user_id_b = Uuid::new_v4();
+    let invoice_id_b = Uuid::new_v4();
+
+    // Seed tenant A: vendor, user, invoice (ready_for_payment)
+    seed_vendor(&pool_a, &tenant_a, vendor_id_a).await;
+    seed_user(&pool_a, &tenant_a, user_id_a).await;
+    seed_invoice(&pool_a, &tenant_a, invoice_id_a, vendor_id_a, user_id_a).await;
+
+    // Seed tenant B: vendor, user, invoice
+    seed_vendor(&pool_b, &tenant_b, vendor_id_b).await;
+    seed_user(&pool_b, &tenant_b, user_id_b).await;
+    seed_invoice(&pool_b, &tenant_b, invoice_id_b, vendor_id_b, user_id_b).await;
+
+    // Insert a payment_requests row for tenant A via raw SQL
+    let request_id = Uuid::new_v4();
+    let now = chrono::Utc::now();
+    sqlx::query(
+        r#"INSERT INTO payment_requests
+            (id, tenant_id, request_number, status, total_amount_cents, currency,
+             invoice_count, created_by, created_at, updated_at)
+           VALUES ($1, $2, 'PR-TEST-001', 'draft', 1000, 'USD', 1, $3, $4, $5)"#,
+    )
+    .bind(request_id)
+    .bind(*tenant_a.as_uuid())
+    .bind(user_id_a)
+    .bind(now)
+    .bind(now)
+    .execute(&pool_a)
+    .await
+    .expect("insert payment_requests");
+
+    // Insert a legitimate payment_request_items row for tenant A's invoice
+    let item_id_a = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO payment_request_items
+            (id, payment_request_id, invoice_id, amount_cents, currency, created_at)
+           VALUES ($1, $2, $3, 1000, 'USD', $4)"#,
+    )
+    .bind(item_id_a)
+    .bind(request_id)
+    .bind(invoice_id_a)
+    .bind(now)
+    .execute(&pool_a)
+    .await
+    .expect("insert payment_request_items for tenant A invoice");
+
+    // Sanity check: tenant B cannot see the parent request at all
+    let repo_b = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_b.clone()));
+    let result = repo_b.get_payment_request(&tenant_b, request_id).await;
+    assert!(
+        matches!(result, Ok(None)),
+        "Cross-tenant get_payment_request should return Ok(None)"
+    );
+
+    // Defense-in-depth: insert a stray cross-tenant item row pointing at tenant B's invoice
+    let stray_item_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO payment_request_items
+            (id, payment_request_id, invoice_id, amount_cents, currency, created_at)
+           VALUES ($1, $2, $3, 9999, 'USD', $4)"#,
+    )
+    .bind(stray_item_id)
+    .bind(request_id)
+    .bind(invoice_id_b)
+    .bind(now)
+    .execute(&pool_a)
+    .await
+    .expect("insert stray cross-tenant payment_request_item");
+
+    // Query as tenant A: should only see the tenant A invoice, not the stray B row
+    let repo_a = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    let result = repo_a.get_payment_request(&tenant_a, request_id).await;
+    assert!(result.is_ok(), "get_payment_request should succeed for tenant A");
+
+    let (_request, items) = result.unwrap().expect("should find the request");
+    assert_eq!(items.len(), 1, "Should only return 1 item (tenant A's invoice), not the cross-tenant stray");
+    assert_eq!(items[0].invoice_id, invoice_id_a, "The returned item should be tenant A's invoice");
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}
+
+/// Test: `add_invoices_to_request` aggregate recompute should exclude cross-tenant
+/// invoice data. If a stray `payment_request_items` row points at another tenant's
+/// invoice, the recomputed `total_amount_cents` and `invoice_count` must not include it.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn add_invoices_to_request_recompute_is_tenant_scoped() {
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
+        setup_two_tenants("pr-add-inv-scope").await;
+
+    let vendor_id_a = Uuid::new_v4();
+    let user_id_a = Uuid::new_v4();
+    let invoice_id_a1 = Uuid::new_v4();
+    let invoice_id_a2 = Uuid::new_v4();
+
+    let vendor_id_b = Uuid::new_v4();
+    let user_id_b = Uuid::new_v4();
+    let invoice_id_b = Uuid::new_v4();
+
+    // Seed tenant A: vendor, user, two invoices
+    seed_vendor(&pool_a, &tenant_a, vendor_id_a).await;
+    seed_user(&pool_a, &tenant_a, user_id_a).await;
+
+    // Invoice A1: 1000 cents, ready_for_payment
+    seed_invoice(&pool_a, &tenant_a, invoice_id_a1, vendor_id_a, user_id_a).await;
+    sqlx::query("UPDATE invoices SET processing_status = 'ready_for_payment' WHERE id = $1")
+        .bind(invoice_id_a1)
+        .execute(&pool_a)
+        .await
+        .expect("set invoice A1 to ready_for_payment");
+
+    // Invoice A2: 2000 cents, ready_for_payment (will be added later via repo)
+    sqlx::query(
+        "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number,
+                                total_amount_cents, document_id, created_by, processing_status)
+         VALUES ($1, $2, $3, 'Test Vendor A', $4, 2000, $5, $6, 'ready_for_payment')",
+    )
+    .bind(invoice_id_a2)
+    .bind(*tenant_a.as_uuid())
+    .bind(vendor_id_a)
+    .bind(format!("INV-A2-{}", invoice_id_a2))
+    .bind(Uuid::new_v4())
+    .bind(user_id_a)
+    .execute(&pool_a)
+    .await
+    .expect("seed invoice A2");
+
+    // Seed tenant B: vendor, user, invoice (5000 cents)
+    seed_vendor(&pool_b, &tenant_b, vendor_id_b).await;
+    seed_user(&pool_b, &tenant_b, user_id_b).await;
+    sqlx::query(
+        "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number,
+                                total_amount_cents, document_id, created_by)
+         VALUES ($1, $2, $3, 'Test Vendor B', $4, 5000, $5, $6)",
+    )
+    .bind(invoice_id_b)
+    .bind(*tenant_b.as_uuid())
+    .bind(vendor_id_b)
+    .bind(format!("INV-B-{}", invoice_id_b))
+    .bind(Uuid::new_v4())
+    .bind(user_id_b)
+    .execute(&pool_b)
+    .await
+    .expect("seed invoice B");
+
+    // Create a draft payment request for tenant A via repo (with invoice A1)
+    let repo_a = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    let pr = repo_a
+        .create_payment_request(&tenant_a, user_id_a, &[invoice_id_a1], None)
+        .await
+        .expect("create payment request");
+    assert_eq!(pr.total_amount_cents, 1000);
+    assert_eq!(pr.invoice_count, 1);
+
+    // Manually insert a stray cross-tenant item row pointing at tenant B's invoice
+    let stray_item_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO payment_request_items
+            (id, payment_request_id, invoice_id, amount_cents, currency, created_at)
+           VALUES ($1, $2, $3, 5000, 'USD', NOW())"#,
+    )
+    .bind(stray_item_id)
+    .bind(pr.id)
+    .bind(invoice_id_b)
+    .execute(&pool_a)
+    .await
+    .expect("insert stray cross-tenant item");
+
+    // Now add invoice A2 via the repo. The aggregate recompute should only count
+    // invoices belonging to tenant A (1000 + 2000 = 3000), NOT the stray B row (5000).
+    let _items = repo_a
+        .add_invoices_to_request(&tenant_a, pr.id, &[invoice_id_a2])
+        .await
+        .expect("add invoices to request");
+
+    // Verify the recomputed totals on the payment_requests row
+    let row: (i64, i32) = sqlx::query_as(
+        "SELECT total_amount_cents, invoice_count FROM payment_requests WHERE id = $1",
+    )
+    .bind(pr.id)
+    .fetch_one(&pool_a)
+    .await
+    .expect("fetch updated payment request");
+
+    assert_eq!(
+        row.0, 3000,
+        "total_amount_cents should be 3000 (A1=1000 + A2=2000), excluding stray tenant B invoice (5000). Got {}",
+        row.0
+    );
+    assert_eq!(
+        row.1, 2,
+        "invoice_count should be 2 (only tenant A invoices), not 3. Got {}",
+        row.1
+    );
+
+    teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
+}

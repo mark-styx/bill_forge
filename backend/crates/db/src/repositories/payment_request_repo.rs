@@ -333,10 +333,11 @@ impl PaymentRequestRepositoryImpl {
         let all_items: Vec<(i64, Option<chrono::NaiveDate>, Option<Uuid>)> = sqlx::query_as(
             r#"SELECT i.total_amount_cents, i.due_date, i.vendor_id
                FROM payment_request_items pri
-               JOIN invoices i ON i.id = pri.invoice_id
+               JOIN invoices i ON i.id = pri.invoice_id AND i.tenant_id = $2
                WHERE pri.payment_request_id = $1"#,
         )
         .bind(request_id)
+        .bind(tenant_id.as_uuid())
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to recompute aggregates: {}", e)))?;
@@ -411,10 +412,11 @@ impl PaymentRequestRepositoryImpl {
                       pri.amount_cents, pri.currency,
                       i.due_date, pri.created_at
                FROM payment_request_items pri
-               JOIN invoices i ON i.id = pri.invoice_id
+               JOIN invoices i ON i.id = pri.invoice_id AND i.tenant_id = $2
                WHERE pri.payment_request_id = $1"#,
         )
         .bind(id)
+        .bind(tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to get payment request items: {}", e)))?;
