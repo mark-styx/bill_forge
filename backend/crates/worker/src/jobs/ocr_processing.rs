@@ -94,19 +94,28 @@ pub async fn process_ocr(
             let (updates, confidence) = match build_invoice_update_from_ocr(result, document_id) {
                 Ok(v) => v,
                 Err(reason) => {
-                    error!(
-                        invoice_id = %invoice_id,
-                        reason = %reason,
-                        "OCR result rejected — routing to OcrError"
-                    );
-                    let _ = repo.update(
-                        &tenant_id, &invoice_id,
-                        serde_json::json!({ "notes": format!("OCR extraction error: {}", reason) }),
-                    ).await;
-                    let _ = repo.update_capture_status(
-                        &tenant_id, &invoice_id, CaptureStatus::Failed,
-                    ).await;
-                    route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+                    if retry_count + 1 >= MAX_RETRIES {
+                        error!(
+                            invoice_id = %invoice_id,
+                            reason = %reason,
+                            "OCR result rejected — routing to OcrError"
+                        );
+                        let _ = repo.update(
+                            &tenant_id, &invoice_id,
+                            serde_json::json!({ "notes": format!("OCR extraction error: {}", reason) }),
+                        ).await;
+                        let _ = repo.update_capture_status(
+                            &tenant_id, &invoice_id, CaptureStatus::Failed,
+                        ).await;
+                        route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+                    } else {
+                        warn!(
+                            invoice_id = %invoice_id,
+                            reason = %reason,
+                            retry = retry_count,
+                            "OCR result rejected, will retry"
+                        );
+                    }
                     return Err(anyhow::anyhow!("OCR extraction rejected: {}", reason));
                 }
             };
@@ -157,19 +166,28 @@ pub async fn process_ocr(
             .execute(&*pool)
             .await
             {
-                error!(
-                    invoice_id = %invoice_id,
-                    error = %e,
-                    "Failed to update OCR-specific fields — routing to OcrError"
-                );
-                let _ = repo.update(
-                    &tenant_id, &invoice_id,
-                    serde_json::json!({ "notes": format!("OCR field update error: {}", e) }),
-                ).await;
-                let _ = repo.update_capture_status(
-                    &tenant_id, &invoice_id, CaptureStatus::Failed,
-                ).await;
-                route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+                if retry_count + 1 >= MAX_RETRIES {
+                    error!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        "Failed to update OCR-specific fields — routing to OcrError"
+                    );
+                    let _ = repo.update(
+                        &tenant_id, &invoice_id,
+                        serde_json::json!({ "notes": format!("OCR field update error: {}", e) }),
+                    ).await;
+                    let _ = repo.update_capture_status(
+                        &tenant_id, &invoice_id, CaptureStatus::Failed,
+                    ).await;
+                    route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+                } else {
+                    warn!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        retry = retry_count,
+                        "Failed to update OCR-specific fields, will retry"
+                    );
+                }
                 return Err(anyhow::anyhow!("OCR field update failed: {}", e));
             }
 
