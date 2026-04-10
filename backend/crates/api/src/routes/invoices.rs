@@ -14,6 +14,7 @@ use billforge_core::{
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
+use billforge_invoice_processing::feedback_loop::{CategorizationFeedback, FeedbackLearning, FeedbackType};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -178,7 +179,64 @@ async fn update_invoice(
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
 
     let old_invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?;
-    let invoice = repo.update(&tenant.tenant_id, &invoice_id, updates).await?;
+    let invoice = repo.update(&tenant.tenant_id, &invoice_id, updates.clone()).await?;
+
+    // Best-effort categorization feedback recording (refs #159)
+    if let Some(ref old) = old_invoice {
+        let has_cat_key = updates.get("gl_code").is_some()
+            || updates.get("department").is_some()
+            || updates.get("cost_center").is_some();
+        if has_cat_key {
+            let gl_changed = old.gl_code != invoice.gl_code;
+            let dept_changed = old.department != invoice.department;
+            let cc_changed = old.cost_center != invoice.cost_center;
+            let feedback_type = if gl_changed || dept_changed || cc_changed {
+                FeedbackType::Correction
+            } else {
+                FeedbackType::Acceptance
+            };
+            let mut summary: String = invoice
+                .line_items
+                .iter()
+                .map(|li| li.description.clone())
+                .collect::<Vec<_>>()
+                .join("; ");
+            if summary.len() > 500 {
+                let mut end = 500;
+                while !summary.is_char_boundary(end) {
+                    end -= 1;
+                }
+                summary.truncate(end);
+            }
+
+            let feedback = CategorizationFeedback {
+                tenant_id: tenant.tenant_id.as_str().to_string(),
+                invoice_id: *invoice.id.as_uuid(),
+                vendor_id: invoice.vendor_id,
+                vendor_name: invoice.vendor_name.clone(),
+                suggested_gl_code: old.gl_code.clone(),
+                suggested_department: old.department.clone(),
+                suggested_cost_center: old.cost_center.clone(),
+                suggestion_confidence: old.categorization_confidence,
+                suggestion_source: Some("auto".to_string()),
+                accepted_gl_code: invoice.gl_code.clone(),
+                accepted_department: invoice.department.clone(),
+                accepted_cost_center: invoice.cost_center.clone(),
+                line_items_summary: summary,
+                total_amount_cents: invoice.total_amount.amount,
+                feedback_type,
+            };
+            if let Err(e) =
+                FeedbackLearning::new((*pool).clone()).record_feedback(feedback).await
+            {
+                tracing::warn!(
+                    error = %e,
+                    invoice_id = %invoice.id,
+                    "Failed to record categorization feedback"
+                );
+            }
+        }
+    }
 
     let mut audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
@@ -1055,6 +1113,7 @@ fn sync_ocr_message(file_name: &str, status: CaptureStatus) -> String {
 }
 
 /// Convert OCR-extracted line items into CreateLineItemInput values.
+#[allow(dead_code)]
 fn ocr_line_items_to_input(items: &[ExtractedLineItem]) -> Vec<CreateLineItemInput> {
     items
         .iter()
