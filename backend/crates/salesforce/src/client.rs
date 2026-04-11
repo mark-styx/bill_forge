@@ -20,6 +20,55 @@ use tokio::time::sleep;
 /// Salesforce API version
 const API_VERSION: &str = "v59.0";
 
+/// Validate a Salesforce record ID: 15 or 18 alphanumeric chars, nothing else.
+/// Rejects quotes, whitespace, SOQL metacharacters.
+pub fn validate_sf_id(id: &str) -> Result<&str> {
+    let len = id.len();
+    if (len == 15 || len == 18) && id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Ok(id)
+    } else {
+        anyhow::bail!("invalid Salesforce ID: {:?}", id)
+    }
+}
+
+/// Escape a string literal for inclusion in a SOQL single-quoted value.
+/// Per Salesforce docs: backslash-escape `\`, `'`, `"`, newline, carriage return.
+pub fn escape_soql_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Validate a custom SOQL filter fragment for obvious injection patterns.
+/// Rejects strings containing `;`, `--`, or unescaped single quotes.
+fn validate_custom_filter(filter: &str) -> Result<()> {
+    if filter.contains(';') {
+        anyhow::bail!("custom_filter contains semicolon: rejected");
+    }
+    if filter.contains("--") {
+        anyhow::bail!("custom_filter contains comment marker '--': rejected");
+    }
+    // Check for unescaped single quotes: a bare ' not preceded by backslash
+    let mut chars = filter.chars().peekable();
+    let mut prev_was_backslash = false;
+    while let Some(c) = chars.next() {
+        if c == '\'' && !prev_was_backslash {
+            anyhow::bail!("custom_filter contains unescaped single quote: rejected");
+        }
+        prev_was_backslash = c == '\\';
+    }
+    Ok(())
+}
+
 /// Salesforce REST API client
 pub struct SalesforceClient {
     /// HTTP client
@@ -196,9 +245,12 @@ impl SalesforceClient {
         &self,
         custom_filter: Option<&str>,
     ) -> Result<Vec<SalesforceAccount>> {
-        let where_clause = custom_filter.unwrap_or(
+        let where_clause = if let Some(filter) = custom_filter {
+            validate_custom_filter(filter)?;
+            filter
+        } else {
             "Type IN ('Vendor', 'Partner', 'Supplier')"
-        );
+        };
 
         let soql = format!(
             "SELECT Id, Name, Type, Industry, Website, Phone, \
@@ -230,6 +282,7 @@ impl SalesforceClient {
 
     /// Get a single account by ID
     pub async fn get_account(&self, account_id: &str) -> Result<SalesforceAccount> {
+        validate_sf_id(account_id)?;
         self.get(&format!("sobjects/Account/{}", account_id)).await
     }
 
@@ -245,6 +298,7 @@ impl SalesforceClient {
         &self,
         account_id: &str,
     ) -> Result<Vec<SalesforceContact>> {
+        validate_sf_id(account_id)?;
         let soql = format!(
             "SELECT Id, FirstName, LastName, Email, Phone, Title, AccountId, Department \
              FROM Contact \
@@ -288,6 +342,7 @@ impl SalesforceClient {
         account_id: Option<&str>,
     ) -> Result<Vec<SalesforceOpportunity>> {
         let where_clause = if let Some(acct_id) = account_id {
+            validate_sf_id(acct_id)?;
             format!(
                 "AccountId = '{}' AND StageName = 'Closed Won'",
                 acct_id
