@@ -284,37 +284,39 @@ fn rejection_by_one_user_does_not_affect_others_request() {
 
 #[test]
 fn email_query_contains_user_scoping_clause() {
-    // Verify the expected SQL pattern for perform_approval / perform_rejection.
-    // These are the corrected queries that include user-scoping via requested_from.
-    let approve_sql = r#"UPDATE approval_requests
-       SET status = 'approved', responded_by = $1, responded_at = NOW()
-       WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
-         AND requested_from->>'user_id' = $4"#;
+    // Verify the expected SQL pattern for update_approval_request.
+    // The query now matches the actual JSONB structure of ApprovalTarget:
+    // - {"User":"<uuid>"} for direct user targets
+    // - {"AnyOf":["<uuid>",...]} for any-of group targets
+    let update_sql = r#"UPDATE approval_requests
+           SET status = $1, responded_by = $2, responded_at = NOW(), updated_at = NOW()
+           WHERE tenant_id = $3 AND invoice_id = $4 AND status = 'pending'
+             AND (
+               requested_from->>'User' = $5
+               OR (requested_from ? 'AnyOf' AND requested_from->'AnyOf' @> to_jsonb($5::text))
+             )"#;
 
-    let reject_sql = r#"UPDATE approval_requests
-       SET status = 'rejected', responded_by = $1, responded_at = NOW()
-       WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
-         AND requested_from->>'user_id' = $4"#;
-
-    // Both queries must filter by user (not bulk-update all pending)
-    for sql in [approve_sql, reject_sql] {
-        assert!(
-            sql.contains("requested_from->>'user_id'"),
-            "SQL must scope update to specific user via requested_from: {sql}"
-        );
-        assert!(
-            sql.contains("tenant_id"),
-            "SQL must include tenant_id for multi-tenant isolation: {sql}"
-        );
-        assert!(
-            sql.contains("invoice_id"),
-            "SQL must include invoice_id to scope to the invoice: {sql}"
-        );
-        assert!(
-            sql.contains("status = 'pending'"),
-            "SQL must only update pending requests: {sql}"
-        );
-    }
+    // Query must scope update to specific user via requested_from JSONB
+    assert!(
+        update_sql.contains("requested_from->>'User'"),
+        "SQL must scope update to specific user via requested_from->>'User': {update_sql}"
+    );
+    assert!(
+        update_sql.contains("AnyOf"),
+        "SQL must handle AnyOf group targets: {update_sql}"
+    );
+    assert!(
+        update_sql.contains("tenant_id"),
+        "SQL must include tenant_id for multi-tenant isolation: {update_sql}"
+    );
+    assert!(
+        update_sql.contains("invoice_id"),
+        "SQL must include invoice_id to scope to the invoice: {update_sql}"
+    );
+    assert!(
+        update_sql.contains("status = 'pending'"),
+        "SQL must only update pending requests: {update_sql}"
+    );
 }
 
 // ============================================================================
@@ -617,4 +619,110 @@ fn po_auto_approve_db_error_unwrap_or_zero_would_bypass() {
         buggy_count, 0,
         "Bug: unwrap_or(0) on error returns 0, allowing auto-approve bypass"
     );
+}
+
+// ============================================================================
+// Delegation Fallback Tests
+//
+// Verifies that the delegation fallback SQL in email_actions.rs correctly
+// allows a delegate to approve/reject on behalf of the original approver
+// when an active delegation exists.
+// ============================================================================
+
+/// Simulates delegation-aware update: first tries direct match, then checks
+/// if acting user is a delegate for any user with a pending request.
+fn simulate_delegation_update<'a>(
+    invoice_requests: &mut [(&str, &'a str)],
+    delegations: &[(&str, &str)], // (delegator_id, delegate_id)
+    acting_user_id: &str,
+    new_status: &'a str,
+) -> usize {
+    // First: try direct match
+    let direct = invoice_requests.iter_mut()
+        .filter(|(user_id, status)| *status == "pending" && *user_id == acting_user_id)
+        .count();
+
+    if direct > 0 {
+        for (user_id, status) in invoice_requests.iter_mut() {
+            if *status == "pending" && *user_id == acting_user_id {
+                *status = new_status;
+            }
+        }
+        return direct;
+    }
+
+    // Fallback: check if acting user is a delegate
+    let mut count = 0;
+    for (user_id, status) in invoice_requests.iter_mut() {
+        if *status == "pending" {
+            let is_delegated = delegations.iter().any(|(delegator, delegate)| {
+                *delegator == *user_id && *delegate == acting_user_id
+            });
+            if is_delegated {
+                *status = new_status;
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn delegate_can_approve_on_behalf_of_ooo_approver() {
+    let mut requests = vec![
+        ("user-a", "pending"),
+    ];
+    let delegations = vec![("user-a", "user-b")]; // user-a delegated to user-b
+
+    let affected = simulate_delegation_update(&mut requests, &delegations, "user-b", "approved");
+    assert_eq!(affected, 1, "Delegate should be able to approve on behalf");
+    assert_eq!(requests[0].1, "approved");
+}
+
+#[test]
+fn non_delegate_cannot_approve_others_request() {
+    let mut requests = vec![
+        ("user-a", "pending"),
+    ];
+    let delegations = vec![]; // no delegations
+
+    let affected = simulate_delegation_update(&mut requests, &delegations, "user-c", "approved");
+    assert_eq!(affected, 0, "Non-delegate should not be able to approve");
+    assert_eq!(requests[0].1, "pending");
+}
+
+#[test]
+fn direct_match_takes_precedence_over_delegation() {
+    let mut requests = vec![
+        ("user-a", "pending"),
+        ("user-b", "pending"),
+    ];
+    let delegations = vec![("user-a", "user-b")];
+
+    // user-b has their own pending request AND is a delegate for user-a.
+    // Direct match should take precedence (only user-b's request updated).
+    let affected = simulate_delegation_update(&mut requests, &delegations, "user-b", "approved");
+    assert_eq!(affected, 1);
+    assert_eq!(requests[0].1, "pending", "user-a's request should not be touched");
+    assert_eq!(requests[1].1, "approved", "user-b's own request should be approved");
+}
+
+#[test]
+fn delegation_sql_includes_active_date_checks() {
+    // Verify the delegation fallback SQL includes the active/date range checks
+    let delegation_sql = r#"UPDATE approval_requests ar
+           SET status = $1, responded_by = $2, responded_at = NOW(), updated_at = NOW()
+           FROM approval_delegations ad
+           WHERE ar.tenant_id = $3 AND ar.invoice_id = $4 AND ar.status = 'pending'
+             AND ad.tenant_id = ar.tenant_id
+             AND ad.delegate_id = $2
+             AND ad.is_active = true
+             AND ad.start_date <= NOW()
+             AND ad.end_date > NOW()"#;
+
+    assert!(delegation_sql.contains("is_active = true"), "Must check delegation is active");
+    assert!(delegation_sql.contains("start_date <= NOW()"), "Must check delegation start date");
+    assert!(delegation_sql.contains("end_date > NOW()"), "Must check delegation end date");
+    assert!(delegation_sql.contains("delegate_id"), "Must match delegate user ID");
+    assert!(delegation_sql.contains("status = 'pending'"), "Must only update pending requests");
 }

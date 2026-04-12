@@ -1,7 +1,9 @@
 //! Email action routes - handle secure email-based actions
 //!
 //! These routes allow users to perform actions (approve/reject) via email links
-//! using secure time-limited tokens.
+//! using secure time-limited tokens. Supports delegation fallback: if the
+//! token's user has an active delegation, the delegate's approval request
+//! is also checked.
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -11,6 +13,7 @@ use axum::{
     routing::get, Router,
 };
 use billforge_core::{
+    domain::{AuditAction, AuditEntry, ResourceType},
     services::{EmailAction, EmailActionTokenService},
     traits::InvoiceRepository,
     UserId,
@@ -124,15 +127,18 @@ async fn handle_email_action(
     let tenant_pool = state.db.tenant(&tenant_id).await?;
 
     // Perform the action based on type
-    match token_data.action {
+    let action_label = match token_data.action {
         EmailAction::ApproveInvoice => {
-            perform_approval(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?
+            perform_approval(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            "approved"
         }
         EmailAction::RejectInvoice => {
-            perform_rejection(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?
+            perform_rejection(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            "rejected"
         }
         EmailAction::HoldInvoice => {
-            perform_hold(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?
+            perform_hold(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            "placed on hold"
         }
         _ => {
             return Err(billforge_core::Error::Validation(
@@ -145,10 +151,114 @@ async fn handle_email_action(
     // Mark token as used
     token_service.mark_used(token_str).await?;
 
+    // Log audit entry (SOX compliance)
+    let audit_action = match token_data.action {
+        EmailAction::ApproveInvoice => AuditAction::InvoiceApproved,
+        EmailAction::RejectInvoice => AuditAction::InvoiceRejected,
+        EmailAction::HoldInvoice => AuditAction::InvoicePutOnHold,
+        _ => AuditAction::Update,
+    };
+
+    let audit_entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(UserId(token_data.user_id)),
+        audit_action,
+        ResourceType::Invoice,
+        token_data.resource_id.to_string(),
+        format!("Invoice {} via email action", action_label),
+    )
+    .with_metadata(serde_json::json!({
+        "channel": "email",
+        "token_nonce": token_data.nonce.to_string(),
+    }));
+
+    super::workflows::log_audit_or_record_gap(&state.db.metadata(), audit_entry).await;
+
     // Return success HTML page
     let html = generate_success_page(&token_data.action, token_data.resource_id);
 
     Ok(Html(html))
+}
+
+/// Update an approval request for the given user, handling the actual JSONB
+/// structure of `requested_from`. Supports:
+/// - `{"User":"<uuid>"}` - direct user target
+/// - `{"AnyOf":["<uuid>",...]}`  - any-of group target
+/// - Delegation fallback: if the acting user is a delegate for the original
+///   approver, the original approver's request is updated with the delegate
+///   recorded in `responded_by`.
+async fn update_approval_request(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: uuid::Uuid,
+    user_id: &UserId,
+    new_status: &str,
+) -> billforge_core::Result<()> {
+    // First, try to match a direct User target or AnyOf member
+    let rows_affected = sqlx::query(
+        r#"UPDATE approval_requests
+           SET status = $1, responded_by = $2, responded_at = NOW(), updated_at = NOW()
+           WHERE tenant_id = $3 AND invoice_id = $4 AND status = 'pending'
+             AND (
+               requested_from->>'User' = $5
+               OR (requested_from ? 'AnyOf' AND requested_from->'AnyOf' @> to_jsonb($5::text))
+             )"#
+    )
+    .bind(new_status)
+    .bind(user_id.as_uuid())
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .bind(user_id.as_uuid().to_string())
+    .execute(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?
+    .rows_affected();
+
+    if rows_affected > 0 {
+        return Ok(());
+    }
+
+    // No direct match - check if this user is a delegate for someone with a
+    // pending approval request on this invoice.
+    let delegate_rows = sqlx::query(
+        r#"UPDATE approval_requests ar
+           SET status = $1, responded_by = $2, responded_at = NOW(), updated_at = NOW()
+           FROM approval_delegations ad
+           WHERE ar.tenant_id = $3 AND ar.invoice_id = $4 AND ar.status = 'pending'
+             AND ad.tenant_id = ar.tenant_id
+             AND ad.delegate_id = $2
+             AND ad.is_active = true
+             AND ad.start_date <= NOW()
+             AND ad.end_date > NOW()
+             AND (
+               ar.requested_from->>'User' = ad.delegator_id::text
+               OR (ar.requested_from ? 'AnyOf' AND ar.requested_from->'AnyOf' @> to_jsonb(ad.delegator_id::text))
+             )"#
+    )
+    .bind(new_status)
+    .bind(user_id.as_uuid())
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .execute(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?
+    .rows_affected();
+
+    if delegate_rows > 0 {
+        tracing::info!(
+            user_id = %user_id,
+            invoice_id = %invoice_id,
+            "Approval performed via delegation fallback"
+        );
+    } else {
+        tracing::warn!(
+            user_id = %user_id,
+            invoice_id = %invoice_id,
+            "Email action found no matching pending approval request (direct or delegated)"
+        );
+    }
+
+    Ok(())
 }
 
 /// Perform approval action
@@ -158,20 +268,7 @@ async fn perform_approval(
     invoice_id: uuid::Uuid,
     user_id: &UserId,
 ) -> billforge_core::Result<()> {
-    // Update only this user's approval request (not all pending requests for the invoice)
-    sqlx::query(
-        r#"UPDATE approval_requests
-           SET status = 'approved', responded_by = $1, responded_at = NOW()
-           WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
-             AND requested_from->>'user_id' = $4"#
-    )
-    .bind(user_id.as_uuid())
-    .bind(*tenant_id.as_uuid())
-    .bind(invoice_id)
-    .bind(user_id.as_uuid().to_string())
-    .execute(pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    update_approval_request(pool, tenant_id, invoice_id, user_id, "approved").await?;
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
     let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
@@ -187,20 +284,7 @@ async fn perform_rejection(
     invoice_id: uuid::Uuid,
     user_id: &UserId,
 ) -> billforge_core::Result<()> {
-    // Update only this user's approval request (not all pending requests for the invoice)
-    sqlx::query(
-        r#"UPDATE approval_requests
-           SET status = 'rejected', responded_by = $1, responded_at = NOW()
-           WHERE tenant_id = $2 AND invoice_id = $3 AND status = 'pending'
-             AND requested_from->>'user_id' = $4"#
-    )
-    .bind(user_id.as_uuid())
-    .bind(*tenant_id.as_uuid())
-    .bind(invoice_id)
-    .bind(user_id.as_uuid().to_string())
-    .execute(pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    update_approval_request(pool, tenant_id, invoice_id, user_id, "rejected").await?;
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
     let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;

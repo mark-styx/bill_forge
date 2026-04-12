@@ -154,7 +154,12 @@ impl<
         Ok(request)
     }
 
-    /// Send approval request email with action tokens
+    /// Send approval request email with action tokens.
+    ///
+    /// Generates per-approver tokens so each approver gets their own unique
+    /// approve/reject links tied to their user ID. This ensures the JSONB
+    /// user-scoping in `perform_approval`/`perform_rejection` correctly
+    /// matches each approver's pending request.
     async fn send_approval_email(
         &self,
         tenant_id: &TenantId,
@@ -162,78 +167,43 @@ impl<
         approver: &ApprovalTarget,
         request: &ApprovalRequest,
     ) -> Result<()> {
-        // Get approver email(s) based on target type
-        let approver_emails: Vec<String> = match approver {
+        // Build a list of (user_id, email) pairs for all approvers
+        let approver_list: Vec<(UserId, String)> = match approver {
             ApprovalTarget::User(user_id) => {
-                self.user_repo.get_email_by_id(tenant_id, user_id).await?
-                    .into_iter()
-                    .collect()
+                match self.user_repo.get_email_by_id(tenant_id, user_id).await? {
+                    Some(email) => vec![(user_id.clone(), email)],
+                    None => vec![],
+                }
             }
             ApprovalTarget::Role(role_name) => {
+                // For role-based targets, emails are looked up but tokens use a nil
+                // user ID since the approval_request stores Role, not individual users
                 self.user_repo.get_emails_by_role(tenant_id, role_name).await?
+                    .into_iter()
+                    .map(|email| (UserId(Uuid::nil()), email))
+                    .collect()
             }
             ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
-                self.user_repo.get_emails_by_ids(tenant_id, user_ids).await?
+                let mut pairs = Vec::new();
+                for uid in user_ids {
+                    if let Some(email) = self.user_repo.get_email_by_id(tenant_id, uid).await? {
+                        pairs.push((uid.clone(), email));
+                    }
+                }
+                pairs
             }
         };
 
-        if approver_emails.is_empty() {
+        if approver_list.is_empty() {
             tracing::warn!("No approver emails found for approval request {}", request.id);
             return Ok(());
         }
 
-        // Get the first approver for token generation (any approver can action it)
-        let first_approver_id = match approver {
-            ApprovalTarget::User(user_id) => user_id.clone(),
-            ApprovalTarget::Role(_) => {
-                // For role-based approvals, use a nil user ID (will be set when action is taken)
-                UserId(Uuid::nil())
-            }
-            ApprovalTarget::AnyOf(user_ids) | ApprovalTarget::AllOf(user_ids) => {
-                user_ids.first().cloned().unwrap_or_else(|| UserId(Uuid::nil()))
-            }
-        };
-
-        // Generate email action tokens
-        let approve_token = self.email_token_service.generate_token(
-            tenant_id,
-            &first_approver_id,
-            EmailAction::ApproveInvoice,
-            invoice.id.0,
-            "invoice",
-            serde_json::json!({ "approval_id": request.id }),
-        ).await?;
-
-        let reject_token = self.email_token_service.generate_token(
-            tenant_id,
-            &first_approver_id,
-            EmailAction::RejectInvoice,
-            invoice.id.0,
-            "invoice",
-            serde_json::json!({ "approval_id": request.id }),
-        ).await?;
-
-        // Generate action URLs
-        let approve_url = self.email_token_service.generate_action_url(
-            &self.app_url,
-            &approve_token,
-            "approve",
-        );
-
-        let reject_url = self.email_token_service.generate_action_url(
-            &self.app_url,
-            &reject_token,
-            "reject",
-        );
-
         let view_url = format!("{}/invoices/{}", self.app_url, invoice.id);
-
-        // Prepare email content
         let invoice_number = if invoice.invoice_number.is_empty() { "N/A" } else { &invoice.invoice_number };
         let vendor_name = if invoice.vendor_name.is_empty() { "Unknown Vendor" } else { &invoice.vendor_name };
         let amount = format!("${:.2}", invoice.total_amount.amount as f64 / 100.0);
 
-        // Get the actual submitter name
         let submitted_by = match self.user_repo.get_name_by_id(tenant_id, &invoice.created_by).await {
             Ok(Some(name)) => name,
             Ok(None) => {
@@ -246,24 +216,54 @@ impl<
             }
         };
 
-        let (html, text) = ET::invoice_pending_approval_with_actions(
-            invoice_number,
-            vendor_name,
-            &amount,
-            &submitted_by,
-            &view_url,
-            Some(&approve_url),
-            Some(&reject_url),
+        let subject = format!(
+            "Approval Required: Invoice {} from {}",
+            invoice_number, vendor_name
         );
 
-        // Send to all approvers
-        for email in approver_emails {
-            let subject = format!(
-                "Approval Required: Invoice {} from {}",
-                invoice_number, vendor_name
+        // Generate per-approver tokens and send individual emails
+        for (uid, email) in &approver_list {
+            let approve_token = self.email_token_service.generate_token(
+                tenant_id,
+                uid,
+                EmailAction::ApproveInvoice,
+                invoice.id.0,
+                "invoice",
+                serde_json::json!({ "approval_id": request.id }),
+            ).await?;
+
+            let reject_token = self.email_token_service.generate_token(
+                tenant_id,
+                uid,
+                EmailAction::RejectInvoice,
+                invoice.id.0,
+                "invoice",
+                serde_json::json!({ "approval_id": request.id }),
+            ).await?;
+
+            let approve_url = self.email_token_service.generate_action_url(
+                &self.app_url,
+                &approve_token,
+                "approve",
             );
 
-            if let Err(e) = self.email_service.send(&email, &subject, &html, &text).await {
+            let reject_url = self.email_token_service.generate_action_url(
+                &self.app_url,
+                &reject_token,
+                "reject",
+            );
+
+            let (html, text) = ET::invoice_pending_approval_with_actions(
+                invoice_number,
+                vendor_name,
+                &amount,
+                &submitted_by,
+                &view_url,
+                Some(&approve_url),
+                Some(&reject_url),
+            );
+
+            if let Err(e) = self.email_service.send(email, &subject, &html, &text).await {
                 tracing::error!("Failed to send approval email to {}: {}", email, e);
             }
         }

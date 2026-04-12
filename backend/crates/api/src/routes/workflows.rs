@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 /// Persist an audit entry or, if that fails, emit an ERROR-level log with a
 /// replayable fingerprint so SOX auditors can spot and reconcile the gap.
-async fn log_audit_or_record_gap(pool: &std::sync::Arc<sqlx::PgPool>, entry: AuditEntry) {
+pub(crate) async fn log_audit_or_record_gap(pool: &std::sync::Arc<sqlx::PgPool>, entry: AuditEntry) {
     let fingerprint = serde_json::json!({
         "id": entry.id,
         "tenant_id": entry.tenant_id,

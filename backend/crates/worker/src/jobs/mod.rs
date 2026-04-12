@@ -16,6 +16,7 @@ pub mod routing_optimization;
 pub mod forecast_refresh;
 pub mod anomaly_detection;
 pub mod ocr_processing;
+pub mod approval_expiry;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -46,6 +47,7 @@ pub enum JobType {
     EdiSendAck,
     EdiCheckAckStatus,
     OcrProcess,
+    ApprovalExpiry,
 }
 
 impl std::fmt::Display for JobType {
@@ -67,6 +69,7 @@ impl std::fmt::Display for JobType {
             JobType::EdiSendAck => write!(f, "EdiSendAck"),
             JobType::EdiCheckAckStatus => write!(f, "EdiCheckAckStatus"),
             JobType::OcrProcess => write!(f, "OcrProcess"),
+            JobType::ApprovalExpiry => write!(f, "ApprovalExpiry"),
         }
     }
 }
@@ -212,6 +215,9 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
                 config,
                 job.retry_count,
             ).await
+        }
+        JobType::ApprovalExpiry => {
+            approval_expiry::process_approval_expiry(&job.tenant_id, config).await
         }
     }
 }
