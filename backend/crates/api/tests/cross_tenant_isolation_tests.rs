@@ -435,13 +435,14 @@ async fn approval_link_cross_tenant_blocked() {
     let vendor_a = insert_vendor(&pool, tenant_a, "CT-APPROVAL Vendor A").await;
     let invoice_a = insert_invoice(&pool, tenant_a, vendor_a, "CT-APPROVAL-001").await;
 
-    // Set initial status to 'pending_approval' so transition is valid
-    sqlx::query("UPDATE invoices SET status = 'pending_approval' WHERE id = $1 AND tenant_id = $2")
+    // Set processing_status to 'pending_approval' so it's distinct from the
+    // default 'received' value and we can verify no cross-tenant mutation.
+    sqlx::query("UPDATE invoices SET processing_status = 'pending_approval' WHERE id = $1 AND tenant_id = $2")
         .bind(invoice_a)
         .bind(tenant_a)
         .execute(&pool)
         .await
-        .expect("Should update status");
+        .expect("Should update processing_status");
 
     // Attempt a state machine transition using tenant B's tenant_id
     // (simulates an approval token for tenant A being used against tenant B's context)
@@ -459,9 +460,9 @@ async fn approval_link_cross_tenant_blocked() {
         "Cross-tenant FOR UPDATE must return no rows — the transition would fail with NotFound"
     );
 
-    // Verify the invoice status is still 'pending_approval' (not modified)
+    // Verify the invoice processing_status is still 'pending_approval' (not modified)
     let status: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2",
+        "SELECT processing_status FROM invoices WHERE id = $1 AND tenant_id = $2",
     )
     .bind(invoice_a)
     .bind(tenant_a)
@@ -472,7 +473,7 @@ async fn approval_link_cross_tenant_blocked() {
     let (current_status,) = status.expect("Invoice should still exist");
     assert_eq!(
         current_status, "pending_approval",
-        "Cross-tenant approval must not change invoice status"
+        "Cross-tenant approval must not change invoice processing_status"
     );
 
     // Cleanup

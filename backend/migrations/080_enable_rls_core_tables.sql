@@ -7,13 +7,18 @@
 -- connection after auth resolves the tenant.  RLS policies then filter all
 -- reads (USING) and writes (WITH CHECK) to rows matching that session value.
 --
--- Uses IF NOT EXISTS / DROP IF EXISTS for idempotency across re-runs.
+-- NOTE: FORCE ROW LEVEL SECURITY is intentionally NOT used here.  Until the
+-- connection-pool plumbing that issues SET app.current_tenant_id per request
+-- is landed, FORCE RLS would block the app role entirely (the session var is
+-- NULL, so tenant_id = NULL is never true).  Once that plumbing ships, add
+-- FORCE ROW LEVEL SECURITY back as a separate migration.
+--
+-- Uses DROP IF EXISTS / CREATE POLICY for idempotency across re-runs.
 
 -- ---------------------------------------------------------------------------
 -- INVOICES
 -- ---------------------------------------------------------------------------
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS rls_tenant_invoices ON invoices;
 CREATE POLICY rls_tenant_invoices ON invoices
@@ -24,7 +29,6 @@ CREATE POLICY rls_tenant_invoices ON invoices
 -- USERS
 -- ---------------------------------------------------------------------------
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS rls_tenant_users ON users;
 CREATE POLICY rls_tenant_users ON users
@@ -35,7 +39,6 @@ CREATE POLICY rls_tenant_users ON users
 -- VENDORS
 -- ---------------------------------------------------------------------------
 ALTER TABLE vendors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE vendors FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS rls_tenant_vendors ON vendors;
 CREATE POLICY rls_tenant_vendors ON vendors
