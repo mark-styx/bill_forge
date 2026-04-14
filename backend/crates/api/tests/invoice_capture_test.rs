@@ -193,6 +193,7 @@ fn crc32(data: &[&[u8]]) -> u32 {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "Requires running PostgreSQL and seeded sandbox tenant"]
 async fn test_upload_image_returns_line_items_with_confidence() {
     let app = create_test_router().await;
     let token = get_auth_token(&app).await;
@@ -252,6 +253,7 @@ async fn test_upload_image_returns_line_items_with_confidence() {
 }
 
 #[tokio::test]
+#[ignore = "Requires running PostgreSQL and seeded sandbox tenant"]
 async fn test_upload_rejects_wrong_mime_and_oversize() {
     let app = create_test_router().await;
     let token = get_auth_token(&app).await;
