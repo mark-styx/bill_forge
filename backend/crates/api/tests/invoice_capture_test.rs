@@ -93,7 +93,7 @@ fn tiny_png() -> Vec<u8> {
         0, // interlace
     ];
     let ihdr_crc = crc32(&[
-        &[b'I', b'H', b'D', b'R'], // chunk type
+        b"IHDR", // chunk type
         &ihdr_data[..],
     ]);
     let mut ihdr_chunk = Vec::new();
@@ -106,7 +106,7 @@ fn tiny_png() -> Vec<u8> {
     let raw_data = [0u8, 255, 255, 255]; // filter=none + RGB
     let deflated = deflate_minimal(&raw_data);
     let idat_crc = crc32(&[
-        &[b'I', b'D', b'A', b'T'],
+        b"IDAT",
         &deflated,
     ]);
     let mut idat_chunk = Vec::new();
@@ -116,7 +116,7 @@ fn tiny_png() -> Vec<u8> {
     idat_chunk.extend_from_slice(&idat_crc.to_be_bytes());
 
     // IEND chunk
-    let iend_crc = crc32(&[&[b'I', b'E', b'N', b'D']]);
+    let iend_crc = crc32(&[b"IEND"]);
     let mut iend_chunk = Vec::new();
     iend_chunk.extend_from_slice(&0u32.to_be_bytes());
     iend_chunk.extend_from_slice(b"IEND");
