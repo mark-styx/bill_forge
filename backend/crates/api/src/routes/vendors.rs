@@ -5,16 +5,52 @@ use crate::extractors::VendorMgmtAccess;
 use crate::state::AppState;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters},
+    domain::{AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters, VendorId},
     traits::{AuditService, TaxDocumentRepository, VendorRepository},
-    types::{PaginatedResponse, Pagination},
+    types::{PaginatedResponse, Pagination, TenantId},
+    Error, Result as CoreResult,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// Vendor-specific routing rules consumed by the approval engine.
+///
+/// Stored as JSONB in the `vendors.routing_rules` column.
+/// The approval engine calls [`get_routing_rules`] to read these.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RoutingRules {
+    /// Email address of the designated approver for this vendor's invoices
+    pub approver_email: Option<String>,
+    /// Invoices at or below this amount (in cents) are auto-approved
+    pub auto_approve_threshold_cents: Option<i64>,
+    /// Whether this vendor requires dual (two-person) approval
+    pub requires_dual_approval: Option<bool>,
+}
+
+impl Default for RoutingRules {
+    fn default() -> Self {
+        Self {
+            approver_email: None,
+            auto_approve_threshold_cents: None,
+            requires_dual_approval: None,
+        }
+    }
+}
+
+/// Request body for PATCH /api/v1/vendors/{id}
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UpdateVendorRequest {
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub email: Option<String>,
+    pub tax_id: Option<String>,
+    pub payment_terms_days: Option<i32>,
+    pub routing_rules: Option<RoutingRules>,
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -22,6 +58,7 @@ pub fn routes() -> Router<AppState> {
         .route("/", post(create_vendor))
         .route("/:id", get(get_vendor))
         .route("/:id", put(update_vendor))
+        .route("/:id", patch(patch_vendor))
         .route("/:id", delete(delete_vendor))
         .route("/:id/contacts", post(add_contact))
         .route("/:id/contacts/:contact_id", delete(remove_contact))
@@ -164,12 +201,19 @@ async fn delete_vendor(
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
 
     let old_vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?;
-    repo.delete(&tenant.tenant_id, &vendor_id).await?;
+
+    // Soft delete: set status='inactive' instead of hard-deleting the row
+    sqlx::query("UPDATE vendors SET status = 'inactive', updated_at = NOW() WHERE id = $1 AND tenant_id = $2")
+        .bind(vendor_id.0)
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to soft-delete vendor: {}", e)))?;
 
     let mut audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(), Some(user.user_id.clone()),
         AuditAction::Delete, ResourceType::Vendor,
-        id.clone(), "Deleted vendor",
+        id.clone(), "Soft-deleted vendor (set inactive)",
     ).with_user_email(&user.email);
     if let Some(old) = old_vendor {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
@@ -180,6 +224,161 @@ async fn delete_vendor(
     }
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// PATCH /api/v1/vendors/{id} - partial update of vendor fields including routing_rules.
+///
+/// Unlike the PUT endpoint (which takes a full `UpdateVendorInput`), this handler
+/// directly patches individual columns: name, status, email, tax_id,
+/// payment_terms_days, and the JSONB routing_rules blob.
+#[utoipa::path(patch, path = "/api/v1/vendors/{id}", tag = "Vendors",
+    request_body = UpdateVendorRequest,
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Vendor patched"), (status = 404, description = "Vendor not found")))]
+async fn patch_vendor(
+    State(state): State<AppState>,
+    VendorMgmtAccess(user, tenant): VendorMgmtAccess,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateVendorRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let vendor_id: VendorId = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Build a dynamic SET clause for the supplied fields
+    let mut set_clauses: Vec<String> = Vec::new();
+    let mut param_idx = 1u32; // $1 is always vendor_id, $2 is always tenant_id
+    let mut bind_name: Option<String> = None;
+    let mut bind_status: Option<String> = None;
+    let mut bind_email: Option<String> = None;
+    let mut bind_tax_id: Option<String> = None;
+    let mut bind_payment_days: Option<i32> = None;
+    let mut bind_routing_rules: Option<serde_json::Value> = None;
+
+    // $1 = vendor_id, $2 = tenant_id (reserved)
+    param_idx = 3;
+
+    if let Some(ref name) = req.name {
+        if name.trim().is_empty() {
+            return Err(billforge_core::Error::Validation("name must not be empty".to_string()).into());
+        }
+        set_clauses.push(format!("name = ${}", param_idx));
+        bind_name = Some(name.clone());
+        param_idx += 1;
+    }
+    if let Some(ref status) = req.status {
+        match status.as_str() {
+            "active" | "inactive" | "on_hold" => {}
+            _ => return Err(billforge_core::Error::Validation(
+                "status must be one of: active, inactive, on_hold".to_string(),
+            ).into()),
+        }
+        set_clauses.push(format!("status = ${}", param_idx));
+        bind_status = Some(status.clone());
+        param_idx += 1;
+    }
+    if let Some(ref email) = req.email {
+        set_clauses.push(format!("email = ${}", param_idx));
+        bind_email = Some(email.clone());
+        param_idx += 1;
+    }
+    if let Some(ref tax_id) = req.tax_id {
+        set_clauses.push(format!("tax_id = ${}", param_idx));
+        bind_tax_id = Some(tax_id.clone());
+        param_idx += 1;
+    }
+    if let Some(days) = req.payment_terms_days {
+        set_clauses.push(format!("payment_terms_days = ${}", param_idx));
+        bind_payment_days = Some(days);
+        param_idx += 1;
+    }
+    if let Some(ref rules) = req.routing_rules {
+        set_clauses.push(format!("routing_rules = ${}::jsonb", param_idx));
+        bind_routing_rules = Some(serde_json::to_value(rules)
+            .map_err(|e| billforge_core::Error::Validation(format!("Invalid routing_rules JSON: {}", e)))?);
+        param_idx += 1;
+    }
+
+    if set_clauses.is_empty() {
+        return Err(billforge_core::Error::Validation("No fields to update".to_string()).into());
+    }
+
+    // Always touch updated_at
+    set_clauses.push("updated_at = NOW()".to_string());
+
+    let sql = format!(
+        "UPDATE vendors SET {} WHERE id = $1 AND tenant_id = $2",
+        set_clauses.join(", ")
+    );
+
+    let mut query = sqlx::query(&sql)
+        .bind(vendor_id.0)
+        .bind(*tenant.tenant_id.as_uuid());
+
+    if let Some(v) = bind_name { query = query.bind(v); }
+    if let Some(v) = bind_status { query = query.bind(v); }
+    if let Some(v) = bind_email { query = query.bind(v); }
+    if let Some(v) = bind_tax_id { query = query.bind(v); }
+    if let Some(v) = bind_payment_days { query = query.bind(v); }
+    if let Some(v) = bind_routing_rules { query = query.bind(v); }
+
+    let result = query.execute(&*pool).await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to patch vendor: {}", e)))?;
+
+    if result.rows_affected() == 0 {
+        return Err(billforge_core::Error::NotFound {
+            resource_type: "Vendor".to_string(),
+            id: id.clone(),
+        }.into());
+    }
+
+    // Audit
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Update, ResourceType::Vendor,
+        id.clone(), format!("Patched vendor {}", id),
+    ).with_user_email(&user.email);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// Look up the routing rules for a specific vendor, scoped to a tenant.
+///
+/// This is the public helper that the approval engine calls to determine
+/// vendor-specific approval routing (approver email, auto-approve threshold,
+/// dual-approval requirement).
+///
+/// Returns a default (empty) [`RoutingRules`] when the vendor has no rules set.
+pub async fn get_routing_rules(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+    vendor_id: &VendorId,
+) -> CoreResult<RoutingRules> {
+    let row: Option<(Option<serde_json::Value>,)> = sqlx::query_as(
+        "SELECT routing_rules FROM vendors WHERE id = $1 AND tenant_id = $2"
+    )
+    .bind(vendor_id.0)
+    .bind(*tenant_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| Error::Database(format!("Failed to fetch routing rules: {}", e)))?;
+
+    let rules_json = match row {
+        Some((Some(v),)) => v,
+        Some((None,)) => serde_json::Value::Object(serde_json::Map::new()),
+        None => return Err(Error::NotFound {
+            resource_type: "Vendor".to_string(),
+            id: vendor_id.to_string(),
+        }),
+    };
+
+    serde_json::from_value(rules_json)
+        .map_err(|e| Error::Database(format!("Failed to parse routing_rules JSON: {}", e)))
 }
 
 #[utoipa::path(post, path = "/api/v1/vendors/{id}/contacts", tag = "Vendors", request_body = serde_json::Value,
