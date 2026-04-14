@@ -86,12 +86,12 @@ CREATE TABLE IF NOT EXISTS categorization_ml_metrics (
 );
 
 -- Create indexes for efficient queries
-CREATE INDEX idx_vendor_embeddings_tenant ON vendor_embeddings(tenant_id);
-CREATE INDEX idx_category_embeddings_tenant_type ON category_embeddings(tenant_id, category_type);
+CREATE INDEX IF NOT EXISTS idx_vendor_embeddings_tenant ON vendor_embeddings(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_category_embeddings_tenant_type ON category_embeddings(tenant_id, category_type);
 
-CREATE INDEX idx_categorization_feedback_tenant ON categorization_feedback(tenant_id, created_at DESC);
-CREATE INDEX idx_categorization_feedback_vendor ON categorization_feedback(vendor_id);
-CREATE INDEX idx_categorization_feedback_invoice ON categorization_feedback(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_categorization_feedback_tenant ON categorization_feedback(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_categorization_feedback_vendor ON categorization_feedback(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_categorization_feedback_invoice ON categorization_feedback(invoice_id);
 
-CREATE INDEX idx_categorization_ml_metrics_tenant_date ON categorization_ml_metrics(tenant_id, metric_date DESC);
+CREATE INDEX IF NOT EXISTS idx_categorization_ml_metrics_tenant_date ON categorization_ml_metrics(tenant_id, metric_date DESC);
 

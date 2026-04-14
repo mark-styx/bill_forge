@@ -58,6 +58,7 @@ dotenvy = { workspace = true }
 validator = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
+jsonwebtoken = { workspace = true }
 
 # Redis job queue (for enqueuing OCR jobs)
 redis = { version = "0.24", features = ["tokio-comp"] }
@@ -95,4 +96,3 @@ http-body-util = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
 dotenvy = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
-jsonwebtoken = { workspace = true }

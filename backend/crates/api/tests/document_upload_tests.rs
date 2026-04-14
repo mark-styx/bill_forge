@@ -219,6 +219,16 @@ async fn test_multiple_documents_per_invoice() {
 
     let invoice_id = ensure_fixture_invoice(&pool).await;
 
+    // Clean up stale data from prior test runs
+    sqlx::query(
+        "DELETE FROM documents WHERE invoice_id = $1 AND tenant_id = $2 AND filename LIKE 'multi-test-%'"
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .execute(&pool)
+    .await
+    .ok();
+
     let mut doc_ids = Vec::new();
 
     for i in 0..3 {

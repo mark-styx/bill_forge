@@ -42,7 +42,7 @@ pub mod routing;
 pub mod approval_links;
 pub mod qbo;
 
-use crate::middleware::{rate_limit_auth, require_auth, RateLimiterState};
+use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
 use crate::state::AppState;
 use crate::metrics;
 use axum::{middleware, routing::get, Extension, Router};
@@ -158,5 +158,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
+        .layer(middleware::from_fn(require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
 }

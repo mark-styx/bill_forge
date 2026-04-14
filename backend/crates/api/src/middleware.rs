@@ -7,11 +7,19 @@ use axum::{
     middleware::Next,
 };
 use billforge_auth::AuthService;
+use billforge_core::UserContext;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+use uuid::Uuid;
+
+/// Newtype inserted into request extensions by [`require_tenant`] after auth succeeds.
+/// Downstream handlers can extract this to get the scoped tenant_id without
+/// re-parsing the JWT.
+#[derive(Debug, Clone, Copy)]
+pub struct TenantGuard(pub Uuid);
 
 /// Paths that do not require an Authorization header.
 /// Prefix-matched entries end with `/`.
@@ -90,6 +98,52 @@ pub async fn require_auth(
             }
         }
     }
+}
+
+/// Middleware that enforces a resolved `tenant_id` on every non-public request.
+///
+/// Must run **after** [`require_auth`] so that `UserContext` is already in extensions.
+/// - If `UserContext` is missing, returns 500 (`tenant_context_missing`) - auth should have set it.
+/// - If `tenant_id` is nil (all-zero UUID), returns 401 (`tenant_unresolved`).
+/// - Otherwise, inserts [`TenantGuard`] and emits an audit log line.
+pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body> {
+    let path = request.uri().path();
+
+    if is_public_path(path) {
+        return next.run(request).await;
+    }
+
+    let user_context = match request.extensions().get::<UserContext>() {
+        Some(uc) => uc.clone(),
+        None => {
+            warn!(path = %path, "UserContext missing from extensions — auth middleware misconfigured");
+            return json_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tenant_context_missing",
+            );
+        }
+    };
+
+    let tenant_uuid = *user_context.tenant_id.as_uuid();
+    if tenant_uuid.is_nil() {
+        warn!(
+            path = %path,
+            user_id = %user_context.user_id.as_uuid(),
+            "tenant_id is nil on authenticated request"
+        );
+        return json_error_response(StatusCode::UNAUTHORIZED, "tenant_unresolved");
+    }
+
+    info!(
+        tenant_id = %tenant_uuid,
+        path = %path,
+        "tenant_scoped_request"
+    );
+
+    let mut request = request;
+    request.extensions_mut().insert(TenantGuard(tenant_uuid));
+
+    next.run(request).await
 }
 
 fn json_error_response(status: StatusCode, error: &str) -> Response<Body> {
