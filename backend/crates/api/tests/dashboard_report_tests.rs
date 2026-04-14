@@ -24,7 +24,7 @@ async fn setup_schema(pool: &sqlx::PgPool, tenant_id: &TenantId) {
 async fn insert_user(pool: &sqlx::PgPool, tenant_id: &TenantId, user_id: Uuid) {
     sqlx::query(
         r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles)
-           VALUES ($1, $2, $3, $4, $5, '[\"tenant_admin\"]'::jsonb)
+           VALUES ($1, $2, $3, $4, $5, '["tenant_admin"]'::jsonb)
            ON CONFLICT DO NOTHING"#,
     )
     .bind(user_id)
@@ -77,7 +77,7 @@ async fn insert_invoice(
     .bind(invoice_id)
     .bind(*tenant_id.as_uuid())
     .bind(vendor_name)
-    .bind(format!("INV-{}", invoice_id.as_simple().get(..6).unwrap_or("000000")))
+    .bind(format!("INV-{}", &invoice_id.as_simple().to_string()[..6]))
     .bind(total_cents)
     .bind(doc_id)
     .bind(user_id)
@@ -118,13 +118,13 @@ async fn read_kpis(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Option<KpiRow> 
     )> = sqlx::query_as(
         r#"SELECT
             queue_count, approved_count, paid_count, rejected_count,
-            aging_0_7, aging_0_7_amount,
-            aging_8_14, aging_8_14_amount,
-            aging_15_30, aging_15_30_amount,
-            aging_30_plus, aging_30_plus_amount,
+            aging_0_7, aging_0_7_amount::bigint,
+            aging_8_14, aging_8_14_amount::bigint,
+            aging_15_30, aging_15_30_amount::bigint,
+            aging_30_plus, aging_30_plus_amount::bigint,
             spend_by_vendor,
-            total_spend_30d,
-            avg_processing_hours
+            total_spend_30d::bigint,
+            avg_processing_hours::double precision
         FROM dashboard_kpis_mv
         WHERE tenant_id = $1"#,
     )
@@ -293,7 +293,7 @@ async fn empty_tenant_returns_zero_defaults(pool: sqlx::PgPool) {
     assert!(kpis.is_none(), "new tenant should have no MV row");
 
     // Verify the SQL query itself works without error
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM dashboard_kpis_mv WHERE tenant_id = $1"
     )
     .bind(*tenant_id.as_uuid())
