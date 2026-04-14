@@ -39,6 +39,8 @@ pub mod theme;
 pub mod ai;
 pub mod billing;
 pub mod routing;
+pub mod approval_links;
+pub mod qbo;
 
 use crate::middleware::{rate_limit_auth, require_auth, RateLimiterState};
 use crate::state::AppState;
@@ -84,8 +86,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/auth", auth::routes()
             .layer(middleware::from_fn(rate_limit_auth))
             .layer(Extension(RateLimiterState::new(20, 60))))
-        // Invoice Capture module
-        .nest("/invoices", invoices::routes())
+        // Invoice Capture module + status state machine transitions
+        .nest("/invoices", invoices::routes().merge(crate::state_machine::routes()))
         // Vendor Management module
         .nest("/vendors", vendors::routes())
         // Invoice Processing module
@@ -149,6 +151,10 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/routing", routing::routes())
         // Payment Requests
         .nest("/payment-requests", payment_requests::routes())
+        // Approval magic links (email-based approve/reject/comment)
+        .nest("/approval-links", approval_links::routes())
+        // Lightweight QBO integration (OAuth + vendor pull)
+        .nest("/qbo", qbo::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
