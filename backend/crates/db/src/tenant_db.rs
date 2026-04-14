@@ -35,6 +35,8 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_purchase_order_migrations(pool).await?;
     run_edi_outbound_migrations(pool).await?;
     run_categorization_migrations(pool).await?;
+    run_invoice_state_machine_migrations(pool).await?;
+    run_dashboard_kpis_migrations(pool).await?;
 
     Ok(())
 }
@@ -92,6 +94,12 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         ALTER TABLE vendors ADD COLUMN IF NOT EXISTS phone TEXT;
         ALTER TABLE vendors ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
         ALTER TABLE vendors ADD COLUMN IF NOT EXISTS address_line1 TEXT;
+
+        -- Vendor routing rules and payment_terms_days (migration 077)
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS payment_terms_days INT NOT NULL DEFAULT 30;
+        ALTER TABLE vendors ADD COLUMN IF NOT EXISTS routing_rules JSONB NOT NULL DEFAULT '{}';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_tenant_tax_id ON vendors(tenant_id, tax_id) WHERE tax_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_vendors_tenant_status ON vendors(tenant_id, status);
 
         -- Invoice status config
         CREATE TABLE IF NOT EXISTS invoice_status_config (
@@ -375,6 +383,40 @@ async fn run_reconciliation_migrations(pool: &PgPool) -> Result<()> {
     .map_err(|e| {
         Error::Migration(format!(
             "Failed to run vendor statement reconciliation migrations: {}",
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Run invoice status state machine and audit log migrations
+pub async fn run_invoice_state_machine_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/076_invoice_status_and_audit.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run invoice state machine migrations: {}",
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Run dashboard KPIs materialized view migration
+pub async fn run_dashboard_kpis_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/078_dashboard_kpis.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run dashboard KPIs migration: {}",
             e
         ))
     })?;

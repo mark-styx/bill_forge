@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use billforge_reporting::DashboardSummary;
 use uuid::Uuid;
 
@@ -16,6 +17,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         // Dashboard endpoints (basic, available to all)
         .route("/dashboard/summary", get(dashboard_summary))
+        // KPIs backed by materialized view (sub-second reads)
+        .route("/dashboard/kpis", get(dashboard_kpis))
         // Advanced reports (Reporting module required)
         .route("/invoices/by-vendor", get(invoices_by_vendor))
         .route("/invoices/by-status", get(invoices_by_status))
@@ -47,6 +50,142 @@ async fn dashboard_summary(
     let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
 
     Ok(Json(summary))
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard KPIs (materialized view)
+// ---------------------------------------------------------------------------
+
+/// Aging bucket metrics for queued invoices.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AgingBuckets {
+    /// Invoices 0-7 days old
+    pub aging_0_7: i64,
+    /// Total amount (cents) for 0-7 day bucket
+    pub aging_0_7_amount: i64,
+    /// Invoices 8-14 days old
+    pub aging_8_14: i64,
+    /// Total amount (cents) for 8-14 day bucket
+    pub aging_8_14_amount: i64,
+    /// Invoices 15-30 days old
+    pub aging_15_30: i64,
+    /// Total amount (cents) for 15-30 day bucket
+    pub aging_15_30_amount: i64,
+    /// Invoices older than 30 days
+    pub aging_30_plus: i64,
+    /// Total amount (cents) for 30+ day bucket
+    pub aging_30_plus_amount: i64,
+}
+
+/// Top vendor by spend.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VendorSpendEntry {
+    pub vendor_id: String,
+    pub vendor_name: String,
+    /// Total amount in cents
+    pub total_amount: i64,
+    pub invoice_count: i64,
+}
+
+/// Aggregated dashboard KPIs returned by the materialized view.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DashboardKpis {
+    pub queue_count: i64,
+    pub approved_count: i64,
+    pub paid_count: i64,
+    pub rejected_count: i64,
+    pub aging: AgingBuckets,
+    pub spend_by_vendor: Vec<VendorSpendEntry>,
+    /// Total paid spend in last 30 days (cents)
+    pub total_spend_30d: i64,
+    /// Average processing hours for paid invoices in last 30 days
+    pub avg_processing_hours: f64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/reports/dashboard/kpis",
+    tag = "Reports",
+    responses(
+        (status = 200, description = "Dashboard KPIs from materialized view", body = DashboardKpis)
+    )
+)]
+async fn dashboard_kpis(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<DashboardKpis>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let row = sqlx::query_as::<_, (
+        i64, i64, i64, i64,
+        i64, i64, i64, i64, i64, i64, i64, i64,
+        serde_json::Value,
+        i64, f64,
+    )>(
+        r#"SELECT
+            queue_count, approved_count, paid_count, rejected_count,
+            aging_0_7, aging_0_7_amount,
+            aging_8_14, aging_8_14_amount,
+            aging_15_30, aging_15_30_amount,
+            aging_30_plus, aging_30_plus_amount,
+            spend_by_vendor,
+            total_spend_30d,
+            avg_processing_hours
+        FROM dashboard_kpis_mv
+        WHERE tenant_id = $1"#,
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query dashboard_kpis_mv: {}", e)))?;
+
+    let kpis = if let Some(row) = row {
+        let spend_by_vendor: Vec<VendorSpendEntry> = serde_json::from_value(row.12)
+            .unwrap_or_default();
+        DashboardKpis {
+            queue_count: row.0,
+            approved_count: row.1,
+            paid_count: row.2,
+            rejected_count: row.3,
+            aging: AgingBuckets {
+                aging_0_7: row.4,
+                aging_0_7_amount: row.5,
+                aging_8_14: row.6,
+                aging_8_14_amount: row.7,
+                aging_15_30: row.8,
+                aging_15_30_amount: row.9,
+                aging_30_plus: row.10,
+                aging_30_plus_amount: row.11,
+            },
+            spend_by_vendor,
+            total_spend_30d: row.13,
+            avg_processing_hours: row.14,
+        }
+    } else {
+        // New tenant with no data in the MV - return zero-valued defaults
+        DashboardKpis {
+            queue_count: 0,
+            approved_count: 0,
+            paid_count: 0,
+            rejected_count: 0,
+            aging: AgingBuckets {
+                aging_0_7: 0,
+                aging_0_7_amount: 0,
+                aging_8_14: 0,
+                aging_8_14_amount: 0,
+                aging_15_30: 0,
+                aging_15_30_amount: 0,
+                aging_30_plus: 0,
+                aging_30_plus_amount: 0,
+            },
+            spend_by_vendor: vec![],
+            total_spend_30d: 0,
+            avg_processing_hours: 0.0,
+        }
+    };
+
+    Ok(Json(kpis))
 }
 
 #[derive(Debug, Deserialize)]

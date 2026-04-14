@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { reportsApi, dashboardApi, auditApi, type AuditEntry } from '@/lib/api';
+import type { DashboardKpis } from '@billforge/shared-types';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
@@ -51,6 +52,11 @@ export default function DashboardPage() {
   const { data: auditData } = useQuery({
     queryKey: ['audit-recent'],
     queryFn: () => auditApi.list({ per_page: 5 }),
+  });
+
+  const { data: kpis, isLoading: kpisLoading } = useQuery({
+    queryKey: ['dashboard-kpis'],
+    queryFn: () => dashboardApi.getKpis(),
   });
 
   const staticFallback = [
@@ -436,6 +442,112 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* KPI Dashboard - Materialized View Backed */}
+      {hasModule('reporting') && (
+        <div className="space-y-4">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+            <Target className="w-4 h-4" />
+            Real-Time KPIs
+          </h2>
+          {kpisLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="card p-5 space-y-3">
+                  <span className="inline-block w-20 h-4 bg-secondary animate-pulse rounded" />
+                  <span className="block w-14 h-7 bg-secondary animate-pulse rounded" />
+                </div>
+              ))}
+            </div>
+          ) : kpis && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">In Queue</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    <AnimatedCounter value={kpis.queue_count} duration={800} />
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">30d Spend</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    ${(kpis.total_spend_30d / 100).toLocaleString()}
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Avg Processing</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    {kpis.avg_processing_hours.toFixed(1)}h
+                  </p>
+                </div>
+                <div className="card p-5">
+                  <p className="text-sm text-muted-foreground">Paid</p>
+                  <p className="text-2xl font-semibold text-foreground mt-1">
+                    <AnimatedCounter value={kpis.paid_count} duration={800} />
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Aging Buckets */}
+                <div className="card p-5">
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Invoice Aging</p>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="text-left font-medium pb-2">Bucket</th>
+                        <th className="text-right font-medium pb-2">Count</th>
+                        <th className="text-right font-medium pb-2">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {[
+                        { label: '0-7 days', count: kpis.aging.aging_0_7, amount: kpis.aging.aging_0_7_amount },
+                        { label: '8-14 days', count: kpis.aging.aging_8_14, amount: kpis.aging.aging_8_14_amount },
+                        { label: '15-30 days', count: kpis.aging.aging_15_30, amount: kpis.aging.aging_15_30_amount },
+                        { label: '30+ days', count: kpis.aging.aging_30_plus, amount: kpis.aging.aging_30_plus_amount },
+                      ].map((bucket) => (
+                        <tr key={bucket.label}>
+                          <td className="py-2 text-foreground">{bucket.label}</td>
+                          <td className="py-2 text-right text-foreground">{bucket.count}</td>
+                          <td className="py-2 text-right text-muted-foreground">${(bucket.amount / 100).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Top Vendors */}
+                <div className="card p-5">
+                  <p className="text-sm font-semibold text-muted-foreground mb-3">Top Vendors (30d)</p>
+                  {kpis.spend_by_vendor.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No vendor data yet</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-muted-foreground">
+                          <th className="text-left font-medium pb-2">Vendor</th>
+                          <th className="text-right font-medium pb-2">Invoices</th>
+                          <th className="text-right font-medium pb-2">Spend</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {kpis.spend_by_vendor.map((v) => (
+                          <tr key={v.vendor_id}>
+                            <td className="py-2 text-foreground">{v.vendor_name}</td>
+                            <td className="py-2 text-right text-foreground">{v.invoice_count}</td>
+                            <td className="py-2 text-right text-muted-foreground">${(v.total_amount / 100).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
             </>
           )}
         </div>

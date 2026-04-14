@@ -2,8 +2,8 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-import type { ApiErrorBody, PaginationMeta } from '@billforge/shared-types';
-export type { ApiErrorBody, PaginationMeta } from '@billforge/shared-types';
+import type { ApiErrorBody, PaginationMeta, DashboardKpis } from '@billforge/shared-types';
+export type { ApiErrorBody, PaginationMeta, DashboardKpis } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
   status: number;
@@ -1530,6 +1530,10 @@ export const dashboardApi = {
 
   getMetrics: () =>
     api.get<DashboardMetrics>('/api/v1/dashboard/metrics'),
+
+  /** KPIs backed by materialized view for sub-second reads */
+  getKpis: () =>
+    api.get<DashboardKpis>('/api/v1/reports/dashboard/kpis'),
 
   getInvoiceMetrics: () =>
     api.get<DashboardInvoiceMetrics>('/api/v1/dashboard/metrics/invoices'),
