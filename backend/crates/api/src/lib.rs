@@ -5,6 +5,7 @@
 pub mod config;
 pub mod error;
 pub mod extractors;
+pub mod invoice_capture;
 pub mod middleware;
 pub mod metrics;
 pub mod openapi;

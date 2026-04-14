@@ -149,6 +149,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/routing", routing::routes())
         // Payment Requests
         .nest("/payment-requests", payment_requests::routes())
+        // Invoice Capture (standalone OCR upload)
+        .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
         .layer(middleware::from_fn_with_state(state, require_auth))
 }
