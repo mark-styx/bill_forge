@@ -253,6 +253,13 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run vendor sync columns migration: {}", e)))?;
 
+        // Row Level Security on core tenant tables (invoices, users, vendors)
+        tracing::debug!("Running migration: 080_enable_rls_core_tables.sql");
+        sqlx::raw_sql(include_str!("../../../migrations/080_enable_rls_core_tables.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to run RLS migration: {}", e)))?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }

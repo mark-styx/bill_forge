@@ -37,6 +37,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_categorization_migrations(pool).await?;
     run_invoice_state_machine_migrations(pool).await?;
     run_dashboard_kpis_migrations(pool).await?;
+    run_rls_migrations(pool).await?;
 
     Ok(())
 }
@@ -417,6 +418,27 @@ pub async fn run_dashboard_kpis_migrations(pool: &PgPool) -> Result<()> {
     .map_err(|e| {
         Error::Migration(format!(
             "Failed to run dashboard KPIs migration: {}",
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Enable Row Level Security on core tenant tables (invoices, users, vendors).
+///
+/// Defense-in-depth: even if application code omits `WHERE tenant_id = $1`,
+/// Postgres will filter rows to only those matching the session variable
+/// `app.current_tenant_id`.
+pub async fn run_rls_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/080_enable_rls_core_tables.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run RLS migration: {}",
             e
         ))
     })?;
