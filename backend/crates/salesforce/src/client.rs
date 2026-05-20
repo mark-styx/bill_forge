@@ -406,3 +406,139 @@ impl SalesforceClient {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── validate_sf_id ───
+
+    #[test]
+    fn accepts_15_char_id() {
+        let id = "001A000000BcdEf";
+        assert_eq!(validate_sf_id(id).unwrap(), id);
+    }
+
+    #[test]
+    fn accepts_18_char_id() {
+        let id = "001A000000BcdEfGHI";
+        assert_eq!(validate_sf_id(id).unwrap(), id);
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(validate_sf_id("").is_err());
+    }
+
+    #[test]
+    fn rejects_14_chars() {
+        assert!(validate_sf_id("001A000000BcdE").is_err());
+    }
+
+    #[test]
+    fn rejects_16_chars() {
+        assert!(validate_sf_id("001A000000BcdEf0").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_single_quote() {
+        assert!(validate_sf_id("001A00000'BCdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_space() {
+        assert!(validate_sf_id("001A000000 cdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_double_dash() {
+        assert!(validate_sf_id("001A00000--cdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_soql_injection_payload() {
+        // Exact shape from the issue: ' OR '1'='1
+        let payload = "001000000000001' OR '1'='1";
+        assert!(validate_sf_id(payload).is_err());
+    }
+
+    // ─── escape_soql_literal ───
+
+    #[test]
+    fn escape_soql_literal_backslash() {
+        assert_eq!(escape_soql_literal(r"a\b"), r"a\\b");
+    }
+
+    #[test]
+    fn escape_soql_literal_single_quote() {
+        assert_eq!(escape_soql_literal("a'b"), r"a\'b");
+    }
+
+    #[test]
+    fn escape_soql_literal_double_quote() {
+        assert_eq!(escape_soql_literal(r#"a"b"#), r#"a\"b"#);
+    }
+
+    #[test]
+    fn escape_soql_literal_newline() {
+        assert_eq!(escape_soql_literal("a\nb"), r"a\nb");
+    }
+
+    #[test]
+    fn escape_soql_literal_no_escape_needed() {
+        assert_eq!(escape_soql_literal("hello"), "hello");
+    }
+
+    // ─── validate_custom_filter ───
+
+    #[test]
+    fn filter_allows_normal_clause() {
+        assert!(validate_custom_filter("Name != null").is_ok());
+    }
+
+    #[test]
+    fn filter_rejects_semicolon() {
+        assert!(validate_custom_filter("Name != null; DROP TABLE").is_err());
+    }
+
+    #[test]
+    fn filter_rejects_double_dash() {
+        assert!(validate_custom_filter("Name != null -- comment").is_err());
+    }
+
+    #[test]
+    fn filter_rejects_unescaped_quote() {
+        assert!(validate_custom_filter("Name = 'evil").is_err());
+    }
+
+    // ─── SalesforceClient constructor ───
+
+    #[test]
+    fn constructor_trims_trailing_slash() {
+        let client = SalesforceClient::new(
+            "token".into(),
+            "https://na1.salesforce.com/".into(),
+        );
+        assert_eq!(client.instance_url, "https://na1.salesforce.com");
+        assert_eq!(client.access_token, "token");
+    }
+
+    #[test]
+    fn constructor_keeps_url_without_trailing_slash() {
+        let client = SalesforceClient::new(
+            "token".into(),
+            "https://na1.salesforce.com".into(),
+        );
+        assert_eq!(client.instance_url, "https://na1.salesforce.com");
+    }
+
+    #[test]
+    fn build_url_formats_correctly() {
+        let client = SalesforceClient::new(
+            "tok".into(),
+            "https://na1.salesforce.com".into(),
+        );
+        let url = client.build_url("sobjects/Account");
+        assert_eq!(url, "https://na1.salesforce.com/services/data/v59.0/sobjects/Account");
+    }
+}
