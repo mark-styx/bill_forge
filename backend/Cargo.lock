@@ -1004,15 +1004,20 @@ dependencies = [
  "billforge-core",
  "billforge-db",
  "chrono",
+ "hex",
+ "hmac",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
+ "subtle",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
