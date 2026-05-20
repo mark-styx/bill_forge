@@ -677,9 +677,9 @@ pub struct PaginationInfo {
     /// Items per page
     #[schema(example = 25)]
     pub per_page: u32,
-    /// Total number of items
+    /// Total number of items (matches PaginationMeta.total_items on the wire)
     #[schema(example = 100)]
-    pub total: u64,
+    pub total_items: u64,
     /// Total number of pages
     #[schema(example = 4)]
     pub total_pages: u32,

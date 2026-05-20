@@ -484,3 +484,27 @@ fn test_auth_paths_200_reference_login_response() {
         );
     }
 }
+
+/// Regression test: PaginationInfo schema must use `total_items` (matching
+/// PaginationMeta.total_items on the wire), not the bare `total` that was
+/// there before. Prevents silent drift between OpenAPI spec and actual
+/// paginated response payloads.
+#[test]
+fn test_pagination_info_schema_uses_total_items() {
+    let spec = ApiDoc::openapi();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let props = parsed["components"]["schemas"]["PaginationInfo"]["properties"]
+        .as_object()
+        .expect("PaginationInfo should have properties in the spec");
+
+    assert!(
+        props.contains_key("total_items"),
+        "PaginationInfo schema must contain 'total_items' field (matches PaginationMeta on the wire)"
+    );
+    assert!(
+        !props.contains_key("total"),
+        "PaginationInfo schema must NOT contain bare 'total' field (was renamed to total_items)"
+    );
+}

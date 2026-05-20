@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::feedback_loop::{CorrectionRule, FeedbackLearning};
+
 /// Category suggestion with confidence score
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CategorySuggestion {
@@ -30,7 +32,7 @@ pub enum CategoryType {
 }
 
 /// Source of the suggestion
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionSource {
     /// Based on vendor's historical invoices
@@ -104,6 +106,17 @@ impl CategorizationEngine {
         let cost_center = self
             .pick_best_suggestion(&suggestions, CategoryType::CostCenter)
             .await?;
+
+        // Apply learned correction rules from user feedback
+        let feedback = FeedbackLearning::new(self.pool.clone());
+        let correction_rules = feedback
+            .get_active_correction_rules(tenant_id)
+            .await
+            .unwrap_or_default();
+
+        let gl_code = self.apply_correction(&gl_code, &correction_rules);
+        let department = self.apply_correction(&department, &correction_rules);
+        let cost_center = self.apply_correction(&cost_center, &correction_rules);
 
         // Calculate overall confidence
         let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
@@ -301,6 +314,33 @@ impl CategorizationEngine {
         Ok(Some(best.clone()))
     }
 
+    /// If a correction rule matches the suggestion, swap the value and boost
+    /// confidence (users have validated this mapping). Otherwise return as-is.
+    fn apply_correction(
+        &self,
+        suggestion: &Option<CategorySuggestion>,
+        rules: &[CorrectionRule],
+    ) -> Option<CategorySuggestion> {
+        let s = suggestion.as_ref()?;
+        let matching_rule = rules.iter().find(|r| {
+            r.category_type == s.category_type && r.suggested_value == s.value
+        });
+
+        match matching_rule {
+            Some(rule) => Some(CategorySuggestion {
+                category_type: s.category_type.clone(),
+                value: rule.correct_value.clone(),
+                confidence: (s.confidence * 1.1).min(0.99),
+                source: SuggestionSource::VendorHistory,
+                reasoning: Some(format!(
+                    "Corrected from '{}' based on {} user corrections",
+                    s.value, rule.frequency
+                )),
+            }),
+            None => suggestion.clone(),
+        }
+    }
+
     /// Calculate overall confidence score.
     ///
     /// Uses a fixed denominator of 3 so missing fields contribute 0.0 to the
@@ -347,5 +387,85 @@ mod tests {
 
         // Can't test async easily in unit tests without runtime
         // This would be tested in integration tests
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_rewrites_value_and_boosts_confidence() {
+        let engine = CategorizationEngine::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+        );
+        let suggestion = Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "6000-Software".to_string(),
+            confidence: 0.85,
+            source: SuggestionSource::LineItemAnalysis,
+            reasoning: Some("keyword match".to_string()),
+        });
+        let rules = vec![CorrectionRule {
+            category_type: CategoryType::GlCode,
+            suggested_value: "6000-Software".to_string(),
+            correct_value: "6100-SaaS Licenses".to_string(),
+            frequency: 7,
+        }];
+
+        let result = engine.apply_correction(&suggestion, &rules).unwrap();
+
+        assert_eq!(result.value, "6100-SaaS Licenses");
+        assert!(result.confidence > 0.85);
+        assert!(result.confidence <= 0.99);
+        assert!(result.reasoning.as_ref().unwrap().contains("user corrections"));
+        assert_eq!(result.source, SuggestionSource::VendorHistory);
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_no_matching_rule_returns_unchanged() {
+        let engine = CategorizationEngine::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+        );
+        let suggestion = Some(CategorySuggestion {
+            category_type: CategoryType::GlCode,
+            value: "6000-Software".to_string(),
+            confidence: 0.80,
+            source: SuggestionSource::LineItemAnalysis,
+            reasoning: Some("keyword match".to_string()),
+        });
+        let rules = vec![CorrectionRule {
+            category_type: CategoryType::GlCode,
+            suggested_value: "7000-Marketing".to_string(),
+            correct_value: "7100-Digital Ads".to_string(),
+            frequency: 3,
+        }];
+
+        let result = engine.apply_correction(&suggestion, &rules).unwrap();
+
+        assert_eq!(result.value, "6000-Software");
+        assert!((result.confidence - 0.80).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_apply_correction_respects_category_type() {
+        let engine = CategorizationEngine::new(
+            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
+        );
+        let suggestion = Some(CategorySuggestion {
+            category_type: CategoryType::Department,
+            value: "Engineering".to_string(),
+            confidence: 0.75,
+            source: SuggestionSource::SimilarInvoices,
+            reasoning: Some("similar invoices".to_string()),
+        });
+        // Rule matches value string but is for GlCode, not Department
+        let rules = vec![CorrectionRule {
+            category_type: CategoryType::GlCode,
+            suggested_value: "Engineering".to_string(),
+            correct_value: "6000-Engineering".to_string(),
+            frequency: 5,
+        }];
+
+        let result = engine.apply_correction(&suggestion, &rules).unwrap();
+
+        // Department suggestion must NOT be rewritten by a GlCode rule
+        assert_eq!(result.value, "Engineering");
+        assert!((result.confidence - 0.75).abs() < f32::EPSILON);
     }
 }

@@ -2,6 +2,7 @@
 
 use crate::config::WorkerConfig;
 use anyhow::{Context, Result};
+use billforge_core::sync::{ConflictResolver, LastWriteWinsResolver, SyncState, detect_change, log_conflict};
 use billforge_core::TenantId;
 use billforge_quickbooks::{QuickBooksClient, QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig};
 use chrono::{Duration, Utc};
@@ -140,6 +141,11 @@ async fn run_vendor_sync(
     };
     let client = QuickBooksClient::new(access_token.clone(), company_id, env);
 
+    // Load sync state for delta tracking
+    let mut sync_state = SyncState::load(pool, tenant_id.as_uuid(), "quickbooks", "vendors").await?;
+    let updated_after = sync_state.cursor.updated_after;
+    let resolver = LastWriteWinsResolver;
+
     // Paginate through all vendors
     let mut all_vendors = Vec::new();
     let mut start_position = 1;
@@ -154,15 +160,35 @@ async fn run_vendor_sync(
         start_position += max_results;
     }
 
+    // Delta filter: only process vendors updated since the last sync cursor
+    let delta_vendors: Vec<_> = all_vendors
+        .iter()
+        .filter(|v| {
+            v.MetaData
+                .as_ref()
+                .map(|md| md.LastUpdatedTime > updated_after)
+                .unwrap_or(true)
+        })
+        .collect();
+
+    info!(
+        "Delta filter: {}/{} vendors changed since {}",
+        delta_vendors.len(),
+        all_vendors.len(),
+        updated_after,
+    );
+
     let mut imported = 0u64;
     let mut updated = 0u64;
+    let mut conflicts = 0u64;
     let mut errors = 0u64;
 
     // Sync each vendor
-    for qb_vendor in &all_vendors {
-        // Check if vendor already exists
-        let existing: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT v.id FROM vendors v \
+    for qb_vendor in &delta_vendors {
+        // Check if vendor already exists (with local updated_at for conflict detection)
+        let existing: Option<(Uuid, String, Option<String>, Option<String>, chrono::DateTime<Utc>)> = sqlx::query_as(
+            "SELECT v.id, v.name, v.email, v.phone, v.updated_at \
+             FROM vendors v \
              INNER JOIN quickbooks_vendor_mappings m ON m.billforge_vendor_id = v.id \
              WHERE m.tenant_id = $1 AND m.quickbooks_vendor_id = $2",
         )
@@ -175,8 +201,54 @@ async fn run_vendor_sync(
             e
         })?;
 
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
+        if let Some((vendor_id, local_name, local_email, local_phone, local_updated_at)) = existing {
+            // Build local snapshot for change detection
+            let local_snapshot = (
+                local_name.clone(),
+                local_email.clone(),
+                local_phone.clone(),
+            );
+            let remote_email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
+            let remote_phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
+            let remote_snapshot = (
+                qb_vendor.DisplayName.clone(),
+                Some(remote_email.to_string()),
+                Some(remote_phone.to_string()),
+            );
+
+            // Detect if both sides changed since last sync (conflict)
+            let remote_updated_at = qb_vendor.MetaData
+                .as_ref()
+                .map(|md| md.LastUpdatedTime)
+                .unwrap_or(Utc::now());
+
+            let local_changed = local_updated_at > updated_after;
+            let remote_changed = detect_change(&local_snapshot, &remote_snapshot);
+
+            if local_changed && remote_changed {
+                // Both sides diverged — resolve via LastWriteWins
+                conflicts += 1;
+                let side = resolver.resolve(local_updated_at, remote_updated_at);
+
+                if side == billforge_core::sync::ResolvedSide::Local {
+                    // Local wins — skip remote update but log conflict
+                    let _ = log_conflict(
+                        pool, tenant_id.as_uuid(), "quickbooks", "vendors",
+                        &vendor_id.to_string(), &qb_vendor.Id,
+                        "both_modified_local_wins",
+                    ).await;
+                    continue;
+                }
+
+                // Remote wins — fall through to update below
+                let _ = log_conflict(
+                    pool, tenant_id.as_uuid(), "quickbooks", "vendors",
+                    &vendor_id.to_string(), &qb_vendor.Id,
+                    "both_modified_remote_wins",
+                ).await;
+            }
+
+            // Update existing vendor with remote data
             let email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
             let phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
 
@@ -264,6 +336,15 @@ async fn run_vendor_sync(
         }
     }
 
+    // Persist updated sync state
+    let now = Utc::now();
+    sync_state.cursor.updated_after = now;
+    sync_state.last_sync_at = now;
+    sync_state.conflict_count += conflicts as i32;
+    if let Err(e) = sync_state.save(pool).await {
+        error!(error = %e, "Failed to persist sync state for quickbooks/vendors");
+    }
+
     // Update sync log to completed
     sqlx::query(
         "UPDATE quickbooks_sync_log \
@@ -288,10 +369,11 @@ async fn run_vendor_sync(
     .context("Failed to update last sync time on QuickBooks connection")?;
 
     info!(
-        "QuickBooks vendor sync completed for tenant {}: imported={}, updated={}, errors={}",
+        "QuickBooks vendor sync completed for tenant {}: imported={}, updated={}, conflicts={}, errors={}",
         tenant_id.as_str(),
         imported,
         updated,
+        conflicts,
         errors
     );
 

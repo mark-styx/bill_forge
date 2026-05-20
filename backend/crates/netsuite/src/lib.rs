@@ -10,6 +10,7 @@
 
 #![allow(dead_code)]
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -59,6 +60,9 @@ pub enum ClientError {
 
     #[error("Missing access token – call authenticate() first")]
     MissingToken,
+
+    #[error("Validation failed: {0}")]
+    Validation(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +169,86 @@ impl NetSuiteClient {
 
         Ok(vendor_resp.items)
     }
+
+    /// Create (POST) a vendor bill in NetSuite.
+    ///
+    /// Validates the request locally, then POSTs to
+    /// `/services/rest/record/v1/vendorBill`. Returns the created record id
+    /// parsed from the JSON body, falling back to the `Location` header.
+    pub async fn create_vendor_bill(
+        &self,
+        req: NetSuiteVendorBillRequest,
+    ) -> Result<NetSuiteVendorBillResponse, ClientError> {
+        if req.item_list.is_empty() {
+            return Err(ClientError::Validation(
+                "item_list must not be empty".to_string(),
+            ));
+        }
+        for (i, line) in req.item_list.iter().enumerate() {
+            if line.amount < 0.0 {
+                return Err(ClientError::Validation(format!(
+                    "line item {} has negative amount ({})",
+                    i, line.amount
+                )));
+            }
+        }
+
+        let token = self
+            .access_token
+            .as_ref()
+            .ok_or(ClientError::MissingToken)?;
+
+        let url = format!(
+            "{}/services/rest/record/v1/vendorBill",
+            self.config.base_url()
+        );
+
+        let body = serde_json::to_string(&req)
+            .map_err(|e| ClientError::Deserialization(e.to_string()))?;
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Http(format!(
+                "create_vendor_bill returned {}: {}",
+                status, text
+            )));
+        }
+
+        // Save Location header before consuming the body.
+        let location_id = resp
+            .headers()
+            .get("Location")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|loc| loc.rsplit('/').next())
+            .map(|s| s.to_string());
+
+        let resp_text = resp.text().await.unwrap_or_default();
+
+        // Try to parse id from JSON body first.
+        if let Ok(parsed) = serde_json::from_str::<NetSuiteVendorBillResponse>(&resp_text) {
+            return Ok(parsed);
+        }
+
+        // Fallback: extract id from Location header.
+        if let Some(id) = location_id {
+            return Ok(NetSuiteVendorBillResponse { id });
+        }
+
+        Err(ClientError::Deserialization(
+            "could not extract vendor bill id from response".to_string(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -190,4 +274,43 @@ struct VendorListResponse {
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
+}
+
+// ---------------------------------------------------------------------------
+// Vendor Bill wire types
+// ---------------------------------------------------------------------------
+
+/// A reference to a NetSuite record by id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetSuiteRecordRef {
+    pub id: String,
+}
+
+/// A single line item on a vendor bill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetSuiteBillLineItem {
+    pub amount: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<NetSuiteRecordRef>,
+}
+
+/// Request body for creating a vendor bill in NetSuite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetSuiteVendorBillRequest {
+    pub entity: NetSuiteRecordRef,
+    pub tran_date: NaiveDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+    pub item_list: Vec<NetSuiteBillLineItem>,
+}
+
+/// Response from creating a vendor bill in NetSuite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetSuiteVendorBillResponse {
+    pub id: String,
 }

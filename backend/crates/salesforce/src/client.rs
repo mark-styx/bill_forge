@@ -20,6 +20,55 @@ use tokio::time::sleep;
 /// Salesforce API version
 const API_VERSION: &str = "v59.0";
 
+/// Validate a Salesforce record ID: 15 or 18 alphanumeric chars, nothing else.
+/// Rejects quotes, whitespace, SOQL metacharacters.
+pub fn validate_sf_id(id: &str) -> Result<&str> {
+    let len = id.len();
+    if (len == 15 || len == 18) && id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Ok(id)
+    } else {
+        anyhow::bail!("invalid Salesforce ID: {:?}", id)
+    }
+}
+
+/// Escape a string literal for inclusion in a SOQL single-quoted value.
+/// Per Salesforce docs: backslash-escape `\`, `'`, `"`, newline, carriage return.
+pub fn escape_soql_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Validate a custom SOQL filter fragment for obvious injection patterns.
+/// Rejects strings containing `;`, `--`, or unescaped single quotes.
+fn validate_custom_filter(filter: &str) -> Result<()> {
+    if filter.contains(';') {
+        anyhow::bail!("custom_filter contains semicolon: rejected");
+    }
+    if filter.contains("--") {
+        anyhow::bail!("custom_filter contains comment marker '--': rejected");
+    }
+    // Check for unescaped single quotes: a bare ' not preceded by backslash
+    let mut chars = filter.chars().peekable();
+    let mut prev_was_backslash = false;
+    while let Some(c) = chars.next() {
+        if c == '\'' && !prev_was_backslash {
+            anyhow::bail!("custom_filter contains unescaped single quote: rejected");
+        }
+        prev_was_backslash = c == '\\';
+    }
+    Ok(())
+}
+
 /// Salesforce REST API client
 pub struct SalesforceClient {
     /// HTTP client
@@ -196,9 +245,12 @@ impl SalesforceClient {
         &self,
         custom_filter: Option<&str>,
     ) -> Result<Vec<SalesforceAccount>> {
-        let where_clause = custom_filter.unwrap_or(
+        let where_clause = if let Some(filter) = custom_filter {
+            validate_custom_filter(filter)?;
+            filter
+        } else {
             "Type IN ('Vendor', 'Partner', 'Supplier')"
-        );
+        };
 
         let soql = format!(
             "SELECT Id, Name, Type, Industry, Website, Phone, \
@@ -230,6 +282,7 @@ impl SalesforceClient {
 
     /// Get a single account by ID
     pub async fn get_account(&self, account_id: &str) -> Result<SalesforceAccount> {
+        validate_sf_id(account_id)?;
         self.get(&format!("sobjects/Account/{}", account_id)).await
     }
 
@@ -245,6 +298,7 @@ impl SalesforceClient {
         &self,
         account_id: &str,
     ) -> Result<Vec<SalesforceContact>> {
+        validate_sf_id(account_id)?;
         let soql = format!(
             "SELECT Id, FirstName, LastName, Email, Phone, Title, AccountId, Department \
              FROM Contact \
@@ -288,6 +342,7 @@ impl SalesforceClient {
         account_id: Option<&str>,
     ) -> Result<Vec<SalesforceOpportunity>> {
         let where_clause = if let Some(acct_id) = account_id {
+            validate_sf_id(acct_id)?;
             format!(
                 "AccountId = '{}' AND StageName = 'Closed Won'",
                 acct_id
@@ -349,5 +404,141 @@ impl SalesforceClient {
         let body = serde_json::json!({ field_name: value });
         self.patch(&format!("sobjects/Account/{}", account_id), &body)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── validate_sf_id ───
+
+    #[test]
+    fn accepts_15_char_id() {
+        let id = "001A000000BcdEf";
+        assert_eq!(validate_sf_id(id).unwrap(), id);
+    }
+
+    #[test]
+    fn accepts_18_char_id() {
+        let id = "001A000000BcdEfGHI";
+        assert_eq!(validate_sf_id(id).unwrap(), id);
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(validate_sf_id("").is_err());
+    }
+
+    #[test]
+    fn rejects_14_chars() {
+        assert!(validate_sf_id("001A000000BcdE").is_err());
+    }
+
+    #[test]
+    fn rejects_16_chars() {
+        assert!(validate_sf_id("001A000000BcdEf0").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_single_quote() {
+        assert!(validate_sf_id("001A00000'BCdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_space() {
+        assert!(validate_sf_id("001A000000 cdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_double_dash() {
+        assert!(validate_sf_id("001A00000--cdEf").is_err());
+    }
+
+    #[test]
+    fn rejects_soql_injection_payload() {
+        // Exact shape from the issue: ' OR '1'='1
+        let payload = "001000000000001' OR '1'='1";
+        assert!(validate_sf_id(payload).is_err());
+    }
+
+    // ─── escape_soql_literal ───
+
+    #[test]
+    fn escape_soql_literal_backslash() {
+        assert_eq!(escape_soql_literal(r"a\b"), r"a\\b");
+    }
+
+    #[test]
+    fn escape_soql_literal_single_quote() {
+        assert_eq!(escape_soql_literal("a'b"), r"a\'b");
+    }
+
+    #[test]
+    fn escape_soql_literal_double_quote() {
+        assert_eq!(escape_soql_literal(r#"a"b"#), r#"a\"b"#);
+    }
+
+    #[test]
+    fn escape_soql_literal_newline() {
+        assert_eq!(escape_soql_literal("a\nb"), r"a\nb");
+    }
+
+    #[test]
+    fn escape_soql_literal_no_escape_needed() {
+        assert_eq!(escape_soql_literal("hello"), "hello");
+    }
+
+    // ─── validate_custom_filter ───
+
+    #[test]
+    fn filter_allows_normal_clause() {
+        assert!(validate_custom_filter("Name != null").is_ok());
+    }
+
+    #[test]
+    fn filter_rejects_semicolon() {
+        assert!(validate_custom_filter("Name != null; DROP TABLE").is_err());
+    }
+
+    #[test]
+    fn filter_rejects_double_dash() {
+        assert!(validate_custom_filter("Name != null -- comment").is_err());
+    }
+
+    #[test]
+    fn filter_rejects_unescaped_quote() {
+        assert!(validate_custom_filter("Name = 'evil").is_err());
+    }
+
+    // ─── SalesforceClient constructor ───
+
+    #[test]
+    fn constructor_trims_trailing_slash() {
+        let client = SalesforceClient::new(
+            "token".into(),
+            "https://na1.salesforce.com/".into(),
+        );
+        assert_eq!(client.instance_url, "https://na1.salesforce.com");
+        assert_eq!(client.access_token, "token");
+    }
+
+    #[test]
+    fn constructor_keeps_url_without_trailing_slash() {
+        let client = SalesforceClient::new(
+            "token".into(),
+            "https://na1.salesforce.com".into(),
+        );
+        assert_eq!(client.instance_url, "https://na1.salesforce.com");
+    }
+
+    #[test]
+    fn build_url_formats_correctly() {
+        let client = SalesforceClient::new(
+            "tok".into(),
+            "https://na1.salesforce.com".into(),
+        );
+        let url = client.build_url("sobjects/Account");
+        assert_eq!(url, "https://na1.salesforce.com/services/data/v59.0/sobjects/Account");
     }
 }

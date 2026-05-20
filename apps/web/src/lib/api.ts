@@ -2,8 +2,8 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-import type { ApiErrorBody, PaginationMeta, DashboardKpis } from '@billforge/shared-types';
-export type { ApiErrorBody, PaginationMeta, DashboardKpis } from '@billforge/shared-types';
+import type { ApiErrorBody, PaginationMeta, DashboardKpis, Money, Invoice, InvoiceLineItem, CreateInvoiceInput } from '@billforge/shared-types';
+export type { ApiErrorBody, PaginationMeta, DashboardKpis, Money, Invoice, InvoiceLineItem, CreateInvoiceInput } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
   status: number;
@@ -559,57 +559,6 @@ export const documentsApi = {
 };
 
 // Types
-export interface InvoiceLineItem {
-  id: string;
-  line_number: number;
-  description: string;
-  quantity?: number;
-  unit_price?: { amount: number; currency: string };
-  amount: { amount: number; currency: string };
-  gl_code?: string;
-  department?: string;
-  project?: string;
-}
-
-export interface Invoice {
-  id: string;
-  tenant_id: string;
-  vendor_id?: string;
-  vendor_name: string;
-  invoice_number: string;
-  invoice_date?: string;
-  due_date?: string;
-  po_number?: string;
-  subtotal?: { amount: number; currency: string };
-  tax_amount?: { amount: number; currency: string };
-  total_amount: { amount: number; currency: string };
-  currency: string;
-  line_items: InvoiceLineItem[];
-  capture_status: string;
-  processing_status: string;
-  current_queue_id?: string;
-  assigned_to?: string;
-  document_id: string;
-  supporting_documents: string[];
-  ocr_confidence?: number;
-  categorization_confidence?: number;
-  department?: string;
-  gl_code?: string;
-  cost_center?: string;
-  notes?: string;
-  tags: string[];
-  custom_fields?: Record<string, unknown>;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateInvoiceInput {
-  vendor_name: string;
-  invoice_number: string;
-  total_amount: { amount: number; currency: string };
-}
-
 export interface VendorContact {
   id: string;
   name: string;
@@ -2108,4 +2057,135 @@ export const aiAssistantApi = {
 
   continueConversation: (id: string, body: { message: string }) =>
     api.post<AiChatResponse>(`/api/v1/ai/conversations/${id}/messages`, body),
+};
+
+// ---------------------------------------------------------------------------
+// Intelligent Routing types & API
+// Mirrors backend/crates/api/src/routes/routing.rs + billforge_core::intelligent_routing
+// ---------------------------------------------------------------------------
+
+/** Routing strategy used by the intelligent routing engine */
+export type RoutingStrategy =
+  | 'least_loaded'
+  | 'round_robin'
+  | 'expert_based'
+  | 'availability_based'
+  | 'hybrid'
+  | 'fallback';
+
+/** Score breakdown for a candidate approver */
+export interface CandidateScore {
+  user_id: string;
+  score: number;
+  workload_score: number;
+  expertise_score: number;
+  availability_score: number;
+  reason: string;
+}
+
+/** Factors that influenced a routing decision */
+export interface RoutingFactors {
+  workload_weight: number;
+  expertise_weight: number;
+  availability_weight: number;
+  invoice_amount: number;
+  vendor_id: string | null;
+  department: string | null;
+  gl_code: string | null;
+}
+
+/** Full routing decision returned by the engine */
+export interface RoutingDecision {
+  approver_id: string | null;
+  strategy: RoutingStrategy;
+  score: number;
+  candidates: CandidateScore[];
+  factors: RoutingFactors;
+  delegated_from: string | null;
+}
+
+/** Request body for routing an invoice */
+export interface RouteInvoiceRequest {
+  queue_id: string;
+}
+
+/** Response from route-invoice endpoint */
+export interface RouteInvoiceResponse {
+  decision: RoutingDecision;
+}
+
+/** Workload distribution stats (mirrors WorkloadDistributionStats) */
+// TODO(#161): expand fields once backend type is documented in OpenAPI
+export type WorkloadDistributionStats = Record<string, unknown>;
+
+/** Summary for a single approver's workload */
+export interface ApproverWorkloadSummary {
+  user_id: string;
+  active_approvals: number;
+  pending_approvals: number;
+  completed_this_week: number;
+  workload_score: number;
+}
+
+/** Response from the workload endpoint */
+export interface WorkloadResponse {
+  stats: WorkloadDistributionStats;
+  approvers: ApproverWorkloadSummary[];
+}
+
+/** Availability status variants (snake_case over the wire per serde rename) */
+export type AvailabilityStatusInput =
+  | 'available'
+  | 'busy'
+  | 'out_of_office'
+  | 'vacation';
+
+/** Request body for setting approver availability */
+export interface SetAvailabilityRequest {
+  user_id: string;
+  status: AvailabilityStatusInput;
+  start_at: string;
+  end_at: string;
+  delegate_id?: string | null;
+  reason?: string | null;
+}
+
+/** Full routing configuration (all 12 fields from RoutingConfigResponse) */
+export interface RoutingConfig {
+  workload_weight: number;
+  expertise_weight: number;
+  availability_weight: number;
+  max_workload_score: number;
+  min_expertise_score: number;
+  enable_auto_delegation: boolean;
+  enable_pattern_learning: boolean;
+  enable_calendar_sync: boolean;
+  working_hours_start: string;
+  working_hours_end: string;
+  working_timezone: string;
+  working_days: number[];
+}
+
+/** Partial update for routing config (all fields optional) */
+export type UpdateRoutingConfigRequest = Partial<RoutingConfig>;
+
+/** Typed wrapper for the Intelligent Routing backend module (/api/v1/routing) */
+export const routingApi = {
+  routeInvoice: (invoiceId: string, body: RouteInvoiceRequest) =>
+    api.post<RouteInvoiceResponse>(
+      `/api/v1/routing/invoices/${invoiceId}/route`,
+      body,
+    ),
+
+  getWorkload: () =>
+    api.get<WorkloadResponse>('/api/v1/routing/workload'),
+
+  setAvailability: (body: SetAvailabilityRequest) =>
+    api.post<void>('/api/v1/routing/availability', body),
+
+  getConfig: () =>
+    api.get<RoutingConfig>('/api/v1/routing/config'),
+
+  updateConfig: (body: UpdateRoutingConfigRequest) =>
+    api.put<RoutingConfig>('/api/v1/routing/config', body),
 };
