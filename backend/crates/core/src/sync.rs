@@ -55,8 +55,7 @@ impl SyncState {
         entity_type: &str,
     ) -> sqlx::Result<Self> {
         let row: Option<(chrono::DateTime<Utc>, Option<String>, Option<String>, i32)> = sqlx::query_as(
-            "SELECT last_sync_at, last_remote_version, cursor->>'page_token', \
-             COALESCE((cursor->>'conflict_count')::int, 0) \
+            "SELECT last_sync_at, last_remote_version, cursor->>'page_token', conflict_count \
              FROM erp_sync_state \
              WHERE tenant_id = $1 AND connector = $2 AND entity_type = $3",
         )
