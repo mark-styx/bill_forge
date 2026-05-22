@@ -473,5 +473,17 @@ pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
         ))
     })?;
 
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/084_create_ai_usage_events.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run AI usage events migration: {}",
+            e
+        ))
+    })?;
+
     Ok(())
 }

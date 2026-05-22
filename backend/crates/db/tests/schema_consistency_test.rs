@@ -235,3 +235,69 @@ async fn test_ai_conversation_tables_schema() {
 
     assert!(fk_count >= 1, "Expected composite FK on ai_messages(tenant_id, user_id, conversation_id) referencing ai_conversations");
 }
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_ai_usage_events_schema() {
+    let (_manager, _tenant_id, pool) = setup_tenant("ai-usage").await;
+
+    // Table exists
+    assert_table_exists(&pool, "ai_usage_events").await;
+
+    // Core identification columns
+    assert_column(&pool, "ai_usage_events", "provider", "text").await;
+    assert_column(&pool, "ai_usage_events", "model", "text").await;
+    assert_column(&pool, "ai_usage_events", "model_route", "text").await;
+
+    // Latency and token telemetry
+    assert_column(&pool, "ai_usage_events", "latency_ms", "bigint").await;
+    assert_column(&pool, "ai_usage_events", "prompt_tokens", "integer").await;
+    assert_column(&pool, "ai_usage_events", "completion_tokens", "integer").await;
+    assert_column(&pool, "ai_usage_events", "total_tokens", "integer").await;
+
+    // Success / error tracking
+    assert_column(&pool, "ai_usage_events", "success", "boolean").await;
+    assert_column(&pool, "ai_usage_events", "error_code", "text").await;
+    assert_column(&pool, "ai_usage_events", "error_message", "text").await;
+
+    // Provider request ID and metadata
+    assert_column(&pool, "ai_usage_events", "provider_request_id", "text").await;
+    assert_column(&pool, "ai_usage_events", "metadata", "jsonb").await;
+    assert_column(&pool, "ai_usage_events", "created_at", "timestamp with time zone").await;
+
+    // UUID default on id
+    assert_column_default_contains(&pool, "ai_usage_events", "id", "gen_random_uuid").await;
+
+    // JSONB default on metadata
+    assert_column_default_contains(&pool, "ai_usage_events", "metadata", "'{}'").await;
+
+    // At least one foreign key exists (tenant_id FK to tenants)
+    let fk_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.table_constraints tc
+        WHERE tc.table_name = 'ai_usage_events'
+            AND tc.constraint_type = 'FOREIGN KEY'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query FK constraints");
+
+    assert!(fk_count >= 1, "Expected at least one FK on ai_usage_events");
+
+    // Tenant RLS policy exists
+    let policy_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM pg_policies
+        WHERE tablename = 'ai_usage_events'
+            AND policyname = 'rls_tenant_ai_usage_events'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query RLS policies");
+
+    assert!(policy_count >= 1, "Expected tenant RLS policy on ai_usage_events");
+}
