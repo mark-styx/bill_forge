@@ -179,6 +179,7 @@ impl WinstonAgent {
     /// Separated so tests can pass a synthetic [`AgentContext`] without
     /// hitting the database via [`inject_context`] or requiring persistence.
     /// Returns both the [`ChatResponse`] and telemetry data.
+    #[cfg(test)]
     async fn chat_with_context(
         &self,
         request: ChatRequest,

@@ -30,3 +30,6 @@ tiktoken-rs = "0.5"
 billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
 billforge-auth = { path = "../auth" }
+
+[dev-dependencies]
+sqlx = { workspace = true }
