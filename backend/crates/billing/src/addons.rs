@@ -74,7 +74,7 @@ impl ModuleAddOn {
             name: "Winston AI Assistant".to_string(),
             description: "Paid conversational AI assistant add-on powered by Winston".to_string(),
             monthly_price_cents: 29900,  // $299/mo fixed monthly
-            annual_price_cents: 29900,   // same as monthly; no annual discount
+            annual_price_cents: 358800,  // $299/mo * 12 = $3,588/yr fixed
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -258,6 +258,7 @@ mod tests {
         assert_eq!(addon.module, Module::AiAssistant);
         assert_eq!(addon.name, "Winston AI Assistant");
         assert_eq!(addon.monthly_price_cents, 29900);
+        assert_eq!(addon.annual_price_cents, 358800); // $299 * 12, no annual discount
     }
 
     #[test]
