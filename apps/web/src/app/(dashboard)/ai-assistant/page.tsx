@@ -6,7 +6,7 @@ import { useMutation } from '@tanstack/react-query';
 import { aiAssistantApi, AiMessage } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from 'sonner';
-import { Sparkles, Send } from 'lucide-react';
+import { Sparkles, Send, ThumbsUp, ThumbsDown } from 'lucide-react';
 
 export default function AiAssistantPage() {
   const router = useRouter();
@@ -16,6 +16,7 @@ export default function AiAssistantPage() {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [feedback, setFeedback] = useState<Record<string, 'positive' | 'negative'>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,6 +56,20 @@ export default function AiAssistantPage() {
     mutation.mutate(trimmed);
   };
 
+  const handleFeedback = async (
+    messageId: string,
+    convId: string | undefined,
+    rating: 'positive' | 'negative',
+  ) => {
+    if (!convId || feedback[messageId]) return;
+    try {
+      await aiAssistantApi.submitAnswerFeedback(convId, messageId, { rating });
+      setFeedback((prev) => ({ ...prev, [messageId]: rating }));
+    } catch {
+      toast.error('Failed to submit feedback. Please try again.');
+    }
+  };
+
   if (!aiEnabled) {
     return null;
   }
@@ -78,15 +93,46 @@ export default function AiAssistantPage() {
           </p>
         )}
         {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`max-w-[80%] rounded-lg px-4 py-2 text-sm ${
-              msg.role === 'user'
-                ? 'ml-auto bg-primary text-primary-foreground'
-                : 'bg-muted'
-            }`}
-          >
-            {msg.content}
+          <div key={msg.id}>
+            <div
+              className={`max-w-[80%] rounded-lg px-4 py-2 text-sm ${
+                msg.role === 'user'
+                  ? 'ml-auto bg-primary text-primary-foreground'
+                  : 'bg-muted'
+              }`}
+            >
+              {msg.content}
+            </div>
+            {msg.role === 'assistant' && conversationId && (
+              <div className="mt-1 flex gap-1">
+                <button
+                  type="button"
+                  disabled={!!feedback[msg.id]}
+                  onClick={() => handleFeedback(msg.id, conversationId, 'positive')}
+                  className={`rounded p-1 text-xs transition-colors ${
+                    feedback[msg.id] === 'positive'
+                      ? 'text-green-600 bg-green-50'
+                      : 'text-muted-foreground hover:text-green-600 hover:bg-green-50'
+                  } disabled:opacity-60 disabled:cursor-default`}
+                  aria-label="Thumbs up"
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!!feedback[msg.id]}
+                  onClick={() => handleFeedback(msg.id, conversationId, 'negative')}
+                  className={`rounded p-1 text-xs transition-colors ${
+                    feedback[msg.id] === 'negative'
+                      ? 'text-red-600 bg-red-50'
+                      : 'text-muted-foreground hover:text-red-600 hover:bg-red-50'
+                  } disabled:opacity-60 disabled:cursor-default`}
+                  aria-label="Thumbs down"
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         ))}
         {mutation.isPending && (

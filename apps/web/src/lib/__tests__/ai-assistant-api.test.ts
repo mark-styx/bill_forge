@@ -78,4 +78,61 @@ describe('aiAssistantApi', () => {
     );
     expect(result).toEqual(response);
   });
+
+  it('submitAnswerFeedback() POSTs to feedback endpoint with expected body', async () => {
+    const feedbackResponse = {
+      id: 'fb-1',
+      tenant_id: 't-1',
+      user_id: 'u-1',
+      conversation_id: 'conv-42',
+      message_id: 'msg-2',
+      rating: 'positive',
+      comment: null,
+      metadata: {},
+      created_at: '2025-01-01T00:01:00Z',
+      updated_at: '2025-01-01T00:01:00Z',
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(feedbackResponse);
+
+    const result = await aiAssistantApi.submitAnswerFeedback('conv-42', 'msg-2', {
+      rating: 'positive',
+    });
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/ai/conversations/conv-42/messages/msg-2/feedback',
+      { rating: 'positive' },
+    );
+    expect(result).toEqual(feedbackResponse);
+    expect(result.rating).toBe('positive');
+  });
+
+  it('submitAnswerFeedback() passes comment when provided', async () => {
+    const feedbackResponse = {
+      id: 'fb-2',
+      tenant_id: 't-1',
+      user_id: 'u-1',
+      conversation_id: 'conv-10',
+      message_id: 'msg-5',
+      rating: 'negative',
+      comment: 'Not helpful',
+      metadata: {},
+      created_at: '2025-01-01T00:02:00Z',
+      updated_at: '2025-01-01T00:02:00Z',
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(feedbackResponse);
+
+    const result = await aiAssistantApi.submitAnswerFeedback('conv-10', 'msg-5', {
+      rating: 'negative',
+      comment: 'Not helpful',
+    });
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/ai/conversations/conv-10/messages/msg-5/feedback',
+      { rating: 'negative', comment: 'Not helpful' },
+    );
+    expect(result.rating).toBe('negative');
+    expect(result.comment).toBe('Not helpful');
+  });
 });

@@ -13,13 +13,17 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{ChatRequest, ChatResponse, Conversation};
 use billforge_ai_agent::provider::AiProvider;
 use billforge_ai_agent::OpenAiCompatibleProvider;
+
+use billforge_db::repositories::{
+    AiAnswerFeedbackRating, AiConversationRepositoryImpl, PersistAiAnswerFeedbackInput,
+};
 
 use crate::extractors::AiAssistantAccess;
 use crate::state::AppState;
@@ -30,12 +34,39 @@ struct ErrorResponse {
     error: String,
 }
 
+/// Request body for submitting feedback on an assistant answer.
+#[derive(Debug, Deserialize)]
+struct SubmitFeedbackRequest {
+    rating: AiAnswerFeedbackRating,
+    comment: Option<String>,
+}
+
+/// Persisted feedback record returned to the client.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct FeedbackResponse {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Uuid,
+    message_id: Uuid,
+    rating: String,
+    comment: Option<String>,
+    metadata: serde_json::Value,
+    created_at: String,
+    updated_at: String,
+}
+
 /// Create AI assistant sub-router
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/chat", post(chat_handler))
         .route("/conversations", get(list_conversations_handler))
         .route("/conversations/{id}/messages", post(continue_conversation_handler))
+        .route(
+            "/conversations/{conversation_id}/messages/{message_id}/feedback",
+            post(submit_feedback_handler),
+        )
 }
 
 /// Build the configured AiProvider for Winston.
@@ -157,6 +188,66 @@ async fn continue_conversation_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: format!("Failed to continue conversation: {}", e),
+                }),
+            ))
+        }
+    }
+}
+
+/// POST /ai/conversations/{conversation_id}/messages/{message_id}/feedback
+async fn submit_feedback_handler(
+    State(state): State<AppState>,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    Path((conversation_id, message_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<SubmitFeedbackRequest>,
+) -> Result<Json<FeedbackResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
+    let repo = AiConversationRepositoryImpl::new(std::sync::Arc::new(pool));
+
+    let input = PersistAiAnswerFeedbackInput {
+        rating: body.rating,
+        comment: body.comment,
+        metadata: serde_json::json!({}),
+    };
+
+    match repo
+        .persist_answer_feedback(&user.tenant_id, &user.user_id, conversation_id, message_id, input)
+        .await
+    {
+        Ok(record) => Ok(Json(FeedbackResponse {
+            id: record.id,
+            tenant_id: record.tenant_id,
+            user_id: record.user_id,
+            conversation_id: record.conversation_id,
+            message_id: record.message_id,
+            rating: record.rating,
+            comment: record.comment,
+            metadata: record.metadata,
+            created_at: record.created_at.to_rfc3339(),
+            updated_at: record.updated_at.to_rfc3339(),
+        })),
+        Err(e) => {
+            tracing::error!("Feedback error: {}", e);
+            let status = match &e {
+                billforge_core::Error::NotFound { .. } => StatusCode::NOT_FOUND,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            Err((
+                status,
+                Json(ErrorResponse {
+                    error: format!("Failed to submit feedback: {}", e),
                 }),
             ))
         }

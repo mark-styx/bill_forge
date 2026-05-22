@@ -11,6 +11,7 @@ use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
     AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
     PersistAiToolCallInput, PersistAiToolResultInput,
+    AiAnswerFeedbackRating, PersistAiAnswerFeedbackInput,
 };
 use billforge_db::PgManager;
 use std::sync::Arc;
@@ -465,6 +466,175 @@ async fn persist_tool_call_and_result_round_trip() {
             );
         }
         other => panic!("expected Database error, got {:?}", other),
+    }
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+/// Answer feedback can be persisted for an assistant message, upserted when
+/// resubmitted, and rejected for user messages or the wrong user.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn answer_feedback_upsert_and_rejection() {
+    let (manager, tenant_id, pool) = setup_single_tenant("answer-feedback").await;
+    let user_id = Uuid::new_v4();
+    let wrong_user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+    seed_user(pool.as_ref(), &tenant_id, wrong_user_id).await;
+
+    let repo = AiConversationRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+    let wrong_uid = UserId(wrong_user_id);
+
+    // Create conversation + user message + assistant message
+    let conv = repo
+        .create_conversation(&tenant_id, &uid, None, serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let user_msg = repo
+        .append_message(
+            &tenant_id,
+            &uid,
+            conv.id,
+            AppendAiMessageInput {
+                role: AiMessageRole::User,
+                content: "What is 2+2?".to_string(),
+                provider: None,
+                model: None,
+                model_route: None,
+                finish_reason: None,
+                provider_request_id: None,
+                latency_ms: None,
+                usage: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("append user message");
+
+    let assistant_msg = repo
+        .append_message(
+            &tenant_id,
+            &uid,
+            conv.id,
+            AppendAiMessageInput {
+                role: AiMessageRole::Assistant,
+                content: "2+2 equals 4.".to_string(),
+                provider: Some("fake".to_string()),
+                model: Some("test-model".to_string()),
+                model_route: None,
+                finish_reason: Some("stop".to_string()),
+                provider_request_id: None,
+                latency_ms: None,
+                usage: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("append assistant message");
+
+    // 1. Persist positive feedback on the assistant message
+    let fb1 = repo
+        .persist_answer_feedback(
+            &tenant_id,
+            &uid,
+            conv.id,
+            assistant_msg.id,
+            PersistAiAnswerFeedbackInput {
+                rating: AiAnswerFeedbackRating::Positive,
+                comment: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("persist positive feedback");
+
+    assert_eq!(fb1.tenant_id, *tenant_id.as_uuid());
+    assert_eq!(fb1.user_id, user_id);
+    assert_eq!(fb1.conversation_id, conv.id);
+    assert_eq!(fb1.message_id, assistant_msg.id);
+    assert_eq!(fb1.rating, "positive");
+    assert!(fb1.comment.is_none());
+    assert!(fb1.created_at <= chrono::Utc::now());
+
+    // 2. Upsert to negative with a comment - same row, different rating
+    let fb2 = repo
+        .persist_answer_feedback(
+            &tenant_id,
+            &uid,
+            conv.id,
+            assistant_msg.id,
+            PersistAiAnswerFeedbackInput {
+                rating: AiAnswerFeedbackRating::Negative,
+                comment: Some("Not detailed enough.".to_string()),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("upsert to negative feedback");
+
+    assert_eq!(fb2.id, fb1.id, "upsert should return same row id");
+    assert_eq!(fb2.rating, "negative");
+    assert_eq!(fb2.comment.as_deref(), Some("Not detailed enough."));
+    assert!(fb2.updated_at >= fb1.created_at, "updated_at should be bumped");
+
+    // Verify single-row upsert: count should be exactly 1
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM ai_message_feedback WHERE message_id = $1",
+    )
+    .bind(assistant_msg.id)
+    .fetch_one(pool.as_ref())
+    .await
+    .expect("count feedback rows");
+
+    assert_eq!(count.0, 1, "should have exactly one feedback row after upsert");
+
+    // 3. Feedback on a user message should be NotFound (role != assistant)
+    let err = repo
+        .persist_answer_feedback(
+            &tenant_id,
+            &uid,
+            conv.id,
+            user_msg.id,
+            PersistAiAnswerFeedbackInput {
+                rating: AiAnswerFeedbackRating::Positive,
+                comment: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("feedback on user message should fail");
+
+    match err {
+        billforge_core::Error::NotFound { resource_type, id } => {
+            assert_eq!(resource_type, "ai_message");
+            assert_eq!(id, user_msg.id.to_string());
+        }
+        other => panic!("expected NotFound, got {:?}", other),
+    }
+
+    // 4. Feedback from wrong user should be NotFound
+    let err = repo
+        .persist_answer_feedback(
+            &tenant_id,
+            &wrong_uid,
+            conv.id,
+            assistant_msg.id,
+            PersistAiAnswerFeedbackInput {
+                rating: AiAnswerFeedbackRating::Positive,
+                comment: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("wrong user should fail");
+
+    match err {
+        billforge_core::Error::NotFound { .. } => {}
+        other => panic!("expected NotFound, got {:?}", other),
     }
 
     manager.delete_tenant(&tenant_id).await.ok();

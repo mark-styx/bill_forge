@@ -18,6 +18,7 @@ pub use ai_conversation_repo::{
     AiMessageUsage, AppendAiMessageInput, PersistAiToolCallInput, AiToolCallRecord,
     PersistAiToolResultInput, AiToolResultRecord,
     AiUsageEventInput, AiUsageEventRecord,
+    AiAnswerFeedbackRating, PersistAiAnswerFeedbackInput, AiAnswerFeedbackRecord,
 };
 pub use audit_repo::AuditRepositoryImpl;
 pub use invoice_repo::InvoiceRepositoryImpl;

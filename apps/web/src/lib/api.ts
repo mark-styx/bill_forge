@@ -2047,6 +2047,26 @@ export interface AiChatResponse {
   message: AiMessage;
 }
 
+export type AiAnswerFeedbackRating = 'positive' | 'negative';
+
+export interface AiAnswerFeedbackRequest {
+  rating: AiAnswerFeedbackRating;
+  comment?: string;
+}
+
+export interface AiAnswerFeedbackResponse {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  conversation_id: string;
+  message_id: string;
+  rating: string;
+  comment: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // AI Assistant API
 export const aiAssistantApi = {
   chat: (body: AiChatRequest) =>
@@ -2057,6 +2077,16 @@ export const aiAssistantApi = {
 
   continueConversation: (id: string, body: { message: string }) =>
     api.post<AiChatResponse>(`/api/v1/ai/conversations/${id}/messages`, body),
+
+  submitAnswerFeedback: (
+    conversationId: string,
+    messageId: string,
+    body: AiAnswerFeedbackRequest,
+  ) =>
+    api.post<AiAnswerFeedbackResponse>(
+      `/api/v1/ai/conversations/${conversationId}/messages/${messageId}/feedback`,
+      body,
+    ),
 };
 
 // ---------------------------------------------------------------------------

@@ -152,6 +152,46 @@ pub struct AiUsageEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Rating for an assistant answer: positive (thumbs up) or negative (thumbs down).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiAnswerFeedbackRating {
+    Positive,
+    Negative,
+}
+
+impl AiAnswerFeedbackRating {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AiAnswerFeedbackRating::Positive => "positive",
+            AiAnswerFeedbackRating::Negative => "negative",
+        }
+    }
+}
+
+/// Input for persisting user feedback on an assistant answer.
+#[derive(Debug, Clone)]
+pub struct PersistAiAnswerFeedbackInput {
+    pub rating: AiAnswerFeedbackRating,
+    pub comment: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// A persisted AI message feedback row.
+#[derive(Debug, Clone)]
+pub struct AiAnswerFeedbackRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_id: Uuid,
+    pub rating: String,
+    pub comment: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Input for persisting a tool result linked to a tool call and message.
 #[derive(Debug, Clone)]
 pub struct PersistAiToolResultInput {
@@ -406,6 +446,67 @@ impl AiConversationRepositoryImpl {
         Ok(row.into_record())
     }
 
+    /// Persist user feedback (thumbs up / down) on an assistant answer.
+    ///
+    /// Uses a scoped `INSERT ... SELECT` from `ai_messages` to validate that the
+    /// message exists, belongs to the given tenant/user/conversation, and has
+    /// `role = 'assistant'`.  Returns `Error::NotFound` when any check fails.
+    ///
+    /// `ON CONFLICT (tenant_id, user_id, message_id) DO UPDATE` makes
+    /// resubmission replace the rating/comment and bump `updated_at`.
+    pub async fn persist_answer_feedback(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        conversation_id: Uuid,
+        message_id: Uuid,
+        input: PersistAiAnswerFeedbackInput,
+    ) -> Result<AiAnswerFeedbackRecord> {
+        let row: FeedbackRow = sqlx::query_as::<_, FeedbackRow>(
+            r#"INSERT INTO ai_message_feedback (
+                    tenant_id, user_id, conversation_id, message_id,
+                    rating, comment, metadata
+               )
+               SELECT $1, $2, $3, $4, $5, $6, $7
+               FROM ai_messages
+               WHERE id = $4
+                 AND tenant_id = $1
+                 AND user_id = $2
+                 AND conversation_id = $3
+                 AND role = 'assistant'
+               ON CONFLICT (tenant_id, user_id, message_id)
+               DO UPDATE SET
+                   rating = EXCLUDED.rating,
+                   comment = EXCLUDED.comment,
+                   metadata = EXCLUDED.metadata,
+                   updated_at = NOW()
+               RETURNING id, tenant_id, user_id, conversation_id, message_id,
+                         rating, comment, metadata, created_at, updated_at"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(conversation_id)
+        .bind(message_id)
+        .bind(input.rating.as_str())
+        .bind(&input.comment)
+        .bind(&input.metadata)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| {
+            // sqlx returns NoRowsFound when the SELECT yields zero rows
+            if let sqlx::error::Error::RowNotFound = e {
+                Error::NotFound {
+                    resource_type: "ai_message".to_string(),
+                    id: message_id.to_string(),
+                }
+            } else {
+                Error::Database(format!("Failed to persist answer feedback: {}", e))
+            }
+        })?;
+
+        Ok(row.into_record())
+    }
+
     /// List all tool calls for a given message, ordered by creation time.
     pub async fn list_tool_calls_for_message(
         &self,
@@ -622,6 +723,37 @@ impl UsageEventRow {
             provider_request_id: self.provider_request_id,
             metadata: self.metadata,
             created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct FeedbackRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Uuid,
+    message_id: Uuid,
+    rating: String,
+    comment: Option<String>,
+    metadata: serde_json::Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl FeedbackRow {
+    fn into_record(self) -> AiAnswerFeedbackRecord {
+        AiAnswerFeedbackRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            conversation_id: self.conversation_id,
+            message_id: self.message_id,
+            rating: self.rating,
+            comment: self.comment,
+            metadata: self.metadata,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         }
     }
 }
