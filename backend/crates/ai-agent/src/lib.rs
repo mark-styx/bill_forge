@@ -9,7 +9,9 @@ pub mod tools;
 pub mod handlers;
 pub mod models;
 pub mod provider;
+pub mod fake_provider;
 
 pub use agent::WinstonAgent;
 pub use handlers::create_router;
 pub use provider::{AiProvider, ProviderChatStream};
+pub use fake_provider::FakeAiProvider;
