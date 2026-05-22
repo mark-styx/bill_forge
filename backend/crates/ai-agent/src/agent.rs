@@ -174,7 +174,7 @@ impl WinstonAgent {
             .await;
 
         match provider_result {
-            Ok((response, telemetry)) => {
+            Ok((mut response, telemetry)) => {
                 // Append the assistant message after a successful provider response.
                 let assistant_msg_input = AppendAiMessageInput {
                     role: AiMessageRole::Assistant,
@@ -196,6 +196,10 @@ impl WinstonAgent {
                     .append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to persist assistant message: {}", e))?;
+
+                // Replace the provisional provider-generated message ID with the
+                // persisted database ID so the client can use it for feedback.
+                response.message.id = assistant_record.id;
 
                 // Record successful usage event (best-effort: warn on failure).
                 let usage = telemetry.usage.as_ref();
