@@ -127,6 +127,7 @@ mod module_tests {
         assert_eq!(Module::InvoiceProcessing.as_str(), "invoice_processing");
         assert_eq!(Module::VendorManagement.as_str(), "vendor_management");
         assert_eq!(Module::Reporting.as_str(), "reporting");
+        assert_eq!(Module::AiAssistant.as_str(), "ai_assistant");
     }
 
     #[test]
@@ -135,6 +136,7 @@ mod module_tests {
         assert_eq!(Module::InvoiceProcessing.display_name(), "Invoice Processing");
         assert_eq!(Module::VendorManagement.display_name(), "Vendor Management");
         assert_eq!(Module::Reporting.display_name(), "Reporting & Analytics");
+        assert_eq!(Module::AiAssistant.display_name(), "AI Assistant");
     }
 
     #[test]
@@ -147,8 +149,17 @@ mod module_tests {
     }
 
     #[test]
+    fn test_ai_assistant_serde_roundtrip() {
+        let module = Module::AiAssistant;
+        let json = serde_json::to_string(&module).unwrap();
+        assert_eq!(json, "\"ai_assistant\"");
+        let deserialized: Module = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, module);
+    }
+
+    #[test]
     fn test_all_modules_deserialize() {
-        let modules = ["invoice_capture", "invoice_processing", "vendor_management", "reporting"];
+        let modules = ["invoice_capture", "invoice_processing", "vendor_management", "reporting", "ai_assistant"];
         for m in modules {
             let json = format!("\"{}\"", m);
             let _: Module = serde_json::from_str(&json).unwrap();

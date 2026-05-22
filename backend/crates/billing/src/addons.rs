@@ -68,6 +68,18 @@ impl ModuleAddOn {
         }
     }
 
+    pub fn ai_assistant() -> Self {
+        Self {
+            module: Module::AiAssistant,
+            name: "AI Assistant".to_string(),
+            description: "Winston AI-powered invoice assistance and automation".to_string(),
+            monthly_price_cents: 4900,  // $49/mo
+            annual_price_cents: 47000,  // $470/yr
+            stripe_monthly_price_id: None,
+            stripe_annual_price_id: None,
+        }
+    }
+
     /// Returns the full add-on catalog (one entry per `Module` variant).
     pub fn catalog() -> Vec<Self> {
         vec![
@@ -75,6 +87,7 @@ impl ModuleAddOn {
             Self::invoice_processing(),
             Self::vendor_management(),
             Self::reporting(),
+            Self::ai_assistant(),
         ]
     }
 
@@ -85,6 +98,7 @@ impl ModuleAddOn {
             Module::InvoiceProcessing => Self::invoice_processing(),
             Module::VendorManagement => Self::vendor_management(),
             Module::Reporting => Self::reporting(),
+            Module::AiAssistant => Self::ai_assistant(),
         }
     }
 }
@@ -226,10 +240,11 @@ mod tests {
     #[test]
     fn test_catalog_covers_all_modules() {
         let catalog = ModuleAddOn::catalog();
-        assert_eq!(catalog.len(), 4);
+        assert_eq!(catalog.len(), 5);
         assert!(catalog.iter().any(|a| a.module == Module::InvoiceCapture));
         assert!(catalog.iter().any(|a| a.module == Module::InvoiceProcessing));
         assert!(catalog.iter().any(|a| a.module == Module::VendorManagement));
         assert!(catalog.iter().any(|a| a.module == Module::Reporting));
+        assert!(catalog.iter().any(|a| a.module == Module::AiAssistant));
     }
 }

@@ -85,6 +85,7 @@ pub enum Module {
     InvoiceProcessing,
     VendorManagement,
     Reporting,
+    AiAssistant,
 }
 
 impl Module {
@@ -94,6 +95,7 @@ impl Module {
             Module::InvoiceProcessing => "invoice_processing",
             Module::VendorManagement => "vendor_management",
             Module::Reporting => "reporting",
+            Module::AiAssistant => "ai_assistant",
         }
     }
 
@@ -103,6 +105,7 @@ impl Module {
             Module::InvoiceProcessing => "Invoice Processing",
             Module::VendorManagement => "Vendor Management",
             Module::Reporting => "Reporting & Analytics",
+            Module::AiAssistant => "AI Assistant",
         }
     }
 }
