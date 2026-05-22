@@ -9,6 +9,7 @@ pub mod context;
 pub mod tools;
 pub mod handlers;
 pub mod models;
+pub mod product_knowledge;
 pub mod provider;
 pub mod fake_provider;
 pub mod openai_compatible_provider;

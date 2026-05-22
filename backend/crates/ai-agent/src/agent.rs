@@ -13,6 +13,9 @@ use super::models::{
     ChatRequest, ChatResponse, Conversation, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
+use super::product_knowledge::{
+    format_product_knowledge_block, product_knowledge_context_for_query,
+};
 use super::provider::AiProvider;
 use super::tools::ToolRegistry;
 use billforge_core::{TenantId, UserId};
@@ -321,16 +324,32 @@ impl WinstonAgent {
     ) -> Result<(ChatResponse, ProviderTurnTelemetry)> {
         // Build provider-neutral messages
         let system_prompt = build_system_prompt(context);
-        let messages = vec![
+
+        // Retrieve product documentation snippets relevant to the user message.
+        let pk_snippets = product_knowledge_context_for_query(&request.message);
+        let pk_block = format_product_knowledge_block(&pk_snippets);
+
+        let mut messages = vec![
             ProviderChatMessage {
                 role: ProviderMessageRole::System,
                 content: system_prompt,
             },
-            ProviderChatMessage {
-                role: ProviderMessageRole::User,
-                content: request.message.clone(),
-            },
         ];
+
+        // If product knowledge matched, inject it as a second system message
+        // so the model can reference documentation without it dominating the
+        // main system prompt.
+        if !pk_block.is_empty() {
+            messages.push(ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: pk_block,
+            });
+        }
+
+        messages.push(ProviderChatMessage {
+            role: ProviderMessageRole::User,
+            content: request.message.clone(),
+        });
 
         // Resolve provider routing into local variables before building the request.
         let selected_route = ProviderModelRoute::Default;
@@ -414,7 +433,7 @@ impl WinstonAgent {
         };
 
         // Build answer provenance trace from context and telemetry.
-        let context_records = vec![
+        let mut context_records = vec![
             AnswerContextRecord {
                 record_type: "tenant_scope".to_string(),
                 label: format!("tenant_id={}", context.tenant_id),
@@ -428,6 +447,20 @@ impl WinstonAgent {
                 label: context.permissions.join(","),
             },
         ];
+
+        // Add provenance records for any product documentation snippets that
+        // were injected into the prompt.
+        for snippet in &pk_snippets {
+            let record_type = if snippet.source_path == "CHANGELOG.md" {
+                "release_note"
+            } else {
+                "product_doc"
+            };
+            context_records.push(AnswerContextRecord {
+                record_type: record_type.to_string(),
+                label: format!("{}: {}", snippet.source_path, snippet.heading),
+            });
+        }
 
         let trace = AnswerTrace {
             context_records,
@@ -519,7 +552,7 @@ mod tests {
         let agent = test_agent(provider.clone());
 
         let ctx = synthetic_context();
-        let request = chat_request("hello agent");
+        let request = chat_request("hello world");
         let conversation_id = Uuid::new_v4();
 
         let response = agent
@@ -545,7 +578,7 @@ mod tests {
         assert_eq!(rec.messages.len(), 2);
         assert_eq!(rec.messages[0].role, ProviderMessageRole::System);
         assert_eq!(rec.messages[1].role, ProviderMessageRole::User);
-        assert_eq!(rec.messages[1].content, "hello agent");
+        assert_eq!(rec.messages[1].content, "hello world");
 
         // Agent sends temperature 0.7 and no max_tokens limit.
         assert_eq!(rec.temperature, Some(0.7));
