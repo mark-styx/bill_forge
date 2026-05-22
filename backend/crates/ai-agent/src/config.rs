@@ -88,7 +88,11 @@ impl AiProviderType {
     /// Case-insensitive. Returns `None` for unrecognised values.
     pub fn from_str_loose(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "openai_compatible" | "openai-compatible" | "openai" => Some(Self::OpenAiCompatible),
+            "openai_compatible"
+            | "openai-compatible"
+            | "openai"
+            | "glm_proxy"
+            | "glm-proxy" => Some(Self::OpenAiCompatible),
             _ => None,
         }
     }
@@ -454,6 +458,23 @@ mod tests {
         );
         assert_eq!(
             AiProviderType::from_str_loose("OPENAI"),
+            Some(AiProviderType::OpenAiCompatible)
+        );
+        // GLM proxy aliases
+        assert_eq!(
+            AiProviderType::from_str_loose("glm_proxy"),
+            Some(AiProviderType::OpenAiCompatible)
+        );
+        assert_eq!(
+            AiProviderType::from_str_loose("glm-proxy"),
+            Some(AiProviderType::OpenAiCompatible)
+        );
+        assert_eq!(
+            AiProviderType::from_str_loose("GLM_PROXY"),
+            Some(AiProviderType::OpenAiCompatible)
+        );
+        assert_eq!(
+            AiProviderType::from_str_loose("GLM-Proxy"),
             Some(AiProviderType::OpenAiCompatible)
         );
         assert_eq!(AiProviderType::from_str_loose("unknown"), None);
