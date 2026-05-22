@@ -4,6 +4,9 @@
 //! rows to the database, including provider telemetry for assistant messages.
 //!
 //! Uses FakeAiProvider and a migrated PostgreSQL test database.
+//!
+//! Gated behind `#[cfg_attr(not(feature = "integration"), ignore)]` so
+//! `cargo test` skips them by default; run with `--features integration`.
 
 use std::sync::Arc;
 
@@ -175,6 +178,7 @@ async fn read_usage_events(
 
 /// Helper row type for usage event queries.
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct UsageEventRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -201,6 +205,7 @@ struct UsageEventRow {
 // ============================================================================
 
 #[sqlx::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -274,6 +279,7 @@ async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_continue_conversation_appends_messages(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -342,6 +348,7 @@ async fn test_continue_conversation_appends_messages(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_nonexistent_conversation_returns_error(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -381,6 +388,7 @@ async fn test_nonexistent_conversation_returns_error(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -447,6 +455,7 @@ async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 

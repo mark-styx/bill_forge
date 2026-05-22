@@ -33,3 +33,6 @@ billforge-auth = { path = "../auth" }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+
+[features]
+integration = []
