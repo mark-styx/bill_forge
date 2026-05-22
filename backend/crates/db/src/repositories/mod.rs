@@ -1,5 +1,6 @@
 //! Repository implementations for database operations
 
+mod ai_conversation_repo;
 mod audit_repo;
 mod invoice_repo;
 mod metrics_repo;
@@ -12,6 +13,10 @@ mod vendor_repo;
 mod vendor_statement_repo;
 mod workflow_repo;
 
+pub use ai_conversation_repo::{
+    AiConversationRepositoryImpl, AiConversationRecord, AiMessageRecord, AiMessageRole,
+    AiMessageUsage, AppendAiMessageInput,
+};
 pub use audit_repo::AuditRepositoryImpl;
 pub use invoice_repo::InvoiceRepositoryImpl;
 pub use metrics_repo::{MetricsRepositoryImpl, InvoiceMetrics, ApprovalMetrics, VendorMetrics, TopVendor, TeamMetrics, TeamMemberStats};

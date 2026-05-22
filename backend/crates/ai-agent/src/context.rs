@@ -1,5 +1,5 @@
 //! Context injection for AI agent
-//! Injects tenant context, user permissions, and relevant data into agent
+//! Injects tenant context, user roles, and relevant data into agent
 
 use anyhow::Result;
 use sqlx::{PgPool, Row};
@@ -7,23 +7,20 @@ use uuid::Uuid;
 
 use super::models::AgentContext;
 
-/// Inject context from authenticated user
+/// Inject context from authenticated user.
+///
+/// Reads the user's `roles` JSON column from the `users` table (the actual
+/// tenant DB schema) instead of querying non-existent RBAC tables.
 pub async fn inject_context(
     pool: &PgPool,
     tenant_id: String,
     user_id: Uuid,
 ) -> Result<AgentContext> {
-    // Get user role and permissions
-    let user = sqlx::query(
+    let row = sqlx::query(
         r#"
-        SELECT
-            u.id,
-            u.email,
-            u.role_id,
-            r.name as role_name
-        FROM users u
-        JOIN roles r ON u.role_id = r.id
-        WHERE u.id = $1 AND u.tenant_id = $2
+        SELECT id, email, roles
+        FROM users
+        WHERE id = $1 AND tenant_id = $2
         "#,
     )
     .bind(user_id)
@@ -31,28 +28,30 @@ pub async fn inject_context(
     .fetch_optional(pool)
     .await?;
 
-    let user = user.ok_or_else(|| anyhow::anyhow!("User not found"))?;
-    let role_id: Uuid = user.try_get("role_id")?;
-    let role_name: String = user.try_get("role_name")?;
+    let row = row.ok_or_else(|| anyhow::anyhow!("User not found"))?;
+    let roles: serde_json::Value = row.try_get("roles")?;
 
-    // Get permissions for user's role
-    let permissions = sqlx::query(
-        r#"
-        SELECT p.name
-        FROM role_permissions rp
-        JOIN permissions p ON rp.permission_id = p.id
-        WHERE rp.role_id = $1
-        "#,
-    )
-    .bind(role_id)
-    .fetch_all(pool)
-    .await?;
+    // Extract role names from the JSON array stored in users.roles.
+    let role_names: Vec<String> = roles
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Use the first role as the primary role label for the system prompt.
+    let user_role = role_names
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "user".to_string());
 
     Ok(AgentContext {
         tenant_id,
         user_id,
-        user_role: role_name,
-        permissions: permissions.iter().filter_map(|row| row.try_get("name").ok()).collect(),
+        user_role,
+        permissions: role_names,
     })
 }
 

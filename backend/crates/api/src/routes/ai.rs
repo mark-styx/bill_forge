@@ -1,7 +1,8 @@
 //! AI Assistant (Winston) API routes
 //!
-//! Thin adapter that constructs a WinstonAgent from AppState's database pool
-//! and an injected AiProvider, then delegates to the ai-agent crate's handler logic.
+//! Thin adapter that constructs a WinstonAgent from the authenticated tenant's
+//! database pool and an injected AiProvider, then delegates to the ai-agent
+//! crate's handler logic.
 
 use std::sync::Arc;
 
@@ -23,10 +24,10 @@ use billforge_ai_agent::OpenAiCompatibleProvider;
 use crate::extractors::AiAssistantAccess;
 use crate::state::AppState;
 
-/// Error response shape matching ai-agent crate convention
+/// Error response shape matching the original AI route contract: `{"error":"..."}`.
 #[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
+struct ErrorResponse {
+    error: String,
 }
 
 /// Create AI assistant sub-router
@@ -50,7 +51,22 @@ async fn chat_handler(
     AiAssistantAccess(user, _tenant): AiAssistantAccess,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let pool = (*state.db.metadata()).clone();
+    // Resolve the tenant-scoped pool so conversation/message persistence
+    // targets the tenant database (which has ai_conversations/ai_messages)
+    // rather than the metadata database.
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
     let provider = build_provider();
     let agent = WinstonAgent::new(pool, provider);
 
@@ -109,7 +125,19 @@ async fn continue_conversation_handler(
     Path(conversation_id): Path<Uuid>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let pool = (*state.db.metadata()).clone();
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
     let provider = build_provider();
     let agent = WinstonAgent::new(pool, provider);
 

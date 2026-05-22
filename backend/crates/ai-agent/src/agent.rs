@@ -14,7 +14,41 @@ use super::models::{
 };
 use super::provider::AiProvider;
 use super::tools::ToolRegistry;
+use billforge_core::{TenantId, UserId};
+use billforge_db::repositories::{
+    AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
+};
 use sqlx::PgPool;
+
+/// Truncate `s` to at most `max_bytes`, falling back to the nearest
+/// UTF-8 character boundary so multibyte sequences are never split.
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> Option<String> {
+    if s.is_empty() {
+        return None;
+    }
+    if s.len() <= max_bytes {
+        return Some(s.to_string());
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    Some(s[..end].to_string())
+}
+
+/// Telemetry captured from a single provider turn.
+struct ProviderTurnTelemetry {
+    selected_provider: String,
+    selected_model: String,
+    selected_route: ProviderModelRoute,
+    finish_reason: Option<String>,
+    provider_request_id: Option<String>,
+    latency_ms: u64,
+    usage: Option<super::models::ProviderChatUsage>,
+}
 
 /// Winston AI Agent
 #[derive(Clone)]
@@ -34,41 +68,147 @@ impl WinstonAgent {
         }
     }
 
-    /// Process a chat message and return AI response
+    /// Process a chat message and return AI response.
+    ///
+    /// This is the production entry point. It injects user context from the DB,
+    /// persists the conversation and messages durably, then calls the provider.
     pub async fn chat(
         &self,
         request: ChatRequest,
         tenant_id: String,
         user_id: Uuid,
     ) -> Result<ChatResponse> {
-        // Inject user context
+        // Inject user context from tenant DB
         let context = inject_context(&self.pool, tenant_id.clone(), user_id)
             .await
             .context("Failed to inject agent context")?;
 
-        let conversation_id = match request.conversation_id {
-            Some(id) => id,
-            None => Uuid::new_v4(),
+        let parsed_tid: TenantId = tenant_id
+            .parse()
+            .context("Failed to parse tenant_id as UUID")?;
+        let parsed_uid = UserId(user_id);
+
+        let repo = AiConversationRepositoryImpl::new(Arc::new(self.pool.clone()));
+        let is_new_conversation = request.conversation_id.is_none();
+
+        // For a new chat, create a conversation row before the provider call.
+        // Persistence is required -- failures propagate as errors.
+        let conversation_id = if is_new_conversation {
+            let title = truncate_to_char_boundary(&request.message, 80);
+            let record = repo
+                .create_conversation(
+                    &parsed_tid,
+                    &parsed_uid,
+                    title.as_deref(),
+                    serde_json::json!({}),
+                )
+                .await
+                .context("Failed to create conversation")?;
+            record.id
+        } else {
+            request
+                .conversation_id
+                .expect("existing conversation_id must be present")
         };
 
-        self.chat_with_context(request, tenant_id, user_id, context, conversation_id)
+        // Append the user message before the provider call.
+        // For existing conversations, NotFound validates tenant/user ownership.
+        let user_msg_input = AppendAiMessageInput {
+            role: AiMessageRole::User,
+            content: request.message.clone(),
+            provider: None,
+            model: None,
+            model_route: None,
+            finish_reason: None,
+            provider_request_id: None,
+            latency_ms: None,
+            usage: None,
+            metadata: serde_json::json!({}),
+        };
+        if let Err(e) = repo
+            .append_message(&parsed_tid, &parsed_uid, conversation_id, user_msg_input)
             .await
+        {
+            match e {
+                billforge_core::Error::NotFound { .. } if !is_new_conversation => {
+                    return Err(anyhow::anyhow!(
+                        "Conversation {} not found or access denied",
+                        conversation_id
+                    ));
+                }
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to persist user message: {}",
+                        other
+                    ));
+                }
+            }
+        }
+
+        // Call the provider
+        let (response, telemetry) = self
+            .execute_provider_turn(&request, &context, conversation_id, &tenant_id, user_id)
+            .await?;
+
+        // Append the assistant message after a successful provider response.
+        let assistant_msg_input = AppendAiMessageInput {
+            role: AiMessageRole::Assistant,
+            content: response.message.content.clone(),
+            provider: Some(telemetry.selected_provider),
+            model: Some(telemetry.selected_model),
+            model_route: Some(format!("{:?}", telemetry.selected_route)),
+            finish_reason: telemetry.finish_reason,
+            provider_request_id: telemetry.provider_request_id,
+            latency_ms: Some(telemetry.latency_ms as i64),
+            usage: telemetry.usage.map(|u| AiMessageUsage {
+                prompt_tokens: u.prompt_tokens.map(|t| t as i32),
+                completion_tokens: u.completion_tokens.map(|t| t as i32),
+                total_tokens: u.total_tokens.map(|t| t as i32),
+            }),
+            metadata: serde_json::json!({}),
+        };
+        repo.append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to persist assistant message: {}", e))?;
+
+        Ok(response)
     }
 
-    /// Core provider-call logic extracted from [`chat`](Self::chat).
+    /// Core provider-call logic extracted for testability.
     ///
     /// Separated so tests can pass a synthetic [`AgentContext`] without
-    /// hitting the database via [`inject_context`].
+    /// hitting the database via [`inject_context`] or requiring persistence.
+    /// Returns both the [`ChatResponse`] and telemetry data.
     async fn chat_with_context(
         &self,
         request: ChatRequest,
-        tenant_id: String,
-        user_id: Uuid,
         context: AgentContext,
         conversation_id: Uuid,
     ) -> Result<ChatResponse> {
+        let (response, _) = self
+            .execute_provider_turn(
+                &request,
+                &context,
+                conversation_id,
+                &context.tenant_id,
+                context.user_id,
+            )
+            .await?;
+        Ok(response)
+    }
+
+    /// Execute a single provider turn: build messages, call the provider,
+    /// measure latency, log the outcome, and return the response plus telemetry.
+    async fn execute_provider_turn(
+        &self,
+        request: &ChatRequest,
+        context: &AgentContext,
+        conversation_id: Uuid,
+        tenant_id: &str,
+        user_id: Uuid,
+    ) -> Result<(ChatResponse, ProviderTurnTelemetry)> {
         // Build provider-neutral messages
-        let system_prompt = build_system_prompt(&context);
+        let system_prompt = build_system_prompt(context);
         let messages = vec![
             ProviderChatMessage {
                 role: ProviderMessageRole::System,
@@ -138,24 +278,36 @@ impl WinstonAgent {
                     retryable = ?e.retryable,
                     "AI turn failed"
                 );
-                return Err(anyhow::anyhow!("Provider chat completion failed: {}", e.message));
+                return Err(anyhow::anyhow!(
+                    "Provider chat completion failed: {}",
+                    e.message
+                ));
             }
         };
 
-        let assistant_content = provider_response.message.content;
+        let assistant_content = provider_response.message.content.clone();
 
-        // Create response message
-        let assistant_message = Message {
-            id: Uuid::new_v4(),
-            role: MessageRole::Assistant,
-            content: assistant_content,
-            created_at: Utc::now(),
+        let telemetry = ProviderTurnTelemetry {
+            selected_provider,
+            selected_model,
+            selected_route,
+            finish_reason: provider_response.finish_reason.clone(),
+            provider_request_id: provider_response.provider_request_id.clone(),
+            latency_ms,
+            usage: provider_response.usage,
         };
 
-        Ok(ChatResponse {
+        let response = ChatResponse {
             conversation_id,
-            message: assistant_message,
-        })
+            message: Message {
+                id: Uuid::new_v4(),
+                role: MessageRole::Assistant,
+                content: assistant_content,
+                created_at: Utc::now(),
+            },
+        };
+
+        Ok((response, telemetry))
     }
 
     /// Get conversation history
@@ -167,7 +319,11 @@ impl WinstonAgent {
     }
 
     /// List user's conversations
-    pub async fn list_conversations(&self, _tenant_id: &str, _user_id: Uuid) -> Result<Vec<Conversation>> {
+    pub async fn list_conversations(
+        &self,
+        _tenant_id: &str,
+        _user_id: Uuid,
+    ) -> Result<Vec<Conversation>> {
         // In production, this would load from database
         // For now, return empty list
         warn!("Conversation listing not yet implemented");
@@ -193,7 +349,7 @@ mod tests {
     /// Helper: build a synthetic AgentContext for tests.
     fn synthetic_context() -> AgentContext {
         AgentContext {
-            tenant_id: "test-tenant".to_string(),
+            tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
             user_id: Uuid::new_v4(),
             user_role: "admin".to_string(),
             permissions: vec!["read".to_string(), "write".to_string()],
@@ -222,8 +378,6 @@ mod tests {
         let response = agent
             .chat_with_context(
                 request,
-                ctx.tenant_id.clone(),
-                ctx.user_id,
                 ctx,
                 conversation_id,
             )
@@ -270,8 +424,6 @@ mod tests {
         let response = agent
             .chat_with_context(
                 request,
-                ctx.tenant_id.clone(),
-                ctx.user_id,
                 ctx,
                 conversation_id,
             )
