@@ -453,6 +453,8 @@ impl WinstonAgent {
         for snippet in &pk_snippets {
             let record_type = if snippet.source_path == "CHANGELOG.md" {
                 "release_note"
+            } else if snippet.source_path == ".github/workflows/release.yml" {
+                "release_process"
             } else {
                 "product_doc"
             };

@@ -10,6 +10,7 @@
 
 const NORTHSTAR_MD: &str = include_str!("../../../../docs/northstar.md");
 const CHANGELOG_MD: &str = include_str!("../../../../CHANGELOG.md");
+const RELEASE_YML: &str = include_str!("../../../../.github/workflows/release.yml");
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -54,6 +55,7 @@ impl ProductKnowledgeIndex {
 
         ingest_markdown(&mut chunks, "docs/northstar.md", NORTHSTAR_MD);
         ingest_markdown(&mut chunks, "CHANGELOG.md", CHANGELOG_MD);
+        ingest_yaml(&mut chunks, ".github/workflows/release.yml", RELEASE_YML);
 
         Self { chunks }
     }
@@ -248,6 +250,77 @@ fn ingest_windows(chunks: &mut Vec<Chunk>, source_path: &'static str, lines: &[&
     }
 }
 
+/// Ingest a YAML file (e.g. release workflow) by splitting into top-level
+/// key sections. Uses line-based splitting on top-level keys (no indent).
+fn ingest_yaml(chunks: &mut Vec<Chunk>, source_path: &'static str, content: &str) {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return;
+    }
+
+    // Find top-level YAML keys (no leading whitespace, contains ":").
+    let mut section_starts: Vec<(usize, String)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // Top-level key: line starts at column 0 and contains ":"
+        if !line.starts_with(|c: char| c.is_whitespace()) {
+            if let Some(colon_pos) = trimmed.find(':') {
+                let key = &trimmed[..colon_pos];
+                // Skip YAML directives like "---"
+                if !key.is_empty() && key != "---" {
+                    section_starts.push((i, key.to_string()));
+                }
+            }
+        }
+    }
+
+    if section_starts.is_empty() {
+        // No sections found; ingest as a single chunk.
+        let body = content.trim();
+        if !body.is_empty() {
+            chunks.push(Chunk {
+                source_path,
+                heading: "Release Workflow".to_string(),
+                body: body.to_string(),
+            });
+        }
+        return;
+    }
+
+    // Everything before the first key is a preamble.
+    let first_start = section_starts[0].0;
+    if first_start > 0 {
+        let body = lines[..first_start].join("\n").trim().to_string();
+        if !body.is_empty() {
+            chunks.push(Chunk {
+                source_path,
+                heading: "Release Workflow".to_string(),
+                body,
+            });
+        }
+    }
+
+    // Each section: from this key start to the next top-level key (or EOF).
+    for (idx, (start, key)) in section_starts.iter().enumerate() {
+        let end = section_starts
+            .get(idx + 1)
+            .map(|(s, _)| *s)
+            .unwrap_or(lines.len());
+        let body = lines[*start..end].join("\n");
+        let body = body.trim();
+        if !body.is_empty() {
+            chunks.push(Chunk {
+                source_path,
+                heading: key.clone(),
+                body: body.to_string(),
+            });
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scoring
 // ---------------------------------------------------------------------------
@@ -373,6 +446,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn index_contains_release_yml() {
+        let paths = ProductKnowledgeIndex::source_paths();
+        assert!(
+            paths.contains(&".github/workflows/release.yml"),
+            "expected .github/workflows/release.yml in source paths, got: {:?}",
+            paths
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Query relevance tests
     // -----------------------------------------------------------------------
@@ -441,6 +524,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn release_process_query_returns_release_yml_snippet() {
+        let results = product_knowledge_context_for_query("How are tag-triggered releases and Docker images published?");
+        assert!(
+            !results.is_empty(),
+            "expected at least one result for release-process query"
+        );
+        let release_results: Vec<_> = results
+            .iter()
+            .filter(|s| s.source_path == ".github/workflows/release.yml")
+            .collect();
+        assert!(
+            !release_results.is_empty(),
+            "expected at least one .github/workflows/release.yml result, got: {:?}",
+            results
+                .iter()
+                .map(|s| s.source_path)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn github_release_creation_query_returns_release_yml() {
+        let results = product_knowledge_context_for_query("GitHub release creation workflow");
+        assert!(
+            !results.is_empty(),
+            "expected results for GitHub release workflow query"
+        );
+        assert!(
+            results.iter().any(|s| s.source_path == ".github/workflows/release.yml"),
+            "expected .github/workflows/release.yml in results, got: {:?}",
+            results.iter().map(|s| s.source_path).collect::<Vec<_>>()
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Snippet structure tests
     // -----------------------------------------------------------------------
@@ -455,7 +573,8 @@ mod tests {
             );
             assert!(
                 snippet.source_path == "docs/northstar.md"
-                    || snippet.source_path == "CHANGELOG.md",
+                    || snippet.source_path == "CHANGELOG.md"
+                    || snippet.source_path == ".github/workflows/release.yml",
                 "unexpected source_path: {}",
                 snippet.source_path
             );
