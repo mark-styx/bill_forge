@@ -82,6 +82,7 @@ impl<const M: u8> RequireModule<M> {
             1 => Module::InvoiceProcessing,
             2 => Module::VendorManagement,
             3 => Module::Reporting,
+            4 => Module::AiAssistant,
             _ => Module::InvoiceCapture,
         }
     }
@@ -173,6 +174,31 @@ where
 
         if !tenant.has_module(Module::Reporting) {
             return Err(ApiError(Error::ModuleNotAvailable("Reporting".to_string())));
+        }
+
+        Ok(Self(user, tenant))
+    }
+}
+
+/// Extractor for AI Assistant module access
+pub struct AiAssistantAccess(pub UserContext, pub TenantContext);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for AiAssistantAccess
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let TenantCtx(tenant) = TenantCtx::from_request_parts(parts, state).await?;
+        let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+
+        if !tenant.has_module(Module::AiAssistant) {
+            return Err(ApiError(Error::ModuleNotAvailable(
+                Module::AiAssistant.display_name().to_string(),
+            )));
         }
 
         Ok(Self(user, tenant))

@@ -3,13 +3,14 @@
 //! These tests verify the route modules produce correct JSON shapes
 //! and that the billing plan data matches the backend truth.
 //!
-//! Auth enforcement: AI handlers now use the `AuthUser` extractor, which
-//! rejects requests with missing/invalid Bearer tokens by returning
-//! `Error::Unauthenticated` (HTTP 401).
+//! Auth enforcement: AI handlers now use the `AiAssistantAccess` extractor,
+//! which requires both authentication AND tenant-level Module::AiAssistant
+//! enablement. Requests from tenants without the add-on are rejected with
+//! `Error::ModuleNotAvailable`.
 
 use billforge_billing::{Plan, PlanId};
 use billforge_billing::{BillingConfig, BillingService, BillingServiceTrait};
-use billforge_core::TenantId;
+use billforge_core::{Module, TenantContext, TenantId, TenantSettings};
 use billforge_core::UserContext;
 use uuid::Uuid;
 
@@ -153,4 +154,36 @@ fn test_ai_handler_uses_authenticated_tenant_not_hardcoded() {
         Uuid::nil(),
         "user_id must come from the token, not Uuid::nil()"
     );
+}
+
+// ---------------------------------------------------------------------------
+// AI Assistant module authorization (RequireModule + TenantContext)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_require_module_4_maps_to_ai_assistant() {
+    use billforge_api::extractors::RequireModule;
+    assert_eq!(RequireModule::<4>::module(), Module::AiAssistant);
+}
+
+#[test]
+fn test_tenant_context_without_ai_assistant_reports_false() {
+    let ctx = TenantContext {
+        tenant_id: TenantId::from_uuid(Uuid::nil()),
+        tenant_name: "No AI Tenant".to_string(),
+        enabled_modules: vec![Module::InvoiceCapture, Module::Reporting],
+        settings: TenantSettings::default(),
+    };
+    assert!(!ctx.has_module(Module::AiAssistant));
+}
+
+#[test]
+fn test_tenant_context_with_ai_assistant_reports_true() {
+    let ctx = TenantContext {
+        tenant_id: TenantId::from_uuid(Uuid::nil()),
+        tenant_name: "AI Tenant".to_string(),
+        enabled_modules: vec![Module::InvoiceCapture, Module::AiAssistant],
+        settings: TenantSettings::default(),
+    };
+    assert!(ctx.has_module(Module::AiAssistant));
 }

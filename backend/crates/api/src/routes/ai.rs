@@ -16,7 +16,7 @@ use uuid::Uuid;
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{ChatRequest, ChatResponse, Conversation};
 
-use crate::extractors::AuthUser;
+use crate::extractors::AiAssistantAccess;
 use crate::state::AppState;
 
 /// Error response shape matching ai-agent crate convention
@@ -38,7 +38,7 @@ pub fn routes() -> Router<AppState> {
     responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
 async fn chat_handler(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
     let pool = (*state.db.metadata()).clone();
@@ -66,7 +66,7 @@ async fn chat_handler(
     responses((status = 200, description = "Conversation list"), (status = 401, description = "Unauthorized")))]
 async fn list_conversations_handler(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
 ) -> Result<Json<Vec<Conversation>>, (StatusCode, Json<ErrorResponse>)> {
     let pool = (*state.db.metadata()).clone();
     let agent = WinstonAgent::new(pool);
@@ -94,7 +94,7 @@ async fn list_conversations_handler(
     responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
 async fn continue_conversation_handler(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
     Path(conversation_id): Path<Uuid>,
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
