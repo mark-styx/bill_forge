@@ -68,6 +68,7 @@ fn test_plans_serialize_to_json() {
 // ---------------------------------------------------------------------------
 
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore = "requires live DATABASE_URL; run with --ignored when DB is available"]
 async fn test_default_subscription_is_free(pool: sqlx::PgPool) {
     let pool = std::sync::Arc::new(pool);
     let service = BillingService::new(BillingConfig::default(), pool);
