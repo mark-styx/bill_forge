@@ -110,6 +110,48 @@ pub struct AiToolCallRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Input for recording a usage event for a single provider turn.
+#[derive(Debug, Clone)]
+pub struct AiUsageEventInput {
+    pub conversation_id: Option<Uuid>,
+    pub message_id: Option<Uuid>,
+    pub provider: String,
+    pub model: Option<String>,
+    pub model_route: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub prompt_tokens: Option<i32>,
+    pub completion_tokens: Option<i32>,
+    pub total_tokens: Option<i32>,
+    pub success: bool,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub provider_request_id: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// A persisted AI usage event row.
+#[derive(Debug, Clone)]
+pub struct AiUsageEventRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub conversation_id: Option<Uuid>,
+    pub message_id: Option<Uuid>,
+    pub provider: String,
+    pub model: Option<String>,
+    pub model_route: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub prompt_tokens: Option<i32>,
+    pub completion_tokens: Option<i32>,
+    pub total_tokens: Option<i32>,
+    pub success: bool,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub provider_request_id: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Input for persisting a tool result linked to a tool call and message.
 #[derive(Debug, Clone)]
 pub struct PersistAiToolResultInput {
@@ -317,6 +359,53 @@ impl AiConversationRepositoryImpl {
         Ok(row.into_record())
     }
 
+    /// Record a usage event for a single provider turn.
+    ///
+    /// Successful turns link to the conversation and optional assistant message.
+    /// Failed turns link to the conversation with no message_id.
+    pub async fn record_usage_event(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        input: AiUsageEventInput,
+    ) -> Result<AiUsageEventRecord> {
+        let row: UsageEventRow = sqlx::query_as::<_, UsageEventRow>(
+            r#"INSERT INTO ai_usage_events (
+                    tenant_id, user_id, conversation_id, message_id,
+                    provider, model, model_route,
+                    latency_ms, prompt_tokens, completion_tokens, total_tokens,
+                    success, error_code, error_message,
+                    provider_request_id, metadata
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+               RETURNING id, tenant_id, user_id, conversation_id, message_id,
+                         provider, model, model_route,
+                         latency_ms, prompt_tokens, completion_tokens, total_tokens,
+                         success, error_code, error_message,
+                         provider_request_id, metadata, created_at"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(input.conversation_id)
+        .bind(input.message_id)
+        .bind(&input.provider)
+        .bind(&input.model)
+        .bind(&input.model_route)
+        .bind(input.latency_ms)
+        .bind(input.prompt_tokens)
+        .bind(input.completion_tokens)
+        .bind(input.total_tokens)
+        .bind(input.success)
+        .bind(&input.error_code)
+        .bind(&input.error_message)
+        .bind(&input.provider_request_id)
+        .bind(&input.metadata)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to record usage event: {}", e)))?;
+
+        Ok(row.into_record())
+    }
+
     /// List all tool calls for a given message, ordered by creation time.
     pub async fn list_tool_calls_for_message(
         &self,
@@ -484,6 +573,53 @@ impl ToolResultRow {
             result: self.result,
             error: self.error,
             latency_ms: self.latency_ms,
+            metadata: self.metadata,
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct UsageEventRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Option<Uuid>,
+    message_id: Option<Uuid>,
+    provider: String,
+    model: Option<String>,
+    model_route: Option<String>,
+    latency_ms: Option<i64>,
+    prompt_tokens: Option<i32>,
+    completion_tokens: Option<i32>,
+    total_tokens: Option<i32>,
+    success: bool,
+    error_code: Option<String>,
+    error_message: Option<String>,
+    provider_request_id: Option<String>,
+    metadata: serde_json::Value,
+    created_at: DateTime<Utc>,
+}
+
+impl UsageEventRow {
+    fn into_record(self) -> AiUsageEventRecord {
+        AiUsageEventRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            conversation_id: self.conversation_id,
+            message_id: self.message_id,
+            provider: self.provider,
+            model: self.model,
+            model_route: self.model_route,
+            latency_ms: self.latency_ms,
+            prompt_tokens: self.prompt_tokens,
+            completion_tokens: self.completion_tokens,
+            total_tokens: self.total_tokens,
+            success: self.success,
+            error_code: self.error_code,
+            error_message: self.error_message,
+            provider_request_id: self.provider_request_id,
             metadata: self.metadata,
             created_at: self.created_at,
         }

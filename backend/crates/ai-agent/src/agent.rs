@@ -17,6 +17,7 @@ use super::tools::ToolRegistry;
 use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
     AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
+    AiUsageEventInput,
 };
 use sqlx::PgPool;
 
@@ -49,6 +50,28 @@ struct ProviderTurnTelemetry {
     latency_ms: u64,
     usage: Option<super::models::ProviderChatUsage>,
 }
+
+/// Error data from a failed provider turn, kept structured for usage recording.
+#[derive(Debug)]
+struct ProviderTurnError {
+    selected_provider: String,
+    selected_model: String,
+    selected_route: ProviderModelRoute,
+    latency_ms: u64,
+    provider_error: super::models::ProviderChatError,
+}
+
+impl std::fmt::Display for ProviderTurnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Provider chat completion failed: {}",
+            self.provider_error.message
+        )
+    }
+}
+
+impl std::error::Error for ProviderTurnError {}
 
 /// Winston AI Agent
 #[derive(Clone)]
@@ -145,33 +168,113 @@ impl WinstonAgent {
             }
         }
 
-        // Call the provider
-        let (response, telemetry) = self
+        // Call the provider, capturing structured error for usage recording.
+        let provider_result = self
             .execute_provider_turn(&request, &context, conversation_id, &tenant_id, user_id)
-            .await?;
+            .await;
 
-        // Append the assistant message after a successful provider response.
-        let assistant_msg_input = AppendAiMessageInput {
-            role: AiMessageRole::Assistant,
-            content: response.message.content.clone(),
-            provider: Some(telemetry.selected_provider),
-            model: Some(telemetry.selected_model),
-            model_route: Some(format!("{:?}", telemetry.selected_route)),
-            finish_reason: telemetry.finish_reason,
-            provider_request_id: telemetry.provider_request_id,
-            latency_ms: Some(telemetry.latency_ms as i64),
-            usage: telemetry.usage.map(|u| AiMessageUsage {
-                prompt_tokens: u.prompt_tokens.map(|t| t as i32),
-                completion_tokens: u.completion_tokens.map(|t| t as i32),
-                total_tokens: u.total_tokens.map(|t| t as i32),
-            }),
-            metadata: serde_json::json!({}),
-        };
-        repo.append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to persist assistant message: {}", e))?;
+        match provider_result {
+            Ok((response, telemetry)) => {
+                // Append the assistant message after a successful provider response.
+                let assistant_msg_input = AppendAiMessageInput {
+                    role: AiMessageRole::Assistant,
+                    content: response.message.content.clone(),
+                    provider: Some(telemetry.selected_provider.clone()),
+                    model: Some(telemetry.selected_model.clone()),
+                    model_route: Some(format!("{:?}", telemetry.selected_route)),
+                    finish_reason: telemetry.finish_reason,
+                    provider_request_id: telemetry.provider_request_id.clone(),
+                    latency_ms: Some(telemetry.latency_ms as i64),
+                    usage: telemetry.usage.as_ref().map(|u| AiMessageUsage {
+                        prompt_tokens: u.prompt_tokens.map(|t| t as i32),
+                        completion_tokens: u.completion_tokens.map(|t| t as i32),
+                        total_tokens: u.total_tokens.map(|t| t as i32),
+                    }),
+                    metadata: serde_json::json!({}),
+                };
+                let assistant_record = repo
+                    .append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to persist assistant message: {}", e))?;
 
-        Ok(response)
+                // Record successful usage event (best-effort: warn on failure).
+                let usage = telemetry.usage.as_ref();
+                if let Err(e) = repo
+                    .record_usage_event(
+                        &parsed_tid,
+                        &parsed_uid,
+                        AiUsageEventInput {
+                            conversation_id: Some(conversation_id),
+                            message_id: Some(assistant_record.id),
+                            provider: telemetry.selected_provider,
+                            model: Some(telemetry.selected_model),
+                            model_route: Some(format!("{:?}", telemetry.selected_route)),
+                            latency_ms: Some(telemetry.latency_ms as i64),
+                            prompt_tokens: usage.and_then(|u| u.prompt_tokens.map(|t| t as i32)),
+                            completion_tokens: usage.and_then(|u| u.completion_tokens.map(|t| t as i32)),
+                            total_tokens: usage.and_then(|u| u.total_tokens.map(|t| t as i32)),
+                            success: true,
+                            error_code: None,
+                            error_message: None,
+                            provider_request_id: telemetry.provider_request_id,
+                            metadata: serde_json::json!({}),
+                        },
+                    )
+                    .await
+                {
+                    warn!("Failed to record usage event (success): {}", e);
+                }
+
+                Ok(response)
+            }
+            Err(e) => {
+                // Try to extract the structured ProviderTurnError for usage recording.
+                if let Some(turn_err) = e.downcast_ref::<ProviderTurnError>() {
+                    let err = &turn_err.provider_error;
+                    if let Err(recording_err) = repo
+                        .record_usage_event(
+                            &parsed_tid,
+                            &parsed_uid,
+                            AiUsageEventInput {
+                                conversation_id: Some(conversation_id),
+                                message_id: None,
+                                provider: turn_err.selected_provider.clone(),
+                                model: Some(turn_err.selected_model.clone()),
+                                model_route: Some(format!("{:?}", turn_err.selected_route)),
+                                latency_ms: Some(turn_err.latency_ms as i64),
+                                prompt_tokens: None,
+                                completion_tokens: None,
+                                total_tokens: None,
+                                success: false,
+                                error_code: err.provider_code.clone().or_else(|| {
+                                    Some(format!("{:?}", err.kind))
+                                }),
+                                error_message: Some(err.message.clone()),
+                                provider_request_id: None,
+                                metadata: serde_json::json!({
+                                    "kind": format!("{:?}", err.kind),
+                                    "status_code": err.status_code,
+                                    "retryable": err.retryable,
+                                }),
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to record usage event (provider failure): {}",
+                            recording_err
+                        );
+                    }
+                } else {
+                    warn!(
+                        "Provider turn failed for conversation {} with unstructured error: {}",
+                        conversation_id, e
+                    );
+                }
+
+                Err(e)
+            }
+        }
     }
 
     /// Core provider-call logic extracted for testability.
@@ -200,6 +303,9 @@ impl WinstonAgent {
 
     /// Execute a single provider turn: build messages, call the provider,
     /// measure latency, log the outcome, and return the response plus telemetry.
+    ///
+    /// On provider error, returns a [`ProviderTurnError`] wrapped in `anyhow`
+    /// so the caller can extract structured error data for usage recording.
     async fn execute_provider_turn(
         &self,
         request: &ChatRequest,
@@ -279,10 +385,14 @@ impl WinstonAgent {
                     retryable = ?e.retryable,
                     "AI turn failed"
                 );
-                return Err(anyhow::anyhow!(
-                    "Provider chat completion failed: {}",
-                    e.message
-                ));
+                let turn_err = ProviderTurnError {
+                    selected_provider,
+                    selected_model,
+                    selected_route,
+                    latency_ms,
+                    provider_error: e,
+                };
+                return Err(turn_err.into());
             }
         };
 

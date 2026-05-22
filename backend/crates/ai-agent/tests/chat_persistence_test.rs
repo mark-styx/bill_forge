@@ -17,7 +17,7 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Create the minimal schema needed for chat persistence tests:
-/// tenants (FK target), users, and ai_conversations/ai_messages.
+/// tenants (FK target), users, ai_conversations/ai_messages, and ai_usage_events.
 async fn setup_minimal_schema(pool: &sqlx::PgPool) {
     // Tenants table (FK target for ai_conversations.tenant_id)
     sqlx::query(
@@ -51,6 +51,20 @@ async fn setup_minimal_schema(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .expect("create ai_conversations/ai_messages tables");
+
+    // AI tool call persistence (adds unique constraint on ai_messages needed by 084)
+    let migration_083 = include_str!("../../../migrations/083_create_ai_tool_call_persistence.sql");
+    sqlx::raw_sql(migration_083)
+        .execute(pool)
+        .await
+        .expect("create ai_tool_calls/ai_tool_results tables");
+
+    // AI usage events
+    let migration_084 = include_str!("../../../migrations/084_create_ai_usage_events.sql");
+    sqlx::raw_sql(migration_084)
+        .execute(pool)
+        .await
+        .expect("create ai_usage_events table");
 }
 
 /// Insert a tenant row.
@@ -136,6 +150,50 @@ async fn read_conversation_title(pool: &sqlx::PgPool, conversation_id: Uuid) -> 
     .await
     .expect("read conversation title");
     row.and_then(|t| t.0)
+}
+
+/// Read usage event rows for a given conversation, ordered by created_at.
+async fn read_usage_events(
+    pool: &sqlx::PgPool,
+    conversation_id: Uuid,
+) -> Vec<UsageEventRow> {
+    sqlx::query_as::<_, UsageEventRow>(
+        r#"SELECT id, tenant_id, user_id, conversation_id, message_id,
+                  provider, model, model_route,
+                  latency_ms, prompt_tokens, completion_tokens, total_tokens,
+                  success, error_code, error_message,
+                  provider_request_id, metadata, created_at
+           FROM ai_usage_events
+           WHERE conversation_id = $1
+           ORDER BY created_at ASC"#,
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await
+    .expect("read usage events")
+}
+
+/// Helper row type for usage event queries.
+#[derive(sqlx::FromRow)]
+struct UsageEventRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Option<Uuid>,
+    message_id: Option<Uuid>,
+    provider: String,
+    model: Option<String>,
+    model_route: Option<String>,
+    latency_ms: Option<i64>,
+    prompt_tokens: Option<i32>,
+    completion_tokens: Option<i32>,
+    total_tokens: Option<i32>,
+    success: bool,
+    error_code: Option<String>,
+    error_message: Option<String>,
+    provider_request_id: Option<String>,
+    metadata: serde_json::Value,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 // ============================================================================
@@ -316,4 +374,171 @@ async fn test_nonexistent_conversation_returns_error(pool: sqlx::PgPool) {
         "error should mention not found or access denied: {}",
         err_msg
     );
+}
+
+// ============================================================================
+// Test 4: Successful chat creates exactly one usage event
+// ============================================================================
+
+#[sqlx::test]
+async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
+    setup_minimal_schema(&pool).await;
+
+    let tenant_uuid = Uuid::new_v4();
+    let user_uuid = Uuid::new_v4();
+
+    insert_tenant(&pool, tenant_uuid).await;
+    insert_user(&pool, tenant_uuid, user_uuid).await;
+
+    let provider = Arc::new(FakeAiProvider::new().with_response_text("test reply"));
+    let agent = WinstonAgent::new(pool.clone(), provider);
+
+    let request = ChatRequest {
+        message: "Hello Winston".to_string(),
+        conversation_id: None,
+    };
+
+    let response = agent
+        .chat(request, tenant_uuid.to_string(), user_uuid)
+        .await
+        .expect("chat should succeed");
+
+    let conv_id = response.conversation_id;
+
+    // Exactly one usage event for the conversation
+    let events = read_usage_events(&pool, conv_id).await;
+    assert_eq!(events.len(), 1, "expected exactly one usage event");
+
+    let evt = &events[0];
+
+    // Success fields
+    assert!(evt.success, "usage event should be successful");
+    assert!(evt.error_code.is_none(), "success event should have no error_code");
+    assert!(evt.error_message.is_none(), "success event should have no error_message");
+
+    // Provider/model/route
+    assert_eq!(evt.provider, "fake");
+    assert!(evt.model.is_some(), "should have model");
+    assert!(evt.model_route.is_some(), "should have model_route");
+
+    // Latency
+    assert!(evt.latency_ms.is_some(), "should have latency_ms");
+    assert!(evt.latency_ms.unwrap() >= 0, "latency should be non-negative");
+
+    // Token counts from the fake provider
+    assert!(evt.prompt_tokens.is_some(), "should have prompt_tokens");
+    assert!(evt.completion_tokens.is_some(), "should have completion_tokens");
+    assert!(evt.total_tokens.is_some(), "should have total_tokens");
+
+    // Provider request ID
+    assert!(evt.provider_request_id.is_some(), "should have provider_request_id");
+
+    // Links
+    assert_eq!(evt.conversation_id, Some(conv_id));
+    assert!(evt.message_id.is_some(), "success event should link to assistant message");
+
+    // Tenant/user scoping
+    assert_eq!(evt.tenant_id, tenant_uuid);
+    assert_eq!(evt.user_id, user_uuid);
+}
+
+// ============================================================================
+// Test 5: Failed provider turn creates a failed usage event
+// ============================================================================
+
+#[sqlx::test]
+async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool) {
+    setup_minimal_schema(&pool).await;
+
+    let tenant_uuid = Uuid::new_v4();
+    let user_uuid = Uuid::new_v4();
+
+    insert_tenant(&pool, tenant_uuid).await;
+    insert_user(&pool, tenant_uuid, user_uuid).await;
+
+    let error = billforge_ai_agent::models::ProviderChatError {
+        kind: billforge_ai_agent::models::ProviderChatErrorKind::RateLimit,
+        message: "quota exceeded".into(),
+        status_code: Some(429),
+        provider_code: Some("rate_limit".into()),
+        retryable: Some(true),
+    };
+    let provider = Arc::new(FakeAiProvider::new().with_error(error));
+    let agent = WinstonAgent::new(pool.clone(), provider);
+
+    let request = ChatRequest {
+        message: "Trigger error".to_string(),
+        conversation_id: None,
+    };
+
+    let result = agent
+        .chat(request, tenant_uuid.to_string(), user_uuid)
+        .await;
+
+    // The chat should fail
+    assert!(result.is_err(), "chat should fail when provider errors");
+
+    // But the conversation and user message should still exist (persistence happened first)
+    assert_eq!(
+        count_conversations(&pool, tenant_uuid, user_uuid).await,
+        1,
+        "conversation should be created before provider call"
+    );
+
+    // Find the conversation
+    let conv_row: (Uuid,) = sqlx::query_as(
+        "SELECT id FROM ai_conversations WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tenant_uuid)
+    .bind(user_uuid)
+    .fetch_one(&pool)
+    .await
+    .expect("find conversation");
+    let conv_id = conv_row.0;
+
+    // One user message should exist (appended before provider call)
+    let messages = read_messages(&pool, conv_id).await;
+    assert_eq!(messages.len(), 1, "expected exactly 1 user message");
+    assert_eq!(messages[0].0, "user");
+    assert_eq!(messages[0].1, "Trigger error");
+
+    // Exactly one usage event with success=false
+    let events = read_usage_events(&pool, conv_id).await;
+    assert_eq!(events.len(), 1, "expected exactly one usage event");
+
+    let evt = &events[0];
+    assert!(!evt.success, "usage event should be failed");
+    assert!(evt.message_id.is_none(), "failed event should have no message_id");
+    assert_eq!(evt.conversation_id, Some(conv_id));
+
+    // Provider/model/route
+    assert_eq!(evt.provider, "fake");
+    assert!(evt.model.is_some(), "should have model");
+    assert!(evt.model_route.is_some(), "should have model_route");
+
+    // Latency
+    assert!(evt.latency_ms.is_some(), "should have latency_ms");
+
+    // Error fields
+    assert!(
+        evt.error_code.is_some(),
+        "failed event should have error_code"
+    );
+    assert!(
+        evt.error_message.is_some(),
+        "failed event should have error_message"
+    );
+    assert_eq!(
+        evt.error_message.as_deref(),
+        Some("quota exceeded"),
+        "error_message should match provider error"
+    );
+
+    // No tokens for failed requests
+    assert!(evt.prompt_tokens.is_none(), "failed event should have no prompt_tokens");
+    assert!(evt.completion_tokens.is_none(), "failed event should have no completion_tokens");
+    assert!(evt.total_tokens.is_none(), "failed event should have no total_tokens");
+
+    // Metadata should contain structured error info
+    assert!(evt.metadata.is_object(), "metadata should be a JSON object");
 }
