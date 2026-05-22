@@ -177,3 +177,61 @@ async fn test_workflow_tables_have_uuid_pk_defaults() {
         assert_column_default_contains(&pool, table, "id", "gen_random_uuid").await;
     }
 }
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_ai_conversation_tables_schema() {
+    let (_manager, _tenant_id, pool) = setup_tenant("ai-conv").await;
+
+    // ai_conversations table with required columns
+    assert_table_exists(&pool, "ai_conversations").await;
+    assert_column(&pool, "ai_conversations", "tenant_id", "uuid").await;
+    assert_column(&pool, "ai_conversations", "user_id", "uuid").await;
+    assert_column(&pool, "ai_conversations", "title", "text").await;
+    assert_column(&pool, "ai_conversations", "metadata", "jsonb").await;
+    assert_column(&pool, "ai_conversations", "created_at", "timestamp with time zone").await;
+    assert_column(&pool, "ai_conversations", "updated_at", "timestamp with time zone").await;
+    assert_column_default_contains(&pool, "ai_conversations", "id", "gen_random_uuid").await;
+
+    // ai_messages table with required columns
+    assert_table_exists(&pool, "ai_messages").await;
+    assert_column(&pool, "ai_messages", "tenant_id", "uuid").await;
+    assert_column(&pool, "ai_messages", "user_id", "uuid").await;
+    assert_column(&pool, "ai_messages", "conversation_id", "uuid").await;
+    assert_column(&pool, "ai_messages", "role", "text").await;
+    assert_column(&pool, "ai_messages", "content", "text").await;
+
+    // Provider-neutral usage columns
+    assert_column(&pool, "ai_messages", "provider", "text").await;
+    assert_column(&pool, "ai_messages", "model", "text").await;
+    assert_column(&pool, "ai_messages", "model_route", "text").await;
+    assert_column(&pool, "ai_messages", "prompt_tokens", "integer").await;
+    assert_column(&pool, "ai_messages", "completion_tokens", "integer").await;
+    assert_column(&pool, "ai_messages", "total_tokens", "integer").await;
+    assert_column(&pool, "ai_messages", "finish_reason", "text").await;
+    assert_column(&pool, "ai_messages", "provider_request_id", "text").await;
+    assert_column(&pool, "ai_messages", "latency_ms", "bigint").await;
+    assert_column(&pool, "ai_messages", "metadata", "jsonb").await;
+    assert_column(&pool, "ai_messages", "created_at", "timestamp with time zone").await;
+    assert_column_default_contains(&pool, "ai_messages", "id", "gen_random_uuid").await;
+
+    // Verify composite FK exists on ai_messages referencing (id, tenant_id, user_id)
+    // on ai_conversations, preventing cross-tenant/user message attachment.
+    let fk_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+        WHERE tc.table_name = 'ai_messages'
+            AND tc.constraint_type = 'FOREIGN KEY'
+            AND tc.constraint_name LIKE '%tenant_id%'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query FK constraints");
+
+    assert!(fk_count >= 1, "Expected composite FK on ai_messages(tenant_id, user_id, conversation_id) referencing ai_conversations");
+}

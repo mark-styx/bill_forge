@@ -260,6 +260,9 @@ impl PgManager {
             .await
             .map_err(|e| Error::Database(format!("Failed to run RLS migration: {}", e)))?;
 
+        // AI conversations and messages (scoped by tenant + user)
+        crate::tenant_db::run_ai_conversation_migrations(pool).await?;
+
         tracing::info!("Tenant migrations completed successfully");
         Ok(())
     }

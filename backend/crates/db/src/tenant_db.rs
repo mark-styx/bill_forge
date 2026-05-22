@@ -38,6 +38,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_invoice_state_machine_migrations(pool).await?;
     run_dashboard_kpis_migrations(pool).await?;
     run_rls_migrations(pool).await?;
+    run_ai_conversation_migrations(pool).await?;
 
     Ok(())
 }
@@ -439,6 +440,23 @@ pub async fn run_rls_migrations(pool: &PgPool) -> Result<()> {
     .map_err(|e| {
         Error::Migration(format!(
             "Failed to run RLS migration: {}",
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Run AI conversations and messages migrations
+pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/082_create_ai_conversations.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run AI conversations migration: {}",
             e
         ))
     })?;
