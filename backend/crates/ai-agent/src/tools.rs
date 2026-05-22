@@ -8,6 +8,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::models::AgentContext;
+use super::product_knowledge::product_knowledge_context_for_query_with_limit;
 
 /// All known BillForge modules, ordered for stable output.
 const ALL_MODULES: &[billforge_core::Module] = &[
@@ -445,6 +446,96 @@ impl Tool for ModuleCapabilitiesTool {
     }
 }
 
+/// Read-only tool that searches the product documentation index for relevant
+/// snippets. No database queries, no mutations, no external calls.
+pub struct SearchProductDocsTool;
+
+#[async_trait]
+impl Tool for SearchProductDocsTool {
+    fn name(&self) -> &str {
+        "search_product_docs"
+    }
+
+    fn description(&self) -> &str {
+        "Search BillForge product documentation for relevant snippets. Args: query (plain text)"
+    }
+
+    async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
+        let query = args.trim();
+        if query.is_empty() {
+            return Ok("Please provide a search query to look up product documentation.".to_string());
+        }
+
+        let snippets = product_knowledge_context_for_query_with_limit(query, 5);
+
+        if snippets.is_empty() {
+            return Ok(format!("No product documentation found for query: '{}'. Try different keywords.", query));
+        }
+
+        let mut lines = Vec::new();
+        lines.push(format!("Product documentation results for '{}':\n", query));
+
+        for (i, snippet) in snippets.iter().enumerate() {
+            lines.push(format!(
+                "{}. [{}] {}\n   {}",
+                i + 1,
+                snippet.source_path,
+                snippet.heading,
+                snippet.excerpt,
+            ));
+        }
+
+        Ok(lines.join("\n\n"))
+    }
+}
+
+/// Read-only tool that explains a product feature using the documentation
+/// index. Returns a concise explanation grounded in matched snippets with
+/// source references. No database queries, no mutations, no external calls.
+pub struct ExplainFeatureTool;
+
+#[async_trait]
+impl Tool for ExplainFeatureTool {
+    fn name(&self) -> &str {
+        "explain_feature"
+    }
+
+    fn description(&self) -> &str {
+        "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)"
+    }
+
+    async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
+        let feature = args.trim();
+        if feature.is_empty() {
+            return Ok("Please provide a feature name or question to get an explanation.".to_string());
+        }
+
+        let snippets = product_knowledge_context_for_query_with_limit(feature, 5);
+
+        if snippets.is_empty() {
+            return Ok(format!(
+                "No product documentation found for '{}'. The feature may not be documented yet or may use different terminology.",
+                feature
+            ));
+        }
+
+        let mut lines = Vec::new();
+        lines.push(format!("Explanation for '{}':\n", feature));
+
+        for snippet in &snippets {
+            lines.push(format!(
+                "- {} (from {}): {}",
+                snippet.heading, snippet.source_path, snippet.excerpt,
+            ));
+        }
+
+        lines.push(String::new());
+        lines.push("Note: This explanation is based solely on indexed product documentation.".to_string());
+
+        Ok(lines.join("\n\n"))
+    }
+}
+
 /// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
@@ -463,6 +554,8 @@ impl ToolRegistry {
             ("get_approval_requirements", "Check who needs to approve an invoice. Args: invoice_id (UUID)"),
             ("summarize_invoice", "Generate a summary of an invoice. Args: invoice_id (UUID)"),
             ("get_module_capabilities", "Report which modules are enabled for the tenant and describe capability boundaries. No args required."),
+            ("search_product_docs", "Search BillForge product documentation for relevant snippets. Args: query (plain text)"),
+            ("explain_feature", "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)"),
         ];
 
         descriptions
@@ -493,6 +586,12 @@ impl ToolRegistry {
             }
             "get_module_capabilities" => {
                 ModuleCapabilitiesTool.execute(context, args).await
+            }
+            "search_product_docs" => {
+                SearchProductDocsTool.execute(context, args).await
+            }
+            "explain_feature" => {
+                ExplainFeatureTool.execute(context, args).await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

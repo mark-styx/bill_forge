@@ -21,6 +21,8 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("get_approval_requirements"), "missing get_approval_requirements");
     assert!(descriptions.contains("summarize_invoice"), "missing summarize_invoice");
     assert!(descriptions.contains("get_module_capabilities"), "missing get_module_capabilities");
+    assert!(descriptions.contains("search_product_docs"), "missing search_product_docs");
+    assert!(descriptions.contains("explain_feature"), "missing explain_feature");
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -45,6 +47,18 @@ fn test_extract_primary_arg_for_each_tool() {
 
     // Invalid JSON → error
     assert!(serde_json::from_str::<serde_json::Value>("not json").is_err());
+
+    // Product docs tools - query arg
+    let query_json = r#"{"query":"invoice processing"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(query_json).unwrap();
+    let result = parsed["query"].as_str().unwrap();
+    assert_eq!(result, "invoice processing");
+
+    // Explain feature tool - feature arg
+    let feature_json = r#"{"feature":"vendor management"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(feature_json).unwrap();
+    let result = parsed["feature"].as_str().unwrap();
+    assert_eq!(result, "vendor management");
 }
 
 /// Build a fake AgentContext with selected enabled modules.
@@ -133,5 +147,92 @@ async fn test_get_module_capabilities_ai_assistant_disabled_when_omitted() {
     assert!(
         result.contains("Invoice Processing (invoice_processing): ENABLED"),
         "Invoice Processing should be ENABLED, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_search_product_docs_returns_source_references() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("search_product_docs", &ctx, "invoice processing")
+        .await
+        .expect("search_product_docs should succeed");
+
+    // Should contain source references (square-bracket paths)
+    assert!(
+        result.contains('[') || result.contains("docs/northstar.md") || result.contains("CHANGELOG.md"),
+        "expected source references in response, got: {result}"
+    );
+
+    // Should contain at least one known indexed path
+    let has_known_path = result.contains("docs/northstar.md")
+        || result.contains("CHANGELOG.md")
+        || result.contains(".github/workflows/release.yml");
+    assert!(
+        has_known_path,
+        "expected at least one known indexed path, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_search_product_docs_empty_query_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("search_product_docs", &ctx, "  ")
+        .await
+        .expect("search_product_docs should succeed");
+
+    assert!(
+        result.contains("Please provide a search query"),
+        "empty query should return helpful message, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_feature_returns_explanation_with_sources() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("explain_feature", &ctx, "changelog")
+        .await
+        .expect("explain_feature should succeed");
+
+    // Response should be explanation-oriented
+    assert!(
+        result.contains("Explanation for"),
+        "expected explanation header, got: {result}"
+    );
+
+    // Response should include source references
+    assert!(
+        result.contains("from "),
+        "expected source references, got: {result}"
+    );
+
+    // Response should note it is documentation-grounded
+    assert!(
+        result.contains("indexed product documentation"),
+        "expected documentation grounding note, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_feature_empty_input_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("explain_feature", &ctx, "")
+        .await
+        .expect("explain_feature should succeed");
+
+    assert!(
+        result.contains("Please provide a feature name"),
+        "empty input should return helpful message, got: {result}"
     );
 }
