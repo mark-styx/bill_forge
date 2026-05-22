@@ -136,7 +136,7 @@ mod module_tests {
         assert_eq!(Module::InvoiceProcessing.display_name(), "Invoice Processing");
         assert_eq!(Module::VendorManagement.display_name(), "Vendor Management");
         assert_eq!(Module::Reporting.display_name(), "Reporting & Analytics");
-        assert_eq!(Module::AiAssistant.display_name(), "AI Assistant");
+        assert_eq!(Module::AiAssistant.display_name(), "Winston AI Assistant");
     }
 
     #[test]

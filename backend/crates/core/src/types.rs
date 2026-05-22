@@ -105,7 +105,7 @@ impl Module {
             Module::InvoiceProcessing => "Invoice Processing",
             Module::VendorManagement => "Vendor Management",
             Module::Reporting => "Reporting & Analytics",
-            Module::AiAssistant => "AI Assistant",
+            Module::AiAssistant => "Winston AI Assistant",
         }
     }
 }

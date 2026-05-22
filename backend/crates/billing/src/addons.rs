@@ -71,10 +71,10 @@ impl ModuleAddOn {
     pub fn ai_assistant() -> Self {
         Self {
             module: Module::AiAssistant,
-            name: "AI Assistant".to_string(),
-            description: "Winston AI-powered invoice assistance and automation".to_string(),
-            monthly_price_cents: 4900,  // $49/mo
-            annual_price_cents: 47000,  // $470/yr
+            name: "Winston AI Assistant".to_string(),
+            description: "Paid conversational AI assistant add-on powered by Winston".to_string(),
+            monthly_price_cents: 29900,  // $299/mo fixed monthly
+            annual_price_cents: 29900,   // same as monthly; no annual discount
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -246,5 +246,48 @@ mod tests {
         assert!(catalog.iter().any(|a| a.module == Module::VendorManagement));
         assert!(catalog.iter().any(|a| a.module == Module::Reporting));
         assert!(catalog.iter().any(|a| a.module == Module::AiAssistant));
+    }
+
+    // ========================================================================
+    // Winston AI Assistant add-on catalog metadata tests
+    // ========================================================================
+
+    #[test]
+    fn test_winston_addon_catalog_metadata() {
+        let addon = ModuleAddOn::ai_assistant();
+        assert_eq!(addon.module, Module::AiAssistant);
+        assert_eq!(addon.name, "Winston AI Assistant");
+        assert_eq!(addon.monthly_price_cents, 29900);
+    }
+
+    #[test]
+    fn test_winston_addon_chargeable_on_all_mvp_plans() {
+        // Winston is not bundled in any base plan, so quoting it on every MVP
+        // plan should result in the full add-on price being charged.
+        let expected_cents = 29900u64;
+        for plan_id in [PlanId::Free, PlanId::Starter, PlanId::Professional, PlanId::Enterprise] {
+            let quote = quote_subscription(plan_id, &[Module::AiAssistant]);
+            assert_eq!(
+                quote.addon_monthly_cents, expected_cents,
+                "Winston should be chargeable on {:?}",
+                plan_id,
+            );
+            assert!(quote.addon_modules.contains(&Module::AiAssistant));
+        }
+    }
+
+    // ========================================================================
+    // Default-containment: no MVP plan bundles AiAssistant
+    // ========================================================================
+
+    #[test]
+    fn test_no_mvp_plan_bundles_ai_assistant() {
+        for plan in [Plan::free(), Plan::starter(), Plan::professional(), Plan::enterprise()] {
+            assert!(
+                !plan.features.modules.contains(&Module::AiAssistant),
+                "{:?} plan must not bundle Module::AiAssistant",
+                plan.id,
+            );
+        }
     }
 }
