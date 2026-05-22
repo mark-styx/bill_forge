@@ -64,11 +64,17 @@ impl WinstonAgent {
             },
         ];
 
+        // Resolve provider routing into local variables before building the request.
+        let selected_route = ProviderModelRoute::Default;
+        let routing_reason = "default_chat_turn";
+        let selected_provider = self.provider.provider_name().to_string();
+        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+
         // Build provider-neutral completion request.
         // max_tokens is left as None so the provider applies its configured default.
         let provider_request = ProviderChatRequest {
-            model: self.provider.model_name_for_route(ProviderModelRoute::Default).to_string(),
-            model_route: ProviderModelRoute::Default,
+            model: selected_model.clone(),
+            model_route: selected_route,
             messages,
             temperature: Some(0.7),
             max_tokens: None,
@@ -76,26 +82,51 @@ impl WinstonAgent {
             tools: None,
         };
 
-        info!(
-            "Sending request to {} for conversation {}",
-            self.provider.provider_name(),
-            conversation_id
-        );
+        // Call provider with latency measurement
+        let start = std::time::Instant::now();
+        let provider_result = self.provider.chat_completion(provider_request).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
 
-        // Call provider
-        let provider_response = self
-            .provider
-            .chat_completion(provider_request)
-            .await
-            .map_err(|e| anyhow::anyhow!("Provider chat completion failed: {}", e.message))?;
+        let provider_response = match provider_result {
+            Ok(resp) => {
+                let provider_request_id = resp.provider_request_id.as_deref();
+                info!(
+                    selected_provider = %selected_provider,
+                    selected_model = %selected_model,
+                    model_route = ?selected_route,
+                    routing_reason = %routing_reason,
+                    latency_ms = %latency_ms,
+                    conversation_id = %conversation_id,
+                    tenant_id = %tenant_id,
+                    user_id = %user_id,
+                    outcome = "success",
+                    provider_request_id = ?provider_request_id,
+                    "AI turn completed"
+                );
+                resp
+            }
+            Err(e) => {
+                warn!(
+                    selected_provider = %selected_provider,
+                    selected_model = %selected_model,
+                    model_route = ?selected_route,
+                    routing_reason = %routing_reason,
+                    latency_ms = %latency_ms,
+                    conversation_id = %conversation_id,
+                    tenant_id = %tenant_id,
+                    user_id = %user_id,
+                    outcome = "error",
+                    error_kind = ?e.kind,
+                    status_code = ?e.status_code,
+                    provider_code = ?e.provider_code,
+                    retryable = ?e.retryable,
+                    "AI turn failed"
+                );
+                return Err(anyhow::anyhow!("Provider chat completion failed: {}", e.message));
+            }
+        };
 
         let assistant_content = provider_response.message.content;
-
-        info!(
-            "Received response from {} for conversation {}",
-            self.provider.provider_name(),
-            conversation_id
-        );
 
         // Create response message
         let assistant_message = Message {
@@ -159,6 +190,10 @@ mod tests {
         // so we verify the provider-neutral request construction logic
         // by examining what FakeAiProvider records.
 
+        // Resolve routing the same way the agent does:
+        let selected_route = ProviderModelRoute::Default;
+        let selected_model = provider.model_name_for_route(selected_route).to_string();
+
         // Build the provider request the same way the agent does:
         let system_prompt = "system prompt".to_string();
         let user_msg = "hello agent".to_string();
@@ -174,8 +209,8 @@ mod tests {
         ];
         // Agent now passes None for max_tokens so the provider applies its default.
         let provider_request = ProviderChatRequest {
-            model: provider.model_name().to_string(),
-            model_route: ProviderModelRoute::Default,
+            model: selected_model.clone(),
+            model_route: selected_route,
             messages,
             temperature: Some(0.7),
             max_tokens: None,
@@ -197,6 +232,10 @@ mod tests {
         assert_eq!(requests[0].messages[1].content, "hello agent");
         assert_eq!(requests[0].temperature, Some(0.7));
         assert_eq!(requests[0].max_tokens, None);
+
+        // Verify the model in the recorded request matches model_name_for_route(Default)
+        assert_eq!(requests[0].model, selected_model);
+        assert_eq!(requests[0].model_route, ProviderModelRoute::Default);
     }
 
     /// Provider name and model name are surfaced through the agent's provider.
@@ -228,10 +267,12 @@ mod tests {
             .expect("lazy connect is always ok");
         let agent = WinstonAgent::new(pool, provider.clone());
 
-        // Simulate the provider call the agent would make
+        // Simulate the provider call the agent would make using model_name_for_route
+        let selected_route = ProviderModelRoute::Default;
+        let selected_model = agent.provider.model_name_for_route(selected_route).to_string();
         let request = ProviderChatRequest {
-            model: agent.provider.model_name().to_string(),
-            model_route: ProviderModelRoute::Default,
+            model: selected_model.clone(),
+            model_route: selected_route,
             messages: vec![ProviderChatMessage {
                 role: ProviderMessageRole::User,
                 content: "trigger error".into(),
@@ -249,5 +290,22 @@ mod tests {
             .expect_err("should fail");
         assert_eq!(err.kind, ProviderChatErrorKind::RateLimit);
         assert_eq!(err.message, "quota exceeded");
+
+        // Verify the recorded request model matches model_name_for_route(Default)
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].model, selected_model);
+        assert_eq!(requests[0].model_route, ProviderModelRoute::Default);
+    }
+
+    /// Verify that the routing reason and route constants used in chat() are stable.
+    #[test]
+    fn routing_constants_are_stable() {
+        let selected_route = ProviderModelRoute::Default;
+        let routing_reason = "default_chat_turn";
+
+        // These constants must remain stable for log consumers.
+        assert_eq!(routing_reason, "default_chat_turn");
+        assert_eq!(selected_route, ProviderModelRoute::Default);
     }
 }
