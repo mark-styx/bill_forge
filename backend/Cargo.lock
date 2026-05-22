@@ -871,6 +871,7 @@ dependencies = [
  "billforge-core",
  "billforge-db",
  "chrono",
+ "futures",
  "serde",
  "serde_json",
  "sqlx",

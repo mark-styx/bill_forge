@@ -8,6 +8,8 @@ pub mod context;
 pub mod tools;
 pub mod handlers;
 pub mod models;
+pub mod provider;
 
 pub use agent::WinstonAgent;
 pub use handlers::create_router;
+pub use provider::{AiProvider, ProviderChatStream};

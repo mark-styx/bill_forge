@@ -103,6 +103,9 @@ pub struct ProviderChatRequest {
     /// Stop sequences.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
+    /// Tool definitions to make available to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ProviderToolDefinition>>,
 }
 
 /// Token usage metadata returned by a provider.
@@ -164,4 +167,35 @@ pub struct ProviderChatError {
     /// Whether the caller should retry the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retryable: Option<bool>,
+}
+
+/// A tool definition passed to a provider in a chat request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderToolDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub parameters: serde_json::Value,
+}
+
+/// A tool call emitted by the model in a response or stream chunk.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderToolCall {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// A single chunk in a provider streaming response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderChatStreamChunk {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<ProviderChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<ProviderToolCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_request_id: Option<String>,
 }

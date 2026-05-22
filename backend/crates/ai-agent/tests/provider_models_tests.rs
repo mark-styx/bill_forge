@@ -20,6 +20,7 @@ fn provider_chat_request_serializes_with_system_and_user_messages() {
         temperature: Some(0.7),
         max_tokens: Some(512),
         stop: None,
+        tools: None,
     };
 
     let json = serde_json::to_string(&request).expect("serialize");
@@ -45,6 +46,7 @@ fn provider_chat_request_deserializes_without_optional_fields() {
     assert!(req.temperature.is_none());
     assert!(req.max_tokens.is_none());
     assert!(req.stop.is_none());
+    assert!(req.tools.is_none());
 }
 
 #[test]
