@@ -20,6 +20,7 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("get_vendor_invoices"), "missing get_vendor_invoices");
     assert!(descriptions.contains("get_approval_requirements"), "missing get_approval_requirements");
     assert!(descriptions.contains("summarize_invoice"), "missing summarize_invoice");
+    assert!(descriptions.contains("get_module_capabilities"), "missing get_module_capabilities");
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -44,4 +45,93 @@ fn test_extract_primary_arg_for_each_tool() {
 
     // Invalid JSON → error
     assert!(serde_json::from_str::<serde_json::Value>("not json").is_err());
+}
+
+/// Build a fake AgentContext with selected enabled modules.
+fn agent_context_with_modules(modules: Vec<billforge_core::Module>) -> billforge_ai_agent::models::AgentContext {
+    billforge_ai_agent::models::AgentContext {
+        tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: uuid::Uuid::new_v4(),
+        user_role: "admin".to_string(),
+        permissions: vec!["read".to_string()],
+        enabled_modules: modules,
+    }
+}
+
+#[tokio::test]
+async fn test_get_module_capabilities_enabled_modules_marked_enabled() {
+    let ctx = agent_context_with_modules(vec![
+        billforge_core::Module::InvoiceCapture,
+        billforge_core::Module::AiAssistant,
+    ]);
+
+    let registry = ToolRegistry::new(fake_pool());
+    let result = registry
+        .execute_tool("get_module_capabilities", &ctx, "")
+        .await
+        .expect("tool should succeed");
+
+    // Enabled modules should be marked ENABLED
+    assert!(
+        result.contains("Invoice Capture (invoice_capture): ENABLED"),
+        "Invoice Capture should be ENABLED, got: {result}"
+    );
+    assert!(
+        result.contains("Winston AI Assistant (ai_assistant): ENABLED"),
+        "AiAssistant should be ENABLED, got: {result}"
+    );
+
+    // Disabled modules should be marked DISABLED
+    assert!(
+        result.contains("Invoice Processing (invoice_processing): DISABLED"),
+        "Invoice Processing should be DISABLED, got: {result}"
+    );
+    assert!(
+        result.contains("Vendor Management (vendor_management): DISABLED"),
+        "Vendor Management should be DISABLED, got: {result}"
+    );
+    assert!(
+        result.contains("Reporting & Analytics (reporting): DISABLED"),
+        "Reporting should be DISABLED, got: {result}"
+    );
+
+    // Disabled modules should include boundary language
+    assert!(
+        result.contains("not available for this organization"),
+        "disabled modules should include boundary language, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_module_capabilities_ai_assistant_disabled_when_omitted() {
+    let ctx = agent_context_with_modules(vec![
+        billforge_core::Module::InvoiceCapture,
+        billforge_core::Module::InvoiceProcessing,
+    ]);
+
+    let registry = ToolRegistry::new(fake_pool());
+    let result = registry
+        .execute_tool("get_module_capabilities", &ctx, "")
+        .await
+        .expect("tool should succeed");
+
+    // AiAssistant should be DISABLED when not in enabled_modules
+    assert!(
+        result.contains("Winston AI Assistant (ai_assistant): DISABLED"),
+        "AiAssistant should be DISABLED when omitted, got: {result}"
+    );
+    assert!(
+        result.contains("paid add-on"),
+        "AiAssistant disabled boundary should mention paid add-on, got: {result}"
+    );
+
+    // Enabled modules should still be ENABLED
+    assert!(
+        result.contains("Invoice Capture (invoice_capture): ENABLED"),
+        "Invoice Capture should be ENABLED, got: {result}"
+    );
+    assert!(
+        result.contains("Invoice Processing (invoice_processing): ENABLED"),
+        "Invoice Processing should be ENABLED, got: {result}"
+    );
 }

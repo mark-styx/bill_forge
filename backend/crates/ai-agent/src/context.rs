@@ -52,6 +52,7 @@ pub async fn inject_context(
         user_id,
         user_role,
         permissions: role_names,
+        enabled_modules: vec![],
     })
 }
 
@@ -71,6 +72,13 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - get_vendor_invoices: Find all invoices from a vendor
 - get_approval_requirements: Check who needs to approve an invoice
 - summarize_invoice: Generate a summary of an invoice
+- get_module_capabilities: Report which modules are enabled for the tenant and describe capability boundaries
+
+## Module Availability
+- Module availability is determined by the tenant's enabled_modules list.
+- Use the get_module_capabilities tool to check which modules are enabled.
+- Disabled modules must be described as unavailable; do not suggest workarounds or alternative access paths.
+- Winston AI Assistant is a paid add-on; it is only available when explicitly present in enabled_modules.
 
 ## Your Context
 - Organization: {tenant_id}

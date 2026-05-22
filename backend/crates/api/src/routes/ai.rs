@@ -99,7 +99,8 @@ async fn chat_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider);
+    let agent = WinstonAgent::new(pool, provider)
+        .with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
@@ -170,7 +171,8 @@ async fn continue_conversation_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider);
+    let agent = WinstonAgent::new(pool, provider)
+        .with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;

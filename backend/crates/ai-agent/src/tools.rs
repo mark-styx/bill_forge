@@ -9,6 +9,59 @@ use uuid::Uuid;
 
 use super::models::AgentContext;
 
+/// All known BillForge modules, ordered for stable output.
+const ALL_MODULES: &[billforge_core::Module] = &[
+    billforge_core::Module::InvoiceCapture,
+    billforge_core::Module::InvoiceProcessing,
+    billforge_core::Module::VendorManagement,
+    billforge_core::Module::Reporting,
+    billforge_core::Module::AiAssistant,
+];
+
+/// What Winston may explain or assist with when a module is enabled,
+/// and the boundary language when it is disabled.
+struct ModuleInfo {
+    key: &'static str,
+    display_name: &'static str,
+    enabled_help: &'static str,
+    disabled_boundary: &'static str,
+}
+
+fn module_info(m: billforge_core::Module) -> ModuleInfo {
+    match m {
+        billforge_core::Module::InvoiceCapture => ModuleInfo {
+            key: "invoice_capture",
+            display_name: "Invoice Capture",
+            enabled_help: "Winston can look up invoice details, explain capture status, and answer questions about uploaded invoices.",
+            disabled_boundary: "Invoice Capture is not available for this organization. Winston cannot access or look up invoice data. Contact your administrator to enable this module.",
+        },
+        billforge_core::Module::InvoiceProcessing => ModuleInfo {
+            key: "invoice_processing",
+            display_name: "Invoice Processing",
+            enabled_help: "Winston can explain processing workflows, approval requirements, and invoice processing status.",
+            disabled_boundary: "Invoice Processing is not available for this organization. Winston cannot explain processing workflows or approval steps. Contact your administrator to enable this module.",
+        },
+        billforge_core::Module::VendorManagement => ModuleInfo {
+            key: "vendor_management",
+            display_name: "Vendor Management",
+            enabled_help: "Winston can look up vendor invoices and answer questions about vendor relationships.",
+            disabled_boundary: "Vendor Management is not available for this organization. Winston cannot access vendor data. Contact your administrator to enable this module.",
+        },
+        billforge_core::Module::Reporting => ModuleInfo {
+            key: "reporting",
+            display_name: "Reporting & Analytics",
+            enabled_help: "Winston can explain available reports and help interpret reporting data.",
+            disabled_boundary: "Reporting & Analytics is not available for this organization. Winston cannot generate or explain reports. Contact your administrator to enable this module.",
+        },
+        billforge_core::Module::AiAssistant => ModuleInfo {
+            key: "ai_assistant",
+            display_name: "Winston AI Assistant",
+            enabled_help: "Winston AI Assistant is active. Winston can answer questions, use tools, and assist with enabled modules.",
+            disabled_boundary: "Winston AI Assistant is a paid add-on that is not enabled for this organization. The AI assistant cannot be used until it is added to the tenant plan.",
+        },
+    }
+}
+
 /// Tool trait for agent capabilities
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -353,6 +406,45 @@ impl Tool for InvoiceSummaryTool {
     }
 }
 
+/// Read-only tool that reports tenant module availability and capability boundaries.
+/// No database queries, no mutations, no external calls.
+pub struct ModuleCapabilitiesTool;
+
+#[async_trait]
+impl Tool for ModuleCapabilitiesTool {
+    fn name(&self) -> &str {
+        "get_module_capabilities"
+    }
+
+    fn description(&self) -> &str {
+        "Report which modules are enabled for the tenant and describe capability boundaries. No args required."
+    }
+
+    async fn execute(&self, context: &AgentContext, _args: &str) -> Result<String> {
+        let mut lines = Vec::new();
+        lines.push("Module Capabilities Report\n".to_string());
+
+        for &module in ALL_MODULES {
+            let info = module_info(module);
+            let enabled = context.enabled_modules.contains(&module);
+            let status = if enabled { "ENABLED" } else { "DISABLED" };
+            lines.push(format!(
+                "- {} ({}): {}\n  {}",
+                info.display_name,
+                info.key,
+                status,
+                if enabled {
+                    info.enabled_help
+                } else {
+                    info.disabled_boundary
+                },
+            ));
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
 /// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
@@ -370,6 +462,7 @@ impl ToolRegistry {
             ("get_vendor_invoices", "Find all invoices from a vendor. Args: vendor_name"),
             ("get_approval_requirements", "Check who needs to approve an invoice. Args: invoice_id (UUID)"),
             ("summarize_invoice", "Generate a summary of an invoice. Args: invoice_id (UUID)"),
+            ("get_module_capabilities", "Report which modules are enabled for the tenant and describe capability boundaries. No args required."),
         ];
 
         descriptions
@@ -397,6 +490,9 @@ impl ToolRegistry {
             }
             "summarize_invoice" => {
                 InvoiceSummaryTool::new(self.pool.clone()).execute(context, args).await
+            }
+            "get_module_capabilities" => {
+                ModuleCapabilitiesTool.execute(context, args).await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

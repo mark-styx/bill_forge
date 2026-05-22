@@ -84,6 +84,7 @@ pub struct WinstonAgent {
     #[allow(dead_code)] // will be used once tool-calling is wired up
     tools: ToolRegistry,
     provider: Arc<dyn AiProvider>,
+    enabled_modules: Vec<billforge_core::Module>,
 }
 
 impl WinstonAgent {
@@ -92,7 +93,14 @@ impl WinstonAgent {
             pool: pool.clone(),
             tools: ToolRegistry::new(pool),
             provider,
+            enabled_modules: vec![],
         }
+    }
+
+    /// Set the tenant's enabled modules on this agent instance.
+    pub fn with_enabled_modules(mut self, modules: Vec<billforge_core::Module>) -> Self {
+        self.enabled_modules = modules;
+        self
     }
 
     /// Process a chat message and return AI response.
@@ -106,9 +114,12 @@ impl WinstonAgent {
         user_id: Uuid,
     ) -> Result<ChatResponse> {
         // Inject user context from tenant DB
-        let context = inject_context(&self.pool, tenant_id.clone(), user_id)
+        let mut context = inject_context(&self.pool, tenant_id.clone(), user_id)
             .await
             .context("Failed to inject agent context")?;
+
+        // Populate enabled modules from the authenticated tenant context.
+        context.enabled_modules = self.enabled_modules.clone();
 
         let parsed_tid: TenantId = tenant_id
             .parse()
@@ -535,6 +546,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             user_role: "admin".to_string(),
             permissions: vec!["read".to_string(), "write".to_string()],
+            enabled_modules: vec![],
         }
     }
 

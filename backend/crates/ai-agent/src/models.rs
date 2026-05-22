@@ -105,6 +105,7 @@ pub struct AgentContext {
     pub user_id: Uuid,
     pub user_role: String,
     pub permissions: Vec<String>,
+    pub enabled_modules: Vec<billforge_core::Module>,
 }
 
 /// Tool result from agent
