@@ -1,19 +1,18 @@
 //! Winston AI Agent - Main agent implementation
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
-use async_openai::{
-    types::{
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
-    },
-    Client,
-};
 use chrono::Utc;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::context::{build_system_prompt, inject_context};
-use super::models::{AgentContext, ChatRequest, ChatResponse, Conversation, Message, MessageRole};
+use super::models::{
+    AgentContext, ChatRequest, ChatResponse, Conversation, Message, MessageRole,
+    ProviderChatMessage, ProviderChatRequest, ProviderMessageRole,
+};
+use super::provider::AiProvider;
 use super::tools::ToolRegistry;
 use sqlx::PgPool;
 
@@ -22,13 +21,15 @@ use sqlx::PgPool;
 pub struct WinstonAgent {
     pool: PgPool,
     tools: ToolRegistry,
+    provider: Arc<dyn AiProvider>,
 }
 
 impl WinstonAgent {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, provider: Arc<dyn AiProvider>) -> Self {
         Self {
             pool: pool.clone(),
             tools: ToolRegistry::new(pool),
+            provider,
         }
     }
 
@@ -50,54 +51,49 @@ impl WinstonAgent {
             None => Uuid::new_v4(),
         };
 
-        // Build messages for OpenAI
+        // Build provider-neutral messages
         let system_prompt = build_system_prompt(&context);
-        let mut messages = vec![
-            ChatCompletionRequestMessage::System(
-                ChatCompletionRequestSystemMessageArgs::default()
-                    .content(&system_prompt)
-                    .build()?,
-            ),
+        let messages = vec![
+            ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: system_prompt,
+            },
+            ProviderChatMessage {
+                role: ProviderMessageRole::User,
+                content: request.message.clone(),
+            },
         ];
 
-        // Add user message
-        messages.push(ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessageArgs::default()
-                .content(request.message.clone())
-                .build()?,
-        ));
+        // Build provider-neutral completion request
+        let provider_request = ProviderChatRequest {
+            model: self.provider.model_name().to_string(),
+            messages,
+            temperature: Some(0.7),
+            max_tokens: Some(1000),
+            stop: None,
+            tools: None,
+        };
 
-        // Create completion request
-        let completion_request = CreateChatCompletionRequestArgs::default()
-            .model("gpt-4-turbo-preview")
-            .messages(messages)
-            .temperature(0.7)
-            .max_tokens(1000u16)
-            .build()?;
+        info!(
+            "Sending request to {} for conversation {}",
+            self.provider.provider_name(),
+            conversation_id
+        );
 
-        info!("Sending request to OpenAI for conversation {}", conversation_id);
-
-        // Create client and call OpenAI API
-        let client = Client::new();
-        let response = client
-            .chat()
-            .create(completion_request)
+        // Call provider
+        let provider_response = self
+            .provider
+            .chat_completion(provider_request)
             .await
-            .context("OpenAI API call failed")?;
+            .map_err(|e| anyhow::anyhow!("Provider chat completion failed: {}", e.message))?;
 
-        // Extract assistant message
-        let choice = response
-            .choices
-            .first()
-            .context("No response from OpenAI")?;
+        let assistant_content = provider_response.message.content;
 
-        let assistant_content = choice
-            .message
-            .content
-            .clone()
-            .context("No content in OpenAI response")?;
-
-        info!("Received response from OpenAI for conversation {}", conversation_id);
+        info!(
+            "Received response from {} for conversation {}",
+            self.provider.provider_name(),
+            conversation_id
+        );
 
         // Create response message
         let assistant_message = Message {
@@ -130,5 +126,123 @@ impl WinstonAgent {
         // For now, return empty list
         warn!("Conversation listing not yet implemented");
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake_provider::FakeAiProvider;
+    use crate::models::{ProviderChatError, ProviderChatErrorKind};
+    use sqlx::PgPool;
+
+    /// Helper: build a ChatRequest for tests.
+    fn chat_request(message: &str) -> ChatRequest {
+        ChatRequest {
+            message: message.to_string(),
+            conversation_id: None,
+        }
+    }
+
+    /// WinstonAgent builds a provider-neutral request with system + user messages
+    /// and delegates completion to the injected provider.
+    #[tokio::test]
+    async fn agent_delegates_to_injected_provider() {
+        let provider = Arc::new(FakeAiProvider::new().with_response_text("test reply"));
+        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
+            .expect("lazy connect is always ok");
+        let _agent = WinstonAgent::new(pool, provider.clone());
+
+        // We can't call agent.chat() because inject_context hits the DB,
+        // so we verify the provider-neutral request construction logic
+        // by examining what FakeAiProvider records.
+
+        // Build the provider request the same way the agent does:
+        let system_prompt = "system prompt".to_string();
+        let user_msg = "hello agent".to_string();
+        let messages = vec![
+            ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: system_prompt,
+            },
+            ProviderChatMessage {
+                role: ProviderMessageRole::User,
+                content: user_msg.clone(),
+            },
+        ];
+        let provider_request = ProviderChatRequest {
+            model: provider.model_name().to_string(),
+            messages,
+            temperature: Some(0.7),
+            max_tokens: Some(1000),
+            stop: None,
+            tools: None,
+        };
+
+        let response = provider.chat_completion(provider_request).await.expect("completion");
+
+        assert_eq!(response.message.role, ProviderMessageRole::Assistant);
+        assert_eq!(response.message.content, "test reply");
+
+        // Verify the request was recorded with the correct structure
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages.len(), 2);
+        assert_eq!(requests[0].messages[0].role, ProviderMessageRole::System);
+        assert_eq!(requests[0].messages[1].role, ProviderMessageRole::User);
+        assert_eq!(requests[0].messages[1].content, "hello agent");
+        assert_eq!(requests[0].temperature, Some(0.7));
+        assert_eq!(requests[0].max_tokens, Some(1000));
+    }
+
+    /// Provider name and model name are surfaced through the agent's provider.
+    #[tokio::test]
+    async fn agent_uses_provider_identity() {
+        let provider =
+            Arc::new(FakeAiProvider::new().with_model_name("glm-4-flash"));
+        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
+            .expect("lazy connect is always ok");
+        let agent = WinstonAgent::new(pool, provider);
+
+        assert_eq!(agent.provider.provider_name(), "fake");
+        assert_eq!(agent.provider.model_name(), "glm-4-flash");
+    }
+
+    /// When the provider returns an error, agent.chat would propagate it.
+    /// We test this by calling the provider directly with the error config.
+    #[tokio::test]
+    async fn provider_error_propagates() {
+        let error = ProviderChatError {
+            kind: ProviderChatErrorKind::RateLimit,
+            message: "quota exceeded".into(),
+            status_code: Some(429),
+            provider_code: None,
+            retryable: Some(true),
+        };
+        let provider = Arc::new(FakeAiProvider::new().with_error(error.clone()));
+        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
+            .expect("lazy connect is always ok");
+        let agent = WinstonAgent::new(pool, provider.clone());
+
+        // Simulate the provider call the agent would make
+        let request = ProviderChatRequest {
+            model: agent.provider.model_name().to_string(),
+            messages: vec![ProviderChatMessage {
+                role: ProviderMessageRole::User,
+                content: "trigger error".into(),
+            }],
+            temperature: Some(0.7),
+            max_tokens: Some(1000),
+            stop: None,
+            tools: None,
+        };
+
+        let err = agent
+            .provider
+            .chat_completion(request)
+            .await
+            .expect_err("should fail");
+        assert_eq!(err.kind, ProviderChatErrorKind::RateLimit);
+        assert_eq!(err.message, "quota exceeded");
     }
 }

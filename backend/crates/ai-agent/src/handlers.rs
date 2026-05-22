@@ -1,5 +1,7 @@
 //! HTTP handlers for Winston AI API
 
+use std::sync::Arc;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -13,6 +15,7 @@ use uuid::Uuid;
 
 use super::agent::WinstonAgent;
 use super::models::{ChatRequest, ChatResponse, Conversation};
+use super::provider::AiProvider;
 
 /// Application state for AI agent
 #[derive(Clone)]
@@ -22,8 +25,8 @@ pub struct AgentState {
 }
 
 /// Create router for AI agent endpoints
-pub fn create_router(pool: PgPool) -> Router {
-    let agent = WinstonAgent::new(pool.clone());
+pub fn create_router(pool: PgPool, provider: Arc<dyn AiProvider>) -> Router {
+    let agent = WinstonAgent::new(pool.clone(), provider);
     let state = AgentState { pool, agent };
 
     Router::new()

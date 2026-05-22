@@ -1,7 +1,9 @@
 //! AI Assistant (Winston) API routes
 //!
 //! Thin adapter that constructs a WinstonAgent from AppState's database pool
-//! and delegates to the ai-agent crate's handler logic.
+//! and an injected AiProvider, then delegates to the ai-agent crate's handler logic.
+
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
@@ -15,6 +17,8 @@ use uuid::Uuid;
 
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{ChatRequest, ChatResponse, Conversation};
+use billforge_ai_agent::provider::AiProvider;
+use billforge_ai_agent::OpenAiCompatibleProvider;
 
 use crate::extractors::AiAssistantAccess;
 use crate::state::AppState;
@@ -33,6 +37,11 @@ pub fn routes() -> Router<AppState> {
         .route("/conversations/{id}/messages", post(continue_conversation_handler))
 }
 
+/// Build the configured AiProvider for Winston.
+fn build_provider() -> Arc<dyn AiProvider> {
+    Arc::new(OpenAiCompatibleProvider::from_env())
+}
+
 /// POST /ai/chat
 #[utoipa::path(post, path = "/api/v1/ai/chat", tag = "AI Assistant", request_body = serde_json::Value,
     responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
@@ -42,7 +51,8 @@ async fn chat_handler(
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
     let pool = (*state.db.metadata()).clone();
-    let agent = WinstonAgent::new(pool);
+    let provider = build_provider();
+    let agent = WinstonAgent::new(pool, provider);
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
@@ -69,7 +79,8 @@ async fn list_conversations_handler(
     AiAssistantAccess(user, _tenant): AiAssistantAccess,
 ) -> Result<Json<Vec<Conversation>>, (StatusCode, Json<ErrorResponse>)> {
     let pool = (*state.db.metadata()).clone();
-    let agent = WinstonAgent::new(pool);
+    let provider = build_provider();
+    let agent = WinstonAgent::new(pool, provider);
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
@@ -99,7 +110,8 @@ async fn continue_conversation_handler(
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ErrorResponse>)> {
     let pool = (*state.db.metadata()).clone();
-    let agent = WinstonAgent::new(pool);
+    let provider = build_provider();
+    let agent = WinstonAgent::new(pool, provider);
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
