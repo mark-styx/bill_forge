@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::context::{build_system_prompt, inject_context};
 use super::models::{
-    ChatRequest, ChatResponse, Conversation, Message, MessageRole,
+    AgentContext, ChatRequest, ChatResponse, Conversation, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
 use super::provider::AiProvider;
@@ -20,6 +20,7 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct WinstonAgent {
     pool: PgPool,
+    #[allow(dead_code)] // will be used once tool-calling is wired up
     tools: ToolRegistry,
     provider: Arc<dyn AiProvider>,
 }
@@ -45,12 +46,27 @@ impl WinstonAgent {
             .await
             .context("Failed to inject agent context")?;
 
-        // Load or create conversation
         let conversation_id = match request.conversation_id {
             Some(id) => id,
             None => Uuid::new_v4(),
         };
 
+        self.chat_with_context(request, tenant_id, user_id, context, conversation_id)
+            .await
+    }
+
+    /// Core provider-call logic extracted from [`chat`](Self::chat).
+    ///
+    /// Separated so tests can pass a synthetic [`AgentContext`] without
+    /// hitting the database via [`inject_context`].
+    async fn chat_with_context(
+        &self,
+        request: ChatRequest,
+        tenant_id: String,
+        user_id: Uuid,
+        context: AgentContext,
+        conversation_id: Uuid,
+    ) -> Result<ChatResponse> {
         // Build provider-neutral messages
         let system_prompt = build_system_prompt(&context);
         let messages = vec![
@@ -136,9 +152,6 @@ impl WinstonAgent {
             created_at: Utc::now(),
         };
 
-        // Store conversation (in production, this would be persisted to database)
-        // For now, we'll skip persistence and return the response
-
         Ok(ChatResponse {
             conversation_id,
             message: assistant_message,
@@ -146,7 +159,7 @@ impl WinstonAgent {
     }
 
     /// Get conversation history
-    pub async fn get_conversation(&self, conversation_id: Uuid) -> Result<Option<Conversation>> {
+    pub async fn get_conversation(&self, _conversation_id: Uuid) -> Result<Option<Conversation>> {
         // In production, this would load from database
         // For now, return None to indicate not implemented
         warn!("Conversation persistence not yet implemented");
@@ -154,7 +167,7 @@ impl WinstonAgent {
     }
 
     /// List user's conversations
-    pub async fn list_conversations(&self, tenant_id: &str, user_id: Uuid) -> Result<Vec<Conversation>> {
+    pub async fn list_conversations(&self, _tenant_id: &str, _user_id: Uuid) -> Result<Vec<Conversation>> {
         // In production, this would load from database
         // For now, return empty list
         warn!("Conversation listing not yet implemented");
@@ -166,7 +179,7 @@ impl WinstonAgent {
 mod tests {
     use super::*;
     use crate::fake_provider::FakeAiProvider;
-    use crate::models::{ProviderChatError, ProviderChatErrorKind};
+    use crate::models::{AgentContext, ProviderChatError, ProviderChatErrorKind};
     use sqlx::PgPool;
 
     /// Helper: build a ChatRequest for tests.
@@ -177,74 +190,112 @@ mod tests {
         }
     }
 
-    /// WinstonAgent builds a provider-neutral request with system + user messages
-    /// and delegates completion to the injected provider.
-    #[tokio::test]
-    async fn agent_delegates_to_injected_provider() {
-        let provider = Arc::new(FakeAiProvider::new().with_response_text("test reply"));
+    /// Helper: build a synthetic AgentContext for tests.
+    fn synthetic_context() -> AgentContext {
+        AgentContext {
+            tenant_id: "test-tenant".to_string(),
+            user_id: Uuid::new_v4(),
+            user_role: "admin".to_string(),
+            permissions: vec!["read".to_string(), "write".to_string()],
+        }
+    }
+
+    /// Helper: wire up a WinstonAgent with the given provider and a lazy PgPool.
+    fn test_agent(provider: Arc<FakeAiProvider>) -> WinstonAgent {
         let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
             .expect("lazy connect is always ok");
-        let _agent = WinstonAgent::new(pool, provider.clone());
+        WinstonAgent::new(pool, provider)
+    }
 
-        // We can't call agent.chat() because inject_context hits the DB,
-        // so we verify the provider-neutral request construction logic
-        // by examining what FakeAiProvider records.
+    /// Proves that `chat_with_context` delegates to the injected fake provider,
+    /// returns the fake provider's response text, and records exactly one request
+    /// with the expected user message, temperature, max_tokens, and model route.
+    #[tokio::test]
+    async fn chat_with_context_uses_injected_fake_provider() {
+        let provider = Arc::new(FakeAiProvider::new().with_response_text("test reply"));
+        let agent = test_agent(provider.clone());
 
-        // Resolve routing the same way the agent does:
-        let selected_route = ProviderModelRoute::Default;
-        let selected_model = provider.model_name_for_route(selected_route).to_string();
+        let ctx = synthetic_context();
+        let request = chat_request("hello agent");
+        let conversation_id = Uuid::new_v4();
 
-        // Build the provider request the same way the agent does:
-        let system_prompt = "system prompt".to_string();
-        let user_msg = "hello agent".to_string();
-        let messages = vec![
-            ProviderChatMessage {
-                role: ProviderMessageRole::System,
-                content: system_prompt,
-            },
-            ProviderChatMessage {
-                role: ProviderMessageRole::User,
-                content: user_msg.clone(),
-            },
-        ];
-        // Agent now passes None for max_tokens so the provider applies its default.
-        let provider_request = ProviderChatRequest {
-            model: selected_model.clone(),
-            model_route: selected_route,
-            messages,
-            temperature: Some(0.7),
-            max_tokens: None,
-            stop: None,
-            tools: None,
-        };
+        let response = agent
+            .chat_with_context(
+                request,
+                ctx.tenant_id.clone(),
+                ctx.user_id,
+                ctx,
+                conversation_id,
+            )
+            .await
+            .expect("chat_with_context should succeed");
 
-        let response = provider.chat_completion(provider_request).await.expect("completion");
-
-        assert_eq!(response.message.role, ProviderMessageRole::Assistant);
+        // The ChatResponse must carry the fake provider's response text.
+        assert_eq!(response.message.role, MessageRole::Assistant);
         assert_eq!(response.message.content, "test reply");
+        assert_eq!(response.conversation_id, conversation_id);
 
-        // Verify the request was recorded with the correct structure
+        // The fake provider must have recorded exactly one request.
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 1, "expected exactly one provider request");
+
+        let rec = &requests[0];
+        // System + user messages.
+        assert_eq!(rec.messages.len(), 2);
+        assert_eq!(rec.messages[0].role, ProviderMessageRole::System);
+        assert_eq!(rec.messages[1].role, ProviderMessageRole::User);
+        assert_eq!(rec.messages[1].content, "hello agent");
+
+        // Agent sends temperature 0.7 and no max_tokens limit.
+        assert_eq!(rec.temperature, Some(0.7));
+        assert_eq!(rec.max_tokens, None);
+
+        // Route is always Default for now.
+        assert_eq!(rec.model_route, ProviderModelRoute::Default);
+    }
+
+    /// Proves that `chat_with_context` uses the injected provider's model selection
+    /// path rather than a hard-coded provider model. Uses
+    /// `FakeAiProvider::new().with_model_name("fake-selected-model")` and asserts
+    /// the recorded request carries that model name.
+    #[tokio::test]
+    async fn chat_with_context_selects_model_from_injected_provider() {
+        let provider = Arc::new(FakeAiProvider::new().with_model_name("fake-selected-model"));
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("check model selection");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(
+                request,
+                ctx.tenant_id.clone(),
+                ctx.user_id,
+                ctx,
+                conversation_id,
+            )
+            .await
+            .expect("chat_with_context should succeed");
+
+        assert_eq!(response.message.role, MessageRole::Assistant);
+
         let requests = provider.take_requests();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].messages.len(), 2);
-        assert_eq!(requests[0].messages[0].role, ProviderMessageRole::System);
-        assert_eq!(requests[0].messages[1].role, ProviderMessageRole::User);
-        assert_eq!(requests[0].messages[1].content, "hello agent");
-        assert_eq!(requests[0].temperature, Some(0.7));
-        assert_eq!(requests[0].max_tokens, None);
 
-        // Verify the model in the recorded request matches model_name_for_route(Default)
-        assert_eq!(requests[0].model, selected_model);
-        assert_eq!(requests[0].model_route, ProviderModelRoute::Default);
+        let rec = &requests[0];
+        // The model in the recorded request must be the one from the injected provider,
+        // not a hard-coded GLM/OpenAI default.
+        assert_eq!(rec.model, "fake-selected-model");
+        assert_eq!(rec.model_route, ProviderModelRoute::Default);
     }
 
     /// Provider name and model name are surfaced through the agent's provider.
     #[tokio::test]
     async fn agent_uses_provider_identity() {
-        let provider =
-            Arc::new(FakeAiProvider::new().with_model_name("glm-4-flash"));
-        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
-            .expect("lazy connect is always ok");
+        let provider = Arc::new(FakeAiProvider::new().with_model_name("glm-4-flash"));
+        let pool =
+            PgPool::connect_lazy("postgres:///_test_placeholder").expect("lazy connect is always ok");
         let agent = WinstonAgent::new(pool, provider);
 
         assert_eq!(agent.provider.provider_name(), "fake");
@@ -263,13 +314,16 @@ mod tests {
             retryable: Some(true),
         };
         let provider = Arc::new(FakeAiProvider::new().with_error(error.clone()));
-        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
-            .expect("lazy connect is always ok");
+        let pool =
+            PgPool::connect_lazy("postgres:///_test_placeholder").expect("lazy connect is always ok");
         let agent = WinstonAgent::new(pool, provider.clone());
 
         // Simulate the provider call the agent would make using model_name_for_route
         let selected_route = ProviderModelRoute::Default;
-        let selected_model = agent.provider.model_name_for_route(selected_route).to_string();
+        let selected_model = agent
+            .provider
+            .model_name_for_route(selected_route)
+            .to_string();
         let request = ProviderChatRequest {
             model: selected_model.clone(),
             model_route: selected_route,
