@@ -11,6 +11,7 @@ use futures::Stream;
 
 use crate::models::{
     ProviderChatError, ProviderChatRequest, ProviderChatResponse, ProviderChatStreamChunk,
+    ProviderModelRoute,
 };
 
 /// A boxed, provider-neutral stream of chat completion chunks.
@@ -25,6 +26,14 @@ pub trait AiProvider: Send + Sync {
 
     /// Model identifier forwarded in requests (e.g. `"gpt-4o"`, `"glm-4"`).
     fn model_name(&self) -> &str;
+
+    /// Model identifier for a specific route.
+    ///
+    /// Default implementation delegates to [`model_name`](Self::model_name).
+    /// Providers that support route-specific models should override this.
+    fn model_name_for_route(&self, _route: ProviderModelRoute) -> &str {
+        self.model_name()
+    }
 
     /// Whether this provider supports tool/function calling.
     fn supports_tools(&self) -> bool;

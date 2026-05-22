@@ -21,8 +21,12 @@ fn clear_env() {
         "WINSTON_AI_PROVIDER_TYPE",
         "WINSTON_AI_BASE_URL",
         "WINSTON_AI_API_KEY",
+        "WINSTON_AI_DEFAULT_MODEL",
         "WINSTON_AI_CHAT_MODEL",
         "WINSTON_AI_MODEL",
+        "WINSTON_AI_FAST_MODEL",
+        "WINSTON_AI_REASONING_MODEL",
+        "WINSTON_AI_TOOL_MODEL",
         "WINSTON_AI_EMBEDDING_MODEL",
         "WINSTON_AI_TIMEOUT_SECONDS",
         "WINSTON_AI_MAX_TOKENS",
@@ -46,6 +50,7 @@ fn user_message(content: &str) -> ProviderChatMessage {
 fn simple_request(content: &str) -> ProviderChatRequest {
     ProviderChatRequest {
         model: "glm-4".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![user_message(content)],
         temperature: None,
         max_tokens: None,

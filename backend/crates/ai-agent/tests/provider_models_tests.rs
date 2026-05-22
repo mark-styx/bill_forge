@@ -7,6 +7,7 @@ use serde_json;
 fn provider_chat_request_serializes_with_system_and_user_messages() {
     let request = ProviderChatRequest {
         model: "test-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![
             ProviderChatMessage {
                 role: ProviderMessageRole::System,
@@ -47,6 +48,36 @@ fn provider_chat_request_deserializes_without_optional_fields() {
     assert!(req.max_tokens.is_none());
     assert!(req.stop.is_none());
     assert!(req.tools.is_none());
+    // model_route defaults to "default" when absent from JSON.
+    assert_eq!(req.model_route, ProviderModelRoute::Default);
+}
+
+#[test]
+fn provider_chat_request_model_route_round_trips() {
+    let request = ProviderChatRequest {
+        model: "fast-model".into(),
+        model_route: ProviderModelRoute::Fast,
+        messages: vec![ProviderChatMessage {
+            role: ProviderMessageRole::User,
+            content: "quick lookup".into(),
+        }],
+        temperature: None,
+        max_tokens: None,
+        stop: None,
+        tools: None,
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize");
+    assert!(json.contains("\"model_route\":\"fast\""));
+    let roundtrip: ProviderChatRequest = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(roundtrip.model_route, ProviderModelRoute::Fast);
+}
+
+#[test]
+fn provider_chat_request_missing_model_route_defaults() {
+    let json = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}"#;
+    let req: ProviderChatRequest = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(req.model_route, ProviderModelRoute::Default);
 }
 
 #[test]

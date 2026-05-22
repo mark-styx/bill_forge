@@ -65,6 +65,9 @@ impl OpenAiCompatibleProvider {
                 api_key: None,
                 models: crate::config::AiModelConfig {
                     chat_model: model,
+                    fast_model: None,
+                    reasoning_model: None,
+                    tool_model: None,
                     embedding_model: None,
                     max_tokens: 1000,
                 },
@@ -88,6 +91,9 @@ impl OpenAiCompatibleProvider {
                 api_key,
                 models: crate::config::AiModelConfig {
                     chat_model: model,
+                    fast_model: None,
+                    reasoning_model: None,
+                    tool_model: None,
                     embedding_model: None,
                     max_tokens: 1000,
                 },
@@ -185,6 +191,10 @@ impl AiProvider for OpenAiCompatibleProvider {
         &self.config.models.chat_model
     }
 
+    fn model_name_for_route(&self, route: ProviderModelRoute) -> &str {
+        self.config.models.model_for_route(route)
+    }
+
     fn supports_tools(&self) -> bool {
         // Tool support can be enabled later; currently not wired through.
         false
@@ -197,7 +207,7 @@ impl AiProvider for OpenAiCompatibleProvider {
         let sdk_messages = self.convert_messages(&request.messages)?;
 
         let mut req = CreateChatCompletionRequestArgs::default()
-            .model(&self.config.models.chat_model)
+            .model(&request.model)
             .messages(sdk_messages)
             .build()
             .map_err(|e| ProviderChatError {
@@ -320,8 +330,12 @@ mod tests {
             "WINSTON_AI_PROVIDER_TYPE",
             "WINSTON_AI_BASE_URL",
             "WINSTON_AI_API_KEY",
+            "WINSTON_AI_DEFAULT_MODEL",
             "WINSTON_AI_CHAT_MODEL",
             "WINSTON_AI_MODEL",
+            "WINSTON_AI_FAST_MODEL",
+            "WINSTON_AI_REASONING_MODEL",
+            "WINSTON_AI_TOOL_MODEL",
             "WINSTON_AI_EMBEDDING_MODEL",
             "WINSTON_AI_TIMEOUT_SECONDS",
             "WINSTON_AI_MAX_TOKENS",

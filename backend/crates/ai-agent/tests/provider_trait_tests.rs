@@ -19,6 +19,7 @@ fn user_message(content: &str) -> ProviderChatMessage {
 fn simple_request(content: &str) -> ProviderChatRequest {
     ProviderChatRequest {
         model: "fake-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![user_message(content)],
         temperature: None,
         max_tokens: None,
@@ -80,6 +81,7 @@ async fn chat_completion_accepts_tools_and_returns_response() {
 
     let request = ProviderChatRequest {
         model: "fake-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![user_message("hello")],
         temperature: None,
         max_tokens: None,
@@ -104,6 +106,7 @@ async fn chat_completion_rejects_empty_messages() {
     let p = FakeAiProvider::new();
     let request = ProviderChatRequest {
         model: "fake-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![],
         temperature: None,
         max_tokens: None,
@@ -164,6 +167,7 @@ async fn stream_chat_completion_rejects_empty_messages() {
     let p = FakeAiProvider::new();
     let request = ProviderChatRequest {
         model: "fake-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![],
         temperature: None,
         max_tokens: None,
@@ -237,6 +241,7 @@ async fn does_not_record_failed_validation() {
     let p = FakeAiProvider::new();
     let empty = ProviderChatRequest {
         model: "fake-model".into(),
+        model_route: ProviderModelRoute::Default,
         messages: vec![],
         temperature: None,
         max_tokens: None,

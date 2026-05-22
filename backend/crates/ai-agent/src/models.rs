@@ -87,11 +87,34 @@ pub struct ProviderChatMessage {
     pub content: String,
 }
 
+/// Route selector for provider model routing.
+///
+/// Each variant maps to a model resolved via [`AiModelConfig::model_for_route`]
+/// or [`AiProvider::model_name_for_route`]. The [`Default`] variant is the
+/// general-purpose chat model; the others allow callers to request a
+/// faster, more capable, or tool-oriented model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderModelRoute {
+    /// Fast / low-latency model for simple lookups.
+    Fast,
+    /// General-purpose chat model (the default).
+    #[default]
+    Default,
+    /// Heavier reasoning model for complex tasks.
+    Reasoning,
+    /// Model optimised for tool/function calling turns.
+    Tool,
+}
+
 /// A provider-neutral chat completion request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderChatRequest {
     /// Model identifier (e.g. "gpt-4o", "glm-4").
     pub model: String,
+    /// Route that was used to select the model.
+    #[serde(default)]
+    pub model_route: ProviderModelRoute,
     /// Ordered list of conversation messages.
     pub messages: Vec<ProviderChatMessage>,
     /// Sampling temperature.

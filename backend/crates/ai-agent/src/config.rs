@@ -22,9 +22,13 @@ mod env_keys {
     pub const PROVIDER_TYPE: &str = "WINSTON_AI_PROVIDER_TYPE";
     pub const BASE_URL: &str = "WINSTON_AI_BASE_URL";
     pub const API_KEY: &str = "WINSTON_AI_API_KEY";
+    pub const DEFAULT_MODEL: &str = "WINSTON_AI_DEFAULT_MODEL";
     pub const CHAT_MODEL: &str = "WINSTON_AI_CHAT_MODEL";
     /// Legacy alias honoured when `WINSTON_AI_CHAT_MODEL` is unset.
     pub const MODEL_LEGACY: &str = "WINSTON_AI_MODEL";
+    pub const FAST_MODEL: &str = "WINSTON_AI_FAST_MODEL";
+    pub const REASONING_MODEL: &str = "WINSTON_AI_REASONING_MODEL";
+    pub const TOOL_MODEL: &str = "WINSTON_AI_TOOL_MODEL";
     pub const EMBEDDING_MODEL: &str = "WINSTON_AI_EMBEDDING_MODEL";
     pub const TIMEOUT_SECONDS: &str = "WINSTON_AI_TIMEOUT_SECONDS";
     pub const MAX_TOKENS: &str = "WINSTON_AI_MAX_TOKENS";
@@ -105,12 +109,44 @@ impl AiProviderType {
 /// Model-level configuration consumed by provider adapters.
 #[derive(Debug, Clone)]
 pub struct AiModelConfig {
-    /// Chat completions model identifier.
+    /// Chat completions model identifier (used as the default route model).
     pub chat_model: String,
+    /// Fast / low-latency model override. Falls back to `chat_model` when `None`.
+    pub fast_model: Option<String>,
+    /// Reasoning model override. Falls back to `chat_model` when `None`.
+    pub reasoning_model: Option<String>,
+    /// Tool-calling model override. Falls back to `chat_model` when `None`.
+    pub tool_model: Option<String>,
     /// Embeddings model identifier, if configured.
     pub embedding_model: Option<String>,
     /// Default maximum tokens for completions when the caller does not specify.
     pub max_tokens: u32,
+}
+
+use crate::models::ProviderModelRoute;
+
+impl AiModelConfig {
+    /// Return the model identifier for the given route.
+    ///
+    /// Fast, reasoning, and tool routes fall back to `chat_model` when their
+    /// route-specific override is `None`.
+    pub fn model_for_route(&self, route: ProviderModelRoute) -> &str {
+        match route {
+            ProviderModelRoute::Fast => self
+                .fast_model
+                .as_deref()
+                .unwrap_or(&self.chat_model),
+            ProviderModelRoute::Default => &self.chat_model,
+            ProviderModelRoute::Reasoning => self
+                .reasoning_model
+                .as_deref()
+                .unwrap_or(&self.chat_model),
+            ProviderModelRoute::Tool => self
+                .tool_model
+                .as_deref()
+                .unwrap_or(&self.chat_model),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +242,16 @@ impl AiProviderConfig {
         let base_url = env_opt(env_keys::BASE_URL);
         let api_key = env_opt(env_keys::API_KEY);
 
-        // Chat model: prefer the new var, fall back to legacy alias.
-        let chat_model = env_opt(env_keys::CHAT_MODEL)
+        // Chat model: prefer DEFAULT_MODEL, then CHAT_MODEL, then legacy alias.
+        let chat_model = env_opt(env_keys::DEFAULT_MODEL)
+            .or_else(|| env_opt(env_keys::CHAT_MODEL))
             .or_else(|| env_opt(env_keys::MODEL_LEGACY))
             .unwrap_or_else(|| DEFAULT_CHAT_MODEL.to_string());
+
+        // Route-specific model overrides (all optional).
+        let fast_model = env_opt(env_keys::FAST_MODEL);
+        let reasoning_model = env_opt(env_keys::REASONING_MODEL);
+        let tool_model = env_opt(env_keys::TOOL_MODEL);
 
         // Embedding model: purely optional.
         let embedding_model = env_opt(env_keys::EMBEDDING_MODEL);
@@ -239,6 +281,9 @@ impl AiProviderConfig {
             api_key,
             models: AiModelConfig {
                 chat_model,
+                fast_model,
+                reasoning_model,
+                tool_model,
                 embedding_model,
                 max_tokens,
             },
@@ -261,8 +306,12 @@ mod tests {
             env_keys::PROVIDER_TYPE,
             env_keys::BASE_URL,
             env_keys::API_KEY,
+            env_keys::DEFAULT_MODEL,
             env_keys::CHAT_MODEL,
             env_keys::MODEL_LEGACY,
+            env_keys::FAST_MODEL,
+            env_keys::REASONING_MODEL,
+            env_keys::TOOL_MODEL,
             env_keys::EMBEDDING_MODEL,
             env_keys::TIMEOUT_SECONDS,
             env_keys::MAX_TOKENS,
@@ -478,5 +527,82 @@ mod tests {
             Some(AiProviderType::OpenAiCompatible)
         );
         assert_eq!(AiProviderType::from_str_loose("unknown"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Route-specific model tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_model_env_takes_precedence_over_chat_model() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var(env_keys::DEFAULT_MODEL, "default-via-env");
+        env::set_var(env_keys::CHAT_MODEL, "chat-via-env");
+
+        let cfg = AiProviderConfig::try_from_env().expect("should parse");
+        assert_eq!(cfg.models.chat_model, "default-via-env");
+
+        clear_env();
+    }
+
+    #[test]
+    fn route_specific_models_parsed_from_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var(env_keys::CHAT_MODEL, "chat-model");
+        env::set_var(env_keys::FAST_MODEL, "fast-model");
+        env::set_var(env_keys::REASONING_MODEL, "reasoning-model");
+        env::set_var(env_keys::TOOL_MODEL, "tool-model");
+
+        let cfg = AiProviderConfig::try_from_env().expect("should parse");
+        assert_eq!(cfg.models.chat_model, "chat-model");
+        assert_eq!(cfg.models.fast_model.as_deref(), Some("fast-model"));
+        assert_eq!(cfg.models.reasoning_model.as_deref(), Some("reasoning-model"));
+        assert_eq!(cfg.models.tool_model.as_deref(), Some("tool-model"));
+
+        clear_env();
+    }
+
+    #[test]
+    fn route_models_default_to_none_when_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = AiProviderConfig::try_from_env().expect("should parse");
+        assert!(cfg.models.fast_model.is_none());
+        assert!(cfg.models.reasoning_model.is_none());
+        assert!(cfg.models.tool_model.is_none());
+    }
+
+    #[test]
+    fn model_for_route_falls_back_to_chat_model() {
+        let cfg = AiModelConfig {
+            chat_model: "base".into(),
+            fast_model: None,
+            reasoning_model: None,
+            tool_model: None,
+            embedding_model: None,
+            max_tokens: 100,
+        };
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Fast), "base");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Default), "base");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Reasoning), "base");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Tool), "base");
+    }
+
+    #[test]
+    fn model_for_route_uses_route_specific_overrides() {
+        let cfg = AiModelConfig {
+            chat_model: "base".into(),
+            fast_model: Some("fast".into()),
+            reasoning_model: Some("reason".into()),
+            tool_model: Some("tooler".into()),
+            embedding_model: None,
+            max_tokens: 100,
+        };
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Fast), "fast");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Default), "base");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Reasoning), "reason");
+        assert_eq!(cfg.model_for_route(ProviderModelRoute::Tool), "tooler");
     }
 }

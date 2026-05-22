@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use super::context::{build_system_prompt, inject_context};
 use super::models::{
-    AgentContext, ChatRequest, ChatResponse, Conversation, Message, MessageRole,
-    ProviderChatMessage, ProviderChatRequest, ProviderMessageRole,
+    ChatRequest, ChatResponse, Conversation, Message, MessageRole,
+    ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
 use super::provider::AiProvider;
 use super::tools::ToolRegistry;
@@ -67,7 +67,8 @@ impl WinstonAgent {
         // Build provider-neutral completion request.
         // max_tokens is left as None so the provider applies its configured default.
         let provider_request = ProviderChatRequest {
-            model: self.provider.model_name().to_string(),
+            model: self.provider.model_name_for_route(ProviderModelRoute::Default).to_string(),
+            model_route: ProviderModelRoute::Default,
             messages,
             temperature: Some(0.7),
             max_tokens: None,
@@ -174,6 +175,7 @@ mod tests {
         // Agent now passes None for max_tokens so the provider applies its default.
         let provider_request = ProviderChatRequest {
             model: provider.model_name().to_string(),
+            model_route: ProviderModelRoute::Default,
             messages,
             temperature: Some(0.7),
             max_tokens: None,
@@ -229,6 +231,7 @@ mod tests {
         // Simulate the provider call the agent would make
         let request = ProviderChatRequest {
             model: agent.provider.model_name().to_string(),
+            model_route: ProviderModelRoute::Default,
             messages: vec![ProviderChatMessage {
                 role: ProviderMessageRole::User,
                 content: "trigger error".into(),
