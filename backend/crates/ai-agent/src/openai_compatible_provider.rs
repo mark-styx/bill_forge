@@ -1,10 +1,9 @@
 //! OpenAI-compatible provider adapter for the GLM proxy.
 //!
 //! Implements [`AiProvider`] by translating between provider-neutral types
-//! and the `async-openai` SDK. Configuration is read from Winston-neutral
-//! environment variables so no provider-specific knowledge leaks into the agent.
-
-use std::env;
+//! and the `async-openai` SDK. Configuration is sourced from
+//! [`AiProviderConfig`](crate::config::AiProviderConfig) which centralises
+//! env-var parsing, validation, and defaults.
 
 use async_openai::{
     types::{
@@ -15,56 +14,62 @@ use async_openai::{
 };
 use async_trait::async_trait;
 
+use crate::config::AiProviderConfig;
 use crate::models::*;
 use crate::provider::{AiProvider, ProviderChatStream};
 
-/// Environment variable names consumed by the OpenAI-compatible adapter.
-mod env_keys {
-    pub const PROVIDER_NAME: &str = "WINSTON_AI_PROVIDER_NAME";
-    pub const BASE_URL: &str = "WINSTON_AI_BASE_URL";
-    pub const API_KEY: &str = "WINSTON_AI_API_KEY";
-    pub const MODEL: &str = "WINSTON_AI_MODEL";
-}
-
 /// OpenAI-compatible provider that targets an OpenAI-style chat completions
-/// endpoint (e.g. a GLM proxy). All config comes from environment variables.
+/// endpoint (e.g. a GLM proxy).
+///
+/// Wraps an [`AiProviderConfig`] so all env-var parsing lives in one place.
 pub struct OpenAiCompatibleProvider {
     provider_name: String,
-    model: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
+    config: AiProviderConfig,
+}
+
+// Keep the old module-level env_keys around for the `from_env` compatibility
+// wrapper and its test.
+mod env_keys {
+    pub const PROVIDER_NAME: &str = "WINSTON_AI_PROVIDER_NAME";
 }
 
 impl OpenAiCompatibleProvider {
-    /// Build a provider from environment variables.
+    /// Build a provider from validated environment configuration.
     ///
-    /// Falls back to sensible defaults when variables are unset:
-    /// - `WINSTON_AI_PROVIDER_NAME` defaults to `"openai-compatible"`
-    /// - `WINSTON_AI_MODEL` defaults to `"gpt-4-turbo-preview"`
-    /// - `WINSTON_AI_BASE_URL` and `WINSTON_AI_API_KEY` are applied directly
-    ///   to the `OpenAIConfig` when building the client.
-    pub fn from_env() -> Self {
-        let provider_name =
-            env::var(env_keys::PROVIDER_NAME).unwrap_or_else(|_| "openai-compatible".into());
-        let model = env::var(env_keys::MODEL).unwrap_or_else(|_| "gpt-4-turbo-preview".into());
-        let base_url = env::var(env_keys::BASE_URL).ok();
-        let api_key = env::var(env_keys::API_KEY).ok();
-
-        Self {
+    /// Uses [`AiProviderConfig::try_from_env`] under the hood, propagating
+    /// validation errors for unsupported provider types or bad numeric values.
+    pub fn try_from_env() -> Result<Self, crate::config::ConfigError> {
+        let config = AiProviderConfig::try_from_env()?;
+        let provider_name = std::env::var(env_keys::PROVIDER_NAME)
+            .unwrap_or_else(|_| "openai-compatible".into());
+        Ok(Self {
             provider_name,
-            model,
-            base_url,
-            api_key,
-        }
+            config,
+        })
+    }
+
+    /// Compatibility wrapper that panics on config errors.
+    ///
+    /// Prefer [`try_from_env()`](Self::try_from_env) in production code.
+    pub fn from_env() -> Self {
+        Self::try_from_env().expect("AI provider configuration is invalid")
     }
 
     /// Create with explicit config (useful for tests or programmatic setup).
     pub fn new(provider_name: String, model: String) -> Self {
         Self {
             provider_name,
-            model,
-            base_url: None,
-            api_key: None,
+            config: AiProviderConfig {
+                provider_type: crate::config::AiProviderType::OpenAiCompatible,
+                base_url: None,
+                api_key: None,
+                models: crate::config::AiModelConfig {
+                    chat_model: model,
+                    embedding_model: None,
+                    max_tokens: 1000,
+                },
+                timeout: None,
+            },
         }
     }
 
@@ -77,21 +82,40 @@ impl OpenAiCompatibleProvider {
     ) -> Self {
         Self {
             provider_name,
-            model,
-            base_url,
-            api_key,
+            config: AiProviderConfig {
+                provider_type: crate::config::AiProviderType::OpenAiCompatible,
+                base_url,
+                api_key,
+                models: crate::config::AiModelConfig {
+                    chat_model: model,
+                    embedding_model: None,
+                    max_tokens: 1000,
+                },
+                timeout: None,
+            },
         }
     }
 
     fn build_client(&self) -> Client<async_openai::config::OpenAIConfig> {
-        let mut config = async_openai::config::OpenAIConfig::new();
-        if let Some(ref base_url) = self.base_url {
-            config = config.with_api_base(base_url);
+        let mut openai_config = async_openai::config::OpenAIConfig::new();
+        if let Some(ref base_url) = self.config.base_url {
+            openai_config = openai_config.with_api_base(base_url);
         }
-        if let Some(ref api_key) = self.api_key {
-            config = config.with_api_key(api_key);
+        if let Some(ref api_key) = self.config.api_key {
+            openai_config = openai_config.with_api_key(api_key);
         }
-        Client::with_config(config)
+        let client = Client::with_config(openai_config);
+        // Apply configured timeout to the underlying HTTP client when present.
+        match self.config.timeout {
+            Some(dur) => {
+                let http = reqwest::Client::builder()
+                    .timeout(dur)
+                    .build()
+                    .expect("reqwest client builder should not fail with valid timeout");
+                client.with_http_client(http)
+            }
+            None => client,
+        }
     }
 
     /// Convert provider-neutral messages into async-openai SDK message types.
@@ -158,7 +182,7 @@ impl AiProvider for OpenAiCompatibleProvider {
     }
 
     fn model_name(&self) -> &str {
-        &self.model
+        &self.config.models.chat_model
     }
 
     fn supports_tools(&self) -> bool {
@@ -173,7 +197,7 @@ impl AiProvider for OpenAiCompatibleProvider {
         let sdk_messages = self.convert_messages(&request.messages)?;
 
         let mut req = CreateChatCompletionRequestArgs::default()
-            .model(&self.model)
+            .model(&self.config.models.chat_model)
             .messages(sdk_messages)
             .build()
             .map_err(|e| ProviderChatError {
@@ -187,8 +211,12 @@ impl AiProvider for OpenAiCompatibleProvider {
         if let Some(temp) = request.temperature {
             req.temperature = Some(temp);
         }
+        // Use request max_tokens if provided, otherwise fall back to config default.
+        // Config already validates max_tokens <= u16::MAX, so this cast is safe.
         if let Some(max_tokens) = request.max_tokens {
-            req.max_tokens = Some(max_tokens as u16);
+            req.max_tokens = Some(max_tokens.min(u16::MAX as u32) as u16);
+        } else {
+            req.max_tokens = Some(self.config.models.max_tokens as u16);
         }
 
         let client = self.build_client();
@@ -274,10 +302,10 @@ mod tests {
         assert_eq!(provider.provider_name(), "test-provider");
         assert_eq!(provider.model_name(), "glm-4-flash");
         assert_eq!(
-            provider.base_url.as_deref(),
+            provider.config.base_url.as_deref(),
             Some("https://glm-proxy.example.com/v1")
         );
-        assert_eq!(provider.api_key.as_deref(), Some("sk-test-key-123"));
+        assert_eq!(provider.config.api_key.as_deref(), Some("sk-test-key-123"));
     }
 
     /// `from_env` picks up Winston env vars when set, then falls back to
@@ -285,36 +313,56 @@ mod tests {
     /// parallel-test races on shared environment variables.
     #[test]
     fn from_env_reads_winston_vars_then_defaults() {
+        let _lock = crate::config::ENV_LOCK.lock().unwrap();
+
+        // Clear all AI-related env vars first to ensure a clean slate.
+        for key in &[
+            "WINSTON_AI_PROVIDER_TYPE",
+            "WINSTON_AI_BASE_URL",
+            "WINSTON_AI_API_KEY",
+            "WINSTON_AI_CHAT_MODEL",
+            "WINSTON_AI_MODEL",
+            "WINSTON_AI_EMBEDDING_MODEL",
+            "WINSTON_AI_TIMEOUT_SECONDS",
+            "WINSTON_AI_MAX_TOKENS",
+            env_keys::PROVIDER_NAME,
+        ] {
+            std::env::remove_var(key);
+        }
+
         // Phase 1: set vars, verify they are read.
-        env::set_var(env_keys::PROVIDER_NAME, "glm-proxy");
-        env::set_var(env_keys::MODEL, "glm-4");
-        env::set_var(env_keys::BASE_URL, "https://glm.local:8080/v1");
-        env::set_var(env_keys::API_KEY, "sk-glm-key");
+        std::env::set_var(env_keys::PROVIDER_NAME, "glm-proxy");
+        std::env::set_var("WINSTON_AI_CHAT_MODEL", "glm-4");
+        std::env::set_var("WINSTON_AI_BASE_URL", "https://glm.local:8080/v1");
+        std::env::set_var("WINSTON_AI_API_KEY", "sk-glm-key");
 
         let provider = OpenAiCompatibleProvider::from_env();
         assert_eq!(provider.provider_name(), "glm-proxy");
         assert_eq!(provider.model_name(), "glm-4");
-        assert_eq!(provider.base_url.as_deref(), Some("https://glm.local:8080/v1"));
-        assert_eq!(provider.api_key.as_deref(), Some("sk-glm-key"));
+        assert_eq!(
+            provider.config.base_url.as_deref(),
+            Some("https://glm.local:8080/v1")
+        );
+        assert_eq!(provider.config.api_key.as_deref(), Some("sk-glm-key"));
 
         // Phase 2: remove vars, verify defaults.
-        env::remove_var(env_keys::PROVIDER_NAME);
-        env::remove_var(env_keys::MODEL);
-        env::remove_var(env_keys::BASE_URL);
-        env::remove_var(env_keys::API_KEY);
+        std::env::remove_var(env_keys::PROVIDER_NAME);
+        std::env::remove_var("WINSTON_AI_CHAT_MODEL");
+        std::env::remove_var("WINSTON_AI_BASE_URL");
+        std::env::remove_var("WINSTON_AI_API_KEY");
 
         let default_provider = OpenAiCompatibleProvider::from_env();
         assert_eq!(default_provider.provider_name(), "openai-compatible");
         assert_eq!(default_provider.model_name(), "gpt-4-turbo-preview");
-        assert!(default_provider.base_url.is_none());
-        assert!(default_provider.api_key.is_none());
+        assert!(default_provider.config.base_url.is_none());
+        assert!(default_provider.config.api_key.is_none());
     }
 
     /// `new()` (legacy constructor) leaves base_url and api_key as None.
     #[test]
     fn new_constructor_has_no_endpoint_config() {
         let provider = OpenAiCompatibleProvider::new("p".into(), "m".into());
-        assert!(provider.base_url.is_none());
-        assert!(provider.api_key.is_none());
+        assert!(provider.config.base_url.is_none());
+        assert!(provider.config.api_key.is_none());
     }
 }

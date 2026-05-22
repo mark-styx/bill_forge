@@ -64,12 +64,13 @@ impl WinstonAgent {
             },
         ];
 
-        // Build provider-neutral completion request
+        // Build provider-neutral completion request.
+        // max_tokens is left as None so the provider applies its configured default.
         let provider_request = ProviderChatRequest {
             model: self.provider.model_name().to_string(),
             messages,
             temperature: Some(0.7),
-            max_tokens: Some(1000),
+            max_tokens: None,
             stop: None,
             tools: None,
         };
@@ -170,11 +171,12 @@ mod tests {
                 content: user_msg.clone(),
             },
         ];
+        // Agent now passes None for max_tokens so the provider applies its default.
         let provider_request = ProviderChatRequest {
             model: provider.model_name().to_string(),
             messages,
             temperature: Some(0.7),
-            max_tokens: Some(1000),
+            max_tokens: None,
             stop: None,
             tools: None,
         };
@@ -192,7 +194,7 @@ mod tests {
         assert_eq!(requests[0].messages[1].role, ProviderMessageRole::User);
         assert_eq!(requests[0].messages[1].content, "hello agent");
         assert_eq!(requests[0].temperature, Some(0.7));
-        assert_eq!(requests[0].max_tokens, Some(1000));
+        assert_eq!(requests[0].max_tokens, None);
     }
 
     /// Provider name and model name are surfaced through the agent's provider.
