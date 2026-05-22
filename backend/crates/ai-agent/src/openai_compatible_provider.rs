@@ -31,6 +31,8 @@ mod env_keys {
 pub struct OpenAiCompatibleProvider {
     provider_name: String,
     model: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -39,25 +41,20 @@ impl OpenAiCompatibleProvider {
     /// Falls back to sensible defaults when variables are unset:
     /// - `WINSTON_AI_PROVIDER_NAME` defaults to `"openai-compatible"`
     /// - `WINSTON_AI_MODEL` defaults to `"gpt-4-turbo-preview"`
-    /// - `WINSTON_AI_BASE_URL` and `WINSTON_AI_API_KEY` are passed through
-    ///   to the `async-openai` client via `OPENAI_API_BASE` / `OPENAI_API_KEY`.
+    /// - `WINSTON_AI_BASE_URL` and `WINSTON_AI_API_KEY` are applied directly
+    ///   to the `OpenAIConfig` when building the client.
     pub fn from_env() -> Self {
         let provider_name =
             env::var(env_keys::PROVIDER_NAME).unwrap_or_else(|_| "openai-compatible".into());
         let model = env::var(env_keys::MODEL).unwrap_or_else(|_| "gpt-4-turbo-preview".into());
-
-        // If the user set the Winston-specific env vars, propagate them to the
-        // conventional async-openai env vars so the Client picks them up.
-        if let Ok(base_url) = env::var(env_keys::BASE_URL) {
-            env::set_var("OPENAI_API_BASE", base_url);
-        }
-        if let Ok(api_key) = env::var(env_keys::API_KEY) {
-            env::set_var("OPENAI_API_KEY", api_key);
-        }
+        let base_url = env::var(env_keys::BASE_URL).ok();
+        let api_key = env::var(env_keys::API_KEY).ok();
 
         Self {
             provider_name,
             model,
+            base_url,
+            api_key,
         }
     }
 
@@ -66,11 +63,35 @@ impl OpenAiCompatibleProvider {
         Self {
             provider_name,
             model,
+            base_url: None,
+            api_key: None,
+        }
+    }
+
+    /// Create with explicit config including base URL and API key.
+    pub fn with_config(
+        provider_name: String,
+        model: String,
+        base_url: Option<String>,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            provider_name,
+            model,
+            base_url,
+            api_key,
         }
     }
 
     fn build_client(&self) -> Client<async_openai::config::OpenAIConfig> {
-        Client::new()
+        let mut config = async_openai::config::OpenAIConfig::new();
+        if let Some(ref base_url) = self.base_url {
+            config = config.with_api_base(base_url);
+        }
+        if let Some(ref api_key) = self.api_key {
+            config = config.with_api_key(api_key);
+        }
+        Client::with_config(config)
     }
 
     /// Convert provider-neutral messages into async-openai SDK message types.
@@ -232,5 +253,68 @@ impl AiProvider for OpenAiCompatibleProvider {
             provider_code: None,
             retryable: Some(false),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `with_config` stores base_url and api_key so `build_client` uses them
+    /// instead of the default OpenAI endpoint.
+    #[test]
+    fn with_config_stores_base_url_and_api_key() {
+        let provider = OpenAiCompatibleProvider::with_config(
+            "test-provider".into(),
+            "glm-4-flash".into(),
+            Some("https://glm-proxy.example.com/v1".into()),
+            Some("sk-test-key-123".into()),
+        );
+
+        assert_eq!(provider.provider_name(), "test-provider");
+        assert_eq!(provider.model_name(), "glm-4-flash");
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://glm-proxy.example.com/v1")
+        );
+        assert_eq!(provider.api_key.as_deref(), Some("sk-test-key-123"));
+    }
+
+    /// `from_env` picks up Winston env vars when set, then falls back to
+    /// defaults once they are removed. Combined into a single test to avoid
+    /// parallel-test races on shared environment variables.
+    #[test]
+    fn from_env_reads_winston_vars_then_defaults() {
+        // Phase 1: set vars, verify they are read.
+        env::set_var(env_keys::PROVIDER_NAME, "glm-proxy");
+        env::set_var(env_keys::MODEL, "glm-4");
+        env::set_var(env_keys::BASE_URL, "https://glm.local:8080/v1");
+        env::set_var(env_keys::API_KEY, "sk-glm-key");
+
+        let provider = OpenAiCompatibleProvider::from_env();
+        assert_eq!(provider.provider_name(), "glm-proxy");
+        assert_eq!(provider.model_name(), "glm-4");
+        assert_eq!(provider.base_url.as_deref(), Some("https://glm.local:8080/v1"));
+        assert_eq!(provider.api_key.as_deref(), Some("sk-glm-key"));
+
+        // Phase 2: remove vars, verify defaults.
+        env::remove_var(env_keys::PROVIDER_NAME);
+        env::remove_var(env_keys::MODEL);
+        env::remove_var(env_keys::BASE_URL);
+        env::remove_var(env_keys::API_KEY);
+
+        let default_provider = OpenAiCompatibleProvider::from_env();
+        assert_eq!(default_provider.provider_name(), "openai-compatible");
+        assert_eq!(default_provider.model_name(), "gpt-4-turbo-preview");
+        assert!(default_provider.base_url.is_none());
+        assert!(default_provider.api_key.is_none());
+    }
+
+    /// `new()` (legacy constructor) leaves base_url and api_key as None.
+    #[test]
+    fn new_constructor_has_no_endpoint_config() {
+        let provider = OpenAiCompatibleProvider::new("p".into(), "m".into());
+        assert!(provider.base_url.is_none());
+        assert!(provider.api_key.is_none());
     }
 }
