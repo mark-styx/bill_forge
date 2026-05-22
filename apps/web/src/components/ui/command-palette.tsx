@@ -25,6 +25,7 @@ import {
   Workflow,
   LogOut,
   ArrowRight,
+  Sparkles,
 } from 'lucide-react';
 
 interface CommandItem {
@@ -146,6 +147,15 @@ export function CommandPalette() {
       href: '/reports',
       keywords: ['analytics', 'metrics', 'charts'],
       module: 'reporting',
+      group: 'navigation',
+    },
+    {
+      id: 'ai-assistant',
+      label: 'Go to Winston AI Assistant',
+      icon: Sparkles,
+      href: '/ai-assistant',
+      keywords: ['winston', 'ai', 'assistant', 'chat'],
+      module: 'ai_assistant',
       group: 'navigation',
     },
     {

@@ -1,12 +1,18 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import { aiAssistantApi, AiMessage } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth';
 import { toast } from 'sonner';
 import { Sparkles, Send } from 'lucide-react';
 
 export default function AiAssistantPage() {
+  const router = useRouter();
+  const hasModule = useAuthStore((s) => s.hasModule);
+  const aiEnabled = hasModule('ai_assistant');
+
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -15,6 +21,13 @@ export default function AiAssistantPage() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
+
+  // Redirect tenants that lack the ai_assistant module
+  useEffect(() => {
+    if (!aiEnabled) {
+      router.replace('/dashboard');
+    }
+  }, [aiEnabled, router]);
 
   const mutation = useMutation({
     mutationFn: (message: string) =>
@@ -41,6 +54,10 @@ export default function AiAssistantPage() {
     if (!trimmed || mutation.isPending) return;
     mutation.mutate(trimmed);
   };
+
+  if (!aiEnabled) {
+    return null;
+  }
 
   return (
     <div className="flex h-full flex-col">

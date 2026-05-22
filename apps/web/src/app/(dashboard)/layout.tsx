@@ -62,6 +62,7 @@ const navigation: NavItem[] = [
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
+  { name: 'Winston AI Assistant', href: '/ai-assistant', icon: Sparkles, module: 'ai_assistant' },
   { name: 'Integrations', href: '/integrations', icon: Workflow, module: null },
 ];
 
