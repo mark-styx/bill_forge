@@ -38,11 +38,64 @@ pub struct ChatRequest {
     pub conversation_id: Option<Uuid>,
 }
 
+/// A single context record that informed the AI answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnswerContextRecord {
+    /// What kind of context this record represents (e.g. "tenant_scope", "user_role", "permissions").
+    pub record_type: String,
+    /// Human-readable label or value for this context.
+    pub label: String,
+}
+
+/// Trace entry for a tool invocation that informed the answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnswerToolTrace {
+    /// Name of the tool that was invoked.
+    pub tool_name: String,
+}
+
+/// Provider metadata captured from the turn that produced the answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnswerProviderTrace {
+    /// Provider identifier (e.g. "fake", "glm_proxy").
+    pub provider: String,
+    /// Model identifier (e.g. "glm-4-flash").
+    pub model: String,
+    /// Route used to select the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_route: Option<String>,
+    /// Why generation stopped (e.g. "stop").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    /// Opaque provider request id for debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_request_id: Option<String>,
+    /// End-to-end latency in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// Token usage, if reported by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ProviderChatUsage>,
+}
+
+/// Answer provenance trace explaining which context records and tools
+/// informed the AI assistant answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnswerTrace {
+    /// Context records injected into the system prompt.
+    pub context_records: Vec<AnswerContextRecord>,
+    /// Tool invocations that informed the answer (empty until tool calling is wired).
+    pub tools_used: Vec<AnswerToolTrace>,
+    /// Provider metadata from the turn that produced the answer.
+    pub provider: AnswerProviderTrace,
+}
+
 /// Response from Winston AI
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub conversation_id: Uuid,
     pub message: Message,
+    pub trace: AnswerTrace,
 }
 
 /// Context injected into the AI agent

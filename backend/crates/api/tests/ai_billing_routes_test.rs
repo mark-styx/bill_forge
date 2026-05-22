@@ -93,6 +93,39 @@ fn test_chat_request_deserialize() {
 
 #[test]
 fn test_chat_response_serializes() {
+    use billforge_ai_agent::models::{AnswerContextRecord, AnswerProviderTrace, AnswerTrace, ProviderChatUsage};
+
+    let trace = AnswerTrace {
+        context_records: vec![
+            AnswerContextRecord {
+                record_type: "tenant_scope".to_string(),
+                label: "tenant_id=test-tenant".to_string(),
+            },
+            AnswerContextRecord {
+                record_type: "user_role".to_string(),
+                label: "admin".to_string(),
+            },
+            AnswerContextRecord {
+                record_type: "permissions".to_string(),
+                label: "read,write".to_string(),
+            },
+        ],
+        tools_used: vec![],
+        provider: AnswerProviderTrace {
+            provider: "fake".to_string(),
+            model: "fake-model".to_string(),
+            model_route: Some("Default".to_string()),
+            finish_reason: Some("stop".to_string()),
+            provider_request_id: Some("req-001".to_string()),
+            latency_ms: Some(42),
+            usage: Some(ProviderChatUsage {
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                total_tokens: Some(15),
+            }),
+        },
+    };
+
     let resp = billforge_ai_agent::models::ChatResponse {
         conversation_id: Uuid::new_v4(),
         message: billforge_ai_agent::models::Message {
@@ -101,11 +134,24 @@ fn test_chat_response_serializes() {
             content: "Invoice ACME-123 is pending approval.".to_string(),
             created_at: chrono::Utc::now(),
         },
+        trace,
     };
     let val: serde_json::Value = serde_json::to_value(&resp).expect("serialize ChatResponse");
     assert!(val.get("conversation_id").is_some());
     assert!(val.get("message").is_some());
     assert_eq!(val["message"]["role"], "assistant");
+
+    // Trace assertions
+    let trace_val = &val["trace"];
+    assert!(trace_val.get("context_records").is_some());
+    assert!(trace_val.get("tools_used").is_some());
+    let cr = trace_val["context_records"].as_array().expect("context_records is array");
+    assert_eq!(cr.len(), 3);
+    assert_eq!(cr[0]["record_type"], "tenant_scope");
+    let tools = trace_val["tools_used"].as_array().expect("tools_used is array");
+    assert_eq!(tools.len(), 0, "tools_used should be empty");
+    assert_eq!(trace_val["provider"]["provider"], "fake");
+    assert_eq!(trace_val["provider"]["model"], "fake-model");
 }
 
 // ---------------------------------------------------------------------------

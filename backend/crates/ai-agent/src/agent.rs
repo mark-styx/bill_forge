@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use super::context::{build_system_prompt, inject_context};
 use super::models::{
-    AgentContext, ChatRequest, ChatResponse, Conversation, Message, MessageRole,
+    AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerTrace,
+    ChatRequest, ChatResponse, Conversation, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
 use super::provider::AiProvider;
@@ -190,7 +191,7 @@ impl WinstonAgent {
                         completion_tokens: u.completion_tokens.map(|t| t as i32),
                         total_tokens: u.total_tokens.map(|t| t as i32),
                     }),
-                    metadata: serde_json::json!({}),
+                    metadata: serde_json::to_value(&response.trace).unwrap_or_else(|_| serde_json::json!({})),
                 };
                 let assistant_record = repo
                     .append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
@@ -409,7 +410,37 @@ impl WinstonAgent {
             finish_reason: provider_response.finish_reason.clone(),
             provider_request_id: provider_response.provider_request_id.clone(),
             latency_ms,
-            usage: provider_response.usage,
+            usage: provider_response.usage.clone(),
+        };
+
+        // Build answer provenance trace from context and telemetry.
+        let context_records = vec![
+            AnswerContextRecord {
+                record_type: "tenant_scope".to_string(),
+                label: format!("tenant_id={}", context.tenant_id),
+            },
+            AnswerContextRecord {
+                record_type: "user_role".to_string(),
+                label: context.user_role.clone(),
+            },
+            AnswerContextRecord {
+                record_type: "permissions".to_string(),
+                label: context.permissions.join(","),
+            },
+        ];
+
+        let trace = AnswerTrace {
+            context_records,
+            tools_used: vec![],
+            provider: AnswerProviderTrace {
+                provider: telemetry.selected_provider.clone(),
+                model: telemetry.selected_model.clone(),
+                model_route: Some(format!("{:?}", telemetry.selected_route)),
+                finish_reason: telemetry.finish_reason.clone(),
+                provider_request_id: telemetry.provider_request_id.clone(),
+                latency_ms: Some(telemetry.latency_ms),
+                usage: telemetry.usage.clone(),
+            },
         };
 
         let response = ChatResponse {
@@ -420,6 +451,7 @@ impl WinstonAgent {
                 content: assistant_content,
                 created_at: Utc::now(),
             },
+            trace,
         };
 
         Ok((response, telemetry))
@@ -617,6 +649,52 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].model, selected_model);
         assert_eq!(requests[0].model_route, ProviderModelRoute::Default);
+    }
+
+    /// Proves that `chat_with_context` returns trace data containing tenant/user-role/permissions
+    /// context records, provider/model metadata from FakeAiProvider, fake usage, and an empty
+    /// tools_used array.
+    #[tokio::test]
+    async fn chat_with_context_returns_trace_data() {
+        let provider = Arc::new(FakeAiProvider::new().with_response_text("trace reply"));
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("trace me");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(request, ctx.clone(), conversation_id)
+            .await
+            .expect("chat_with_context should succeed");
+
+        // Validate trace is present
+        let trace = &response.trace;
+
+        // Context records: tenant_scope, user_role, permissions
+        assert_eq!(trace.context_records.len(), 3);
+        assert_eq!(trace.context_records[0].record_type, "tenant_scope");
+        assert!(trace.context_records[0].label.contains(&ctx.tenant_id));
+        assert_eq!(trace.context_records[1].record_type, "user_role");
+        assert_eq!(trace.context_records[1].label, "admin");
+        assert_eq!(trace.context_records[2].record_type, "permissions");
+        assert_eq!(trace.context_records[2].label, "read,write");
+
+        // tools_used is intentionally empty (no tool calling wired yet)
+        assert!(trace.tools_used.is_empty());
+
+        // Provider metadata from FakeAiProvider
+        assert_eq!(trace.provider.provider, "fake");
+        assert_eq!(trace.provider.model, "fake-model");
+        assert_eq!(trace.provider.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(trace.provider.provider_request_id.as_deref(), Some("fake-req-001"));
+        assert!(trace.provider.latency_ms.is_some());
+
+        // FakeAiProvider reports deterministic usage
+        let usage = trace.provider.usage.as_ref().expect("usage should be present");
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.completion_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(15));
     }
 
     /// Verify that the routing reason and route constants used in chat() are stable.

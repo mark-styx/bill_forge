@@ -2042,9 +2042,39 @@ export interface AiChatRequest {
   conversation_id?: string;
 }
 
+export interface AiTraceContextRecord {
+  record_type: string;
+  label: string;
+}
+
+export interface AiTraceToolUsed {
+  tool_name: string;
+}
+
+export interface AiTraceProvider {
+  provider: string;
+  model: string;
+  model_route?: string;
+  finish_reason?: string;
+  provider_request_id?: string;
+  latency_ms?: number;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+export interface AiAnswerTrace {
+  context_records: AiTraceContextRecord[];
+  tools_used: AiTraceToolUsed[];
+  provider: AiTraceProvider;
+}
+
 export interface AiChatResponse {
   conversation_id: string;
   message: AiMessage;
+  trace: AiAnswerTrace;
 }
 
 export type AiAnswerFeedbackRating = 'positive' | 'negative';
