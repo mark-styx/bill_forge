@@ -461,5 +461,17 @@ pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
         ))
     })?;
 
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/083_create_ai_tool_call_persistence.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run AI tool call persistence migration: {}",
+            e
+        ))
+    })?;
+
     Ok(())
 }

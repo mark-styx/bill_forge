@@ -15,7 +15,8 @@ mod workflow_repo;
 
 pub use ai_conversation_repo::{
     AiConversationRepositoryImpl, AiConversationRecord, AiMessageRecord, AiMessageRole,
-    AiMessageUsage, AppendAiMessageInput,
+    AiMessageUsage, AppendAiMessageInput, PersistAiToolCallInput, AiToolCallRecord,
+    PersistAiToolResultInput, AiToolResultRecord,
 };
 pub use audit_repo::AuditRepositoryImpl;
 pub use invoice_repo::InvoiceRepositoryImpl;

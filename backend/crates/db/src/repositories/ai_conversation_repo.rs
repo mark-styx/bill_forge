@@ -83,6 +83,60 @@ pub struct AiMessageRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Input for persisting a tool call linked to an assistant message.
+#[derive(Debug, Clone)]
+pub struct PersistAiToolCallInput {
+    pub provider_tool_call_id: Option<String>,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    pub status: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// A persisted AI tool call row.
+#[derive(Debug, Clone)]
+pub struct AiToolCallRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_id: Uuid,
+    pub provider_tool_call_id: Option<String>,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    pub status: String,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input for persisting a tool result linked to a tool call and message.
+#[derive(Debug, Clone)]
+pub struct PersistAiToolResultInput {
+    pub success: bool,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub metadata: serde_json::Value,
+}
+
+/// A persisted AI tool result row.
+#[derive(Debug, Clone)]
+pub struct AiToolResultRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_id: Uuid,
+    pub tool_call_id: Uuid,
+    pub success: bool,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
 /// PostgreSQL implementation of the AI conversation repository.
 pub struct AiConversationRepositoryImpl {
     pool: Arc<PgPool>,
@@ -184,6 +238,112 @@ impl AiConversationRepositoryImpl {
 
         Ok(row.into_record())
     }
+
+    /// Persist a tool call linked to an assistant message.
+    ///
+    /// Validates ownership via the composite FK on `ai_messages`. Returns
+    /// `Error::Database` if the message does not exist or does not belong to
+    /// the given tenant/user/conversation.
+    pub async fn persist_tool_call(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        conversation_id: Uuid,
+        message_id: Uuid,
+        input: PersistAiToolCallInput,
+    ) -> Result<AiToolCallRecord> {
+        let status = input.status.unwrap_or_else(|| "requested".to_string());
+        let row: ToolCallRow = sqlx::query_as::<_, ToolCallRow>(
+            r#"INSERT INTO ai_tool_calls (
+                    tenant_id, user_id, conversation_id, message_id,
+                    provider_tool_call_id, tool_name, arguments, status, metadata
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING id, tenant_id, user_id, conversation_id, message_id,
+                         provider_tool_call_id, tool_name, arguments, status,
+                         metadata, created_at, updated_at"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(conversation_id)
+        .bind(message_id)
+        .bind(&input.provider_tool_call_id)
+        .bind(&input.tool_name)
+        .bind(&input.arguments)
+        .bind(&status)
+        .bind(&input.metadata)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to persist tool call: {}", e)))?;
+
+        Ok(row.into_record())
+    }
+
+    /// Persist a tool result linked to a tool call and message.
+    ///
+    /// Validates ownership via composite FKs. Returns `Error::Database` if
+    /// the tool call or message does not exist or scope mismatch.
+    pub async fn persist_tool_result(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        conversation_id: Uuid,
+        message_id: Uuid,
+        tool_call_id: Uuid,
+        input: PersistAiToolResultInput,
+    ) -> Result<AiToolResultRecord> {
+        let row: ToolResultRow = sqlx::query_as::<_, ToolResultRow>(
+            r#"INSERT INTO ai_tool_results (
+                    tenant_id, user_id, conversation_id, message_id,
+                    tool_call_id, success, result, error, latency_ms, metadata
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               RETURNING id, tenant_id, user_id, conversation_id, message_id,
+                         tool_call_id, success, result, error, latency_ms,
+                         metadata, created_at"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(conversation_id)
+        .bind(message_id)
+        .bind(tool_call_id)
+        .bind(input.success)
+        .bind(&input.result)
+        .bind(&input.error)
+        .bind(input.latency_ms)
+        .bind(&input.metadata)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to persist tool result: {}", e)))?;
+
+        Ok(row.into_record())
+    }
+
+    /// List all tool calls for a given message, ordered by creation time.
+    pub async fn list_tool_calls_for_message(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        conversation_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Vec<AiToolCallRecord>> {
+        let rows: Vec<ToolCallRow> = sqlx::query_as::<_, ToolCallRow>(
+            r#"SELECT id, tenant_id, user_id, conversation_id, message_id,
+                      provider_tool_call_id, tool_name, arguments, status,
+                      metadata, created_at, updated_at
+               FROM ai_tool_calls
+               WHERE tenant_id = $1 AND user_id = $2
+                 AND conversation_id = $3 AND message_id = $4
+               ORDER BY created_at ASC"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(conversation_id)
+        .bind(message_id)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list tool calls: {}", e)))?;
+
+        Ok(rows.into_iter().map(|r| r.into_record()).collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +413,76 @@ impl MessageRow {
             total_tokens: self.total_tokens,
             finish_reason: self.finish_reason,
             provider_request_id: self.provider_request_id,
+            latency_ms: self.latency_ms,
+            metadata: self.metadata,
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ToolCallRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Uuid,
+    message_id: Uuid,
+    provider_tool_call_id: Option<String>,
+    tool_name: String,
+    arguments: serde_json::Value,
+    status: String,
+    metadata: serde_json::Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl ToolCallRow {
+    fn into_record(self) -> AiToolCallRecord {
+        AiToolCallRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            conversation_id: self.conversation_id,
+            message_id: self.message_id,
+            provider_tool_call_id: self.provider_tool_call_id,
+            tool_name: self.tool_name,
+            arguments: self.arguments,
+            status: self.status,
+            metadata: self.metadata,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ToolResultRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Uuid,
+    message_id: Uuid,
+    tool_call_id: Uuid,
+    success: bool,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+    latency_ms: Option<i64>,
+    metadata: serde_json::Value,
+    created_at: DateTime<Utc>,
+}
+
+impl ToolResultRow {
+    fn into_record(self) -> AiToolResultRecord {
+        AiToolResultRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            conversation_id: self.conversation_id,
+            message_id: self.message_id,
+            tool_call_id: self.tool_call_id,
+            success: self.success,
+            result: self.result,
+            error: self.error,
             latency_ms: self.latency_ms,
             metadata: self.metadata,
             created_at: self.created_at,

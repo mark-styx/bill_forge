@@ -10,6 +10,7 @@
 use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
     AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
+    PersistAiToolCallInput, PersistAiToolResultInput,
 };
 use billforge_db::PgManager;
 use std::sync::Arc;
@@ -290,6 +291,180 @@ async fn append_message_rejects_wrong_user_or_missing_conversation() {
             assert_eq!(id, missing_id.to_string());
         }
         other => panic!("expected NotFound, got {:?}", other),
+    }
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+/// Persisting a tool call and tool result against an assistant message works
+/// end-to-end, and cross-scope attachment is rejected.
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn persist_tool_call_and_result_round_trip() {
+    let (manager, tenant_id, pool) = setup_single_tenant("tool-call-persist").await;
+    let user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+
+    let repo = AiConversationRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+
+    // Create conversation + assistant message
+    let conv = repo
+        .create_conversation(&tenant_id, &uid, Some("Tool test"), serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let assistant_msg = repo
+        .append_message(
+            &tenant_id,
+            &uid,
+            conv.id,
+            AppendAiMessageInput {
+                role: AiMessageRole::Assistant,
+                content: "I will look that up.".to_string(),
+                provider: Some("fake".to_string()),
+                model: Some("test-model".to_string()),
+                model_route: None,
+                finish_reason: Some("tool_calls".to_string()),
+                provider_request_id: None,
+                latency_ms: None,
+                usage: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("append assistant message");
+
+    // Persist a tool call
+    let tool_call = repo
+        .persist_tool_call(
+            &tenant_id,
+            &uid,
+            conv.id,
+            assistant_msg.id,
+            PersistAiToolCallInput {
+                provider_tool_call_id: Some("call_abc123".to_string()),
+                tool_name: "get_invoice".to_string(),
+                arguments: serde_json::json!({"invoice_id": "inv-001"}),
+                status: Some("requested".to_string()),
+                metadata: serde_json::json!({"source": "assistant_response"}),
+            },
+        )
+        .await
+        .expect("persist tool call");
+
+    assert_eq!(tool_call.tenant_id, *tenant_id.as_uuid());
+    assert_eq!(tool_call.user_id, user_id);
+    assert_eq!(tool_call.conversation_id, conv.id);
+    assert_eq!(tool_call.message_id, assistant_msg.id);
+    assert_eq!(tool_call.provider_tool_call_id.as_deref(), Some("call_abc123"));
+    assert_eq!(tool_call.tool_name, "get_invoice");
+    assert_eq!(tool_call.arguments["invoice_id"], "inv-001");
+    assert_eq!(tool_call.status, "requested");
+    assert!(tool_call.created_at <= chrono::Utc::now());
+    assert!(tool_call.updated_at <= chrono::Utc::now());
+
+    // Persist a tool result for that call
+    let tool_result = repo
+        .persist_tool_result(
+            &tenant_id,
+            &uid,
+            conv.id,
+            assistant_msg.id,
+            tool_call.id,
+            PersistAiToolResultInput {
+                success: true,
+                result: Some(serde_json::json!({"amount": 10000, "currency": "USD"})),
+                error: None,
+                latency_ms: Some(42),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("persist tool result");
+
+    assert_eq!(tool_result.tenant_id, *tenant_id.as_uuid());
+    assert_eq!(tool_result.user_id, user_id);
+    assert_eq!(tool_result.conversation_id, conv.id);
+    assert_eq!(tool_result.message_id, assistant_msg.id);
+    assert_eq!(tool_result.tool_call_id, tool_call.id);
+    assert!(tool_result.success);
+    assert_eq!(tool_result.result.as_ref().unwrap()["amount"], 10000);
+    assert!(tool_result.error.is_none());
+    assert_eq!(tool_result.latency_ms, Some(42));
+    assert!(tool_result.created_at <= chrono::Utc::now());
+
+    // List tool calls for message and verify
+    let calls = repo
+        .list_tool_calls_for_message(&tenant_id, &uid, conv.id, assistant_msg.id)
+        .await
+        .expect("list tool calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, tool_call.id);
+
+    // --- Negative: wrong user cannot persist tool call ---
+    let wrong_user_id = Uuid::new_v4();
+    seed_user(pool.as_ref(), &tenant_id, wrong_user_id).await;
+    let wrong_uid = UserId(wrong_user_id);
+
+    let err = repo
+        .persist_tool_call(
+            &tenant_id,
+            &wrong_uid,
+            conv.id,
+            assistant_msg.id,
+            PersistAiToolCallInput {
+                provider_tool_call_id: None,
+                tool_name: "bad_call".to_string(),
+                arguments: serde_json::json!({}),
+                status: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("wrong user should fail");
+
+    match err {
+        billforge_core::Error::Database(msg) => {
+            assert!(
+                msg.contains("Failed to persist tool call"),
+                "unexpected error: {}",
+                msg
+            );
+        }
+        other => panic!("expected Database error, got {:?}", other),
+    }
+
+    // --- Negative: missing message ---
+    let missing_msg_id = Uuid::new_v4();
+    let err = repo
+        .persist_tool_call(
+            &tenant_id,
+            &uid,
+            conv.id,
+            missing_msg_id,
+            PersistAiToolCallInput {
+                provider_tool_call_id: None,
+                tool_name: "orphan".to_string(),
+                arguments: serde_json::json!({}),
+                status: None,
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect_err("missing message should fail");
+
+    match err {
+        billforge_core::Error::Database(msg) => {
+            assert!(
+                msg.contains("Failed to persist tool call"),
+                "unexpected error: {}",
+                msg
+            );
+        }
+        other => panic!("expected Database error, got {:?}", other),
     }
 
     manager.delete_tenant(&tenant_id).await.ok();
