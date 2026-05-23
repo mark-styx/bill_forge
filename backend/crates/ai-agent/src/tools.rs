@@ -149,17 +149,13 @@ impl Tool for InvoiceStatusTool {
         let row = sqlx::query(
             r#"
             SELECT
-                i.id,
-                i.invoice_number,
-                i.status,
-                i.total_amount,
-                i.currency,
-                v.name as vendor_name,
-                i.created_at,
-                i.approved_at
-            FROM invoices i
-            JOIN vendors v ON i.vendor_id = v.id
-            WHERE i.id = $1 AND i.tenant_id = $2
+                id, invoice_number, status, total_amount_cents, currency,
+                vendor_name, capture_status, processing_status,
+                invoice_date, due_date, po_number,
+                current_queue_id, assigned_to,
+                created_at, updated_at
+            FROM invoices
+            WHERE id = $1 AND tenant_id = $2
             "#,
         )
         .bind(invoice_id)
@@ -172,22 +168,52 @@ impl Tool for InvoiceStatusTool {
                 let invoice_number: String = row.try_get("invoice_number")?;
                 let id: Uuid = row.try_get("id")?;
                 let status: String = row.try_get("status")?;
-                let total_amount: f64 = row.try_get("total_amount")?;
+                let total_cents: Option<i64> = row.try_get("total_amount_cents")?;
                 let currency: String = row.try_get("currency")?;
-                let vendor_name: String = row.try_get("vendor_name")?;
+                let vendor_name: Option<String> = row.try_get("vendor_name")?;
+                let capture_status: Option<String> = row.try_get("capture_status")?;
+                let processing_status: Option<String> = row.try_get("processing_status")?;
+                let invoice_date: Option<DateTime<Utc>> = row.try_get("invoice_date")?;
+                let due_date: Option<DateTime<Utc>> = row.try_get("due_date")?;
+                let po_number: Option<String> = row.try_get("po_number")?;
+                let current_queue_id: Option<Uuid> = row.try_get("current_queue_id")?;
+                let assigned_to: Option<Uuid> = row.try_get("assigned_to")?;
                 let created_at: DateTime<Utc> = row.try_get("created_at")?;
-                let approved_at: Option<DateTime<Utc>> = row.try_get("approved_at")?;
+                let updated_at: Option<DateTime<Utc>> = row.try_get("updated_at")?;
+
+                let amount_display = total_cents
+                    .map(|c| format!("{}.{:02}", c / 100, c % 100))
+                    .unwrap_or_else(|| "N/A".to_string());
 
                 Ok(format!(
-                    "Invoice {} (ID: {})\nStatus: {}\nVendor: {}\nAmount: {} {}\nCreated: {}\nApproved: {}",
+                    "Invoice {} (ID: {})\n\
+                     Status: {}\n\
+                     Vendor: {}\n\
+                     Amount: {} {}\n\
+                     Capture Status: {}\n\
+                     Processing Status: {}\n\
+                     Invoice Date: {}\n\
+                     Due Date: {}\n\
+                     PO Number: {}\n\
+                     Queue: {}\n\
+                     Assigned To: {}\n\
+                     Created: {}\n\
+                     Updated: {}",
                     invoice_number,
                     id,
                     status,
-                    vendor_name,
-                    total_amount,
+                    vendor_name.unwrap_or_else(|| "Unknown".to_string()),
+                    amount_display,
                     currency,
+                    capture_status.unwrap_or_else(|| "N/A".to_string()),
+                    processing_status.unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    po_number.unwrap_or_else(|| "N/A".to_string()),
+                    current_queue_id.map(|q| q.to_string()).unwrap_or_else(|| "None".to_string()),
+                    assigned_to.map(|a| a.to_string()).unwrap_or_else(|| "Unassigned".to_string()),
                     created_at.format("%Y-%m-%d %H:%M"),
-                    approved_at.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "Not approved".to_string()),
+                    updated_at.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "N/A".to_string()),
                 ))
             }
             None => Ok(format!("Invoice {} not found in your organization.", invoice_id)),
@@ -403,18 +429,12 @@ impl Tool for InvoiceSummaryTool {
         let invoice = sqlx::query(
             r#"
             SELECT
-                i.id,
-                i.invoice_number,
-                i.status,
-                i.total_amount,
-                i.currency,
-                v.name as vendor_name,
-                i.description,
-                i.created_at,
-                i.approved_at
-            FROM invoices i
-            JOIN vendors v ON i.vendor_id = v.id
-            WHERE i.id = $1 AND i.tenant_id = $2
+                id, invoice_number, status, total_amount_cents, currency,
+                vendor_name, capture_status, processing_status,
+                invoice_date, due_date, po_number,
+                created_at, updated_at
+            FROM invoices
+            WHERE id = $1 AND tenant_id = $2
             "#,
         )
         .bind(invoice_id)
@@ -425,13 +445,21 @@ impl Tool for InvoiceSummaryTool {
         match invoice {
             Some(inv) => {
                 let invoice_number: String = inv.try_get("invoice_number")?;
-                let vendor_name: String = inv.try_get("vendor_name")?;
-                let total_amount: f64 = inv.try_get("total_amount")?;
+                let vendor_name: Option<String> = inv.try_get("vendor_name")?;
+                let total_cents: Option<i64> = inv.try_get("total_amount_cents")?;
                 let currency: String = inv.try_get("currency")?;
                 let status: String = inv.try_get("status")?;
-                let description: Option<String> = inv.try_get("description")?;
+                let capture_status: Option<String> = inv.try_get("capture_status")?;
+                let processing_status: Option<String> = inv.try_get("processing_status")?;
+                let invoice_date: Option<DateTime<Utc>> = inv.try_get("invoice_date")?;
+                let due_date: Option<DateTime<Utc>> = inv.try_get("due_date")?;
+                let po_number: Option<String> = inv.try_get("po_number")?;
                 let created_at: DateTime<Utc> = inv.try_get("created_at")?;
-                let approved_at: Option<DateTime<Utc>> = inv.try_get("approved_at")?;
+                let updated_at: Option<DateTime<Utc>> = inv.try_get("updated_at")?;
+
+                let amount_display = total_cents
+                    .map(|c| format!("{}.{:02}", c / 100, c % 100))
+                    .unwrap_or_else(|| "N/A".to_string());
 
                 Ok(format!(
                     "**Invoice Summary**\n\n\
@@ -439,17 +467,25 @@ impl Tool for InvoiceSummaryTool {
                     **Vendor:** {}\n\
                     **Amount:** {} {}\n\
                     **Status:** {}\n\
-                    **Description:** {}\n\
+                    **Capture Status:** {}\n\
+                    **Processing Status:** {}\n\
+                    **Invoice Date:** {}\n\
+                    **Due Date:** {}\n\
+                    **PO Number:** {}\n\
                     **Created:** {}\n\
-                    **Approved:** {}",
+                    **Updated:** {}",
                     invoice_number,
-                    vendor_name,
-                    total_amount,
+                    vendor_name.unwrap_or_else(|| "Unknown".to_string()),
+                    amount_display,
                     currency,
                     status,
-                    description.unwrap_or_else(|| "No description".to_string()),
+                    capture_status.unwrap_or_else(|| "N/A".to_string()),
+                    processing_status.unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    po_number.unwrap_or_else(|| "N/A".to_string()),
                     created_at.format("%Y-%m-%d"),
-                    approved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "Not approved".to_string()),
+                    updated_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
                 ))
             }
             None => Ok(format!("Invoice {} not found.", invoice_id)),
@@ -1073,6 +1109,665 @@ impl Tool for ExplainWorkflowBehaviorTool {
 }
 
 /// Collection of available tools
+
+// ── Search invoices tool ─────────────────────────────────────────────────────
+
+/// Read-only tool for searching invoices with flexible filters.
+/// No mutations, no external calls. Tenant-scoped.
+pub struct SearchInvoicesTool {
+    pool: PgPool,
+}
+
+impl SearchInvoicesTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for SearchInvoicesTool {
+    fn name(&self) -> &str {
+        "search_invoices"
+    }
+
+    fn description(&self) -> &str {
+        "Search invoices with flexible filters. Args: JSON with optional query, vendor_name, invoice_number, status, capture_status, processing_status, due_before, due_after, min_amount_cents, max_amount_cents, and limit. Raw text is treated as query."
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let trimmed = args.trim();
+        let filters: serde_json::Value = if trimmed.is_empty() {
+            serde_json::json!({})
+        } else if trimmed.starts_with('{') {
+            serde_json::from_str(trimmed)
+                .context("Invalid JSON input for search_invoices.")?
+        } else {
+            serde_json::json!({ "query": trimmed })
+        };
+
+        let query = filters.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        let vendor_name = filters.get("vendor_name").and_then(|v| v.as_str());
+        let invoice_number = filters.get("invoice_number").and_then(|v| v.as_str());
+        let status = filters.get("status").and_then(|v| v.as_str());
+        let capture_status = filters.get("capture_status").and_then(|v| v.as_str());
+        let processing_status = filters.get("processing_status").and_then(|v| v.as_str());
+        let due_before = filters.get("due_before").and_then(|v| v.as_str());
+        let due_after = filters.get("due_after").and_then(|v| v.as_str());
+        let min_amount_cents = filters.get("min_amount_cents").and_then(|v| v.as_i64());
+        let max_amount_cents = filters.get("max_amount_cents").and_then(|v| v.as_i64());
+        let limit_val = filters.get("limit").and_then(|v| v.as_u64()).unwrap_or(25);
+        let limit = limit_val.min(25) as i64;
+
+        // Build dynamic query with bind parameters
+        let mut sql_parts = vec![
+            r#"SELECT id, invoice_number, vendor_name, status, capture_status,"#.to_string(),
+            r#"       processing_status, total_amount_cents, currency,"#.to_string(),
+            r#"       invoice_date, due_date, created_at"#.to_string(),
+            r#"FROM invoices"#.to_string(),
+            r#"WHERE tenant_id = $1"#.to_string(),
+        ];
+        let mut param_idx = 2u32;
+
+        // Text search across invoice_number and vendor_name
+        if !query.is_empty() {
+            sql_parts.push(format!(
+                "  AND (invoice_number ILIKE ${} OR vendor_name ILIKE ${})",
+                param_idx, param_idx
+            ));
+            param_idx += 1;
+        }
+        if vendor_name.is_some() {
+            sql_parts.push(format!("  AND vendor_name ILIKE ${}", param_idx));
+            param_idx += 1;
+        }
+        if invoice_number.is_some() {
+            sql_parts.push(format!("  AND invoice_number ILIKE ${}", param_idx));
+            param_idx += 1;
+        }
+        if status.is_some() {
+            sql_parts.push(format!("  AND status = ${}", param_idx));
+            param_idx += 1;
+        }
+        if capture_status.is_some() {
+            sql_parts.push(format!("  AND capture_status = ${}", param_idx));
+            param_idx += 1;
+        }
+        if processing_status.is_some() {
+            sql_parts.push(format!("  AND processing_status = ${}", param_idx));
+            param_idx += 1;
+        }
+        if due_before.is_some() {
+            sql_parts.push(format!("  AND due_date <= ${}", param_idx));
+            param_idx += 1;
+        }
+        if due_after.is_some() {
+            sql_parts.push(format!("  AND due_date >= ${}", param_idx));
+            param_idx += 1;
+        }
+        if min_amount_cents.is_some() {
+            sql_parts.push(format!("  AND total_amount_cents >= ${}", param_idx));
+            param_idx += 1;
+        }
+        if max_amount_cents.is_some() {
+            sql_parts.push(format!("  AND total_amount_cents <= ${}", param_idx));
+            param_idx += 1;
+        }
+
+        sql_parts.push(format!("ORDER BY created_at DESC LIMIT ${}", param_idx));
+
+        let sql = sql_parts.join("\n");
+        let mut q = sqlx::query(&sql).bind(&context.tenant_id);
+
+        if !query.is_empty() {
+            q = q.bind(format!("%{}%", query));
+        }
+        if let Some(vn) = vendor_name {
+            q = q.bind(format!("%{}%", vn));
+        }
+        if let Some(inv_num) = invoice_number {
+            q = q.bind(format!("%{}%", inv_num));
+        }
+        if let Some(s) = status {
+            q = q.bind(s);
+        }
+        if let Some(cs) = capture_status {
+            q = q.bind(cs);
+        }
+        if let Some(ps) = processing_status {
+            q = q.bind(ps);
+        }
+        if let Some(db) = due_before {
+            let dt: DateTime<Utc> = db.parse()
+                .context("Invalid due_before date format. Use YYYY-MM-DD.")?;
+            q = q.bind(dt);
+        }
+        if let Some(da) = due_after {
+            let dt: DateTime<Utc> = da.parse()
+                .context("Invalid due_after date format. Use YYYY-MM-DD.")?;
+            q = q.bind(dt);
+        }
+        if let Some(min) = min_amount_cents {
+            q = q.bind(min);
+        }
+        if let Some(max) = max_amount_cents {
+            q = q.bind(max);
+        }
+        q = q.bind(limit);
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        if rows.is_empty() {
+            return Ok("No invoices found matching the given criteria.".to_string());
+        }
+
+        let mut lines = vec![format!("Found {} invoice(s):\n", rows.len())];
+        for row in &rows {
+            let id: Uuid = row.try_get("id")?;
+            let inv_num: String = row.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
+            let vn: Option<String> = row.try_get("vendor_name").ok().flatten();
+            let st: String = row.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+            let cents: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
+            let cur: String = row.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+            let dd: Option<DateTime<Utc>> = row.try_get("due_date").ok().flatten();
+            let ca: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+
+            let amt = cents
+                .map(|c| format!("{}.{:02}", c / 100, c % 100))
+                .unwrap_or_else(|| "N/A".to_string());
+
+            lines.push(format!(
+                "- {} | {} | {} | {} {} | Due: {} | Created: {} (ID: {})",
+                inv_num,
+                vn.unwrap_or_else(|| "Unknown".to_string()),
+                st,
+                amt,
+                cur,
+                dd.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                ca.format("%Y-%m-%d"),
+                id,
+            ));
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
+// ── Duplicate invoice candidates tool ────────────────────────────────────────
+
+/// Read-only tool for finding potential duplicate invoices.
+/// No mutations, no external services. Tenant-scoped.
+pub struct FindDuplicateInvoiceCandidatesTool {
+    pool: PgPool,
+}
+
+impl FindDuplicateInvoiceCandidatesTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    fn parse_invoice_id(args: &str) -> Result<Uuid> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide an invoice_id to find duplicate candidates for. \
+                 Expected: invoice UUID or {{\"invoice_id\":\"<uuid>\"}}."
+            );
+        }
+        if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input. Expected: {\"invoice_id\":\"<uuid>\"}.")?;
+            let id_str = val
+                .get("invoice_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "JSON input missing 'invoice_id' key. Expected: {{\"invoice_id\":\"<uuid>\"}}."
+                    )
+                })?;
+            return id_str
+                .parse::<Uuid>()
+                .context("Invalid invoice_id format in JSON. Please provide a valid UUID.");
+        }
+        trimmed
+            .parse::<Uuid>()
+            .context("Invalid invoice ID format. Please provide a valid UUID.")
+    }
+}
+
+#[async_trait]
+impl Tool for FindDuplicateInvoiceCandidatesTool {
+    fn name(&self) -> &str {
+        "find_duplicate_invoice_candidates"
+    }
+
+    fn description(&self) -> &str {
+        "Find potential duplicate invoices for a given invoice. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let invoice_id = Self::parse_invoice_id(args)?;
+
+        // Load the target invoice
+        let target = sqlx::query(
+            r#"
+            SELECT invoice_number, vendor_name, total_amount_cents,
+                   invoice_date, due_date
+            FROM invoices
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let target = match target {
+            Some(t) => t,
+            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+        };
+
+        let t_inv_num: Option<String> = target.try_get("invoice_number").ok().flatten();
+        let t_vendor: Option<String> = target.try_get("vendor_name").ok().flatten();
+        let t_amount: Option<i64> = target.try_get("total_amount_cents").ok().flatten();
+        let t_invoice_date: Option<DateTime<Utc>> = target.try_get("invoice_date").ok().flatten();
+        let t_due_date: Option<DateTime<Utc>> = target.try_get("due_date").ok().flatten();
+
+        // Find candidates: same invoice_number, or same vendor_name+amount, or same vendor_name+near dates
+        let candidates = sqlx::query(
+            r#"
+            SELECT id, invoice_number, vendor_name, total_amount_cents,
+                   invoice_date, due_date, created_at
+            FROM invoices
+            WHERE tenant_id = $1
+              AND id != $2
+              AND (
+                  (invoice_number IS NOT NULL AND invoice_number = $3)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND total_amount_cents IS NOT NULL AND total_amount_cents = $5)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND invoice_date IS NOT NULL
+                      AND $6::timestamptz IS NOT NULL
+                      AND ABS(EXTRACT(EPOCH FROM (invoice_date - $6::timestamptz))) < 86400 * 3)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND due_date IS NOT NULL
+                      AND $7::timestamptz IS NOT NULL
+                      AND ABS(EXTRACT(EPOCH FROM (due_date - $7::timestamptz))) < 86400 * 3)
+              )
+            ORDER BY created_at DESC
+            LIMIT 25
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(invoice_id)
+        .bind(&t_inv_num)
+        .bind(&t_vendor)
+        .bind(&t_amount)
+        .bind(&t_invoice_date)
+        .bind(&t_due_date)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if candidates.is_empty() {
+            return Ok(format!(
+                "No duplicate candidates found for invoice {}.",
+                invoice_id
+            ));
+        }
+
+        let mut lines = vec![format!(
+            "Found {} potential duplicate candidate(s) for invoice {}:\n",
+            candidates.len(),
+            invoice_id
+        )];
+
+        for row in &candidates {
+            let c_id: Uuid = row.try_get("id")?;
+            let c_inv_num: Option<String> = row.try_get("invoice_number").ok().flatten();
+            let c_vendor: Option<String> = row.try_get("vendor_name").ok().flatten();
+            let c_amount: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
+            let c_inv_date: Option<DateTime<Utc>> = row.try_get("invoice_date").ok().flatten();
+            let c_due_date: Option<DateTime<Utc>> = row.try_get("due_date").ok().flatten();
+
+            let mut reasons = Vec::new();
+
+            // Check match reasons
+            if let (Some(ref t_num), Some(ref c_num)) = (&t_inv_num, &c_inv_num) {
+                if t_num == c_num {
+                    reasons.push("same invoice_number".to_string());
+                }
+            }
+            if let (Some(ref t_v), Some(ref c_v)) = (&t_vendor, &c_vendor) {
+                if t_v == c_v {
+                    if t_amount == c_amount && t_amount.is_some() {
+                        reasons.push("same vendor + amount".to_string());
+                    } else {
+                        // Check near dates
+                        if let (Some(td), Some(cd)) = (t_invoice_date, c_inv_date) {
+                            let diff = (td - cd).num_days().abs();
+                            if diff <= 3 {
+                                reasons.push(format!("same vendor + invoice_date within {} day(s)", diff));
+                            }
+                        }
+                        if let (Some(td), Some(cd)) = (t_due_date, c_due_date) {
+                            let diff = (td - cd).num_days().abs();
+                            if diff <= 3 {
+                                reasons.push(format!("same vendor + due_date within {} day(s)", diff));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let amt = c_amount
+                .map(|c| format!("{}.{:02}", c / 100, c % 100))
+                .unwrap_or_else(|| "N/A".to_string());
+
+            lines.push(format!(
+                "- ID: {} | {} | {} | {} | Invoice Date: {} | Due: {} | Reason: {}",
+                c_id,
+                c_inv_num.unwrap_or_else(|| "N/A".to_string()),
+                c_vendor.unwrap_or_else(|| "Unknown".to_string()),
+                amt,
+                c_inv_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                c_due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                reasons.join(", "),
+            ));
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
+// ── Payment risk assessment tool ─────────────────────────────────────────────
+
+/// Read-only tool for assessing invoice payment risk.
+/// No mutations, no external services. Tenant-scoped.
+/// Defensively handles missing optional support tables.
+pub struct AssessInvoicePaymentRiskTool {
+    pool: PgPool,
+}
+
+impl AssessInvoicePaymentRiskTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    fn parse_invoice_id(args: &str) -> Result<Uuid> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide an invoice_id to assess payment risk for. \
+                 Expected: invoice UUID or {{\"invoice_id\":\"<uuid>\"}}."
+            );
+        }
+        if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input. Expected: {\"invoice_id\":\"<uuid>\"}.")?;
+            let id_str = val
+                .get("invoice_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "JSON input missing 'invoice_id' key. Expected: {{\"invoice_id\":\"<uuid>\"}}."
+                    )
+                })?;
+            return id_str
+                .parse::<Uuid>()
+                .context("Invalid invoice_id format in JSON. Please provide a valid UUID.");
+        }
+        trimmed
+            .parse::<Uuid>()
+            .context("Invalid invoice ID format. Please provide a valid UUID.")
+    }
+}
+
+#[async_trait]
+impl Tool for AssessInvoicePaymentRiskTool {
+    fn name(&self) -> &str {
+        "assess_invoice_payment_risk"
+    }
+
+    fn description(&self) -> &str {
+        "Assess payment risk for an invoice. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let invoice_id = Self::parse_invoice_id(args)?;
+
+        // Load the invoice
+        let invoice = sqlx::query(
+            r#"
+            SELECT invoice_number, vendor_name, total_amount_cents, currency,
+                   status, processing_status, invoice_date, due_date, created_at
+            FROM invoices
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let invoice = match invoice {
+            Some(inv) => inv,
+            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+        };
+
+        let inv_num: Option<String> = invoice.try_get("invoice_number").ok().flatten();
+        let vendor: Option<String> = invoice.try_get("vendor_name").ok().flatten();
+        let amount_cents: Option<i64> = invoice.try_get("total_amount_cents").ok().flatten();
+        let currency: String = invoice.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+        let status: String = invoice.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+        let proc_status: Option<String> = invoice.try_get("processing_status").ok().flatten();
+        let due_date: Option<DateTime<Utc>> = invoice.try_get("due_date").ok().flatten();
+
+        let mut risk_signals: Vec<String> = Vec::new();
+        let mut evidence: Vec<String> = Vec::new();
+        let mut risk_score: i32 = 0; // 0-100 scale
+
+        // --- Signal 1: Overdue check ---
+        if let Some(dd) = due_date {
+            let now = Utc::now();
+            if dd < now {
+                let days_overdue = (now - dd).num_days();
+                if days_overdue > 0 {
+                    risk_score += 30;
+                    risk_signals.push(format!("Invoice is {} day(s) overdue (due: {}).", days_overdue, dd.format("%Y-%m-%d")));
+                    evidence.push(format!("due_date {} is {} days past", dd.format("%Y-%m-%d"), days_overdue));
+                }
+            } else {
+                let days_remaining = (dd - now).num_days();
+                if days_remaining <= 3 {
+                    risk_score += 10;
+                    risk_signals.push(format!("Invoice due in {} day(s).", days_remaining));
+                    evidence.push(format!("due_date {} is {} days away", dd.format("%Y-%m-%d"), days_remaining));
+                }
+            }
+        }
+
+        // --- Signal 2: Processing status ---
+        if let Some(ref ps) = proc_status {
+            if ps == "pending_approval" {
+                risk_score += 15;
+                risk_signals.push("Invoice is pending approval.".to_string());
+                evidence.push(format!("processing_status: {}", ps));
+            } else if ps == "rejected" {
+                risk_score += 40;
+                risk_signals.push("Invoice has been rejected.".to_string());
+                evidence.push(format!("processing_status: {}", ps));
+            } else if ps == "draft" {
+                risk_score += 20;
+                risk_signals.push("Invoice is still in draft.".to_string());
+                evidence.push(format!("processing_status: {}", ps));
+            }
+        }
+
+        // --- Signal 3: High amount ---
+        if let Some(cents) = amount_cents {
+            if cents > 100_000_00 {
+                risk_score += 10;
+                risk_signals.push(format!("High-value invoice: {}.{:02} {}.", cents / 100, cents % 100, currency));
+                evidence.push(format!("total_amount_cents: {}", cents));
+            }
+        }
+
+        // --- Signal 4: Duplicate candidates (defensive) ---
+        let dup_result = sqlx::query(
+            r#"
+            SELECT COUNT(*) as cnt
+            FROM invoices
+            WHERE tenant_id = $1
+              AND id != $2
+              AND (
+                  (invoice_number IS NOT NULL AND invoice_number = $3)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND total_amount_cents IS NOT NULL AND total_amount_cents = $5)
+              )
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(invoice_id)
+        .bind(&inv_num)
+        .bind(&vendor)
+        .bind(&amount_cents)
+        .fetch_optional(&self.pool)
+        .await;
+
+        match dup_result {
+            Ok(Some(row)) => {
+                let cnt: i64 = row.try_get("cnt").unwrap_or(0);
+                if cnt > 0 {
+                    risk_score += 20;
+                    risk_signals.push(format!("{} potential duplicate candidate(s) found.", cnt));
+                    evidence.push(format!("duplicate_candidates: {}", cnt));
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                // Defensively skip this signal if table/query fails
+                evidence.push("duplicate_candidates: unable to check".to_string());
+            }
+        }
+
+        // --- Signal 5: Active payment requests (defensive) ---
+        let payment_result = sqlx::query(
+            r#"
+            SELECT pr.status as pr_status
+            FROM payment_request_items pri
+            JOIN payment_requests pr ON pr.id = pri.payment_request_id
+            WHERE pri.invoice_id = $1 AND pr.tenant_id = $2
+            LIMIT 5
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await;
+
+        match payment_result {
+            Ok(rows) if !rows.is_empty() => {
+                let active: Vec<String> = rows
+                    .iter()
+                    .filter_map(|r| r.try_get::<String, _>("pr_status").ok())
+                    .filter(|s| s == "pending" || s == "submitted")
+                    .collect();
+                if !active.is_empty() {
+                    evidence.push(format!("active payment_requests: {}", active.len()));
+                    // No risk penalty, but informative
+                } else {
+                    evidence.push(format!("payment_requests found: {} (all resolved)", rows.len()));
+                }
+            }
+            Ok(_) => {
+                evidence.push("payment_requests: none found".to_string());
+            }
+            Err(_) => {
+                // Defensively skip if table is unavailable
+                evidence.push("payment_requests: unable to check".to_string());
+            }
+        }
+
+        // --- Signal 6: Pending approval requests (defensive) ---
+        let approval_result = sqlx::query(
+            r#"
+            SELECT status as ar_status
+            FROM approval_requests
+            WHERE invoice_id = $1 AND tenant_id = $2
+            LIMIT 5
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await;
+
+        match approval_result {
+            Ok(rows) if !rows.is_empty() => {
+                let pending: Vec<String> = rows
+                    .iter()
+                    .filter_map(|r| r.try_get::<String, _>("ar_status").ok())
+                    .filter(|s| s == "pending")
+                    .collect();
+                if !pending.is_empty() {
+                    risk_score += 15;
+                    risk_signals.push(format!("{} pending approval request(s).", pending.len()));
+                    evidence.push(format!("pending_approvals: {}", pending.len()));
+                }
+            }
+            Ok(_) => {}
+            Err(_) => {
+                evidence.push("approval_requests: unable to check".to_string());
+            }
+        }
+
+        // Cap risk score
+        risk_score = risk_score.min(100);
+
+        let risk_level = if risk_score >= 50 {
+            "HIGH"
+        } else if risk_score >= 25 {
+            "MEDIUM"
+        } else {
+            "LOW"
+        };
+
+        let amt_display = amount_cents
+            .map(|c| format!("{}.{:02}", c / 100, c % 100))
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let mut lines = vec![
+            format!("Payment Risk Assessment for Invoice {}", invoice_id),
+            format!("Invoice: {} | Vendor: {} | Amount: {} {}", 
+                inv_num.unwrap_or_else(|| "N/A".to_string()),
+                vendor.unwrap_or_else(|| "Unknown".to_string()),
+                amt_display, currency),
+            format!("Status: {} | Processing: {}", status, proc_status.unwrap_or_else(|| "N/A".to_string())),
+            format!("Due Date: {}", due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string())),
+            String::new(),
+            format!("Risk Level: {} (score: {}/100)", risk_level, risk_score),
+        ];
+
+        if !risk_signals.is_empty() {
+            lines.push(String::new());
+            lines.push("Risk Signals:".to_string());
+            for signal in &risk_signals {
+                lines.push(format!("  - {}", signal));
+            }
+        }
+
+        if !evidence.is_empty() {
+            lines.push(String::new());
+            lines.push("Evidence:".to_string());
+            for ev in &evidence {
+                lines.push(format!("  - {}", ev));
+            }
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
+/// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
     pool: PgPool,
@@ -1394,6 +2089,105 @@ impl ToolRegistry {
                 }),
                 mutates: false,
             },
+            AiToolDefinition {
+                name: "search_invoices",
+                description: "Search invoices with flexible filters. Args: JSON with optional query, vendor_name, invoice_number, status, capture_status, processing_status, due_before, due_after, min_amount_cents, max_amount_cents, and limit. Raw text is treated as query.",
+                class: AiToolClass::Invoice,
+                required_permission: AiToolPermission::InvoiceRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Free-text search across invoice_number and vendor_name" },
+                        "vendor_name": { "type": "string" },
+                        "invoice_number": { "type": "string" },
+                        "status": { "type": "string" },
+                        "capture_status": { "type": "string" },
+                        "processing_status": { "type": "string" },
+                        "due_before": { "type": "string", "format": "date" },
+                        "due_after": { "type": "string", "format": "date" },
+                        "min_amount_cents": { "type": "integer" },
+                        "max_amount_cents": { "type": "integer" },
+                        "limit": { "type": "integer", "maximum": 25 }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "format": "uuid" },
+                                    "invoice_number": { "type": "string" },
+                                    "vendor_name": { "type": "string" },
+                                    "status": { "type": "string" },
+                                    "total_amount_cents": { "type": "integer" },
+                                    "due_date": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "find_duplicate_invoice_candidates",
+                description: "Find potential duplicate invoices for a given invoice. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})",
+                class: AiToolClass::Invoice,
+                required_permission: AiToolPermission::InvoiceRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "candidates": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "format": "uuid" },
+                                    "invoice_number": { "type": "string" },
+                                    "vendor_name": { "type": "string" },
+                                    "match_reasons": { "type": "array", "items": { "type": "string" } }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "assess_invoice_payment_risk",
+                description: "Assess payment risk for an invoice based on due date, processing status, duplicates, and payment/approval activity. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})",
+                class: AiToolClass::Invoice,
+                required_permission: AiToolPermission::InvoiceRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+                        "risk_score": { "type": "integer" },
+                        "risk_signals": { "type": "array", "items": { "type": "string" } },
+                        "evidence": { "type": "array", "items": { "type": "string" } }
+                    }
+                }),
+                mutates: false,
+            },
         ]
     }
 
@@ -1462,6 +2256,15 @@ impl ToolRegistry {
                     )?;
                 let envelope = super::issue_intake::prepare_issue_creation_for_approval(request)?;
                 serde_json::to_string(&envelope).context("Failed to serialize approval envelope")
+            }
+            "search_invoices" => {
+                SearchInvoicesTool::new(self.pool.clone()).execute(context, args).await
+            }
+            "find_duplicate_invoice_candidates" => {
+                FindDuplicateInvoiceCandidatesTool::new(self.pool.clone()).execute(context, args).await
+            }
+            "assess_invoice_payment_risk" => {
+                AssessInvoicePaymentRiskTool::new(self.pool.clone()).execute(context, args).await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

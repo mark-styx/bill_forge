@@ -27,6 +27,9 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("search_known_issues"), "missing search_known_issues");
     assert!(descriptions.contains("summarize_release_changes"), "missing summarize_release_changes");
     assert!(descriptions.contains("explain_workflow_behavior"), "missing explain_workflow_behavior");
+    assert!(descriptions.contains("search_invoices"), "missing search_invoices");
+    assert!(descriptions.contains("find_duplicate_invoice_candidates"), "missing find_duplicate_invoice_candidates");
+    assert!(descriptions.contains("assess_invoice_payment_risk"), "missing assess_invoice_payment_risk");
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -776,5 +779,192 @@ fn test_get_tool_definition_returns_none_for_unknown() {
     assert!(
         ToolRegistry::get_tool_definition("nonexistent_tool").is_none(),
         "unknown tool should return None"
+    );
+}
+
+// ── New invoice tool tests ────────────────────────────────────────────────────
+
+/// Spot-check: search_invoices typed definition
+#[test]
+fn test_typed_definition_search_invoices() {
+    let def = ToolRegistry::get_tool_definition("search_invoices")
+        .expect("search_invoices should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Invoice);
+    assert_eq!(def.required_permission, AiToolPermission::InvoiceRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    // Should have properties for the filter fields
+    let props = def.input_schema
+        .get("properties")
+        .expect("input_schema should have properties");
+    assert!(props.get("query").is_some(), "search_invoices should have query property");
+    assert!(props.get("vendor_name").is_some(), "search_invoices should have vendor_name property");
+    assert!(props.get("status").is_some(), "search_invoices should have status property");
+    assert!(props.get("limit").is_some(), "search_invoices should have limit property");
+}
+
+/// Spot-check: find_duplicate_invoice_candidates typed definition
+#[test]
+fn test_typed_definition_find_duplicate_invoice_candidates() {
+    let def = ToolRegistry::get_tool_definition("find_duplicate_invoice_candidates")
+        .expect("find_duplicate_invoice_candidates should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Invoice);
+    assert_eq!(def.required_permission, AiToolPermission::InvoiceRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: assess_invoice_payment_risk typed definition
+#[test]
+fn test_typed_definition_assess_invoice_payment_risk() {
+    let def = ToolRegistry::get_tool_definition("assess_invoice_payment_risk")
+        .expect("assess_invoice_payment_risk should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Invoice);
+    assert_eq!(def.required_permission, AiToolPermission::InvoiceRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Validate invoice_id extraction for find_duplicate_invoice_candidates:
+/// JSON {"invoice_id":"<uuid>"} and raw UUID.
+#[test]
+fn test_extract_invoice_id_for_find_duplicate_invoice_candidates() {
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+
+    // JSON arg extraction
+    let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let result = parsed["invoice_id"].as_str().unwrap();
+    assert_eq!(result, uuid, "JSON extraction failed for find_duplicate_invoice_candidates");
+
+    // Raw UUID parses correctly
+    let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
+    assert_eq!(parsed_uuid.to_string(), uuid, "raw UUID parse failed");
+}
+
+/// Validate invoice_id extraction for assess_invoice_payment_risk:
+/// JSON {"invoice_id":"<uuid>"} and raw UUID.
+#[test]
+fn test_extract_invoice_id_for_assess_invoice_payment_risk() {
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+
+    // JSON arg extraction
+    let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let result = parsed["invoice_id"].as_str().unwrap();
+    assert_eq!(result, uuid, "JSON extraction failed for assess_invoice_payment_risk");
+
+    // Raw UUID parses correctly
+    let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
+    assert_eq!(parsed_uuid.to_string(), uuid, "raw UUID parse failed");
+}
+
+/// search_invoices primary argument extraction:
+/// JSON with query, vendor_name, status, etc.
+#[test]
+fn test_extract_primary_args_for_search_invoices() {
+    let json = r#"{"vendor_name":"Acme Corp","status":"pending","limit":10}"#;
+    let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed["vendor_name"].as_str(), Some("Acme Corp"));
+    assert_eq!(parsed["status"].as_str(), Some("pending"));
+    assert_eq!(parsed["limit"].as_u64(), Some(10));
+
+    // Also test raw text treated as query
+    let raw = "some search text";
+    let wrapped = serde_json::json!({ "query": raw });
+    assert_eq!(wrapped["query"].as_str(), Some("some search text"));
+}
+
+/// find_duplicate_invoice_candidates with empty input returns error.
+#[tokio::test]
+async fn test_find_duplicate_invoice_candidates_empty_input_returns_error() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("find_duplicate_invoice_candidates", &ctx, "")
+        .await;
+    assert!(result.is_err(), "empty input should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Please provide an invoice_id"),
+        "empty input should mention invoice_id, got: {err_msg}"
+    );
+}
+
+/// find_duplicate_invoice_candidates with invalid UUID returns error.
+#[tokio::test]
+async fn test_find_duplicate_invoice_candidates_invalid_uuid_returns_error() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("find_duplicate_invoice_candidates", &ctx, "not-a-uuid")
+        .await;
+    assert!(result.is_err(), "invalid UUID should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Invalid invoice ID format") || err_msg.contains("Invalid"),
+        "invalid UUID should mention format, got: {err_msg}"
+    );
+}
+
+/// assess_invoice_payment_risk with empty input returns error.
+#[tokio::test]
+async fn test_assess_invoice_payment_risk_empty_input_returns_error() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("assess_invoice_payment_risk", &ctx, "")
+        .await;
+    assert!(result.is_err(), "empty input should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Please provide an invoice_id"),
+        "empty input should mention invoice_id, got: {err_msg}"
+    );
+}
+
+/// assess_invoice_payment_risk with invalid UUID returns error.
+#[tokio::test]
+async fn test_assess_invoice_payment_risk_invalid_uuid_returns_error() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("assess_invoice_payment_risk", &ctx, "not-a-uuid")
+        .await;
+    assert!(result.is_err(), "invalid UUID should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Invalid invoice ID format") || err_msg.contains("Invalid"),
+        "invalid UUID should mention format, got: {err_msg}"
     );
 }
