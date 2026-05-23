@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::plans::{Plan, PlanId};
-use crate::subscription::{BillingCycle, Subscription, SubscriptionId, SubscriptionStatus};
 use crate::stripe::StripeClient;
+use crate::subscription::{BillingCycle, Subscription, SubscriptionId, SubscriptionStatus};
 
 /// Billing configuration
 #[derive(Debug, Clone)]
@@ -66,11 +66,7 @@ pub trait BillingServiceTrait: Send + Sync {
     ) -> Result<Subscription>;
 
     /// Upgrade/downgrade subscription
-    async fn change_plan(
-        &self,
-        tenant_id: &TenantId,
-        new_plan_id: PlanId,
-    ) -> Result<Subscription>;
+    async fn change_plan(&self, tenant_id: &TenantId, new_plan_id: PlanId) -> Result<Subscription>;
 
     /// Cancel subscription
     async fn cancel_subscription(&self, tenant_id: &TenantId) -> Result<Subscription>;
@@ -120,25 +116,55 @@ impl BillingService {
     }
 
     fn row_to_subscription(row: &sqlx::postgres::PgRow) -> Result<Subscription> {
-        let plan_str: String = row.try_get("plan_id").map_err(|e| Error::Database(e.to_string()))?;
-        let status_str: String = row.try_get("status").map_err(|e| Error::Database(e.to_string()))?;
-        let cycle_str: String = row.try_get("billing_cycle").map_err(|e| Error::Database(e.to_string()))?;
+        let plan_str: String = row
+            .try_get("plan_id")
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let status_str: String = row
+            .try_get("status")
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let cycle_str: String = row
+            .try_get("billing_cycle")
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         Ok(Subscription {
-            id: SubscriptionId(row.try_get("id").map_err(|e| Error::Database(e.to_string()))?),
-            tenant_id: TenantId::from_uuid(row.try_get("tenant_id").map_err(|e| Error::Database(e.to_string()))?),
+            id: SubscriptionId(
+                row.try_get("id")
+                    .map_err(|e| Error::Database(e.to_string()))?,
+            ),
+            tenant_id: TenantId::from_uuid(
+                row.try_get("tenant_id")
+                    .map_err(|e| Error::Database(e.to_string()))?,
+            ),
             plan_id: plan_str.parse().map_err(|e| Error::Database(e))?,
             status: SubscriptionStatus::from_str(&status_str).map_err(|e| Error::Database(e))?,
             billing_cycle: BillingCycle::from_str(&cycle_str).map_err(|e| Error::Database(e))?,
-            started_at: row.try_get("started_at").map_err(|e| Error::Database(e.to_string()))?,
-            current_period_start: row.try_get("current_period_start").map_err(|e| Error::Database(e.to_string()))?,
-            current_period_end: row.try_get("current_period_end").map_err(|e| Error::Database(e.to_string()))?,
-            canceled_at: row.try_get("canceled_at").map_err(|e| Error::Database(e.to_string()))?,
-            trial_end: row.try_get("trial_end").map_err(|e| Error::Database(e.to_string()))?,
-            stripe_subscription_id: row.try_get("stripe_subscription_id").map_err(|e| Error::Database(e.to_string()))?,
-            stripe_customer_id: row.try_get("stripe_customer_id").map_err(|e| Error::Database(e.to_string()))?,
-            created_at: row.try_get("created_at").map_err(|e| Error::Database(e.to_string()))?,
-            updated_at: row.try_get("updated_at").map_err(|e| Error::Database(e.to_string()))?,
+            started_at: row
+                .try_get("started_at")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            current_period_start: row
+                .try_get("current_period_start")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            current_period_end: row
+                .try_get("current_period_end")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            canceled_at: row
+                .try_get("canceled_at")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            trial_end: row
+                .try_get("trial_end")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            stripe_subscription_id: row
+                .try_get("stripe_subscription_id")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            stripe_customer_id: row
+                .try_get("stripe_customer_id")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| Error::Database(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| Error::Database(e.to_string()))?,
         })
     }
 }
@@ -223,11 +249,7 @@ impl BillingServiceTrait for BillingService {
         Ok(subscription)
     }
 
-    async fn change_plan(
-        &self,
-        tenant_id: &TenantId,
-        new_plan_id: PlanId,
-    ) -> Result<Subscription> {
+    async fn change_plan(&self, tenant_id: &TenantId, new_plan_id: PlanId) -> Result<Subscription> {
         let row = sqlx::query(
             r#"UPDATE tenant_subscriptions
                SET plan_id = $1, updated_at = NOW()
@@ -278,19 +300,19 @@ impl BillingServiceTrait for BillingService {
 
     async fn resume_subscription(&self, tenant_id: &TenantId) -> Result<Subscription> {
         // First fetch to check precondition
-        let existing = sqlx::query(
-            "SELECT status FROM tenant_subscriptions WHERE tenant_id = $1"
-        )
-        .bind(tenant_id.as_uuid())
-        .fetch_optional(&*self.pool)
-        .await
-        .map_err(|e| Error::Database(e.to_string()))?
-        .ok_or_else(|| Error::NotFound {
-            resource_type: "Subscription".to_string(),
-            id: tenant_id.to_string(),
-        })?;
+        let existing = sqlx::query("SELECT status FROM tenant_subscriptions WHERE tenant_id = $1")
+            .bind(tenant_id.as_uuid())
+            .fetch_optional(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(e.to_string()))?
+            .ok_or_else(|| Error::NotFound {
+                resource_type: "Subscription".to_string(),
+                id: tenant_id.to_string(),
+            })?;
 
-        let status_str: String = existing.try_get("status").map_err(|e| Error::Database(e.to_string()))?;
+        let status_str: String = existing
+            .try_get("status")
+            .map_err(|e| Error::Database(e.to_string()))?;
         let status = SubscriptionStatus::from_str(&status_str).map_err(|e| Error::Database(e))?;
         if status != SubscriptionStatus::Canceled {
             return Err(Error::Validation(
@@ -339,7 +361,118 @@ impl BillingServiceTrait for BillingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::PgPool;
+    use sqlx::{postgres::PgPoolOptions, PgPool};
+
+    struct TestDb {
+        admin_pool: PgPool,
+        pool: Arc<PgPool>,
+        db_name: String,
+    }
+
+    impl TestDb {
+        async fn new() -> Self {
+            let admin_url = std::env::var("TEST_DATABASE_URL")
+                .or_else(|_| std::env::var("DATABASE_URL"))
+                .unwrap_or_else(|_| "postgres://mark@localhost/postgres".to_string());
+            let admin_pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&admin_url)
+                .await
+                .expect("connect to local postgres for billing tests");
+            let db_name = format!("billforge_billing_test_{}", uuid::Uuid::new_v4().simple());
+
+            sqlx::query(&format!(r#"CREATE DATABASE "{}""#, db_name))
+                .execute(&admin_pool)
+                .await
+                .expect("create billing test database");
+
+            let db_url = database_url_for(&admin_url, &db_name);
+            let pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&db_url)
+                .await
+                .expect("connect to billing test database");
+            apply_test_schema(&pool).await;
+
+            Self {
+                admin_pool,
+                pool: Arc::new(pool),
+                db_name,
+            }
+        }
+
+        async fn cleanup(self) {
+            self.pool.close().await;
+            sqlx::query(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1",
+            )
+            .bind(&self.db_name)
+            .execute(&self.admin_pool)
+            .await
+            .ok();
+            sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{}""#, self.db_name))
+                .execute(&self.admin_pool)
+                .await
+                .ok();
+            self.admin_pool.close().await;
+        }
+    }
+
+    fn database_url_for(admin_url: &str, db_name: &str) -> String {
+        let (base, suffix) = admin_url
+            .split_once('?')
+            .map(|(base, query)| (base, format!("?{}", query)))
+            .unwrap_or((admin_url, String::new()));
+        let prefix = base
+            .rsplit_once('/')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or(base);
+        format!("{}/{}{}", prefix, db_name, suffix)
+    }
+
+    async fn apply_test_schema(pool: &PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE tenants (
+                id UUID PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                settings JSONB NOT NULL DEFAULT '{}',
+                enabled_modules JSONB NOT NULL DEFAULT '[]',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("create billing test tenants table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE tenant_subscriptions (
+                id UUID PRIMARY KEY,
+                tenant_id UUID NOT NULL UNIQUE REFERENCES tenants(id) ON DELETE CASCADE,
+                plan_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                billing_cycle TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL,
+                current_period_start TIMESTAMPTZ NOT NULL,
+                current_period_end TIMESTAMPTZ NOT NULL,
+                canceled_at TIMESTAMPTZ NULL,
+                trial_end TIMESTAMPTZ NULL,
+                stripe_subscription_id TEXT NULL,
+                stripe_customer_id TEXT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("create billing test subscriptions table");
+    }
 
     async fn seed_tenant(pool: &PgPool, tenant_id: &TenantId) {
         // Ensure tenants table exists and insert a row for FK satisfaction.
@@ -352,20 +485,23 @@ mod tests {
             .unwrap();
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_get_default_subscription(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_get_default_subscription() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         let service = BillingService::new(BillingConfig::default(), pool.clone());
         let tenant_id = TenantId::new();
 
         let sub = service.get_subscription(&tenant_id).await.unwrap();
         assert_eq!(sub.plan_id, PlanId::Free);
         assert!(sub.is_active());
+        db.cleanup().await;
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_create_subscription(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_create_subscription() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         seed_tenant(&pool, &TenantId::new()).await; // warm up tenant table
         let service = BillingService::new(BillingConfig::default(), pool.clone());
         let tenant_id = TenantId::new();
@@ -378,11 +514,13 @@ mod tests {
 
         assert_eq!(sub.plan_id, PlanId::Starter);
         assert_eq!(sub.status, SubscriptionStatus::Trialing);
+        db.cleanup().await;
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_change_plan(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_change_plan() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         let service = BillingService::new(BillingConfig::default(), pool.clone());
         let tenant_id = TenantId::new();
         seed_tenant(&pool, &tenant_id).await;
@@ -400,11 +538,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(sub.plan_id, PlanId::Professional);
+        db.cleanup().await;
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_cancel_subscription(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_cancel_subscription() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         let service = BillingService::new(BillingConfig::default(), pool.clone());
         let tenant_id = TenantId::new();
         seed_tenant(&pool, &tenant_id).await;
@@ -417,11 +557,13 @@ mod tests {
         let sub = service.cancel_subscription(&tenant_id).await.unwrap();
         assert_eq!(sub.status, SubscriptionStatus::Canceled);
         assert!(sub.canceled_at.is_some());
+        db.cleanup().await;
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_has_feature(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_has_feature() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         let service = BillingService::new(BillingConfig::default(), pool.clone());
         let tenant_id = TenantId::new();
         seed_tenant(&pool, &tenant_id).await;
@@ -438,11 +580,13 @@ mod tests {
 
         let has_api = service.has_feature(&tenant_id, "api_access").await.unwrap();
         assert!(has_api);
+        db.cleanup().await;
     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_subscription_persists_across_service_instances(pool: PgPool) {
-        let pool = Arc::new(pool);
+    #[tokio::test]
+    async fn test_subscription_persists_across_service_instances() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
         let tenant_id = TenantId::new();
         seed_tenant(&pool, &tenant_id).await;
 
@@ -456,5 +600,6 @@ mod tests {
         let sub = svc2.get_subscription(&tenant_id).await.unwrap();
         assert_eq!(sub.plan_id, PlanId::Professional);
         assert_eq!(sub.status, SubscriptionStatus::Trialing);
+        db.cleanup().await;
     }
 }
