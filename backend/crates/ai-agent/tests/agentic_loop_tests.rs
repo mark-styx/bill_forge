@@ -777,6 +777,66 @@ fn test_typed_tool_definitions_have_non_empty_fields() {
     }
 }
 
+#[tokio::test]
+async fn test_provider_exposed_tools_are_non_mutating_and_not_high_impact() {
+    let registry = ToolRegistry::new(fake_pool());
+    let provider_tools = registry.provider_tool_definitions();
+    let definitions = ToolRegistry::tool_definitions();
+
+    assert!(
+        !provider_tools.is_empty(),
+        "provider tool definitions should not be empty"
+    );
+    assert_eq!(
+        provider_tools.len(),
+        definitions.len(),
+        "provider-exposed tools should map one-for-one to typed definitions"
+    );
+
+    for provider_tool in provider_tools {
+        let def = ToolRegistry::get_tool_definition(&provider_tool.name)
+            .unwrap_or_else(|| panic!("missing typed definition for {}", provider_tool.name));
+
+        assert_eq!(
+            provider_tool.description.as_deref(),
+            Some(def.description),
+            "provider description should come from typed definition for {}",
+            provider_tool.name
+        );
+        assert_eq!(
+            provider_tool.parameters, def.input_schema,
+            "provider schema should come from typed definition for {}",
+            provider_tool.name
+        );
+        assert!(
+            !def.mutates,
+            "provider-exposed tool '{}' must not be mutating without audit update",
+            def.name
+        );
+        assert_ne!(
+            def.risk_level,
+            AiToolRiskLevel::High,
+            "provider-exposed tool '{}' must not be high-impact without audit update",
+            def.name
+        );
+    }
+}
+
+#[test]
+fn test_current_registry_has_no_mutating_or_high_impact_tools() {
+    let mutating_or_high_impact_tools: Vec<&str> = ToolRegistry::tool_definitions()
+        .iter()
+        .filter(|def| def.mutates || def.risk_level == AiToolRiskLevel::High)
+        .map(|def| def.name)
+        .collect();
+
+    assert!(
+        mutating_or_high_impact_tools.is_empty(),
+        "mutating/high-impact tool set must stay empty unless the Winston tool execution audit is updated: {:?}",
+        mutating_or_high_impact_tools
+    );
+}
+
 /// Spot-check: get_invoice_status
 #[test]
 fn test_typed_definition_get_invoice_status() {
