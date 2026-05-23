@@ -145,21 +145,17 @@ async fn read_messages(
 
 /// Read the title of a conversation.
 async fn read_conversation_title(pool: &sqlx::PgPool, conversation_id: Uuid) -> Option<String> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT title FROM ai_conversations WHERE id = $1",
-    )
-    .bind(conversation_id)
-    .fetch_optional(pool)
-    .await
-    .expect("read conversation title");
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT title FROM ai_conversations WHERE id = $1")
+            .bind(conversation_id)
+            .fetch_optional(pool)
+            .await
+            .expect("read conversation title");
     row.and_then(|t| t.0)
 }
 
 /// Read usage event rows for a given conversation, ordered by created_at.
-async fn read_usage_events(
-    pool: &sqlx::PgPool,
-    conversation_id: Uuid,
-) -> Vec<UsageEventRow> {
+async fn read_usage_events(pool: &sqlx::PgPool, conversation_id: Uuid) -> Vec<UsageEventRow> {
     sqlx::query_as::<_, UsageEventRow>(
         r#"SELECT id, tenant_id, user_id, conversation_id, message_id,
                   provider, model, model_route,
@@ -256,7 +252,10 @@ async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
     assert!(msg.4.is_none(), "user msg should have no model_route");
     assert!(msg.5.is_none(), "user msg should have no prompt_tokens");
     assert!(msg.8.is_none(), "user msg should have no finish_reason");
-    assert!(msg.9.is_none(), "user msg should have no provider_request_id");
+    assert!(
+        msg.9.is_none(),
+        "user msg should have no provider_request_id"
+    );
     assert!(msg.10.is_none(), "user msg should have no latency_ms");
 
     // Second message: assistant, with provider telemetry
@@ -267,10 +266,20 @@ async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
     assert!(msg.3.is_some(), "assistant msg should have model");
     assert!(msg.4.is_some(), "assistant msg should have model_route");
     assert!(msg.5.is_some(), "assistant msg should have prompt_tokens");
-    assert!(msg.6.is_some(), "assistant msg should have completion_tokens");
+    assert!(
+        msg.6.is_some(),
+        "assistant msg should have completion_tokens"
+    );
     assert!(msg.7.is_some(), "assistant msg should have total_tokens");
-    assert_eq!(msg.8.as_deref(), Some("stop"), "finish_reason should be 'stop'");
-    assert!(msg.9.is_some(), "assistant msg should have provider_request_id");
+    assert_eq!(
+        msg.8.as_deref(),
+        Some("stop"),
+        "finish_reason should be 'stop'"
+    );
+    assert!(
+        msg.9.is_some(),
+        "assistant msg should have provider_request_id"
+    );
     assert!(msg.10.is_some(), "assistant msg should have latency_ms");
 }
 
@@ -421,8 +430,14 @@ async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
 
     // Success fields
     assert!(evt.success, "usage event should be successful");
-    assert!(evt.error_code.is_none(), "success event should have no error_code");
-    assert!(evt.error_message.is_none(), "success event should have no error_message");
+    assert!(
+        evt.error_code.is_none(),
+        "success event should have no error_code"
+    );
+    assert!(
+        evt.error_message.is_none(),
+        "success event should have no error_message"
+    );
 
     // Provider/model/route
     assert_eq!(evt.provider, "fake");
@@ -431,19 +446,31 @@ async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
 
     // Latency
     assert!(evt.latency_ms.is_some(), "should have latency_ms");
-    assert!(evt.latency_ms.unwrap() >= 0, "latency should be non-negative");
+    assert!(
+        evt.latency_ms.unwrap() >= 0,
+        "latency should be non-negative"
+    );
 
     // Token counts from the fake provider
     assert!(evt.prompt_tokens.is_some(), "should have prompt_tokens");
-    assert!(evt.completion_tokens.is_some(), "should have completion_tokens");
+    assert!(
+        evt.completion_tokens.is_some(),
+        "should have completion_tokens"
+    );
     assert!(evt.total_tokens.is_some(), "should have total_tokens");
 
     // Provider request ID
-    assert!(evt.provider_request_id.is_some(), "should have provider_request_id");
+    assert!(
+        evt.provider_request_id.is_some(),
+        "should have provider_request_id"
+    );
 
     // Links
     assert_eq!(evt.conversation_id, Some(conv_id));
-    assert!(evt.message_id.is_some(), "success event should link to assistant message");
+    assert!(
+        evt.message_id.is_some(),
+        "success event should link to assistant message"
+    );
 
     // Tenant/user scoping
     assert_eq!(evt.tenant_id, tenant_uuid);
@@ -495,14 +522,13 @@ async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool
     );
 
     // Find the conversation
-    let conv_row: (Uuid,) = sqlx::query_as(
-        "SELECT id FROM ai_conversations WHERE tenant_id = $1 AND user_id = $2",
-    )
-    .bind(tenant_uuid)
-    .bind(user_uuid)
-    .fetch_one(&pool)
-    .await
-    .expect("find conversation");
+    let conv_row: (Uuid,) =
+        sqlx::query_as("SELECT id FROM ai_conversations WHERE tenant_id = $1 AND user_id = $2")
+            .bind(tenant_uuid)
+            .bind(user_uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("find conversation");
     let conv_id = conv_row.0;
 
     // One user message should exist (appended before provider call)
@@ -517,7 +543,10 @@ async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool
 
     let evt = &events[0];
     assert!(!evt.success, "usage event should be failed");
-    assert!(evt.message_id.is_none(), "failed event should have no message_id");
+    assert!(
+        evt.message_id.is_none(),
+        "failed event should have no message_id"
+    );
     assert_eq!(evt.conversation_id, Some(conv_id));
 
     // Provider/model/route
@@ -544,9 +573,18 @@ async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool
     );
 
     // No tokens for failed requests
-    assert!(evt.prompt_tokens.is_none(), "failed event should have no prompt_tokens");
-    assert!(evt.completion_tokens.is_none(), "failed event should have no completion_tokens");
-    assert!(evt.total_tokens.is_none(), "failed event should have no total_tokens");
+    assert!(
+        evt.prompt_tokens.is_none(),
+        "failed event should have no prompt_tokens"
+    );
+    assert!(
+        evt.completion_tokens.is_none(),
+        "failed event should have no completion_tokens"
+    );
+    assert!(
+        evt.total_tokens.is_none(),
+        "failed event should have no total_tokens"
+    );
 
     // Metadata should contain structured error info
     assert!(evt.metadata.is_object(), "metadata should be a JSON object");

@@ -201,6 +201,9 @@ pub struct ProviderChatUsage {
 pub struct ProviderChatResponse {
     /// The generated message.
     pub message: ProviderChatMessage,
+    /// Tool calls requested by the provider, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ProviderToolCall>>,
     /// Why generation stopped, if reported by the provider.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,

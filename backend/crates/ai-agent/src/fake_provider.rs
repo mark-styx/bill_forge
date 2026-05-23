@@ -147,6 +147,7 @@ impl AiProvider for FakeAiProvider {
                 role: ProviderMessageRole::Assistant,
                 content: text,
             },
+            tool_calls: None,
             finish_reason: Some("stop".into()),
             usage: Some(ProviderChatUsage {
                 prompt_tokens: Some(10),

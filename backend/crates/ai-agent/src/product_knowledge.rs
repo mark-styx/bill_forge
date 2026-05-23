@@ -75,11 +75,7 @@ impl ProductKnowledgeIndex {
     /// Return all source paths present in the index.
     pub fn source_paths() -> Vec<&'static str> {
         let idx = Self::instance();
-        let mut paths: Vec<&'static str> = idx
-            .chunks
-            .iter()
-            .map(|c| c.source_path)
-            .collect();
+        let mut paths: Vec<&'static str> = idx.chunks.iter().map(|c| c.source_path).collect();
         paths.sort();
         paths.dedup();
         paths
@@ -271,7 +267,12 @@ fn ingest_markdown(chunks: &mut Vec<Chunk>, source_path: &'static str, content: 
 }
 
 /// Fallback: split lines into fixed-size windows when no headings exist.
-fn ingest_windows(chunks: &mut Vec<Chunk>, source_path: &'static str, lines: &[&str], _content: &str) {
+fn ingest_windows(
+    chunks: &mut Vec<Chunk>,
+    source_path: &'static str,
+    lines: &[&str],
+    _content: &str,
+) {
     let title = lines
         .first()
         .map(|l| l.trim_start_matches('#').trim())
@@ -375,7 +376,10 @@ fn ingest_yaml(chunks: &mut Vec<Chunk>, source_path: &'static str, content: &str
 fn tokenize(input: &str) -> Vec<String> {
     input
         .to_lowercase()
-        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':' | '!' | '?' | '/' | '-' | '(' | ')'))
+        .split(|c: char| {
+            c.is_whitespace()
+                || matches!(c, ',' | '.' | ';' | ':' | '!' | '?' | '/' | '-' | '(' | ')')
+        })
         .filter(|t| t.len() > 1)
         .map(|t| t.to_string())
         .collect()
@@ -386,10 +390,7 @@ fn tokenize(input: &str) -> Vec<String> {
 /// path. Uses the same tokenization as the query to avoid partial-word matches
 /// (e.g. "me" inside "time").
 fn score_chunk(query_tokens: &[String], chunk: &Chunk) -> usize {
-    let combined = format!(
-        "{} {} {}",
-        chunk.heading, chunk.body, chunk.source_path
-    );
+    let combined = format!("{} {} {}", chunk.heading, chunk.body, chunk.source_path);
     let doc_tokens = tokenize(&combined);
 
     query_tokens
@@ -447,7 +448,9 @@ pub fn format_product_knowledge_block(snippets: &[ProductKnowledgeSnippet]) -> S
     }
 
     let mut block = String::from("## Product Documentation Context\n\n");
-    block.push_str("The following product documentation excerpts may help answer the user's question.\n\n");
+    block.push_str(
+        "The following product documentation excerpts may help answer the user's question.\n\n",
+    );
 
     for snippet in snippets {
         block.push_str(&format!(
@@ -541,15 +544,13 @@ mod tests {
         assert!(
             !northstar_results.is_empty(),
             "expected at least one docs/northstar.md result, got: {:?}",
-            results
-                .iter()
-                .map(|s| s.source_path)
-                .collect::<Vec<_>>()
+            results.iter().map(|s| s.source_path).collect::<Vec<_>>()
         );
         // The snippet should mention BillForge or product-related content.
-        let body_match = northstar_results
-            .iter()
-            .any(|s| s.excerpt.to_lowercase().contains("billforge") || s.heading.to_lowercase().contains("vision"));
+        let body_match = northstar_results.iter().any(|s| {
+            s.excerpt.to_lowercase().contains("billforge")
+                || s.heading.to_lowercase().contains("vision")
+        });
         assert!(
             body_match,
             "expected northstar snippet to mention BillForge or have Vision heading"
@@ -570,10 +571,7 @@ mod tests {
         assert!(
             !changelog_results.is_empty(),
             "expected at least one CHANGELOG.md result, got: {:?}",
-            results
-                .iter()
-                .map(|s| s.source_path)
-                .collect::<Vec<_>>()
+            results.iter().map(|s| s.source_path).collect::<Vec<_>>()
         );
     }
 
@@ -593,7 +591,9 @@ mod tests {
 
     #[test]
     fn release_process_query_returns_release_yml_snippet() {
-        let results = product_knowledge_context_for_query("How are tag-triggered releases and Docker images published?");
+        let results = product_knowledge_context_for_query(
+            "How are tag-triggered releases and Docker images published?",
+        );
         assert!(
             !results.is_empty(),
             "expected at least one result for release-process query"
@@ -605,10 +605,7 @@ mod tests {
         assert!(
             !release_results.is_empty(),
             "expected at least one .github/workflows/release.yml result, got: {:?}",
-            results
-                .iter()
-                .map(|s| s.source_path)
-                .collect::<Vec<_>>()
+            results.iter().map(|s| s.source_path).collect::<Vec<_>>()
         );
     }
 
@@ -620,7 +617,9 @@ mod tests {
             "expected results for GitHub release workflow query"
         );
         assert!(
-            results.iter().any(|s| s.source_path == ".github/workflows/release.yml"),
+            results
+                .iter()
+                .any(|s| s.source_path == ".github/workflows/release.yml"),
             "expected .github/workflows/release.yml in results, got: {:?}",
             results.iter().map(|s| s.source_path).collect::<Vec<_>>()
         );
@@ -708,7 +707,11 @@ mod tests {
     #[test]
     fn limit_is_respected() {
         let results = product_knowledge_context_for_query_with_limit("invoice", 1);
-        assert!(results.len() <= 1, "expected at most 1 result, got {}", results.len());
+        assert!(
+            results.len() <= 1,
+            "expected at most 1 result, got {}",
+            results.len()
+        );
     }
 
     // -----------------------------------------------------------------------

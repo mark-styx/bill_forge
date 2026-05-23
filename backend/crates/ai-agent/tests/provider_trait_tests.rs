@@ -59,19 +59,28 @@ async fn trait_exposes_supports_tools() {
 #[tokio::test]
 async fn chat_completion_echoes_last_message() {
     let p = FakeAiProvider::new();
-    let response = p.chat_completion(simple_request("hello")).await.expect("completion");
+    let response = p
+        .chat_completion(simple_request("hello"))
+        .await
+        .expect("completion");
     assert_eq!(response.message.role, ProviderMessageRole::Assistant);
     assert_eq!(response.message.content, "echo: hello");
     assert_eq!(response.finish_reason.as_deref(), Some("stop"));
     let usage = response.usage.expect("usage present");
     assert_eq!(usage.total_tokens, Some(15));
-    assert_eq!(response.provider_request_id.as_deref(), Some("fake-req-001"));
+    assert_eq!(
+        response.provider_request_id.as_deref(),
+        Some("fake-req-001")
+    );
 }
 
 #[tokio::test]
 async fn chat_completion_with_custom_response_text() {
     let p = FakeAiProvider::new().with_response_text("fixed reply");
-    let response = p.chat_completion(simple_request("anything")).await.expect("completion");
+    let response = p
+        .chat_completion(simple_request("anything"))
+        .await
+        .expect("completion");
     assert_eq!(response.message.content, "fixed reply");
 }
 
@@ -128,7 +137,10 @@ async fn chat_completion_returns_configured_error() {
         retryable: Some(true),
     };
     let p = FakeAiProvider::new().with_error(error.clone());
-    let err = p.chat_completion(simple_request("hi")).await.expect_err("should fail");
+    let err = p
+        .chat_completion(simple_request("hi"))
+        .await
+        .expect_err("should fail");
     assert_eq!(err, error);
 }
 
@@ -139,7 +151,10 @@ async fn chat_completion_returns_configured_error() {
 #[tokio::test]
 async fn stream_chat_completion_returns_two_chunks() {
     let p = FakeAiProvider::new();
-    let mut stream = p.stream_chat_completion(simple_request("stream me")).await.expect("stream");
+    let mut stream = p
+        .stream_chat_completion(simple_request("stream me"))
+        .await
+        .expect("stream");
 
     let chunk1 = stream.next().await.expect("first chunk").expect("ok");
     assert!(chunk1.delta.is_some());
@@ -156,7 +171,10 @@ async fn stream_chat_completion_returns_two_chunks() {
 #[tokio::test]
 async fn stream_chat_completion_with_custom_response_text() {
     let p = FakeAiProvider::new().with_response_text("fixed stream");
-    let mut stream = p.stream_chat_completion(simple_request("anything")).await.expect("stream");
+    let mut stream = p
+        .stream_chat_completion(simple_request("anything"))
+        .await
+        .expect("stream");
 
     let chunk1 = stream.next().await.expect("first chunk").expect("ok");
     assert_eq!(chunk1.delta.unwrap().content, "fixed stream");

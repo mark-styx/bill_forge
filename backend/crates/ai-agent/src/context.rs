@@ -66,6 +66,7 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - Find invoices by vendor
 - Explain approval requirements
 - Summarize invoices
+- Explain why an invoice is waiting, approved, rejected, complete, or outside active workflow
 - Search invoices with flexible filters
 - Find potential duplicate invoices
 - Assess payment risk for invoices
@@ -76,6 +77,7 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - get_vendor_summary: Get a vendor summary including contact info, payment terms, and invoice metrics
 - get_approval_requirements: Check approval requirements and current approval request status for an invoice
 - summarize_invoice: Generate a summary of an invoice
+- explain_workflow_state: Read-only invoice-scoped explanation of current workflow state, queue assignment, due date, and approval status
 - get_module_capabilities: Report which modules are enabled for the tenant and describe capability boundaries
 - search_known_issues: Search the known issue register for relevant issues
 - summarize_release_changes: Summarize release changes from release notes
@@ -83,7 +85,7 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - find_duplicate_invoice_candidates: Find potential duplicate invoices for a given invoice ID
 - assess_invoice_payment_risk: Assess payment risk for an invoice based on due date, processing status, duplicates, and payment/approval activity
 
-All invoice, vendor, and approval tools are read-only and database-grounded. They query tenant-scoped data without making any mutations.
+All invoice, vendor, approval, and workflow-state tools are read-only and database-grounded. They query tenant-scoped data without making any mutations. Use explain_workflow_state for invoice workflow-status questions rather than approval mutations.
 
 ## Module Availability
 - Module availability is determined by the tenant's enabled_modules list.

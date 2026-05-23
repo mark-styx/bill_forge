@@ -8,7 +8,8 @@
 use async_openai::{
     types::{
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
+        ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionToolType,
+        CreateChatCompletionRequestArgs, FunctionObject,
     },
     Client,
 };
@@ -40,8 +41,8 @@ impl OpenAiCompatibleProvider {
     /// validation errors for unsupported provider types or bad numeric values.
     pub fn try_from_env() -> Result<Self, crate::config::ConfigError> {
         let config = AiProviderConfig::try_from_env()?;
-        let provider_name = std::env::var(env_keys::PROVIDER_NAME)
-            .unwrap_or_else(|_| "openai-compatible".into());
+        let provider_name =
+            std::env::var(env_keys::PROVIDER_NAME).unwrap_or_else(|_| "openai-compatible".into());
         Ok(Self {
             provider_name,
             config,
@@ -132,48 +133,42 @@ impl OpenAiCompatibleProvider {
         let mut out = Vec::with_capacity(messages.len());
         for msg in messages {
             let converted = match msg.role {
-                ProviderMessageRole::System => {
-                    ChatCompletionRequestMessage::System(
-                        ChatCompletionRequestSystemMessageArgs::default()
-                            .content(&*msg.content)
-                            .build()
-                            .map_err(|e| ProviderChatError {
-                                kind: ProviderChatErrorKind::InvalidRequest,
-                                message: format!("Failed to build system message: {}", e),
-                                status_code: None,
-                                provider_code: None,
-                                retryable: Some(false),
-                            })?,
-                    )
-                }
-                ProviderMessageRole::User => {
-                    ChatCompletionRequestMessage::User(
-                        ChatCompletionRequestUserMessageArgs::default()
-                            .content(&*msg.content)
-                            .build()
-                            .map_err(|e| ProviderChatError {
-                                kind: ProviderChatErrorKind::InvalidRequest,
-                                message: format!("Failed to build user message: {}", e),
-                                status_code: None,
-                                provider_code: None,
-                                retryable: Some(false),
-                            })?,
-                    )
-                }
-                ProviderMessageRole::Assistant => {
-                    ChatCompletionRequestMessage::Assistant(
-                        async_openai::types::ChatCompletionRequestAssistantMessageArgs::default()
-                            .content(&*msg.content)
-                            .build()
-                            .map_err(|e| ProviderChatError {
-                                kind: ProviderChatErrorKind::InvalidRequest,
-                                message: format!("Failed to build assistant message: {}", e),
-                                status_code: None,
-                                provider_code: None,
-                                retryable: Some(false),
-                            })?,
-                    )
-                }
+                ProviderMessageRole::System => ChatCompletionRequestMessage::System(
+                    ChatCompletionRequestSystemMessageArgs::default()
+                        .content(&*msg.content)
+                        .build()
+                        .map_err(|e| ProviderChatError {
+                            kind: ProviderChatErrorKind::InvalidRequest,
+                            message: format!("Failed to build system message: {}", e),
+                            status_code: None,
+                            provider_code: None,
+                            retryable: Some(false),
+                        })?,
+                ),
+                ProviderMessageRole::User => ChatCompletionRequestMessage::User(
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content(&*msg.content)
+                        .build()
+                        .map_err(|e| ProviderChatError {
+                            kind: ProviderChatErrorKind::InvalidRequest,
+                            message: format!("Failed to build user message: {}", e),
+                            status_code: None,
+                            provider_code: None,
+                            retryable: Some(false),
+                        })?,
+                ),
+                ProviderMessageRole::Assistant => ChatCompletionRequestMessage::Assistant(
+                    async_openai::types::ChatCompletionRequestAssistantMessageArgs::default()
+                        .content(&*msg.content)
+                        .build()
+                        .map_err(|e| ProviderChatError {
+                            kind: ProviderChatErrorKind::InvalidRequest,
+                            message: format!("Failed to build assistant message: {}", e),
+                            status_code: None,
+                            provider_code: None,
+                            retryable: Some(false),
+                        })?,
+                ),
             };
             out.push(converted);
         }
@@ -196,8 +191,7 @@ impl AiProvider for OpenAiCompatibleProvider {
     }
 
     fn supports_tools(&self) -> bool {
-        // Tool support can be enabled later; currently not wired through.
-        false
+        true
     }
 
     async fn chat_completion(
@@ -227,6 +221,21 @@ impl AiProvider for OpenAiCompatibleProvider {
             req.max_tokens = Some(max_tokens.min(u16::MAX as u32) as u16);
         } else {
             req.max_tokens = Some(self.config.models.max_tokens as u16);
+        }
+        if let Some(tools) = request.tools {
+            req.tools = Some(
+                tools
+                    .into_iter()
+                    .map(|tool| ChatCompletionTool {
+                        r#type: ChatCompletionToolType::Function,
+                        function: FunctionObject {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: Some(tool.parameters),
+                        },
+                    })
+                    .collect(),
+            );
         }
 
         let client = self.build_client();
@@ -263,12 +272,25 @@ impl AiProvider for OpenAiCompatibleProvider {
 
         let content = choice.message.content.clone().unwrap_or_default();
         let finish_reason = choice.finish_reason.as_ref().map(|r| format!("{:?}", r));
+        let tool_calls = choice.message.tool_calls.as_ref().map(|calls| {
+            calls
+                .iter()
+                .map(|call| ProviderToolCall {
+                    id: Some(call.id.clone()),
+                    name: call.function.name.clone(),
+                    arguments: serde_json::from_str(&call.function.arguments).unwrap_or_else(
+                        |_| serde_json::Value::String(call.function.arguments.clone()),
+                    ),
+                })
+                .collect()
+        });
 
         Ok(ProviderChatResponse {
             message: ProviderChatMessage {
                 role: ProviderMessageRole::Assistant,
                 content,
             },
+            tool_calls,
             finish_reason,
             usage: response.usage.map(|u| ProviderChatUsage {
                 prompt_tokens: Some(u.prompt_tokens as u32),

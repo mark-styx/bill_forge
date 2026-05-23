@@ -44,9 +44,17 @@ pub enum ConfigError {
     /// The `WINSTON_AI_PROVIDER_TYPE` value is not a recognised variant.
     UnsupportedProviderType { value: String },
     /// A numeric env var could not be parsed.
-    InvalidNumeric { key: &'static str, value: String, source: String },
+    InvalidNumeric {
+        key: &'static str,
+        value: String,
+        source: String,
+    },
     /// A numeric env var is syntactically valid but outside the allowed range.
-    OutOfRange { key: &'static str, value: u64, max: u64 },
+    OutOfRange {
+        key: &'static str,
+        value: u64,
+        max: u64,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -92,11 +100,9 @@ impl AiProviderType {
     /// Case-insensitive. Returns `None` for unrecognised values.
     pub fn from_str_loose(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "openai_compatible"
-            | "openai-compatible"
-            | "openai"
-            | "glm_proxy"
-            | "glm-proxy" => Some(Self::OpenAiCompatible),
+            "openai_compatible" | "openai-compatible" | "openai" | "glm_proxy" | "glm-proxy" => {
+                Some(Self::OpenAiCompatible)
+            }
             _ => None,
         }
     }
@@ -132,19 +138,12 @@ impl AiModelConfig {
     /// route-specific override is `None`.
     pub fn model_for_route(&self, route: ProviderModelRoute) -> &str {
         match route {
-            ProviderModelRoute::Fast => self
-                .fast_model
-                .as_deref()
-                .unwrap_or(&self.chat_model),
+            ProviderModelRoute::Fast => self.fast_model.as_deref().unwrap_or(&self.chat_model),
             ProviderModelRoute::Default => &self.chat_model,
-            ProviderModelRoute::Reasoning => self
-                .reasoning_model
-                .as_deref()
-                .unwrap_or(&self.chat_model),
-            ProviderModelRoute::Tool => self
-                .tool_model
-                .as_deref()
-                .unwrap_or(&self.chat_model),
+            ProviderModelRoute::Reasoning => {
+                self.reasoning_model.as_deref().unwrap_or(&self.chat_model)
+            }
+            ProviderModelRoute::Tool => self.tool_model.as_deref().unwrap_or(&self.chat_model),
         }
     }
 }
@@ -231,11 +230,8 @@ impl AiProviderConfig {
         // Provider type
         let provider_type = match env_opt(env_keys::PROVIDER_TYPE) {
             None => DEFAULT_PROVIDER_TYPE,
-            Some(ref raw) => AiProviderType::from_str_loose(raw).ok_or_else(|| {
-                ConfigError::UnsupportedProviderType {
-                    value: raw.clone(),
-                }
-            })?,
+            Some(ref raw) => AiProviderType::from_str_loose(raw)
+                .ok_or_else(|| ConfigError::UnsupportedProviderType { value: raw.clone() })?,
         };
 
         // Endpoint credentials
@@ -558,7 +554,10 @@ mod tests {
         let cfg = AiProviderConfig::try_from_env().expect("should parse");
         assert_eq!(cfg.models.chat_model, "chat-model");
         assert_eq!(cfg.models.fast_model.as_deref(), Some("fast-model"));
-        assert_eq!(cfg.models.reasoning_model.as_deref(), Some("reasoning-model"));
+        assert_eq!(
+            cfg.models.reasoning_model.as_deref(),
+            Some("reasoning-model")
+        );
         assert_eq!(cfg.models.tool_model.as_deref(), Some("tool-model"));
 
         clear_env();

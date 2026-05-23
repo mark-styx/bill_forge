@@ -4,13 +4,20 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Row};
+use std::sync::Arc;
 use uuid::Uuid;
+
+use billforge_core::{
+    domain::{ApprovalStatus, ApprovalTarget, InvoiceId, ProcessingStatus},
+    traits::{ApprovalRepository, InvoiceRepository, WorkQueueRepository, WorkflowRuleRepository},
+    TenantId,
+};
+use billforge_db::repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl};
 
 use super::models::AgentContext;
 use super::product_knowledge::{
-    product_knowledge_context_for_query_with_limit,
+    product_knowledge_context_for_query_with_limit, release_changes_context_for_query_with_limit,
     search_known_issues_context_for_query_with_limit,
-    release_changes_context_for_query_with_limit,
 };
 
 /// All known BillForge modules, ordered for stable output.
@@ -143,7 +150,9 @@ impl Tool for InvoiceStatusTool {
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
+        let invoice_id: Uuid = args
+            .trim()
+            .parse()
             .context("Invalid invoice ID format. Please provide a valid UUID.")?;
 
         let row = sqlx::query(
@@ -207,16 +216,29 @@ impl Tool for InvoiceStatusTool {
                     currency,
                     capture_status.unwrap_or_else(|| "N/A".to_string()),
                     processing_status.unwrap_or_else(|| "N/A".to_string()),
-                    invoice_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
-                    due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
+                    due_date
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
                     po_number.unwrap_or_else(|| "N/A".to_string()),
-                    current_queue_id.map(|q| q.to_string()).unwrap_or_else(|| "None".to_string()),
-                    assigned_to.map(|a| a.to_string()).unwrap_or_else(|| "Unassigned".to_string()),
+                    current_queue_id
+                        .map(|q| q.to_string())
+                        .unwrap_or_else(|| "None".to_string()),
+                    assigned_to
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "Unassigned".to_string()),
                     created_at.format("%Y-%m-%d %H:%M"),
-                    updated_at.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    updated_at
+                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
                 ))
             }
-            None => Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => Ok(format!(
+                "Invoice {} not found in your organization.",
+                invoice_id
+            )),
         }
     }
 }
@@ -267,7 +289,10 @@ impl Tool for VendorInvoicesTool {
         .await?;
 
         if rows.is_empty() {
-            return Ok(format!("No invoices found for vendor matching '{}'.", vendor_name));
+            return Ok(format!(
+                "No invoices found for vendor matching '{}'.",
+                vendor_name
+            ));
         }
 
         let mut result = format!("Invoices from vendor matching '{}':\n\n", vendor_name);
@@ -326,9 +351,13 @@ impl Tool for VendorSummaryTool {
         let (vendor_id_opt, vendor_name_opt) = if trimmed.starts_with('{') {
             let val: serde_json::Value = serde_json::from_str(trimmed)
                 .context("Invalid JSON input for get_vendor_summary.")?;
-            let vid = val.get("vendor_id").and_then(|v| v.as_str())
+            let vid = val
+                .get("vendor_id")
+                .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<Uuid>().ok());
-            let vn = val.get("vendor_name").and_then(|v| v.as_str())
+            let vn = val
+                .get("vendor_name")
+                .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             (vid, vn)
         } else if let Ok(uid) = trimmed.parse::<Uuid>() {
@@ -443,21 +472,29 @@ impl Tool for VendorSummaryTool {
         lines.push(format!("Total Invoiced: {}", total_display));
         lines.push(format!(
             "Latest Invoice Date: {}",
-            latest_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())
+            latest_date
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "N/A".to_string())
         ));
         lines.push(format!(
             "Latest Due Date: {}",
-            latest_due.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())
+            latest_due
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "N/A".to_string())
         ));
 
         if !recent.is_empty() {
             lines.push(String::new());
             lines.push(format!("Recent Invoices (up to 5):"));
             for row in &recent {
-                let inv_num: String = row.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
+                let inv_num: String = row
+                    .try_get("invoice_number")
+                    .unwrap_or_else(|_| "N/A".to_string());
                 let status: String = row.try_get("status").unwrap_or_else(|_| "N/A".to_string());
                 let cents: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
-                let cur: String = row.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+                let cur: String = row
+                    .try_get("currency")
+                    .unwrap_or_else(|_| "USD".to_string());
                 let inv_date: Option<NaiveDate> = row.try_get("invoice_date").ok().flatten();
                 let due: Option<NaiveDate> = row.try_get("due_date").ok().flatten();
                 let amt = cents
@@ -469,8 +506,11 @@ impl Tool for VendorSummaryTool {
                     status,
                     amt,
                     cur,
-                    inv_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
-                    due.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    inv_date
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
+                    due.map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
                 ));
             }
         }
@@ -604,13 +644,24 @@ impl Tool for ApprovalRequirementsTool {
 
         let invoice = match invoice {
             Some(inv) => inv,
-            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => {
+                return Ok(format!(
+                    "Invoice {} not found in your organization.",
+                    invoice_id
+                ))
+            }
         };
 
-        let invoice_number: String = invoice.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
-        let inv_status: String = invoice.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+        let invoice_number: String = invoice
+            .try_get("invoice_number")
+            .unwrap_or_else(|_| "N/A".to_string());
+        let inv_status: String = invoice
+            .try_get("status")
+            .unwrap_or_else(|_| "N/A".to_string());
         let total_cents: Option<i64> = invoice.try_get("total_amount_cents").ok().flatten();
-        let currency: String = invoice.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+        let currency: String = invoice
+            .try_get("currency")
+            .unwrap_or_else(|_| "USD".to_string());
 
         let amount_display = total_cents
             .map(|c| format!("{}.{:02}", c / 100, (c % 100).abs()))
@@ -651,17 +702,26 @@ impl Tool for ApprovalRequirementsTool {
         }
 
         let mut lines = vec![
-            format!("Approval Requirements for Invoice {} ({})", invoice_id, invoice_number),
-            format!("Invoice Status: {} | Amount: {} {}", inv_status, amount_display, currency),
+            format!(
+                "Approval Requirements for Invoice {} ({})",
+                invoice_id, invoice_number
+            ),
+            format!(
+                "Invoice Status: {} | Amount: {} {}",
+                inv_status, amount_display, currency
+            ),
             String::new(),
             format!("Approval Requests ({}):", requests.len()),
         ];
 
         for row in &requests {
             let ar_id: Uuid = row.try_get("ar_id")?;
-            let ar_status: String = row.try_get("ar_status").unwrap_or_else(|_| "Unknown".to_string());
-            let req_from: serde_json::Value =
-                row.try_get("requested_from").unwrap_or(serde_json::Value::Null);
+            let ar_status: String = row
+                .try_get("ar_status")
+                .unwrap_or_else(|_| "Unknown".to_string());
+            let req_from: serde_json::Value = row
+                .try_get("requested_from")
+                .unwrap_or(serde_json::Value::Null);
             let comments: Option<String> = row.try_get("comments").ok().flatten();
             let responder_email: Option<String> = row.try_get("responder_email").ok().flatten();
             let responded_at: Option<DateTime<Utc>> = row.try_get("responded_at").ok().flatten();
@@ -669,10 +729,7 @@ impl Tool for ApprovalRequirementsTool {
             let rule_name: Option<String> = row.try_get("rule_name").ok().flatten();
             let rule_priority: Option<i32> = row.try_get("rule_priority").ok().flatten();
 
-            lines.push(format!(
-                "- Request ID: {}",
-                ar_id,
-            ));
+            lines.push(format!("- Request ID: {}", ar_id,));
             lines.push(format!("  Status: {}", ar_status));
             lines.push(format!(
                 "  Requested From: {}",
@@ -727,7 +784,9 @@ impl Tool for InvoiceSummaryTool {
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
+        let invoice_id: Uuid = args
+            .trim()
+            .parse()
             .context("Invalid invoice ID format. Please provide a valid UUID.")?;
 
         let invoice = sqlx::query(
@@ -785,11 +844,17 @@ impl Tool for InvoiceSummaryTool {
                     status,
                     capture_status.unwrap_or_else(|| "N/A".to_string()),
                     processing_status.unwrap_or_else(|| "N/A".to_string()),
-                    invoice_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
-                    due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
+                    due_date
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
                     po_number.unwrap_or_else(|| "N/A".to_string()),
                     created_at.format("%Y-%m-%d"),
-                    updated_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    updated_at
+                        .map(|t| t.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
                 ))
             }
             None => Ok(format!("Invoice {} not found.", invoice_id)),
@@ -853,13 +918,18 @@ impl Tool for SearchProductDocsTool {
     async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
         let query = args.trim();
         if query.is_empty() {
-            return Ok("Please provide a search query to look up product documentation.".to_string());
+            return Ok(
+                "Please provide a search query to look up product documentation.".to_string(),
+            );
         }
 
         let snippets = product_knowledge_context_for_query_with_limit(query, 5);
 
         if snippets.is_empty() {
-            return Ok(format!("No product documentation found for query: '{}'. Try different keywords.", query));
+            return Ok(format!(
+                "No product documentation found for query: '{}'. Try different keywords.",
+                query
+            ));
         }
 
         let mut lines = Vec::new();
@@ -897,7 +967,9 @@ impl Tool for ExplainFeatureTool {
     async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
         let feature = args.trim();
         if feature.is_empty() {
-            return Ok("Please provide a feature name or question to get an explanation.".to_string());
+            return Ok(
+                "Please provide a feature name or question to get an explanation.".to_string(),
+            );
         }
 
         let snippets = product_knowledge_context_for_query_with_limit(feature, 5);
@@ -920,7 +992,9 @@ impl Tool for ExplainFeatureTool {
         }
 
         lines.push(String::new());
-        lines.push("Note: This explanation is based solely on indexed product documentation.".to_string());
+        lines.push(
+            "Note: This explanation is based solely on indexed product documentation.".to_string(),
+        );
 
         Ok(lines.join("\n\n"))
     }
@@ -1026,6 +1100,262 @@ impl Tool for SummarizeReleaseChangesTool {
     }
 }
 
+/// Read-only tool that explains the current workflow state for a single
+/// invoice using tenant-scoped backend repositories.
+pub struct WorkflowStateExplanationTool {
+    pool: PgPool,
+}
+
+impl WorkflowStateExplanationTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    fn parse_invoice_id(args: &str) -> Result<Uuid> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide an invoice_id to explain workflow state for. Expected: invoice UUID or {{\"invoice_id\":\"<uuid>\"}}."
+            );
+        }
+        if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input. Expected: {\"invoice_id\":\"<uuid>\"}.")?;
+            let id_str = val
+                .get("invoice_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "JSON input missing 'invoice_id' key. Expected: {{\"invoice_id\":\"<uuid>\"}}."
+                    )
+                })?;
+            return id_str
+                .parse::<Uuid>()
+                .context("Invalid invoice_id format in JSON. Please provide a valid UUID.");
+        }
+        trimmed
+            .parse::<Uuid>()
+            .context("Invalid invoice ID format. Please provide a valid UUID.")
+    }
+}
+
+fn format_approval_target(target: &ApprovalTarget) -> String {
+    match target {
+        ApprovalTarget::User(user) => format!("user {}", user.0),
+        ApprovalTarget::Role(role) => format!("role {}", role),
+        ApprovalTarget::AnyOf(users) => format!(
+            "any of {}",
+            users
+                .iter()
+                .map(|u| u.0.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        ApprovalTarget::AllOf(users) => format!(
+            "all of {}",
+            users
+                .iter()
+                .map(|u| u.0.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn workflow_state_reason(
+    status: ProcessingStatus,
+    pending_count: usize,
+    rejected_count: usize,
+    has_queue: bool,
+) -> &'static str {
+    if rejected_count > 0 || status == ProcessingStatus::Rejected {
+        return "The invoice is blocked because at least one approval was rejected.";
+    }
+    if pending_count > 0 || status == ProcessingStatus::PendingApproval {
+        return "The invoice is waiting on pending approval requests.";
+    }
+    match status {
+        ProcessingStatus::Draft => {
+            "The invoice is still in draft and has not entered active processing."
+        }
+        ProcessingStatus::Submitted => {
+            if has_queue {
+                "The invoice is in workflow and waiting in its current queue."
+            } else {
+                "The invoice was submitted but is not currently assigned to a workflow queue."
+            }
+        }
+        ProcessingStatus::Approved => {
+            "All required approvals appear complete; the invoice is approved."
+        }
+        ProcessingStatus::OnHold => {
+            "The invoice is on hold and needs clarification before workflow can continue."
+        }
+        ProcessingStatus::ReadyForPayment => {
+            "The invoice is complete from workflow review and is ready for payment."
+        }
+        ProcessingStatus::Paid => "The invoice workflow is complete and payment has been issued.",
+        ProcessingStatus::Voided => "The invoice is voided and outside active workflow processing.",
+        ProcessingStatus::PendingApproval | ProcessingStatus::Rejected => unreachable!(),
+    }
+}
+
+#[async_trait]
+impl Tool for WorkflowStateExplanationTool {
+    fn name(&self) -> &str {
+        "explain_workflow_state"
+    }
+
+    fn description(&self) -> &str {
+        "Explain an invoice's current workflow state using tenant-scoped invoice, queue, approval, and rule data. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let invoice_uuid = Self::parse_invoice_id(args)?;
+        let invoice_id = InvoiceId(invoice_uuid);
+        let tenant_id: TenantId = context
+            .tenant_id
+            .parse()
+            .context("Invalid tenant_id in agent context. Expected UUID tenant id.")?;
+
+        let pool = Arc::new(self.pool.clone());
+        let invoice_repo = InvoiceRepositoryImpl::new(pool.clone());
+        let workflow_repo = WorkflowRepositoryImpl::new(pool);
+
+        let invoice = match invoice_repo.get_by_id(&tenant_id, &invoice_id).await? {
+            Some(invoice) => invoice,
+            None => {
+                return Ok(format!(
+                    "Invoice {} not found in your organization.",
+                    invoice_uuid
+                ))
+            }
+        };
+
+        let current_item = workflow_repo
+            .get_current_item_for_invoice(&tenant_id, &invoice_id)
+            .await?;
+        let queue = if let Some(item) = current_item.as_ref() {
+            WorkQueueRepository::get_by_id(&workflow_repo, &tenant_id, &item.queue_id).await?
+        } else {
+            None
+        };
+        let approvals = workflow_repo
+            .list_for_invoice(&tenant_id, &invoice_id)
+            .await?;
+
+        let pending_count = approvals
+            .iter()
+            .filter(|a| a.status == ApprovalStatus::Pending)
+            .count();
+        let approved_count = approvals
+            .iter()
+            .filter(|a| a.status == ApprovalStatus::Approved)
+            .count();
+        let rejected_count = approvals
+            .iter()
+            .filter(|a| a.status == ApprovalStatus::Rejected)
+            .count();
+        let expired_count = approvals
+            .iter()
+            .filter(|a| a.status == ApprovalStatus::Expired)
+            .count();
+        let cancelled_count = approvals
+            .iter()
+            .filter(|a| a.status == ApprovalStatus::Cancelled)
+            .count();
+
+        let mut lines = vec![
+            format!("Invoice {} ({})", invoice.invoice_number, invoice.id),
+            format!("Vendor: {}", invoice.vendor_name),
+            format!(
+                "Amount: {:.2} {}",
+                invoice.total_amount.as_decimal(),
+                invoice.currency
+            ),
+            format!("Processing Status: {}", invoice.processing_status.as_str()),
+            format!("Capture Status: {}", invoice.capture_status.as_str()),
+        ];
+
+        if let Some(item) = current_item.as_ref() {
+            if let Some(queue) = queue.as_ref() {
+                lines.push(format!(
+                    "Current Queue: {} ({:?})",
+                    queue.name, queue.queue_type
+                ));
+            } else {
+                lines.push(format!("Current Queue: {}", item.queue_id));
+            }
+            lines.push(format!(
+                "Queue Assignment: {}",
+                item.assigned_to
+                    .as_ref()
+                    .map(|u| u.0.to_string())
+                    .unwrap_or_else(|| "unassigned".to_string())
+            ));
+            lines.push(format!(
+                "Entered Queue: {}",
+                item.entered_at.format("%Y-%m-%d %H:%M")
+            ));
+            lines.push(format!(
+                "Due: {}",
+                item.due_at
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "not set".to_string())
+            ));
+        } else {
+            lines.push("Current Queue: none".to_string());
+        }
+
+        lines.push(format!(
+            "Approval Requests: pending={}, approved={}, rejected={}, expired={}, cancelled={}",
+            pending_count, approved_count, rejected_count, expired_count, cancelled_count
+        ));
+
+        if !approvals.is_empty() {
+            lines.push("Approval Breakdown:".to_string());
+            for approval in &approvals {
+                let rule_name = match WorkflowRuleRepository::get_by_id(
+                    &workflow_repo,
+                    &tenant_id,
+                    &approval.rule_id,
+                )
+                .await?
+                {
+                    Some(rule) => rule.name,
+                    None => format!("rule {}", approval.rule_id.0),
+                };
+                lines.push(format!(
+                    "- {}: {:?} requested from {}{}{}",
+                    rule_name,
+                    approval.status,
+                    format_approval_target(&approval.requested_from),
+                    approval
+                        .responded_at
+                        .map(|d| format!(", responded {}", d.format("%Y-%m-%d %H:%M")))
+                        .unwrap_or_default(),
+                    approval
+                        .expires_at
+                        .map(|d| format!(", expires {}", d.format("%Y-%m-%d %H:%M")))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+
+        lines.push(format!(
+            "Explanation: {}",
+            workflow_state_reason(
+                invoice.processing_status,
+                pending_count,
+                rejected_count,
+                current_item.is_some()
+            )
+        ));
+
+        Ok(lines.join("\n"))
+    }
+}
+
 /// Read-only tool that explains workflow behavior for an invoice by examining
 /// workflow state, queue items, approval requests, and audit history.
 /// No mutations. Gracefully reports missing records.
@@ -1098,7 +1428,12 @@ impl Tool for ExplainWorkflowBehaviorTool {
 
         let invoice_row = match invoice {
             Some(r) => r,
-            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => {
+                return Ok(format!(
+                    "Invoice {} not found in your organization.",
+                    invoice_id
+                ))
+            }
         };
 
         let invoice_number: String = invoice_row.try_get("invoice_number")?;
@@ -1161,9 +1496,15 @@ impl Tool for ExplainWorkflowBehaviorTool {
         } else {
             let mut lines = vec!["## Workflow Queue State".to_string()];
             for qi in &queue_items {
-                let q_name: String = qi.try_get("queue_name").unwrap_or_else(|_| "Unknown".to_string());
-                let q_type: String = qi.try_get("queue_type").unwrap_or_else(|_| "Unknown".to_string());
-                let qi_status: String = qi.try_get("qi_status").unwrap_or_else(|_| "Unknown".to_string());
+                let q_name: String = qi
+                    .try_get("queue_name")
+                    .unwrap_or_else(|_| "Unknown".to_string());
+                let q_type: String = qi
+                    .try_get("queue_type")
+                    .unwrap_or_else(|_| "Unknown".to_string());
+                let qi_status: String = qi
+                    .try_get("qi_status")
+                    .unwrap_or_else(|_| "Unknown".to_string());
                 let priority: i32 = qi.try_get("priority").unwrap_or(0);
                 let due_at: Option<DateTime<Utc>> = qi.try_get("due_at").ok().flatten();
                 let comp_action: Option<String> = qi.try_get("completion_action").ok().flatten();
@@ -1211,15 +1552,17 @@ impl Tool for ExplainWorkflowBehaviorTool {
 
         if approvals.is_empty() {
             sections.push(
-                "## Approval Requests\nNo approval requests found for this invoice."
-                    .to_string(),
+                "## Approval Requests\nNo approval requests found for this invoice.".to_string(),
             );
         } else {
             let mut lines = vec!["## Approval Requests".to_string()];
             for ar in &approvals {
-                let ar_status: String = ar.try_get("ar_status").unwrap_or_else(|_| "Unknown".to_string());
-                let req_from: serde_json::Value =
-                    ar.try_get("requested_from").unwrap_or(serde_json::Value::Null);
+                let ar_status: String = ar
+                    .try_get("ar_status")
+                    .unwrap_or_else(|_| "Unknown".to_string());
+                let req_from: serde_json::Value = ar
+                    .try_get("requested_from")
+                    .unwrap_or(serde_json::Value::Null);
                 let comments: Option<String> = ar.try_get("comments").ok().flatten();
                 let responded_at: Option<DateTime<Utc>> = ar.try_get("responded_at").ok().flatten();
                 let rule_name: Option<String> = ar.try_get("rule_name").ok().flatten();
@@ -1272,7 +1615,9 @@ impl Tool for ExplainWorkflowBehaviorTool {
             for row in &inv_audit {
                 let from: Option<String> = row.try_get("from_status").ok().flatten();
                 let to: String = row.try_get("to_status").unwrap_or_else(|_| "?".to_string());
-                let evt: String = row.try_get("event_type").unwrap_or_else(|_| "?".to_string());
+                let evt: String = row
+                    .try_get("event_type")
+                    .unwrap_or_else(|_| "?".to_string());
                 let actor: Option<Uuid> = row.try_get("actor_id").ok().flatten();
                 let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
                 audit_lines.push(format!(
@@ -1308,9 +1653,13 @@ impl Tool for ExplainWorkflowBehaviorTool {
         } else {
             audit_lines.push(format!("Workflow audit (latest {}):", wf_audit.len()));
             for row in &wf_audit {
-                let etype: String = row.try_get("entity_type").unwrap_or_else(|_| "?".to_string());
+                let etype: String = row
+                    .try_get("entity_type")
+                    .unwrap_or_else(|_| "?".to_string());
                 let action: String = row.try_get("action").unwrap_or_else(|_| "?".to_string());
-                let atype: String = row.try_get("actor_type").unwrap_or_else(|_| "?".to_string());
+                let atype: String = row
+                    .try_get("actor_type")
+                    .unwrap_or_else(|_| "?".to_string());
                 let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
                 audit_lines.push(format!(
                     "  {} {} (by {}) at {}",
@@ -1345,14 +1694,18 @@ impl Tool for ExplainWorkflowBehaviorTool {
                 audit_lines.push(format!("Generic audit log (latest {}):", rows.len()));
                 for row in &rows {
                     let action: String = row.try_get("action").unwrap_or_else(|_| "?".to_string());
-                    let rtype: String = row.try_get("resource_type").unwrap_or_else(|_| "?".to_string());
+                    let rtype: String = row
+                        .try_get("resource_type")
+                        .unwrap_or_else(|_| "?".to_string());
                     let uid: Option<Uuid> = row.try_get("user_id").ok().flatten();
-                    let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+                    let at: DateTime<Utc> =
+                        row.try_get("created_at").unwrap_or_else(|_| Utc::now());
                     audit_lines.push(format!(
                         "  {} on {} by {} at {}",
                         action,
                         rtype,
-                        uid.map(|u| u.to_string()).unwrap_or_else(|| "system".to_string()),
+                        uid.map(|u| u.to_string())
+                            .unwrap_or_else(|| "system".to_string()),
                         at.format("%Y-%m-%d %H:%M"),
                     ));
                 }
@@ -1443,8 +1796,7 @@ impl Tool for SearchInvoicesTool {
         let filters: serde_json::Value = if trimmed.is_empty() {
             serde_json::json!({})
         } else if trimmed.starts_with('{') {
-            serde_json::from_str(trimmed)
-                .context("Invalid JSON input for search_invoices.")?
+            serde_json::from_str(trimmed).context("Invalid JSON input for search_invoices.")?
         } else {
             serde_json::json!({ "query": trimmed })
         };
@@ -1541,12 +1893,14 @@ impl Tool for SearchInvoicesTool {
             q = q.bind(ps);
         }
         if let Some(db) = due_before {
-            let dt: NaiveDate = db.parse()
+            let dt: NaiveDate = db
+                .parse()
                 .context("Invalid due_before date format. Use YYYY-MM-DD.")?;
             q = q.bind(dt);
         }
         if let Some(da) = due_after {
-            let dt: NaiveDate = da.parse()
+            let dt: NaiveDate = da
+                .parse()
                 .context("Invalid due_after date format. Use YYYY-MM-DD.")?;
             q = q.bind(dt);
         }
@@ -1567,11 +1921,15 @@ impl Tool for SearchInvoicesTool {
         let mut lines = vec![format!("Found {} invoice(s):\n", rows.len())];
         for row in &rows {
             let id: Uuid = row.try_get("id")?;
-            let inv_num: String = row.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
+            let inv_num: String = row
+                .try_get("invoice_number")
+                .unwrap_or_else(|_| "N/A".to_string());
             let vn: Option<String> = row.try_get("vendor_name").ok().flatten();
             let st: String = row.try_get("status").unwrap_or_else(|_| "N/A".to_string());
             let cents: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
-            let cur: String = row.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+            let cur: String = row
+                .try_get("currency")
+                .unwrap_or_else(|_| "USD".to_string());
             let dd: Option<NaiveDate> = row.try_get("due_date").ok().flatten();
             let ca: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
 
@@ -1586,7 +1944,8 @@ impl Tool for SearchInvoicesTool {
                 st,
                 amt,
                 cur,
-                dd.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                dd.map(|d| d.to_string())
+                    .unwrap_or_else(|| "N/A".to_string()),
                 ca.format("%Y-%m-%d"),
                 id,
             ));
@@ -1667,7 +2026,12 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
 
         let target = match target {
             Some(t) => t,
-            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => {
+                return Ok(format!(
+                    "Invoice {} not found in your organization.",
+                    invoice_id
+                ))
+            }
         };
 
         let t_inv_num: Option<String> = target.try_get("invoice_number").ok().flatten();
@@ -1749,13 +2113,17 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
                         if let (Some(td), Some(cd)) = (t_invoice_date, c_inv_date) {
                             let diff = (td - cd).num_days().abs();
                             if diff <= 3 {
-                                reasons.push(format!("same vendor + invoice_date within {} day(s)", diff));
+                                reasons.push(format!(
+                                    "same vendor + invoice_date within {} day(s)",
+                                    diff
+                                ));
                             }
                         }
                         if let (Some(td), Some(cd)) = (t_due_date, c_due_date) {
                             let diff = (td - cd).num_days().abs();
                             if diff <= 3 {
-                                reasons.push(format!("same vendor + due_date within {} day(s)", diff));
+                                reasons
+                                    .push(format!("same vendor + due_date within {} day(s)", diff));
                             }
                         }
                     }
@@ -1772,8 +2140,12 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
                 c_inv_num.unwrap_or_else(|| "N/A".to_string()),
                 c_vendor.unwrap_or_else(|| "Unknown".to_string()),
                 amt,
-                c_inv_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
-                c_due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                c_inv_date
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "N/A".to_string()),
+                c_due_date
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "N/A".to_string()),
                 reasons.join(", "),
             ));
         }
@@ -1854,14 +2226,23 @@ impl Tool for AssessInvoicePaymentRiskTool {
 
         let invoice = match invoice {
             Some(inv) => inv,
-            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+            None => {
+                return Ok(format!(
+                    "Invoice {} not found in your organization.",
+                    invoice_id
+                ))
+            }
         };
 
         let inv_num: Option<String> = invoice.try_get("invoice_number").ok().flatten();
         let vendor: Option<String> = invoice.try_get("vendor_name").ok().flatten();
         let amount_cents: Option<i64> = invoice.try_get("total_amount_cents").ok().flatten();
-        let currency: String = invoice.try_get("currency").unwrap_or_else(|_| "USD".to_string());
-        let status: String = invoice.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+        let currency: String = invoice
+            .try_get("currency")
+            .unwrap_or_else(|_| "USD".to_string());
+        let status: String = invoice
+            .try_get("status")
+            .unwrap_or_else(|_| "N/A".to_string());
         let proc_status: Option<String> = invoice.try_get("processing_status").ok().flatten();
         let invoice_date: Option<NaiveDate> = invoice.try_get("invoice_date").ok().flatten();
         let due_date: Option<NaiveDate> = invoice.try_get("due_date").ok().flatten();
@@ -1877,7 +2258,10 @@ impl Tool for AssessInvoicePaymentRiskTool {
                 let days_overdue = (today - dd).num_days();
                 if days_overdue > 0 {
                     risk_score += 30;
-                    risk_signals.push(format!("Invoice is {} day(s) overdue (due: {}).", days_overdue, dd));
+                    risk_signals.push(format!(
+                        "Invoice is {} day(s) overdue (due: {}).",
+                        days_overdue, dd
+                    ));
                     evidence.push(format!("due_date {} is {} days past", dd, days_overdue));
                 }
             } else {
@@ -1911,7 +2295,12 @@ impl Tool for AssessInvoicePaymentRiskTool {
         if let Some(cents) = amount_cents {
             if cents > 100_000_00 {
                 risk_score += 10;
-                risk_signals.push(format!("High-value invoice: {}.{:02} {}.", cents / 100, cents % 100, currency));
+                risk_signals.push(format!(
+                    "High-value invoice: {}.{:02} {}.",
+                    cents / 100,
+                    cents % 100,
+                    currency
+                ));
                 evidence.push(format!("total_amount_cents: {}", cents));
             }
         }
@@ -1990,7 +2379,10 @@ impl Tool for AssessInvoicePaymentRiskTool {
                     evidence.push(format!("active payment_requests: {}", active.len()));
                     // No risk penalty, but informative
                 } else {
-                    evidence.push(format!("payment_requests found: {} (all resolved)", rows.len()));
+                    evidence.push(format!(
+                        "payment_requests found: {} (all resolved)",
+                        rows.len()
+                    ));
                 }
             }
             Ok(_) => {
@@ -2052,12 +2444,24 @@ impl Tool for AssessInvoicePaymentRiskTool {
 
         let mut lines = vec![
             format!("Payment Risk Assessment for Invoice {}", invoice_id),
-            format!("Invoice: {} | Vendor: {} | Amount: {} {}", 
+            format!(
+                "Invoice: {} | Vendor: {} | Amount: {} {}",
                 inv_num.unwrap_or_else(|| "N/A".to_string()),
                 vendor.unwrap_or_else(|| "Unknown".to_string()),
-                amt_display, currency),
-            format!("Status: {} | Processing: {}", status, proc_status.unwrap_or_else(|| "N/A".to_string())),
-            format!("Due Date: {}", due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())),
+                amt_display,
+                currency
+            ),
+            format!(
+                "Status: {} | Processing: {}",
+                status,
+                proc_status.unwrap_or_else(|| "N/A".to_string())
+            ),
+            format!(
+                "Due Date: {}",
+                due_date
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| "N/A".to_string())
+            ),
             String::new(),
             format!("Risk Level: {} (score: {}/100)", risk_level, risk_score),
         ];
@@ -2426,6 +2830,30 @@ impl ToolRegistry {
                 mutates: false,
             },
             AiToolDefinition {
+                name: "explain_workflow_state",
+                description: "Explain an invoice's current workflow state using tenant-scoped backend services. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})",
+                class: AiToolClass::Workflow,
+                required_permission: AiToolPermission::WorkflowRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice": { "type": "object" },
+                        "current_queue": { "type": "object" },
+                        "approval_breakdown": { "type": "object" },
+                        "explanation": { "type": "string" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
                 name: "request_issue_creation",
                 description: "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\",\"source_conversation_link\":\"...\",\"metadata\":{}}",
                 class: AiToolClass::IssueIntake,
@@ -2573,6 +3001,17 @@ impl ToolRegistry {
             .join("\n")
     }
 
+    pub fn provider_tool_definitions(&self) -> Vec<super::models::ProviderToolDefinition> {
+        Self::tool_definitions()
+            .into_iter()
+            .map(|d| super::models::ProviderToolDefinition {
+                name: d.name.to_string(),
+                description: Some(d.description.to_string()),
+                parameters: d.input_schema,
+            })
+            .collect()
+    }
+
     pub async fn execute_tool(
         &self,
         tool_name: &str,
@@ -2586,34 +3025,39 @@ impl ToolRegistry {
 
         match tool_name {
             "get_invoice_status" => {
-                InvoiceStatusTool::new(self.pool.clone()).execute(context, args).await
+                InvoiceStatusTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "get_vendor_invoices" => {
-                VendorInvoicesTool::new(self.pool.clone()).execute(context, args).await
+                VendorInvoicesTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "get_approval_requirements" => {
-                ApprovalRequirementsTool::new(self.pool.clone()).execute(context, args).await
+                ApprovalRequirementsTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "summarize_invoice" => {
-                InvoiceSummaryTool::new(self.pool.clone()).execute(context, args).await
+                InvoiceSummaryTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
-            "get_module_capabilities" => {
-                ModuleCapabilitiesTool.execute(context, args).await
-            }
-            "search_product_docs" => {
-                SearchProductDocsTool.execute(context, args).await
-            }
-            "explain_feature" => {
-                ExplainFeatureTool.execute(context, args).await
-            }
-            "search_known_issues" => {
-                SearchKnownIssuesTool.execute(context, args).await
-            }
-            "summarize_release_changes" => {
-                SummarizeReleaseChangesTool.execute(context, args).await
-            }
+            "get_module_capabilities" => ModuleCapabilitiesTool.execute(context, args).await,
+            "search_product_docs" => SearchProductDocsTool.execute(context, args).await,
+            "explain_feature" => ExplainFeatureTool.execute(context, args).await,
+            "search_known_issues" => SearchKnownIssuesTool.execute(context, args).await,
+            "summarize_release_changes" => SummarizeReleaseChangesTool.execute(context, args).await,
             "explain_workflow_behavior" => {
-                ExplainWorkflowBehaviorTool::new(self.pool.clone()).execute(context, args).await
+                ExplainWorkflowBehaviorTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "explain_workflow_state" => {
+                WorkflowStateExplanationTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "request_issue_creation" => {
                 let request: super::issue_intake::IssueCreationRequest =
@@ -2625,16 +3069,24 @@ impl ToolRegistry {
                 serde_json::to_string(&envelope).context("Failed to serialize approval envelope")
             }
             "search_invoices" => {
-                SearchInvoicesTool::new(self.pool.clone()).execute(context, args).await
+                SearchInvoicesTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "find_duplicate_invoice_candidates" => {
-                FindDuplicateInvoiceCandidatesTool::new(self.pool.clone()).execute(context, args).await
+                FindDuplicateInvoiceCandidatesTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "assess_invoice_payment_risk" => {
-                AssessInvoicePaymentRiskTool::new(self.pool.clone()).execute(context, args).await
+                AssessInvoicePaymentRiskTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             "get_vendor_summary" => {
-                VendorSummaryTool::new(self.pool.clone()).execute(context, args).await
+                VendorSummaryTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

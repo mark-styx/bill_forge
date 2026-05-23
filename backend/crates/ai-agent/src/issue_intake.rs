@@ -72,7 +72,9 @@ pub enum IssueCreationError {
 }
 
 /// Validate an `IssueCreationRequest`, returning an error for invalid inputs.
-pub fn validate_issue_creation_request(request: &IssueCreationRequest) -> Result<(), IssueCreationError> {
+pub fn validate_issue_creation_request(
+    request: &IssueCreationRequest,
+) -> Result<(), IssueCreationError> {
     if request.title.trim().is_empty() {
         return Err(IssueCreationError::EmptyTitle);
     }
@@ -167,10 +169,22 @@ mod tests {
 
     #[test]
     fn parse_target_all_variants() {
-        assert!(matches!(parse_target("github"), Ok(IssueCreationTarget::Github)));
-        assert!(matches!(parse_target("linear"), Ok(IssueCreationTarget::Linear)));
-        assert!(matches!(parse_target("jira"), Ok(IssueCreationTarget::Jira)));
-        assert!(matches!(parse_target("internal_feedback_table"), Ok(IssueCreationTarget::InternalFeedbackTable)));
+        assert!(matches!(
+            parse_target("github"),
+            Ok(IssueCreationTarget::Github)
+        ));
+        assert!(matches!(
+            parse_target("linear"),
+            Ok(IssueCreationTarget::Linear)
+        ));
+        assert!(matches!(
+            parse_target("jira"),
+            Ok(IssueCreationTarget::Jira)
+        ));
+        assert!(matches!(
+            parse_target("internal_feedback_table"),
+            Ok(IssueCreationTarget::InternalFeedbackTable)
+        ));
     }
 
     #[test]
@@ -201,8 +215,14 @@ mod tests {
             metadata: serde_json::json!({ "intake_channel": "winston_ai" }),
         };
         let result = prepare_issue_creation_for_approval(req.clone()).unwrap();
-        assert_eq!(result.request.source_conversation_id, req.source_conversation_id);
-        assert_eq!(result.request.source_conversation_link, req.source_conversation_link);
+        assert_eq!(
+            result.request.source_conversation_id,
+            req.source_conversation_id
+        );
+        assert_eq!(
+            result.request.source_conversation_link,
+            req.source_conversation_link
+        );
     }
 
     #[test]

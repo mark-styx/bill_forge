@@ -129,7 +129,7 @@ fn glm_proxy_defaults_when_minimal_env() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn glm_proxy_reports_model_and_no_tools() {
+fn glm_proxy_reports_model_and_tools() {
     let provider = OpenAiCompatibleProvider::with_config(
         "glm-proxy".into(),
         "glm-4".into(),
@@ -139,7 +139,7 @@ fn glm_proxy_reports_model_and_no_tools() {
 
     assert_eq!(provider.provider_name(), "glm-proxy");
     assert_eq!(provider.model_name(), "glm-4");
-    assert!(!provider.supports_tools());
+    assert!(provider.supports_tools());
 }
 
 #[test]

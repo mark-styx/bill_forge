@@ -9,11 +9,10 @@ use uuid::Uuid;
 
 use super::context::{build_system_prompt, inject_context};
 use super::models::{
-    AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerTrace,
-    BugReportDraftRequest, BugReportDraftResponse,
-    FeatureRequestDraftRequest, FeatureRequestDraftResponse,
-    ChatRequest, ChatResponse, Conversation, IssueSourceMetadata, Message, MessageRole,
-    ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
+    AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerToolTrace, AnswerTrace,
+    BugReportDraftRequest, BugReportDraftResponse, ChatRequest, ChatResponse, Conversation,
+    FeatureRequestDraftRequest, FeatureRequestDraftResponse, IssueSourceMetadata, Message,
+    MessageRole, ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
 use super::product_knowledge::{
     format_product_knowledge_block, product_knowledge_context_for_query,
@@ -22,8 +21,8 @@ use super::provider::AiProvider;
 use super::tools::ToolRegistry;
 use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
-    AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
-    AiUsageEventInput,
+    AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AiUsageEventInput,
+    AppendAiMessageInput,
 };
 use sqlx::PgPool;
 
@@ -177,10 +176,7 @@ impl WinstonAgent {
                     ));
                 }
                 other => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to persist user message: {}",
-                        other
-                    ));
+                    return Err(anyhow::anyhow!("Failed to persist user message: {}", other));
                 }
             }
         }
@@ -207,10 +203,16 @@ impl WinstonAgent {
                         completion_tokens: u.completion_tokens.map(|t| t as i32),
                         total_tokens: u.total_tokens.map(|t| t as i32),
                     }),
-                    metadata: serde_json::to_value(&response.trace).unwrap_or_else(|_| serde_json::json!({})),
+                    metadata: serde_json::to_value(&response.trace)
+                        .unwrap_or_else(|_| serde_json::json!({})),
                 };
                 let assistant_record = repo
-                    .append_message(&parsed_tid, &parsed_uid, conversation_id, assistant_msg_input)
+                    .append_message(
+                        &parsed_tid,
+                        &parsed_uid,
+                        conversation_id,
+                        assistant_msg_input,
+                    )
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to persist assistant message: {}", e))?;
 
@@ -232,7 +234,8 @@ impl WinstonAgent {
                             model_route: Some(format!("{:?}", telemetry.selected_route)),
                             latency_ms: Some(telemetry.latency_ms as i64),
                             prompt_tokens: usage.and_then(|u| u.prompt_tokens.map(|t| t as i32)),
-                            completion_tokens: usage.and_then(|u| u.completion_tokens.map(|t| t as i32)),
+                            completion_tokens: usage
+                                .and_then(|u| u.completion_tokens.map(|t| t as i32)),
                             total_tokens: usage.and_then(|u| u.total_tokens.map(|t| t as i32)),
                             success: true,
                             error_code: None,
@@ -267,9 +270,10 @@ impl WinstonAgent {
                                 completion_tokens: None,
                                 total_tokens: None,
                                 success: false,
-                                error_code: err.provider_code.clone().or_else(|| {
-                                    Some(format!("{:?}", err.kind))
-                                }),
+                                error_code: err
+                                    .provider_code
+                                    .clone()
+                                    .or_else(|| Some(format!("{:?}", err.kind))),
                                 error_message: Some(err.message.clone()),
                                 provider_request_id: None,
                                 metadata: serde_json::json!({
@@ -342,12 +346,10 @@ impl WinstonAgent {
         let pk_snippets = product_knowledge_context_for_query(&request.message);
         let pk_block = format_product_knowledge_block(&pk_snippets);
 
-        let mut messages = vec![
-            ProviderChatMessage {
-                role: ProviderMessageRole::System,
-                content: system_prompt,
-            },
-        ];
+        let mut messages = vec![ProviderChatMessage {
+            role: ProviderMessageRole::System,
+            content: system_prompt,
+        }];
 
         // If product knowledge matched, inject it as a second system message
         // so the model can reference documentation without it dominating the
@@ -368,18 +370,26 @@ impl WinstonAgent {
         let selected_route = ProviderModelRoute::Default;
         let routing_reason = "default_chat_turn";
         let selected_provider = self.provider.provider_name().to_string();
-        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+        let selected_model = self
+            .provider
+            .model_name_for_route(selected_route)
+            .to_string();
+        let provider_tools = if self.provider.supports_tools() {
+            Some(self.tools.provider_tool_definitions())
+        } else {
+            None
+        };
 
         // Build provider-neutral completion request.
         // max_tokens is left as None so the provider applies its configured default.
         let provider_request = ProviderChatRequest {
             model: selected_model.clone(),
             model_route: selected_route,
-            messages,
+            messages: messages.clone(),
             temperature: Some(0.7),
             max_tokens: None,
             stop: None,
-            tools: None,
+            tools: provider_tools,
         };
 
         // Call provider with latency measurement
@@ -433,6 +443,71 @@ impl WinstonAgent {
             }
         };
 
+        let mut tool_traces = Vec::new();
+        let provider_response = if let Some(tool_calls) = provider_response.tool_calls.clone() {
+            let mut tool_result_lines = Vec::new();
+            for call in tool_calls {
+                let args = match call.arguments {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                tool_traces.push(AnswerToolTrace {
+                    tool_name: call.name.clone(),
+                });
+                let result = match self.tools.execute_tool(&call.name, context, &args).await {
+                    Ok(result) => result,
+                    Err(e) => format!("Tool error: {}", e),
+                };
+                tool_result_lines.push(format!("Tool {} returned:\n{}", call.name, result));
+            }
+
+            let mut followup_messages = messages.clone();
+            if !provider_response.message.content.is_empty() {
+                followup_messages.push(provider_response.message.clone());
+            }
+            followup_messages.push(ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: format!(
+                    "Use these read-only tool results to answer the user's original question. Do not claim any mutation occurred.\n\n{}",
+                    tool_result_lines.join("\n\n")
+                ),
+            });
+
+            let followup_request = ProviderChatRequest {
+                model: selected_model.clone(),
+                model_route: selected_route,
+                messages: followup_messages,
+                temperature: Some(0.7),
+                max_tokens: None,
+                stop: None,
+                tools: None,
+            };
+            self.provider
+                .chat_completion(followup_request)
+                .await
+                .map_err(|e| {
+                    warn!(
+                        selected_provider = %selected_provider,
+                        selected_model = %selected_model,
+                        model_route = ?selected_route,
+                        conversation_id = %conversation_id,
+                        tenant_id = %tenant_id,
+                        user_id = %user_id,
+                        error_kind = ?e.kind,
+                        "AI follow-up turn after tool call failed"
+                    );
+                    ProviderTurnError {
+                        selected_provider: selected_provider.clone(),
+                        selected_model: selected_model.clone(),
+                        selected_route,
+                        latency_ms,
+                        provider_error: e,
+                    }
+                })?
+        } else {
+            provider_response
+        };
+
         let assistant_content = provider_response.message.content.clone();
 
         let telemetry = ProviderTurnTelemetry {
@@ -479,7 +554,7 @@ impl WinstonAgent {
 
         let trace = AnswerTrace {
             context_records,
-            tools_used: vec![],
+            tools_used: tool_traces,
             provider: AnswerProviderTrace {
                 provider: telemetry.selected_provider.clone(),
                 model: telemetry.selected_model.clone(),
@@ -521,7 +596,8 @@ impl WinstonAgent {
             .context("Failed to inject agent context")?;
         context.enabled_modules = self.enabled_modules.clone();
 
-        self.generate_bug_report_draft_with_context(request, &context).await
+        self.generate_bug_report_draft_with_context(request, &context)
+            .await
     }
 
     /// Inner method that builds prompt, calls provider, and parses JSON response.
@@ -531,7 +607,6 @@ impl WinstonAgent {
         request: BugReportDraftRequest,
         context: &AgentContext,
     ) -> Result<BugReportDraftResponse> {
-
         let system_prompt = build_system_prompt(context);
 
         let json_schema_instruction = r#"You are a bug report drafting assistant. Given unstructured bug notes, produce a JSON object with EXACTLY these fields:
@@ -557,7 +632,10 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
         ];
 
         let selected_route = ProviderModelRoute::Default;
-        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+        let selected_model = self
+            .provider
+            .model_name_for_route(selected_route)
+            .to_string();
 
         let provider_request = ProviderChatRequest {
             model: selected_model,
@@ -629,7 +707,8 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
             .context("Failed to inject agent context")?;
         context.enabled_modules = self.enabled_modules.clone();
 
-        self.generate_feature_request_draft_with_context(request, &context).await
+        self.generate_feature_request_draft_with_context(request, &context)
+            .await
     }
 
     /// Inner method that builds prompt, calls provider, and parses JSON response.
@@ -639,7 +718,6 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
         request: FeatureRequestDraftRequest,
         context: &AgentContext,
     ) -> Result<FeatureRequestDraftResponse> {
-
         let system_prompt = build_system_prompt(context);
 
         let json_schema_instruction = r#"You are a feature request drafting assistant. Given unstructured feature request notes, produce a JSON object with EXACTLY these fields:
@@ -663,7 +741,10 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
         ];
 
         let selected_route = ProviderModelRoute::Default;
-        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+        let selected_model = self
+            .provider
+            .model_name_for_route(selected_route)
+            .to_string();
 
         let provider_request = ProviderChatRequest {
             model: selected_model,
@@ -725,8 +806,8 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
         intake_channel: &'static str,
         issue_kind: &'static str,
     ) -> Option<IssueSourceMetadata> {
-        let source_conversation_link = conversation_id
-            .map(|id| format!("/ai-assistant?conversation_id={}", id));
+        let source_conversation_link =
+            conversation_id.map(|id| format!("/ai-assistant?conversation_id={}", id));
         Some(IssueSourceMetadata {
             source_conversation_id: conversation_id,
             source_conversation_link,
@@ -760,7 +841,10 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
 mod tests {
     use super::*;
     use crate::fake_provider::FakeAiProvider;
-    use crate::models::{AgentContext, BugReportDraftRequest, BugReportPriority, FeatureRequestDraftRequest, FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind};
+    use crate::models::{
+        AgentContext, BugReportDraftRequest, BugReportPriority, FeatureRequestDraftRequest,
+        FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind,
+    };
     use sqlx::PgPool;
 
     /// Helper: build a ChatRequest for tests.
@@ -802,11 +886,7 @@ mod tests {
         let conversation_id = Uuid::new_v4();
 
         let response = agent
-            .chat_with_context(
-                request,
-                ctx,
-                conversation_id,
-            )
+            .chat_with_context(request, ctx, conversation_id)
             .await
             .expect("chat_with_context should succeed");
 
@@ -848,11 +928,7 @@ mod tests {
         let conversation_id = Uuid::new_v4();
 
         let response = agent
-            .chat_with_context(
-                request,
-                ctx,
-                conversation_id,
-            )
+            .chat_with_context(request, ctx, conversation_id)
             .await
             .expect("chat_with_context should succeed");
 
@@ -872,8 +948,8 @@ mod tests {
     #[tokio::test]
     async fn agent_uses_provider_identity() {
         let provider = Arc::new(FakeAiProvider::new().with_model_name("glm-4-flash"));
-        let pool =
-            PgPool::connect_lazy("postgres:///_test_placeholder").expect("lazy connect is always ok");
+        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
+            .expect("lazy connect is always ok");
         let agent = WinstonAgent::new(pool, provider);
 
         assert_eq!(agent.provider.provider_name(), "fake");
@@ -892,8 +968,8 @@ mod tests {
             retryable: Some(true),
         };
         let provider = Arc::new(FakeAiProvider::new().with_error(error.clone()));
-        let pool =
-            PgPool::connect_lazy("postgres:///_test_placeholder").expect("lazy connect is always ok");
+        let pool = PgPool::connect_lazy("postgres:///_test_placeholder")
+            .expect("lazy connect is always ok");
         let agent = WinstonAgent::new(pool, provider.clone());
 
         // Simulate the provider call the agent would make using model_name_for_route
@@ -966,11 +1042,18 @@ mod tests {
         assert_eq!(trace.provider.provider, "fake");
         assert_eq!(trace.provider.model, "fake-model");
         assert_eq!(trace.provider.finish_reason.as_deref(), Some("stop"));
-        assert_eq!(trace.provider.provider_request_id.as_deref(), Some("fake-req-001"));
+        assert_eq!(
+            trace.provider.provider_request_id.as_deref(),
+            Some("fake-req-001")
+        );
         assert!(trace.provider.latency_ms.is_some());
 
         // FakeAiProvider reports deterministic usage
-        let usage = trace.provider.usage.as_ref().expect("usage should be present");
+        let usage = trace
+            .provider
+            .usage
+            .as_ref()
+            .expect("usage should be present");
         assert_eq!(usage.prompt_tokens, Some(10));
         assert_eq!(usage.completion_tokens, Some(5));
         assert_eq!(usage.total_tokens, Some(15));
@@ -1031,8 +1114,14 @@ mod tests {
 
         // Verify all fields parsed correctly
         assert_eq!(draft.title, "Login page crashes on submit");
-        assert_eq!(draft.current_behavior, "Page shows a white screen after clicking login");
-        assert_eq!(draft.expected_behavior, "User is redirected to the dashboard");
+        assert_eq!(
+            draft.current_behavior,
+            "Page shows a white screen after clicking login"
+        );
+        assert_eq!(
+            draft.expected_behavior,
+            "User is redirected to the dashboard"
+        );
         assert_eq!(draft.reproduction_steps.len(), 3);
         assert_eq!(draft.reproduction_steps[0], "Go to /login");
         assert_eq!(draft.priority, BugReportPriority::High);
@@ -1146,7 +1235,9 @@ mod tests {
         let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
         let agent = test_agent(provider.clone());
 
-        let request = feature_request_request("We need to export many invoices at once instead of one by one.");
+        let request = feature_request_request(
+            "We need to export many invoices at once instead of one by one.",
+        );
         let ctx = synthetic_context();
 
         let draft = agent
@@ -1154,12 +1245,21 @@ mod tests {
             .await
             .expect("draft generation should succeed");
 
-        assert_eq!(draft.problem_statement, "Users cannot export invoices in bulk");
-        assert_eq!(draft.proposed_value, "Add a bulk export feature supporting CSV and PDF formats");
+        assert_eq!(
+            draft.problem_statement,
+            "Users cannot export invoices in bulk"
+        );
+        assert_eq!(
+            draft.proposed_value,
+            "Add a bulk export feature supporting CSV and PDF formats"
+        );
         assert_eq!(draft.affected_module, "Reporting");
         assert_eq!(draft.priority, FeatureRequestPriority::Medium);
         assert_eq!(draft.acceptance_criteria.len(), 3);
-        assert_eq!(draft.acceptance_criteria[0], "User can select multiple invoices for export");
+        assert_eq!(
+            draft.acceptance_criteria[0],
+            "User can select multiple invoices for export"
+        );
 
         // Verify the provider received the prompt with feature-request-specific instructions
         let requests = provider.take_requests();
@@ -1194,7 +1294,8 @@ mod tests {
         assert!(result.is_err(), "should fail for malformed JSON");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("Failed to parse feature request draft"),
+            err.to_string()
+                .contains("Failed to parse feature request draft"),
             "error message should mention parse failure, got: {}",
             err
         );
@@ -1226,7 +1327,10 @@ mod tests {
             .await
             .expect("should strip fences and parse");
 
-        assert_eq!(draft.problem_statement, "No audit trail for approval overrides");
+        assert_eq!(
+            draft.problem_statement,
+            "No audit trail for approval overrides"
+        );
         assert_eq!(draft.priority, FeatureRequestPriority::High);
     }
 

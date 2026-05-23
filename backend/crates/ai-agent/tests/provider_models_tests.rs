@@ -87,6 +87,7 @@ fn provider_chat_response_round_trips_with_usage() {
             role: ProviderMessageRole::Assistant,
             content: "Invoice INV-001 is approved.".into(),
         },
+        tool_calls: None,
         finish_reason: Some("stop".into()),
         usage: Some(ProviderChatUsage {
             prompt_tokens: Some(20),

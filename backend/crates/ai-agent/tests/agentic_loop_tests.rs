@@ -3,7 +3,7 @@
 //! These run without a database or OpenAI key (SQLX_OFFLINE=true).
 
 use billforge_ai_agent::tools::ToolRegistry;
-use billforge_ai_agent::tools::{AiToolDefinition, AiToolClass, AiToolPermission, AiToolRiskLevel};
+use billforge_ai_agent::tools::{AiToolClass, AiToolDefinition, AiToolPermission, AiToolRiskLevel};
 use sqlx::postgres::PgPoolOptions;
 
 fn fake_pool() -> sqlx::PgPool {
@@ -17,20 +17,66 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     let registry = ToolRegistry::new(fake_pool());
     let descriptions = registry.get_tool_descriptions();
 
-    assert!(descriptions.contains("get_invoice_status"), "missing get_invoice_status");
-    assert!(descriptions.contains("get_vendor_invoices"), "missing get_vendor_invoices");
-    assert!(descriptions.contains("get_approval_requirements"), "missing get_approval_requirements");
-    assert!(descriptions.contains("summarize_invoice"), "missing summarize_invoice");
-    assert!(descriptions.contains("get_module_capabilities"), "missing get_module_capabilities");
-    assert!(descriptions.contains("search_product_docs"), "missing search_product_docs");
-    assert!(descriptions.contains("explain_feature"), "missing explain_feature");
-    assert!(descriptions.contains("search_known_issues"), "missing search_known_issues");
-    assert!(descriptions.contains("summarize_release_changes"), "missing summarize_release_changes");
-    assert!(descriptions.contains("explain_workflow_behavior"), "missing explain_workflow_behavior");
-    assert!(descriptions.contains("search_invoices"), "missing search_invoices");
-    assert!(descriptions.contains("find_duplicate_invoice_candidates"), "missing find_duplicate_invoice_candidates");
-    assert!(descriptions.contains("assess_invoice_payment_risk"), "missing assess_invoice_payment_risk");
-    assert!(descriptions.contains("get_vendor_summary"), "missing get_vendor_summary");
+    assert!(
+        descriptions.contains("get_invoice_status"),
+        "missing get_invoice_status"
+    );
+    assert!(
+        descriptions.contains("get_vendor_invoices"),
+        "missing get_vendor_invoices"
+    );
+    assert!(
+        descriptions.contains("get_approval_requirements"),
+        "missing get_approval_requirements"
+    );
+    assert!(
+        descriptions.contains("summarize_invoice"),
+        "missing summarize_invoice"
+    );
+    assert!(
+        descriptions.contains("get_module_capabilities"),
+        "missing get_module_capabilities"
+    );
+    assert!(
+        descriptions.contains("search_product_docs"),
+        "missing search_product_docs"
+    );
+    assert!(
+        descriptions.contains("explain_feature"),
+        "missing explain_feature"
+    );
+    assert!(
+        descriptions.contains("search_known_issues"),
+        "missing search_known_issues"
+    );
+    assert!(
+        descriptions.contains("summarize_release_changes"),
+        "missing summarize_release_changes"
+    );
+    assert!(
+        descriptions.contains("explain_workflow_behavior"),
+        "missing explain_workflow_behavior"
+    );
+    assert!(
+        descriptions.contains("explain_workflow_state"),
+        "missing explain_workflow_state"
+    );
+    assert!(
+        descriptions.contains("search_invoices"),
+        "missing search_invoices"
+    );
+    assert!(
+        descriptions.contains("find_duplicate_invoice_candidates"),
+        "missing find_duplicate_invoice_candidates"
+    );
+    assert!(
+        descriptions.contains("assess_invoice_payment_risk"),
+        "missing assess_invoice_payment_risk"
+    );
+    assert!(
+        descriptions.contains("get_vendor_summary"),
+        "missing get_vendor_summary"
+    );
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -41,7 +87,12 @@ fn test_extract_primary_arg_for_each_tool() {
 
     // Invoice-id tools
     let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
-    for tool in &["get_invoice_status", "get_approval_requirements", "summarize_invoice"] {
+    for tool in &[
+        "get_invoice_status",
+        "get_approval_requirements",
+        "summarize_invoice",
+        "explain_workflow_state",
+    ] {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let result = parsed["invoice_id"].as_str().unwrap();
         assert_eq!(result, uuid, "failed for tool {}", tool);
@@ -57,13 +108,19 @@ fn test_extract_primary_arg_for_each_tool() {
     let vendor_id_json = format!(r#"{{"vendor_id":"{}"}}"#, uuid);
     let parsed: serde_json::Value = serde_json::from_str(&vendor_id_json).unwrap();
     let result = parsed["vendor_id"].as_str().unwrap();
-    assert_eq!(result, uuid, "vendor_id extraction failed for get_vendor_summary");
+    assert_eq!(
+        result, uuid,
+        "vendor_id extraction failed for get_vendor_summary"
+    );
 
     // Vendor summary tool - vendor_name arg
     let vn_json = r#"{"vendor_name":"Acme Corp"}"#;
     let parsed: serde_json::Value = serde_json::from_str(vn_json).unwrap();
     let result = parsed["vendor_name"].as_str().unwrap();
-    assert_eq!(result, "Acme Corp", "vendor_name extraction failed for get_vendor_summary");
+    assert_eq!(
+        result, "Acme Corp",
+        "vendor_name extraction failed for get_vendor_summary"
+    );
 
     // Invalid JSON → error
     assert!(serde_json::from_str::<serde_json::Value>("not json").is_err());
@@ -97,8 +154,30 @@ fn test_extract_primary_arg_for_each_tool() {
     assert_eq!(result, "2026-03-20");
 }
 
+#[tokio::test]
+async fn test_explain_workflow_state_invalid_tenant_uuid_fails_before_db() {
+    let mut ctx = agent_context_with_modules(vec![billforge_core::Module::AiAssistant]);
+    ctx.tenant_id = "not-a-uuid".to_string();
+    let registry = ToolRegistry::new(fake_pool());
+    let result = registry
+        .execute_tool(
+            "explain_workflow_state",
+            &ctx,
+            "550e8400-e29b-41d4-a716-446655440000",
+        )
+        .await;
+
+    let err = result.expect_err("invalid tenant UUID should fail");
+    assert!(
+        err.to_string().contains("Invalid tenant_id"),
+        "unexpected error: {err}"
+    );
+}
+
 /// Build a fake AgentContext with selected enabled modules.
-fn agent_context_with_modules(modules: Vec<billforge_core::Module>) -> billforge_ai_agent::models::AgentContext {
+fn agent_context_with_modules(
+    modules: Vec<billforge_core::Module>,
+) -> billforge_ai_agent::models::AgentContext {
     billforge_ai_agent::models::AgentContext {
         tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
         user_id: uuid::Uuid::new_v4(),
@@ -198,7 +277,9 @@ async fn test_search_product_docs_returns_source_references() {
 
     // Should contain source references (square-bracket paths)
     assert!(
-        result.contains('[') || result.contains("docs/northstar.md") || result.contains("CHANGELOG.md"),
+        result.contains('[')
+            || result.contains("docs/northstar.md")
+            || result.contains("CHANGELOG.md"),
         "expected source references in response, got: {result}"
     );
 
@@ -283,7 +364,10 @@ fn test_extract_invoice_id_for_explain_workflow_behavior() {
     let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let result = parsed["invoice_id"].as_str().unwrap();
-    assert_eq!(result, uuid, "JSON extraction failed for explain_workflow_behavior");
+    assert_eq!(
+        result, uuid,
+        "JSON extraction failed for explain_workflow_behavior"
+    );
 
     // Raw UUID parses correctly
     let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
@@ -455,8 +539,8 @@ async fn test_request_issue_creation_github_returns_approval_required() {
         .await
         .expect("request_issue_creation should succeed");
 
-    let parsed: serde_json::Value = serde_json::from_str(&result)
-        .expect("tool output should be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&result).expect("tool output should be valid JSON");
 
     // Status must be approval_required
     assert_eq!(
@@ -595,10 +679,7 @@ async fn test_typed_tool_registry_covers_all_tool_descriptions() {
 #[test]
 fn test_typed_tool_definitions_have_non_empty_fields() {
     for def in ToolRegistry::tool_definitions() {
-        assert!(
-            !def.name.is_empty(),
-            "tool definition has empty name"
-        );
+        assert!(!def.name.is_empty(), "tool definition has empty name");
         assert!(
             !def.description.is_empty(),
             "tool '{}' has empty description",
@@ -626,7 +707,10 @@ fn test_typed_tool_definitions_have_non_empty_fields() {
         );
         // Ensure concrete risk level (not a default-like sentinel)
         assert!(
-            matches!(def.risk_level, AiToolRiskLevel::Low | AiToolRiskLevel::Medium | AiToolRiskLevel::High),
+            matches!(
+                def.risk_level,
+                AiToolRiskLevel::Low | AiToolRiskLevel::Medium | AiToolRiskLevel::High
+            ),
             "tool '{}' has unexpected risk level",
             def.name
         );
@@ -644,7 +728,8 @@ fn test_typed_definition_get_invoice_status() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -667,7 +752,8 @@ fn test_typed_definition_get_vendor_invoices() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -690,7 +776,8 @@ fn test_typed_definition_get_approval_requirements() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -702,7 +789,8 @@ fn test_typed_definition_get_approval_requirements() {
     );
 
     // Output schema should have approval_requests array
-    let props = def.output_schema
+    let props = def
+        .output_schema
         .get("properties")
         .expect("output_schema should have properties");
     assert!(
@@ -727,11 +815,18 @@ fn test_typed_definition_get_vendor_summary() {
     assert!(!def.mutates);
 
     // Should have vendor_id and vendor_name properties (not required)
-    let props = def.input_schema
+    let props = def
+        .input_schema
         .get("properties")
         .expect("input_schema should have properties");
-    assert!(props.get("vendor_id").is_some(), "should have vendor_id property");
-    assert!(props.get("vendor_name").is_some(), "should have vendor_name property");
+    assert!(
+        props.get("vendor_id").is_some(),
+        "should have vendor_id property"
+    );
+    assert!(
+        props.get("vendor_name").is_some(),
+        "should have vendor_name property"
+    );
 
     // Neither should be required
     let required = def.input_schema.get("required").and_then(|r| r.as_array());
@@ -742,15 +837,34 @@ fn test_typed_definition_get_vendor_summary() {
     );
 
     // Output schema should have expected properties
-    let out_props = def.output_schema
+    let out_props = def
+        .output_schema
         .get("properties")
         .expect("output_schema should have properties");
-    assert!(out_props.get("vendor_id").is_some(), "output should have vendor_id");
-    assert!(out_props.get("vendor_name").is_some(), "output should have vendor_name");
-    assert!(out_props.get("is_active").is_some(), "output should have is_active");
-    assert!(out_props.get("contact_email").is_some(), "output should have contact_email");
-    assert!(out_props.get("total_invoices").is_some(), "output should have total_invoices");
-    assert!(out_props.get("recent_invoices").is_some(), "output should have recent_invoices");
+    assert!(
+        out_props.get("vendor_id").is_some(),
+        "output should have vendor_id"
+    );
+    assert!(
+        out_props.get("vendor_name").is_some(),
+        "output should have vendor_name"
+    );
+    assert!(
+        out_props.get("is_active").is_some(),
+        "output should have is_active"
+    );
+    assert!(
+        out_props.get("contact_email").is_some(),
+        "output should have contact_email"
+    );
+    assert!(
+        out_props.get("total_invoices").is_some(),
+        "output should have total_invoices"
+    );
+    assert!(
+        out_props.get("recent_invoices").is_some(),
+        "output should have recent_invoices"
+    );
 }
 
 /// Spot-check: summarize_invoice
@@ -764,7 +878,8 @@ fn test_typed_definition_summarize_invoice() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -787,7 +902,32 @@ fn test_typed_definition_explain_workflow_behavior() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: explain_workflow_state
+#[test]
+fn test_typed_definition_explain_workflow_state() {
+    let def = ToolRegistry::get_tool_definition("explain_workflow_state")
+        .expect("explain_workflow_state should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Workflow);
+    assert_eq!(def.required_permission, AiToolPermission::WorkflowRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -808,9 +948,13 @@ fn test_typed_definition_request_issue_creation() {
     assert_eq!(def.class, AiToolClass::IssueIntake);
     assert_eq!(def.required_permission, AiToolPermission::IssueRequest);
     assert_eq!(def.risk_level, AiToolRiskLevel::Medium);
-    assert!(!def.mutates, "request_issue_creation should NOT be marked as mutates");
+    assert!(
+        !def.mutates,
+        "request_issue_creation should NOT be marked as mutates"
+    );
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -860,13 +1004,26 @@ fn test_typed_definition_search_invoices() {
     assert!(!def.mutates);
 
     // Should have properties for the filter fields
-    let props = def.input_schema
+    let props = def
+        .input_schema
         .get("properties")
         .expect("input_schema should have properties");
-    assert!(props.get("query").is_some(), "search_invoices should have query property");
-    assert!(props.get("vendor_name").is_some(), "search_invoices should have vendor_name property");
-    assert!(props.get("status").is_some(), "search_invoices should have status property");
-    assert!(props.get("limit").is_some(), "search_invoices should have limit property");
+    assert!(
+        props.get("query").is_some(),
+        "search_invoices should have query property"
+    );
+    assert!(
+        props.get("vendor_name").is_some(),
+        "search_invoices should have vendor_name property"
+    );
+    assert!(
+        props.get("status").is_some(),
+        "search_invoices should have status property"
+    );
+    assert!(
+        props.get("limit").is_some(),
+        "search_invoices should have limit property"
+    );
 }
 
 /// Spot-check: find_duplicate_invoice_candidates typed definition
@@ -880,7 +1037,8 @@ fn test_typed_definition_find_duplicate_invoice_candidates() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -903,7 +1061,8 @@ fn test_typed_definition_assess_invoice_payment_risk() {
     assert_eq!(def.risk_level, AiToolRiskLevel::Low);
     assert!(!def.mutates);
 
-    let required = def.input_schema
+    let required = def
+        .input_schema
         .get("required")
         .and_then(|r| r.as_array())
         .expect("input_schema should have required array");
@@ -925,7 +1084,10 @@ fn test_extract_invoice_id_for_find_duplicate_invoice_candidates() {
     let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let result = parsed["invoice_id"].as_str().unwrap();
-    assert_eq!(result, uuid, "JSON extraction failed for find_duplicate_invoice_candidates");
+    assert_eq!(
+        result, uuid,
+        "JSON extraction failed for find_duplicate_invoice_candidates"
+    );
 
     // Raw UUID parses correctly
     let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
@@ -942,7 +1104,10 @@ fn test_extract_invoice_id_for_assess_invoice_payment_risk() {
     let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let result = parsed["invoice_id"].as_str().unwrap();
-    assert_eq!(result, uuid, "JSON extraction failed for assess_invoice_payment_risk");
+    assert_eq!(
+        result, uuid,
+        "JSON extraction failed for assess_invoice_payment_risk"
+    );
 
     // Raw UUID parses correctly
     let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
