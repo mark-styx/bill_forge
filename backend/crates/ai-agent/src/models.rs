@@ -276,3 +276,39 @@ pub struct ProviderChatStreamChunk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_request_id: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Bug report draft generation models
+// ---------------------------------------------------------------------------
+
+/// Request to generate a structured bug report draft from unstructured notes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugReportDraftRequest {
+    /// Free-form bug description from the user.
+    pub description: String,
+    /// Optional conversation to attach context from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<Uuid>,
+}
+
+/// Priority level for a bug report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BugReportPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Structured bug report draft returned by Winston AI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BugReportDraftResponse {
+    pub title: String,
+    pub current_behavior: String,
+    pub expected_behavior: String,
+    pub reproduction_steps: Vec<String>,
+    pub priority: BugReportPriority,
+    pub affected_module: String,
+    pub acceptance_criteria: Vec<String>,
+}

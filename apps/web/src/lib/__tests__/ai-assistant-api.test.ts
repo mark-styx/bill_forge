@@ -135,4 +135,37 @@ describe('aiAssistantApi', () => {
     expect(result.rating).toBe('negative');
     expect(result.comment).toBe('Not helpful');
   });
+
+  it('generateBugReportDraft() POSTs to /api/v1/ai/bug-report-drafts and returns structured fields', async () => {
+    const draftResponse = {
+      title: 'Login page crashes on submit',
+      current_behavior: 'Page shows a white screen after clicking login',
+      expected_behavior: 'User is redirected to the dashboard',
+      reproduction_steps: ['Go to /login', 'Enter credentials', 'Click submit'],
+      priority: 'high' as const,
+      affected_module: 'Authentication',
+      acceptance_criteria: [
+        'Login submits without crash',
+        'User sees dashboard after login',
+      ],
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(draftResponse);
+
+    const result = await aiAssistantApi.generateBugReportDraft({
+      description: 'Login page crashes when I click submit.',
+    });
+
+    expect(api.post).toHaveBeenCalledWith('/api/v1/ai/bug-report-drafts', {
+      description: 'Login page crashes when I click submit.',
+    });
+    expect(result).toEqual(draftResponse);
+    expect(result.title).toBe('Login page crashes on submit');
+    expect(result.current_behavior).toBe('Page shows a white screen after clicking login');
+    expect(result.expected_behavior).toBe('User is redirected to the dashboard');
+    expect(result.reproduction_steps).toHaveLength(3);
+    expect(result.priority).toBe('high');
+    expect(result.affected_module).toBe('Authentication');
+    expect(result.acceptance_criteria).toHaveLength(2);
+  });
 });

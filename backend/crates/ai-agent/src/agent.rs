@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::context::{build_system_prompt, inject_context};
 use super::models::{
     AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerTrace,
+    BugReportDraftRequest, BugReportDraftResponse,
     ChatRequest, ChatResponse, Conversation, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
@@ -503,6 +504,110 @@ impl WinstonAgent {
         Ok((response, telemetry))
     }
 
+    /// Generate a structured bug report draft from unstructured notes.
+    ///
+    /// Sends a focused JSON-only prompt to the provider and parses the
+    /// response into a [`BugReportDraftResponse`]. Does not persist any
+    /// records; this is purely a draft generation endpoint.
+    pub async fn generate_bug_report_draft(
+        &self,
+        request: BugReportDraftRequest,
+        tenant_id: String,
+        user_id: Uuid,
+    ) -> Result<BugReportDraftResponse> {
+        let mut context = inject_context(&self.pool, tenant_id.clone(), user_id)
+            .await
+            .context("Failed to inject agent context")?;
+        context.enabled_modules = self.enabled_modules.clone();
+
+        self.generate_bug_report_draft_with_context(request, &context).await
+    }
+
+    /// Inner method that builds prompt, calls provider, and parses JSON response.
+    /// Extracted so tests can call it with a synthetic context, bypassing DB.
+    async fn generate_bug_report_draft_with_context(
+        &self,
+        request: BugReportDraftRequest,
+        context: &AgentContext,
+    ) -> Result<BugReportDraftResponse> {
+
+        let system_prompt = build_system_prompt(context);
+
+        let json_schema_instruction = r#"You are a bug report drafting assistant. Given unstructured bug notes, produce a JSON object with EXACTLY these fields:
+- "title": string - concise bug report title
+- "current_behavior": string - what currently happens
+- "expected_behavior": string - what should happen instead
+- "reproduction_steps": array of strings - ordered steps to reproduce
+- "priority": string - one of "low", "medium", "high", "critical"
+- "affected_module": string - the system area or module affected
+- "acceptance_criteria": array of strings - conditions that must be true for the bug to be considered fixed
+
+Return ONLY the JSON object. No markdown fences, no explanation."#;
+
+        let messages = vec![
+            ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: format!("{}\n\n{}", system_prompt, json_schema_instruction),
+            },
+            ProviderChatMessage {
+                role: ProviderMessageRole::User,
+                content: request.description,
+            },
+        ];
+
+        let selected_route = ProviderModelRoute::Default;
+        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+
+        let provider_request = ProviderChatRequest {
+            model: selected_model,
+            model_route: selected_route,
+            messages,
+            temperature: Some(0.3),
+            max_tokens: None,
+            stop: None,
+            tools: None,
+        };
+
+        let start = std::time::Instant::now();
+        let provider_response = self.provider.chat_completion(provider_request).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        let provider_response = match provider_response {
+            Ok(resp) => {
+                info!(
+                    selected_provider = %self.provider.provider_name(),
+                    latency_ms = %latency_ms,
+                    outcome = "bug_report_draft_success",
+                    "Bug report draft generated"
+                );
+                resp
+            }
+            Err(e) => {
+                warn!(
+                    selected_provider = %self.provider.provider_name(),
+                    latency_ms = %latency_ms,
+                    outcome = "bug_report_draft_error",
+                    error_kind = ?e.kind,
+                    "Bug report draft generation failed"
+                );
+                return Err(anyhow::anyhow!("Provider error: {}", e.message));
+            }
+        };
+
+        let content = provider_response.message.content.trim().to_string();
+
+        // Strip markdown code fences if present
+        let json_str = content
+            .strip_prefix("```json")
+            .or_else(|| content.strip_prefix("```"))
+            .map(|s| s.strip_suffix("```").unwrap_or(s))
+            .unwrap_or(&content)
+            .trim();
+
+        serde_json::from_str(json_str)
+            .context("Failed to parse bug report draft from provider response. Expected valid JSON with title, current_behavior, expected_behavior, reproduction_steps, priority, affected_module, acceptance_criteria.")
+    }
+
     /// Get conversation history
     pub async fn get_conversation(&self, _conversation_id: Uuid) -> Result<Option<Conversation>> {
         // In production, this would load from database
@@ -528,7 +633,7 @@ impl WinstonAgent {
 mod tests {
     use super::*;
     use crate::fake_provider::FakeAiProvider;
-    use crate::models::{AgentContext, ProviderChatError, ProviderChatErrorKind};
+    use crate::models::{AgentContext, BugReportDraftRequest, BugReportPriority, ProviderChatError, ProviderChatErrorKind};
     use sqlx::PgPool;
 
     /// Helper: build a ChatRequest for tests.
@@ -753,5 +858,131 @@ mod tests {
         // These constants must remain stable for log consumers.
         assert_eq!(routing_reason, "default_chat_turn");
         assert_eq!(selected_route, ProviderModelRoute::Default);
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug report draft generation tests
+    // -------------------------------------------------------------------------
+
+    /// Helper: build a BugReportDraftRequest for tests.
+    fn bug_report_request(description: &str) -> BugReportDraftRequest {
+        BugReportDraftRequest {
+            description: description.to_string(),
+            conversation_id: None,
+        }
+    }
+
+    /// Proves that generate_bug_report_draft sends a prompt requesting all required
+    /// fields and successfully parses valid provider JSON into BugReportDraftResponse.
+    #[tokio::test]
+    async fn bug_report_draft_parses_valid_json() {
+        let valid_json = serde_json::json!({
+            "title": "Login page crashes on submit",
+            "current_behavior": "Page shows a white screen after clicking login",
+            "expected_behavior": "User is redirected to the dashboard",
+            "reproduction_steps": ["Go to /login", "Enter credentials", "Click submit"],
+            "priority": "high",
+            "affected_module": "Authentication",
+            "acceptance_criteria": [
+                "Login submits without crash",
+                "User sees dashboard after login",
+                "Error messages display correctly"
+            ]
+        })
+        .to_string();
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
+        let agent = test_agent(provider.clone());
+
+        let request = bug_report_request("Login page crashes when I click submit. White screen.");
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_bug_report_draft_with_context(request, &ctx)
+            .await
+            .expect("draft generation should succeed");
+
+        // Verify all fields parsed correctly
+        assert_eq!(draft.title, "Login page crashes on submit");
+        assert_eq!(draft.current_behavior, "Page shows a white screen after clicking login");
+        assert_eq!(draft.expected_behavior, "User is redirected to the dashboard");
+        assert_eq!(draft.reproduction_steps.len(), 3);
+        assert_eq!(draft.reproduction_steps[0], "Go to /login");
+        assert_eq!(draft.priority, BugReportPriority::High);
+        assert_eq!(draft.affected_module, "Authentication");
+        assert_eq!(draft.acceptance_criteria.len(), 3);
+
+        // Verify the provider received the prompt with bug-report-specific instructions
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 1);
+        let system_msg = &requests[0].messages[0];
+        assert!(system_msg.content.contains("title"));
+        assert!(system_msg.content.contains("current_behavior"));
+        assert!(system_msg.content.contains("expected_behavior"));
+        assert!(system_msg.content.contains("reproduction_steps"));
+        assert!(system_msg.content.contains("priority"));
+        assert!(system_msg.content.contains("affected_module"));
+        assert!(system_msg.content.contains("acceptance_criteria"));
+        // Lower temperature for structured output
+        assert_eq!(requests[0].temperature, Some(0.3));
+    }
+
+    /// Proves that generate_bug_report_draft returns an error when the provider
+    /// returns malformed JSON (e.g. freeform text instead of JSON).
+    #[tokio::test]
+    async fn bug_report_draft_rejects_malformed_json() {
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_response_text("This is not JSON, just freeform text about a bug."),
+        );
+        let agent = test_agent(provider);
+
+        let request = bug_report_request("Something is broken.");
+        let ctx = synthetic_context();
+
+        let result = agent
+            .generate_bug_report_draft_with_context(request, &ctx)
+            .await;
+
+        assert!(result.is_err(), "should fail for malformed JSON");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse bug report draft"),
+            "error message should mention parse failure, got: {}",
+            err
+        );
+    }
+
+    /// Proves that generate_bug_report_draft handles JSON wrapped in markdown
+    /// code fences (common provider behavior).
+    #[tokio::test]
+    async fn bug_report_draft_strips_markdown_fences() {
+        let raw_json = serde_json::json!({
+            "title": "Slow dashboard load",
+            "current_behavior": "Dashboard takes 30 seconds to load",
+            "expected_behavior": "Dashboard loads in under 3 seconds",
+            "reproduction_steps": ["Open the app", "Navigate to dashboard"],
+            "priority": "medium",
+            "affected_module": "Reporting",
+            "acceptance_criteria": ["Dashboard loads in < 3s"]
+        })
+        .to_string();
+
+        // Wrap in markdown fences like many LLMs do
+        let fenced = format!("```json\n{}\n```", raw_json);
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(fenced));
+        let agent = test_agent(provider);
+
+        let request = bug_report_request("Dashboard is really slow");
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_bug_report_draft_with_context(request, &ctx)
+            .await
+            .expect("should strip fences and parse");
+
+        assert_eq!(draft.title, "Slow dashboard load");
+        assert_eq!(draft.priority, BugReportPriority::Medium);
     }
 }

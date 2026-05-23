@@ -2097,6 +2097,24 @@ export interface AiAnswerFeedbackResponse {
   updated_at: string;
 }
 
+// Bug Report Draft Types
+export type BugReportPriority = 'low' | 'medium' | 'high' | 'critical';
+
+export interface BugReportDraftRequest {
+  description: string;
+  conversation_id?: string;
+}
+
+export interface BugReportDraftResponse {
+  title: string;
+  current_behavior: string;
+  expected_behavior: string;
+  reproduction_steps: string[];
+  priority: BugReportPriority;
+  affected_module: string;
+  acceptance_criteria: string[];
+}
+
 // AI Assistant API
 export const aiAssistantApi = {
   chat: (body: AiChatRequest) =>
@@ -2117,6 +2135,9 @@ export const aiAssistantApi = {
       `/api/v1/ai/conversations/${conversationId}/messages/${messageId}/feedback`,
       body,
     ),
+
+  generateBugReportDraft: (body: BugReportDraftRequest) =>
+    api.post<BugReportDraftResponse>('/api/v1/ai/bug-report-drafts', body),
 };
 
 // ---------------------------------------------------------------------------
