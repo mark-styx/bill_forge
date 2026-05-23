@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -173,8 +173,8 @@ impl Tool for InvoiceStatusTool {
                 let vendor_name: Option<String> = row.try_get("vendor_name")?;
                 let capture_status: Option<String> = row.try_get("capture_status")?;
                 let processing_status: Option<String> = row.try_get("processing_status")?;
-                let invoice_date: Option<DateTime<Utc>> = row.try_get("invoice_date")?;
-                let due_date: Option<DateTime<Utc>> = row.try_get("due_date")?;
+                let invoice_date: Option<NaiveDate> = row.try_get("invoice_date")?;
+                let due_date: Option<NaiveDate> = row.try_get("due_date")?;
                 let po_number: Option<String> = row.try_get("po_number")?;
                 let current_queue_id: Option<Uuid> = row.try_get("current_queue_id")?;
                 let assigned_to: Option<Uuid> = row.try_get("assigned_to")?;
@@ -207,8 +207,8 @@ impl Tool for InvoiceStatusTool {
                     currency,
                     capture_status.unwrap_or_else(|| "N/A".to_string()),
                     processing_status.unwrap_or_else(|| "N/A".to_string()),
-                    invoice_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
-                    due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
                     po_number.unwrap_or_else(|| "N/A".to_string()),
                     current_queue_id.map(|q| q.to_string()).unwrap_or_else(|| "None".to_string()),
                     assigned_to.map(|a| a.to_string()).unwrap_or_else(|| "Unassigned".to_string()),
@@ -451,8 +451,8 @@ impl Tool for InvoiceSummaryTool {
                 let status: String = inv.try_get("status")?;
                 let capture_status: Option<String> = inv.try_get("capture_status")?;
                 let processing_status: Option<String> = inv.try_get("processing_status")?;
-                let invoice_date: Option<DateTime<Utc>> = inv.try_get("invoice_date")?;
-                let due_date: Option<DateTime<Utc>> = inv.try_get("due_date")?;
+                let invoice_date: Option<NaiveDate> = inv.try_get("invoice_date")?;
+                let due_date: Option<NaiveDate> = inv.try_get("due_date")?;
                 let po_number: Option<String> = inv.try_get("po_number")?;
                 let created_at: DateTime<Utc> = inv.try_get("created_at")?;
                 let updated_at: Option<DateTime<Utc>> = inv.try_get("updated_at")?;
@@ -481,8 +481,8 @@ impl Tool for InvoiceSummaryTool {
                     status,
                     capture_status.unwrap_or_else(|| "N/A".to_string()),
                     processing_status.unwrap_or_else(|| "N/A".to_string()),
-                    invoice_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
-                    due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    invoice_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
                     po_number.unwrap_or_else(|| "N/A".to_string()),
                     created_at.format("%Y-%m-%d"),
                     updated_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
@@ -1237,12 +1237,12 @@ impl Tool for SearchInvoicesTool {
             q = q.bind(ps);
         }
         if let Some(db) = due_before {
-            let dt: DateTime<Utc> = db.parse()
+            let dt: NaiveDate = db.parse()
                 .context("Invalid due_before date format. Use YYYY-MM-DD.")?;
             q = q.bind(dt);
         }
         if let Some(da) = due_after {
-            let dt: DateTime<Utc> = da.parse()
+            let dt: NaiveDate = da.parse()
                 .context("Invalid due_after date format. Use YYYY-MM-DD.")?;
             q = q.bind(dt);
         }
@@ -1268,7 +1268,7 @@ impl Tool for SearchInvoicesTool {
             let st: String = row.try_get("status").unwrap_or_else(|_| "N/A".to_string());
             let cents: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
             let cur: String = row.try_get("currency").unwrap_or_else(|_| "USD".to_string());
-            let dd: Option<DateTime<Utc>> = row.try_get("due_date").ok().flatten();
+            let dd: Option<NaiveDate> = row.try_get("due_date").ok().flatten();
             let ca: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
 
             let amt = cents
@@ -1282,7 +1282,7 @@ impl Tool for SearchInvoicesTool {
                 st,
                 amt,
                 cur,
-                dd.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                dd.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
                 ca.format("%Y-%m-%d"),
                 id,
             ));
@@ -1369,8 +1369,8 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
         let t_inv_num: Option<String> = target.try_get("invoice_number").ok().flatten();
         let t_vendor: Option<String> = target.try_get("vendor_name").ok().flatten();
         let t_amount: Option<i64> = target.try_get("total_amount_cents").ok().flatten();
-        let t_invoice_date: Option<DateTime<Utc>> = target.try_get("invoice_date").ok().flatten();
-        let t_due_date: Option<DateTime<Utc>> = target.try_get("due_date").ok().flatten();
+        let t_invoice_date: Option<NaiveDate> = target.try_get("invoice_date").ok().flatten();
+        let t_due_date: Option<NaiveDate> = target.try_get("due_date").ok().flatten();
 
         // Find candidates: same invoice_number, or same vendor_name+amount, or same vendor_name+near dates
         let candidates = sqlx::query(
@@ -1386,12 +1386,12 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
                       AND total_amount_cents IS NOT NULL AND total_amount_cents = $5)
                   OR (vendor_name IS NOT NULL AND vendor_name = $4
                       AND invoice_date IS NOT NULL
-                      AND $6::timestamptz IS NOT NULL
-                      AND ABS(EXTRACT(EPOCH FROM (invoice_date - $6::timestamptz))) < 86400 * 3)
+                      AND $6::date IS NOT NULL
+                      AND ABS(invoice_date - $6::date) < 3)
                   OR (vendor_name IS NOT NULL AND vendor_name = $4
                       AND due_date IS NOT NULL
-                      AND $7::timestamptz IS NOT NULL
-                      AND ABS(EXTRACT(EPOCH FROM (due_date - $7::timestamptz))) < 86400 * 3)
+                      AND $7::date IS NOT NULL
+                      AND ABS(due_date - $7::date) < 3)
               )
             ORDER BY created_at DESC
             LIMIT 25
@@ -1425,8 +1425,8 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
             let c_inv_num: Option<String> = row.try_get("invoice_number").ok().flatten();
             let c_vendor: Option<String> = row.try_get("vendor_name").ok().flatten();
             let c_amount: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
-            let c_inv_date: Option<DateTime<Utc>> = row.try_get("invoice_date").ok().flatten();
-            let c_due_date: Option<DateTime<Utc>> = row.try_get("due_date").ok().flatten();
+            let c_inv_date: Option<NaiveDate> = row.try_get("invoice_date").ok().flatten();
+            let c_due_date: Option<NaiveDate> = row.try_get("due_date").ok().flatten();
 
             let mut reasons = Vec::new();
 
@@ -1468,8 +1468,8 @@ impl Tool for FindDuplicateInvoiceCandidatesTool {
                 c_inv_num.unwrap_or_else(|| "N/A".to_string()),
                 c_vendor.unwrap_or_else(|| "Unknown".to_string()),
                 amt,
-                c_inv_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
-                c_due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string()),
+                c_inv_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                c_due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
                 reasons.join(", "),
             ));
         }
@@ -1559,7 +1559,8 @@ impl Tool for AssessInvoicePaymentRiskTool {
         let currency: String = invoice.try_get("currency").unwrap_or_else(|_| "USD".to_string());
         let status: String = invoice.try_get("status").unwrap_or_else(|_| "N/A".to_string());
         let proc_status: Option<String> = invoice.try_get("processing_status").ok().flatten();
-        let due_date: Option<DateTime<Utc>> = invoice.try_get("due_date").ok().flatten();
+        let invoice_date: Option<NaiveDate> = invoice.try_get("invoice_date").ok().flatten();
+        let due_date: Option<NaiveDate> = invoice.try_get("due_date").ok().flatten();
 
         let mut risk_signals: Vec<String> = Vec::new();
         let mut evidence: Vec<String> = Vec::new();
@@ -1567,20 +1568,20 @@ impl Tool for AssessInvoicePaymentRiskTool {
 
         // --- Signal 1: Overdue check ---
         if let Some(dd) = due_date {
-            let now = Utc::now();
-            if dd < now {
-                let days_overdue = (now - dd).num_days();
+            let today = Utc::now().date_naive();
+            if dd < today {
+                let days_overdue = (today - dd).num_days();
                 if days_overdue > 0 {
                     risk_score += 30;
-                    risk_signals.push(format!("Invoice is {} day(s) overdue (due: {}).", days_overdue, dd.format("%Y-%m-%d")));
-                    evidence.push(format!("due_date {} is {} days past", dd.format("%Y-%m-%d"), days_overdue));
+                    risk_signals.push(format!("Invoice is {} day(s) overdue (due: {}).", days_overdue, dd));
+                    evidence.push(format!("due_date {} is {} days past", dd, days_overdue));
                 }
             } else {
-                let days_remaining = (dd - now).num_days();
+                let days_remaining = (dd - today).num_days();
                 if days_remaining <= 3 {
                     risk_score += 10;
                     risk_signals.push(format!("Invoice due in {} day(s).", days_remaining));
-                    evidence.push(format!("due_date {} is {} days away", dd.format("%Y-%m-%d"), days_remaining));
+                    evidence.push(format!("due_date {} is {} days away", dd, days_remaining));
                 }
             }
         }
@@ -1611,7 +1612,7 @@ impl Tool for AssessInvoicePaymentRiskTool {
             }
         }
 
-        // --- Signal 4: Duplicate candidates (defensive) ---
+        // --- Signal 4: Duplicate candidates (defensive, same criteria as find_duplicate_invoice_candidates) ---
         let dup_result = sqlx::query(
             r#"
             SELECT COUNT(*) as cnt
@@ -1622,6 +1623,14 @@ impl Tool for AssessInvoicePaymentRiskTool {
                   (invoice_number IS NOT NULL AND invoice_number = $3)
                   OR (vendor_name IS NOT NULL AND vendor_name = $4
                       AND total_amount_cents IS NOT NULL AND total_amount_cents = $5)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND invoice_date IS NOT NULL
+                      AND $6::date IS NOT NULL
+                      AND ABS(invoice_date - $6::date) < 3)
+                  OR (vendor_name IS NOT NULL AND vendor_name = $4
+                      AND due_date IS NOT NULL
+                      AND $7::date IS NOT NULL
+                      AND ABS(due_date - $7::date) < 3)
               )
             "#,
         )
@@ -1630,6 +1639,8 @@ impl Tool for AssessInvoicePaymentRiskTool {
         .bind(&inv_num)
         .bind(&vendor)
         .bind(&amount_cents)
+        .bind(&invoice_date)
+        .bind(&due_date)
         .fetch_optional(&self.pool)
         .await;
 
@@ -1742,7 +1753,7 @@ impl Tool for AssessInvoicePaymentRiskTool {
                 vendor.unwrap_or_else(|| "Unknown".to_string()),
                 amt_display, currency),
             format!("Status: {} | Processing: {}", status, proc_status.unwrap_or_else(|| "N/A".to_string())),
-            format!("Due Date: {}", due_date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string())),
+            format!("Due Date: {}", due_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())),
             String::new(),
             format!("Risk Level: {} (score: {}/100)", risk_level, risk_score),
         ];
