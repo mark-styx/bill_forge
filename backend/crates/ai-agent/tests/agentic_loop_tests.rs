@@ -663,6 +663,75 @@ fn test_typed_definition_get_vendor_invoices() {
     );
 }
 
+/// Spot-check: get_approval_requirements
+#[test]
+fn test_typed_definition_get_approval_requirements() {
+    let def = ToolRegistry::get_tool_definition("get_approval_requirements")
+        .expect("get_approval_requirements should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Approval);
+    assert_eq!(def.required_permission, AiToolPermission::ApprovalRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: summarize_invoice
+#[test]
+fn test_typed_definition_summarize_invoice() {
+    let def = ToolRegistry::get_tool_definition("summarize_invoice")
+        .expect("summarize_invoice should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Invoice);
+    assert_eq!(def.required_permission, AiToolPermission::InvoiceRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: explain_workflow_behavior
+#[test]
+fn test_typed_definition_explain_workflow_behavior() {
+    let def = ToolRegistry::get_tool_definition("explain_workflow_behavior")
+        .expect("explain_workflow_behavior should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Workflow);
+    assert_eq!(def.required_permission, AiToolPermission::WorkflowRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
 /// Spot-check: request_issue_creation
 #[test]
 fn test_typed_definition_request_issue_creation() {
