@@ -14,9 +14,12 @@ use uuid::Uuid;
 /// Helper: create a fresh tenant database with all migrations applied.
 async fn setup_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
     let metadata_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| {
+            "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
+        });
     let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
+        .unwrap_or_else(|_| database_url_for(&metadata_url, "{database}"));
 
     let manager = PgManager::new(&metadata_url, tenant_template)
         .await
@@ -36,6 +39,22 @@ async fn setup_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
     manager.run_tenant_migrations(&pool).await.expect("migrations");
 
     (manager, tenant_id, pool)
+}
+
+fn database_url_for(metadata_url: &str, database: &str) -> String {
+    let (base, suffix) = metadata_url
+        .split_once('?')
+        .map(|(base, query)| (base, format!("?{}", query)))
+        .unwrap_or((metadata_url, String::new()));
+    let prefix = base
+        .rsplit_once('/')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(base);
+    format!("{}/{}{}", prefix, database, suffix)
+}
+
+fn test_database_configured() -> bool {
+    std::env::var("TEST_DATABASE_URL").is_ok() || std::env::var("DATABASE_URL").is_ok()
 }
 
 /// Assert that a given column exists on a table with the expected data type (prefix match).
@@ -300,4 +319,84 @@ async fn test_ai_usage_events_schema() {
     .expect("query RLS policies");
 
     assert!(policy_count >= 1, "Expected tenant RLS policy on ai_usage_events");
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_ai_action_proposals_schema() {
+    if !test_database_configured() {
+        eprintln!(
+            "skipping ai_action_proposals schema test: TEST_DATABASE_URL or DATABASE_URL is required"
+        );
+        return;
+    }
+
+    let (_manager, _tenant_id, pool) = setup_tenant("ai-actions").await;
+
+    assert_table_exists(&pool, "ai_action_proposals").await;
+
+    assert_column(&pool, "ai_action_proposals", "id", "uuid").await;
+    assert_column(&pool, "ai_action_proposals", "tenant_id", "uuid").await;
+    assert_column(&pool, "ai_action_proposals", "user_id", "uuid").await;
+    assert_column(&pool, "ai_action_proposals", "conversation_id", "uuid").await;
+    assert_column(&pool, "ai_action_proposals", "tool_name", "text").await;
+    assert_column(&pool, "ai_action_proposals", "payload", "jsonb").await;
+    assert_column(&pool, "ai_action_proposals", "risk", "text").await;
+    assert_column(&pool, "ai_action_proposals", "permission", "text").await;
+    assert_column(&pool, "ai_action_proposals", "status", "text").await;
+    assert_column(
+        &pool,
+        "ai_action_proposals",
+        "created_at",
+        "timestamp with time zone",
+    )
+    .await;
+    assert_column(
+        &pool,
+        "ai_action_proposals",
+        "updated_at",
+        "timestamp with time zone",
+    )
+    .await;
+
+    assert_column_default_contains(&pool, "ai_action_proposals", "id", "gen_random_uuid").await;
+    assert_column_default_contains(&pool, "ai_action_proposals", "payload", "'{}'").await;
+    assert_column_default_contains(&pool, "ai_action_proposals", "status", "approval_required")
+        .await;
+
+    let fk_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.table_constraints tc
+        WHERE tc.table_name = 'ai_action_proposals'
+            AND tc.constraint_type = 'FOREIGN KEY'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query FK constraints");
+
+    assert!(
+        fk_count >= 1,
+        "Expected at least one FK on ai_action_proposals"
+    );
+
+    let policy_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM pg_policies
+        WHERE tablename = 'ai_action_proposals'
+            AND policyname = 'rls_tenant_ai_action_proposals'
+            AND qual LIKE '%app.current_tenant_id%'
+            AND with_check LIKE '%app.current_tenant_id%'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query RLS policies");
+
+    assert!(
+        policy_count >= 1,
+        "Expected tenant RLS policy on ai_action_proposals"
+    );
 }

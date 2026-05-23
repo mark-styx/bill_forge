@@ -497,5 +497,17 @@ pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
         ))
     })?;
 
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/086_create_ai_action_proposals.sql"
+    ))
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        Error::Migration(format!(
+            "Failed to run AI action proposals migration: {}",
+            e
+        ))
+    })?;
+
     Ok(())
 }
