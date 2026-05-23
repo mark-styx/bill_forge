@@ -23,6 +23,7 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("get_module_capabilities"), "missing get_module_capabilities");
     assert!(descriptions.contains("search_product_docs"), "missing search_product_docs");
     assert!(descriptions.contains("explain_feature"), "missing explain_feature");
+    assert!(descriptions.contains("explain_workflow_behavior"), "missing explain_workflow_behavior");
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -234,5 +235,71 @@ async fn test_explain_feature_empty_input_returns_message() {
     assert!(
         result.contains("Please provide a feature name"),
         "empty input should return helpful message, got: {result}"
+    );
+}
+
+/// Validate invoice_id extraction for explain_workflow_behavior:
+/// JSON {"invoice_id":"<uuid>"} and raw UUID.
+#[test]
+fn test_extract_invoice_id_for_explain_workflow_behavior() {
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+
+    // JSON arg extraction
+    let json = format!(r#"{{"invoice_id":"{}"}}"#, uuid);
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let result = parsed["invoice_id"].as_str().unwrap();
+    assert_eq!(result, uuid, "JSON extraction failed for explain_workflow_behavior");
+
+    // Raw UUID parses correctly
+    let parsed_uuid: uuid::Uuid = uuid.parse().unwrap();
+    assert_eq!(parsed_uuid.to_string(), uuid, "raw UUID parse failed");
+}
+
+#[tokio::test]
+async fn test_explain_workflow_behavior_empty_input_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("explain_workflow_behavior", &ctx, "")
+        .await;
+    // Should return an error with helpful message (not panic)
+    assert!(result.is_err(), "empty input should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Please provide an invoice_id"),
+        "empty input should mention invoice_id, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_workflow_behavior_invalid_uuid_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("explain_workflow_behavior", &ctx, "not-a-uuid")
+        .await;
+    assert!(result.is_err(), "invalid UUID should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Invalid invoice ID format") || err_msg.contains("Invalid"),
+        "invalid UUID should mention format, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_explain_workflow_behavior_invalid_json_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("explain_workflow_behavior", &ctx, "{bad json}")
+        .await;
+    assert!(result.is_err(), "invalid JSON should return an error");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Invalid JSON") || err_msg.contains("Invalid"),
+        "invalid JSON should mention format, got: {err_msg}"
     );
 }

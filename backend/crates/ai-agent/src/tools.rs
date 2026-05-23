@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -536,6 +535,392 @@ impl Tool for ExplainFeatureTool {
     }
 }
 
+/// Read-only tool that explains workflow behavior for an invoice by examining
+/// workflow state, queue items, approval requests, and audit history.
+/// No mutations. Gracefully reports missing records.
+pub struct ExplainWorkflowBehaviorTool {
+    pool: PgPool,
+}
+
+impl ExplainWorkflowBehaviorTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Parse invoice_id from args: raw UUID text or JSON {"invoice_id":"..."}.
+    fn parse_invoice_id(args: &str) -> Result<Uuid> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide an invoice_id to explain workflow behavior for. \
+                 Expected: invoice UUID or {{\"invoice_id\":\"<uuid>\"}}."
+            );
+        }
+        if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input. Expected: {\"invoice_id\":\"<uuid>\"}.")?;
+            let id_str = val
+                .get("invoice_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "JSON input missing 'invoice_id' key. Expected: {{\"invoice_id\":\"<uuid>\"}}."
+                    )
+                })?;
+            return id_str
+                .parse::<Uuid>()
+                .context("Invalid invoice_id format in JSON. Please provide a valid UUID.");
+        }
+        trimmed
+            .parse::<Uuid>()
+            .context("Invalid invoice ID format. Please provide a valid UUID.")
+    }
+}
+
+#[async_trait]
+impl Tool for ExplainWorkflowBehaviorTool {
+    fn name(&self) -> &str {
+        "explain_workflow_behavior"
+    }
+
+    fn description(&self) -> &str {
+        "Explain workflow behavior for an invoice using workflow state and audit logs when available. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let invoice_id = Self::parse_invoice_id(args)?;
+
+        // --- Invoice State ---
+        let invoice = sqlx::query(
+            r#"
+            SELECT invoice_number, status, processing_status,
+                   current_queue_id, assigned_to,
+                   total_amount_cents, currency
+            FROM invoices
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let invoice_row = match invoice {
+            Some(r) => r,
+            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
+        };
+
+        let invoice_number: String = invoice_row.try_get("invoice_number")?;
+        let inv_status: String = invoice_row.try_get("status")?;
+        let proc_status: String = invoice_row.try_get("processing_status")?;
+        let current_queue_id: Option<Uuid> = invoice_row.try_get("current_queue_id")?;
+        let assigned_to: Option<Uuid> = invoice_row.try_get("assigned_to")?;
+        let total_cents: Option<i64> = invoice_row.try_get("total_amount_cents")?;
+        let currency: String = invoice_row.try_get("currency")?;
+
+        let mut sections: Vec<String> = Vec::new();
+
+        // Section: Invoice State
+        sections.push(format!(
+            "## Invoice State\n\
+             - Invoice: {} (ID: {})\n\
+             - Status: {}\n\
+             - Processing Status: {}\n\
+             - Current Queue ID: {}\n\
+             - Assigned To: {}\n\
+             - Amount: {} {}",
+            invoice_number,
+            invoice_id,
+            inv_status,
+            proc_status,
+            current_queue_id
+                .map(|q| q.to_string())
+                .unwrap_or_else(|| "None".to_string()),
+            assigned_to
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "Unassigned".to_string()),
+            total_cents
+                .map(|c| format!("{}.{:02}", c / 100, c % 100))
+                .unwrap_or_else(|| "N/A".to_string()),
+            currency,
+        ));
+
+        // --- Workflow Queue State ---
+        let queue_items = sqlx::query(
+            r#"
+            SELECT qi.id, qi.status AS qi_status, qi.priority, qi.due_at,
+                   qi.completion_action, qi.notes,
+                   wq.name AS queue_name, wq.queue_type
+            FROM queue_items qi
+            JOIN work_queues wq ON wq.id = qi.queue_id
+            WHERE qi.invoice_id = $1 AND qi.tenant_id = $2
+            ORDER BY qi.entered_at DESC
+            LIMIT 10
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if queue_items.is_empty() {
+            sections.push(
+                "## Workflow Queue State\nNo queue items found for this invoice.".to_string(),
+            );
+        } else {
+            let mut lines = vec!["## Workflow Queue State".to_string()];
+            for qi in &queue_items {
+                let q_name: String = qi.try_get("queue_name").unwrap_or_else(|_| "Unknown".to_string());
+                let q_type: String = qi.try_get("queue_type").unwrap_or_else(|_| "Unknown".to_string());
+                let qi_status: String = qi.try_get("qi_status").unwrap_or_else(|_| "Unknown".to_string());
+                let priority: i32 = qi.try_get("priority").unwrap_or(0);
+                let due_at: Option<DateTime<Utc>> = qi.try_get("due_at").ok().flatten();
+                let comp_action: Option<String> = qi.try_get("completion_action").ok().flatten();
+                let notes: Option<String> = qi.try_get("notes").ok().flatten();
+
+                lines.push(format!(
+                    "- Queue: {} ({}), Status: {}, Priority: {}{}{}{}",
+                    q_name,
+                    q_type,
+                    qi_status,
+                    priority,
+                    due_at
+                        .map(|d| format!(", Due: {}", d.format("%Y-%m-%d %H:%M")))
+                        .unwrap_or_default(),
+                    comp_action
+                        .as_ref()
+                        .map(|a| format!(", Action: {}", a))
+                        .unwrap_or_default(),
+                    notes
+                        .as_ref()
+                        .map(|n| format!(", Notes: {}", n))
+                        .unwrap_or_default(),
+                ));
+            }
+            sections.push(lines.join("\n"));
+        }
+
+        // --- Approval Requests ---
+        let approvals = sqlx::query(
+            r#"
+            SELECT ar.status AS ar_status, ar.requested_from, ar.comments,
+                   ar.responded_at,
+                   wr.name AS rule_name, wr.priority AS rule_priority
+            FROM approval_requests ar
+            LEFT JOIN workflow_rules wr ON wr.id = ar.rule_id
+            WHERE ar.invoice_id = $1 AND ar.tenant_id = $2
+            ORDER BY ar.created_at DESC
+            LIMIT 10
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if approvals.is_empty() {
+            sections.push(
+                "## Approval Requests\nNo approval requests found for this invoice."
+                    .to_string(),
+            );
+        } else {
+            let mut lines = vec!["## Approval Requests".to_string()];
+            for ar in &approvals {
+                let ar_status: String = ar.try_get("ar_status").unwrap_or_else(|_| "Unknown".to_string());
+                let req_from: serde_json::Value =
+                    ar.try_get("requested_from").unwrap_or(serde_json::Value::Null);
+                let comments: Option<String> = ar.try_get("comments").ok().flatten();
+                let responded_at: Option<DateTime<Utc>> = ar.try_get("responded_at").ok().flatten();
+                let rule_name: Option<String> = ar.try_get("rule_name").ok().flatten();
+                let rule_priority: Option<i32> = ar.try_get("rule_priority").ok().flatten();
+
+                lines.push(format!(
+                    "- Status: {}, Requested From: {}{}{}{}",
+                    ar_status,
+                    req_from,
+                    rule_name
+                        .as_ref()
+                        .map(|n| format!(", Rule: {}", n))
+                        .unwrap_or_default(),
+                    rule_priority
+                        .map(|p| format!(" (priority {})", p))
+                        .unwrap_or_default(),
+                    responded_at
+                        .map(|r| format!(", Responded: {}", r.format("%Y-%m-%d %H:%M")))
+                        .unwrap_or_default(),
+                ));
+                if let Some(c) = comments {
+                    lines.push(format!("  Comments: {}", c));
+                }
+            }
+            sections.push(lines.join("\n"));
+        }
+
+        // --- Audit Evidence ---
+        let mut audit_lines = vec!["## Audit Evidence".to_string()];
+
+        // invoice_audit_log (last 5)
+        let inv_audit = sqlx::query(
+            r#"
+            SELECT from_status, to_status, event_type, actor_id, created_at
+            FROM invoice_audit_log
+            WHERE invoice_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+            LIMIT 5
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if inv_audit.is_empty() {
+            audit_lines.push("No invoice_audit_log rows found.".to_string());
+        } else {
+            audit_lines.push(format!("Invoice audit (latest {}):", inv_audit.len()));
+            for row in &inv_audit {
+                let from: Option<String> = row.try_get("from_status").ok().flatten();
+                let to: String = row.try_get("to_status").unwrap_or_else(|_| "?".to_string());
+                let evt: String = row.try_get("event_type").unwrap_or_else(|_| "?".to_string());
+                let actor: Option<Uuid> = row.try_get("actor_id").ok().flatten();
+                let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+                audit_lines.push(format!(
+                    "  {} -> {} ({}) by {} at {}",
+                    from.unwrap_or_else(|| "—".to_string()),
+                    to,
+                    evt,
+                    actor
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "system".to_string()),
+                    at.format("%Y-%m-%d %H:%M"),
+                ));
+            }
+        }
+
+        // workflow_audit_log (last 5)
+        let wf_audit = sqlx::query(
+            r#"
+            SELECT entity_type, entity_id, action, actor_type, created_at
+            FROM workflow_audit_log
+            WHERE entity_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+            LIMIT 5
+            "#,
+        )
+        .bind(invoice_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if wf_audit.is_empty() {
+            audit_lines.push("No workflow_audit_log rows found.".to_string());
+        } else {
+            audit_lines.push(format!("Workflow audit (latest {}):", wf_audit.len()));
+            for row in &wf_audit {
+                let etype: String = row.try_get("entity_type").unwrap_or_else(|_| "?".to_string());
+                let action: String = row.try_get("action").unwrap_or_else(|_| "?".to_string());
+                let atype: String = row.try_get("actor_type").unwrap_or_else(|_| "?".to_string());
+                let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+                audit_lines.push(format!(
+                    "  {} {} (by {}) at {}",
+                    etype,
+                    action,
+                    atype,
+                    at.format("%Y-%m-%d %H:%M"),
+                ));
+            }
+        }
+
+        // audit_log for resource_id = invoice_id (last 5)
+        let gen_audit = sqlx::query(
+            r#"
+            SELECT action, resource_type, resource_id, user_id, created_at
+            FROM audit_log
+            WHERE resource_id = $1::text AND tenant_id = $2
+            ORDER BY created_at DESC
+            LIMIT 5
+            "#,
+        )
+        .bind(invoice_id.to_string())
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await;
+
+        match gen_audit {
+            Ok(rows) if rows.is_empty() => {
+                audit_lines.push("No audit_log rows found.".to_string());
+            }
+            Ok(rows) => {
+                audit_lines.push(format!("Generic audit log (latest {}):", rows.len()));
+                for row in &rows {
+                    let action: String = row.try_get("action").unwrap_or_else(|_| "?".to_string());
+                    let rtype: String = row.try_get("resource_type").unwrap_or_else(|_| "?".to_string());
+                    let uid: Option<Uuid> = row.try_get("user_id").ok().flatten();
+                    let at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+                    audit_lines.push(format!(
+                        "  {} on {} by {} at {}",
+                        action,
+                        rtype,
+                        uid.map(|u| u.to_string()).unwrap_or_else(|| "system".to_string()),
+                        at.format("%Y-%m-%d %H:%M"),
+                    ));
+                }
+            }
+            Err(_) => {
+                audit_lines.push("No audit_log rows found.".to_string());
+            }
+        }
+
+        sections.push(audit_lines.join("\n"));
+
+        // --- Interpretation ---
+        let mut interp = vec!["## Interpretation".to_string()];
+
+        // Pending approvals -> blocked by approval
+        let pending_approvals = approvals
+            .iter()
+            .filter(|r| {
+                r.try_get::<String, _>("ar_status")
+                    .map(|s| s == "pending")
+                    .unwrap_or(false)
+            })
+            .count();
+        if pending_approvals > 0 {
+            interp.push(format!(
+                "Invoice is blocked by {} pending approval request(s).",
+                pending_approvals
+            ));
+        }
+
+        // Completed queue items -> prior routing
+        let completed_queues = queue_items
+            .iter()
+            .filter(|r| {
+                r.try_get::<String, _>("qi_status")
+                    .map(|s| s == "completed")
+                    .unwrap_or(false)
+            })
+            .count();
+        if completed_queues > 0 {
+            interp.push(format!(
+                "Invoice has passed through {} completed queue stage(s).",
+                completed_queues
+            ));
+        }
+
+        // No workflow rows at all
+        if queue_items.is_empty() && approvals.is_empty() {
+            interp.push(
+                "No workflow state (queue items or approval requests) is recorded for this invoice.".to_string(),
+            );
+        }
+
+        sections.push(interp.join("\n"));
+
+        Ok(sections.join("\n\n"))
+    }
+}
+
 /// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
@@ -556,6 +941,7 @@ impl ToolRegistry {
             ("get_module_capabilities", "Report which modules are enabled for the tenant and describe capability boundaries. No args required."),
             ("search_product_docs", "Search BillForge product documentation for relevant snippets. Args: query (plain text)"),
             ("explain_feature", "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)"),
+            ("explain_workflow_behavior", "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"),
         ];
 
         descriptions
@@ -592,6 +978,9 @@ impl ToolRegistry {
             }
             "explain_feature" => {
                 ExplainFeatureTool.execute(context, args).await
+            }
+            "explain_workflow_behavior" => {
+                ExplainWorkflowBehaviorTool::new(self.pool.clone()).execute(context, args).await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }
