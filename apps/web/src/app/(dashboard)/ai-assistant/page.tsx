@@ -65,7 +65,7 @@ export default function AiAssistantPage() {
 
   const bugDraftMutation = useMutation({
     mutationFn: (description: string) =>
-      aiAssistantApi.generateBugReportDraft({ description }),
+      aiAssistantApi.generateBugReportDraft({ description, conversation_id: conversationId }),
     onSuccess: (data) => {
       setBugDraft(data);
       setBugNotes('');
@@ -77,7 +77,7 @@ export default function AiAssistantPage() {
 
   const frDraftMutation = useMutation({
     mutationFn: (description: string) =>
-      aiAssistantApi.generateFeatureRequestDraft({ description }),
+      aiAssistantApi.generateFeatureRequestDraft({ description, conversation_id: conversationId }),
     onSuccess: (data) => {
       setFrDraft(data);
       setFrNotes('');

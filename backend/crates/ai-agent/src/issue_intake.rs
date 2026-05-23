@@ -38,6 +38,16 @@ pub struct IssueCreationRequest {
     pub labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_conversation_id: Option<String>,
+    /// Deterministic deep-link back to the source conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_conversation_link: Option<String>,
+    /// Arbitrary structured metadata for downstream consumers.
+    #[serde(default = "default_metadata")]
+    pub metadata: serde_json::Value,
+}
+
+fn default_metadata() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 /// The approval envelope returned by `prepare_issue_creation_for_approval`.
@@ -113,6 +123,8 @@ mod tests {
             body: "Something broke.".to_string(),
             labels: vec![],
             source_conversation_id: None,
+            source_conversation_link: None,
+            metadata: serde_json::json!({}),
         }
     }
 
@@ -169,5 +181,62 @@ mod tests {
         assert_eq!(back.target, req.target);
         assert_eq!(back.kind, req.kind);
         assert_eq!(back.title, req.title);
+    }
+
+    // -------------------------------------------------------------------------
+    // Source conversation link & metadata preservation tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn prepare_preserves_source_conversation_id_and_link() {
+        let conv_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let req = IssueCreationRequest {
+            target: IssueCreationTarget::Github,
+            kind: IssueCreationKind::Bug,
+            title: "Bug from chat".to_string(),
+            body: "Details here.".to_string(),
+            labels: vec![],
+            source_conversation_id: Some(conv_id.to_string()),
+            source_conversation_link: Some(format!("/ai-assistant?conversation_id={}", conv_id)),
+            metadata: serde_json::json!({ "intake_channel": "winston_ai" }),
+        };
+        let result = prepare_issue_creation_for_approval(req.clone()).unwrap();
+        assert_eq!(result.request.source_conversation_id, req.source_conversation_id);
+        assert_eq!(result.request.source_conversation_link, req.source_conversation_link);
+    }
+
+    #[test]
+    fn prepare_preserves_arbitrary_metadata() {
+        let meta = serde_json::json!({
+            "intake_channel": "winston_ai",
+            "issue_kind": "bug",
+            "custom_field": 42
+        });
+        let req = IssueCreationRequest {
+            target: IssueCreationTarget::Linear,
+            kind: IssueCreationKind::FeatureRequest,
+            title: "Feature from chat".to_string(),
+            body: "Body text.".to_string(),
+            labels: vec!["enhancement".to_string()],
+            source_conversation_id: None,
+            source_conversation_link: None,
+            metadata: meta.clone(),
+        };
+        let result = prepare_issue_creation_for_approval(req).unwrap();
+        assert_eq!(result.request.metadata, meta);
+    }
+
+    #[test]
+    fn old_caller_without_metadata_defaults_to_empty_object() {
+        let json = r#"{
+            "target": "github",
+            "kind": "bug",
+            "title": "Legacy caller",
+            "body": "No metadata fields."
+        }"#;
+        let req: IssueCreationRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.metadata, serde_json::json!({}));
+        assert_eq!(req.source_conversation_link, None);
+        assert_eq!(req.source_conversation_id, None);
     }
 }

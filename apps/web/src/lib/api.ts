@@ -2100,6 +2100,13 @@ export interface AiAnswerFeedbackResponse {
 // Bug Report Draft Types
 export type BugReportPriority = 'low' | 'medium' | 'high' | 'critical';
 
+export interface IssueSourceMetadata {
+  source_conversation_id?: string;
+  source_conversation_link?: string;
+  intake_channel: string;
+  issue_kind: string;
+}
+
 export interface BugReportDraftRequest {
   description: string;
   conversation_id?: string;
@@ -2113,6 +2120,7 @@ export interface BugReportDraftResponse {
   priority: BugReportPriority;
   affected_module: string;
   acceptance_criteria: string[];
+  metadata?: IssueSourceMetadata;
 }
 
 // Feature Request Draft Types
@@ -2129,6 +2137,7 @@ export interface FeatureRequestDraftResponse {
   affected_module: string;
   priority: FeatureRequestPriority;
   acceptance_criteria: string[];
+  metadata?: IssueSourceMetadata;
 }
 
 // AI Assistant API

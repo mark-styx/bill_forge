@@ -12,7 +12,7 @@ use super::models::{
     AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerTrace,
     BugReportDraftRequest, BugReportDraftResponse,
     FeatureRequestDraftRequest, FeatureRequestDraftResponse,
-    ChatRequest, ChatResponse, Conversation, Message, MessageRole,
+    ChatRequest, ChatResponse, Conversation, IssueSourceMetadata, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
 use super::product_knowledge::{
@@ -607,6 +607,10 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
 
         serde_json::from_str(json_str)
             .context("Failed to parse bug report draft from provider response. Expected valid JSON with title, current_behavior, expected_behavior, reproduction_steps, priority, affected_module, acceptance_criteria.")
+            .map(|mut draft: BugReportDraftResponse| {
+                draft.metadata = Self::build_source_metadata(request.conversation_id, "winston_ai", "bug");
+                draft
+            })
     }
 
     /// Generate a structured feature request draft from unstructured notes.
@@ -709,6 +713,26 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
 
         serde_json::from_str(json_str)
             .context("Failed to parse feature request draft from provider response. Expected valid JSON with problem_statement, proposed_value, affected_module, priority, acceptance_criteria.")
+            .map(|mut draft: FeatureRequestDraftResponse| {
+                draft.metadata = Self::build_source_metadata(request.conversation_id, "winston_ai", "feature_request");
+                draft
+            })
+    }
+
+    /// Build source provenance metadata from an optional conversation_id.
+    fn build_source_metadata(
+        conversation_id: Option<Uuid>,
+        intake_channel: &'static str,
+        issue_kind: &'static str,
+    ) -> Option<IssueSourceMetadata> {
+        let source_conversation_link = conversation_id
+            .map(|id| format!("/ai-assistant?conversation_id={}", id));
+        Some(IssueSourceMetadata {
+            source_conversation_id: conversation_id,
+            source_conversation_link,
+            intake_channel: intake_channel.to_string(),
+            issue_kind: issue_kind.to_string(),
+        })
     }
 
     /// Get conversation history
@@ -1204,5 +1228,125 @@ mod tests {
 
         assert_eq!(draft.problem_statement, "No audit trail for approval overrides");
         assert_eq!(draft.priority, FeatureRequestPriority::High);
+    }
+
+    // -------------------------------------------------------------------------
+    // Source metadata provenance tests
+    // -------------------------------------------------------------------------
+
+    /// Proves that a bug report draft includes source metadata with the
+    /// conversation id, deterministic link, intake channel, and issue kind
+    /// when a conversation_id is provided.
+    #[tokio::test]
+    async fn bug_report_draft_includes_source_metadata_with_conversation() {
+        let conv_id = Uuid::new_v4();
+        let valid_json = serde_json::json!({
+            "title": "Crash",
+            "current_behavior": "Crashes",
+            "expected_behavior": "Does not crash",
+            "reproduction_steps": ["Open app"],
+            "priority": "high",
+            "affected_module": "Auth",
+            "acceptance_criteria": ["No crash"]
+        })
+        .to_string();
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
+        let agent = test_agent(provider);
+
+        let request = BugReportDraftRequest {
+            description: "It crashes.".to_string(),
+            conversation_id: Some(conv_id),
+        };
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_bug_report_draft_with_context(request, &ctx)
+            .await
+            .expect("draft generation should succeed");
+
+        let meta = draft.metadata.as_ref().expect("metadata must be present");
+        assert_eq!(meta.source_conversation_id, Some(conv_id));
+        assert_eq!(
+            meta.source_conversation_link,
+            Some(format!("/ai-assistant?conversation_id={}", conv_id))
+        );
+        assert_eq!(meta.intake_channel, "winston_ai");
+        assert_eq!(meta.issue_kind, "bug");
+    }
+
+    /// Proves that a feature request draft includes source metadata with the
+    /// conversation id, deterministic link, intake channel, and issue kind
+    /// when a conversation_id is provided.
+    #[tokio::test]
+    async fn feature_request_draft_includes_source_metadata_with_conversation() {
+        let conv_id = Uuid::new_v4();
+        let valid_json = serde_json::json!({
+            "problem_statement": "Need export",
+            "proposed_value": "Add CSV export",
+            "affected_module": "Reporting",
+            "priority": "medium",
+            "acceptance_criteria": ["Exports CSV"]
+        })
+        .to_string();
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
+        let agent = test_agent(provider);
+
+        let request = FeatureRequestDraftRequest {
+            description: "We need export.".to_string(),
+            conversation_id: Some(conv_id),
+        };
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_feature_request_draft_with_context(request, &ctx)
+            .await
+            .expect("draft generation should succeed");
+
+        let meta = draft.metadata.as_ref().expect("metadata must be present");
+        assert_eq!(meta.source_conversation_id, Some(conv_id));
+        assert_eq!(
+            meta.source_conversation_link,
+            Some(format!("/ai-assistant?conversation_id={}", conv_id))
+        );
+        assert_eq!(meta.intake_channel, "winston_ai");
+        assert_eq!(meta.issue_kind, "feature_request");
+    }
+
+    /// Proves that metadata is still populated (with None conversation fields)
+    /// when no conversation_id is provided.
+    #[tokio::test]
+    async fn bug_report_draft_metadata_present_without_conversation() {
+        let valid_json = serde_json::json!({
+            "title": "Bug",
+            "current_behavior": "Broken",
+            "expected_behavior": "Fixed",
+            "reproduction_steps": ["Do thing"],
+            "priority": "low",
+            "affected_module": "Core",
+            "acceptance_criteria": ["Works"]
+        })
+        .to_string();
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
+        let agent = test_agent(provider);
+
+        let request = BugReportDraftRequest {
+            description: "Something.".to_string(),
+            conversation_id: None,
+        };
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_bug_report_draft_with_context(request, &ctx)
+            .await
+            .expect("draft generation should succeed");
+
+        let meta = draft.metadata.as_ref().expect("metadata must be present");
+        assert_eq!(meta.source_conversation_id, None);
+        assert_eq!(meta.source_conversation_link, None);
+        assert_eq!(meta.intake_channel, "winston_ai");
+        assert_eq!(meta.issue_kind, "bug");
     }
 }

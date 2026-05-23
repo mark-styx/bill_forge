@@ -1048,7 +1048,7 @@ impl ToolRegistry {
             ("search_known_issues", "Search the known issue register for relevant issues. Args: query (plain text)"),
             ("summarize_release_changes", "Summarize release changes from release notes. Args: query or version (optional plain text)"),
             ("explain_workflow_behavior", "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"),
-            ("request_issue_creation", "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\"}"),
+            ("request_issue_creation", "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\",\"source_conversation_link\":\"...\",\"metadata\":{}}"),
         ];
 
         descriptions

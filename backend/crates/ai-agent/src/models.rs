@@ -301,6 +301,21 @@ pub enum BugReportPriority {
     Critical,
 }
 
+/// Provenance metadata linking a draft or filed issue back to its source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IssueSourceMetadata {
+    /// The conversation that produced this issue, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_conversation_id: Option<Uuid>,
+    /// Deterministic deep-link back to the source conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_conversation_link: Option<String>,
+    /// Which intake channel produced this issue.
+    pub intake_channel: String,
+    /// The kind of issue (e.g. "bug", "feature_request").
+    pub issue_kind: String,
+}
+
 /// Structured bug report draft returned by Winston AI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BugReportDraftResponse {
@@ -311,6 +326,9 @@ pub struct BugReportDraftResponse {
     pub priority: BugReportPriority,
     pub affected_module: String,
     pub acceptance_criteria: Vec<String>,
+    /// Provenance metadata linking this draft back to its source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<IssueSourceMetadata>,
 }
 
 // ---------------------------------------------------------------------------
@@ -345,4 +363,7 @@ pub struct FeatureRequestDraftResponse {
     pub affected_module: String,
     pub priority: FeatureRequestPriority,
     pub acceptance_criteria: Vec<String>,
+    /// Provenance metadata linking this draft back to its source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<IssueSourceMetadata>,
 }
