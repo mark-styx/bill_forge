@@ -2916,7 +2916,7 @@ impl ToolRegistry {
     /// Return the authoritative list of typed tool definitions for every
     /// executable tool.  The caller must not mutate the returned vec.
     pub fn tool_definitions() -> Vec<AiToolDefinition> {
-        vec![
+        let definitions = vec![
             AiToolDefinition {
                 name: "get_invoice_status",
                 description: "Get status of an invoice by ID. Args: invoice_id (UUID)",
@@ -3492,7 +3492,34 @@ impl ToolRegistry {
                 }),
                 mutates: false,
             },
-        ]
+        ];
+
+        #[cfg(test)]
+        {
+            let mut definitions = definitions;
+            definitions.push(AiToolDefinition {
+                name: "synthetic_mutating_test_tool",
+                description: "Test-only mutating tool used to verify execution guards.",
+                class: AiToolClass::IssueIntake,
+                required_permission: AiToolPermission::IssueRequest,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                mutates: true,
+            });
+            definitions
+        }
+
+        #[cfg(not(test))]
+        {
+            definitions
+        }
     }
 
     /// Look up a single typed definition by tool name.

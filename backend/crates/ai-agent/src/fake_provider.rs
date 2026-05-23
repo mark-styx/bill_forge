@@ -27,6 +27,7 @@ pub struct FakeAiProvider {
     model: String,
     tools_supported: bool,
     response_text: Option<String>,
+    tool_calls: Option<Vec<ProviderToolCall>>,
     error: Option<ProviderChatError>,
     request_log: Arc<Mutex<Vec<ProviderChatRequest>>>,
 }
@@ -44,6 +45,7 @@ impl FakeAiProvider {
             model: "fake-model".into(),
             tools_supported: false,
             response_text: None,
+            tool_calls: None,
             error: None,
             request_log: Arc::new(Mutex::new(Vec::new())),
         }
@@ -64,6 +66,12 @@ impl FakeAiProvider {
     /// Use a fixed response text instead of the default echo behavior.
     pub fn with_response_text(mut self, text: impl Into<String>) -> Self {
         self.response_text = Some(text.into());
+        self
+    }
+
+    /// Return deterministic tool calls when tools are offered in the request.
+    pub fn with_tool_calls(mut self, tool_calls: Vec<ProviderToolCall>) -> Self {
+        self.tool_calls = Some(tool_calls);
         self
     }
 
@@ -141,14 +149,24 @@ impl AiProvider for FakeAiProvider {
             return Err(err.clone());
         }
 
+        let configured_tool_calls = if request.tools.is_some() {
+            self.tool_calls.clone()
+        } else {
+            None
+        };
+        let finish_reason = if configured_tool_calls.is_some() {
+            Some("tool_calls".into())
+        } else {
+            Some("stop".into())
+        };
         let text = self.resolve_text(&request);
         Ok(ProviderChatResponse {
             message: ProviderChatMessage {
                 role: ProviderMessageRole::Assistant,
                 content: text,
             },
-            tool_calls: None,
-            finish_reason: Some("stop".into()),
+            tool_calls: configured_tool_calls,
+            finish_reason,
             usage: Some(ProviderChatUsage {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(5),

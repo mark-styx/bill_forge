@@ -843,8 +843,9 @@ mod tests {
     use crate::fake_provider::FakeAiProvider;
     use crate::models::{
         AgentContext, BugReportDraftRequest, BugReportPriority, FeatureRequestDraftRequest,
-        FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind,
+        FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind, ProviderToolCall,
     };
+    use serde_json::json;
     use sqlx::PgPool;
 
     /// Helper: build a ChatRequest for tests.
@@ -1057,6 +1058,117 @@ mod tests {
         assert_eq!(usage.prompt_tokens, Some(10));
         assert_eq!(usage.completion_tokens, Some(5));
         assert_eq!(usage.total_tokens, Some(15));
+    }
+
+    #[tokio::test]
+    async fn chat_with_context_executes_read_only_tool_directly() {
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_tools_supported(true)
+                .with_response_text("final answer")
+                .with_tool_calls(vec![ProviderToolCall {
+                    id: Some("call-001".to_string()),
+                    name: "get_module_capabilities".to_string(),
+                    arguments: json!({}),
+                }]),
+        );
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("What can Winston do?");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(request, ctx, conversation_id)
+            .await
+            .expect("chat_with_context should succeed");
+
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 2, "expected tool turn and follow-up turn");
+        assert!(requests[0]
+            .tools
+            .as_ref()
+            .expect("initial request should include tools")
+            .iter()
+            .any(|tool| tool.name == "get_module_capabilities"));
+        assert_eq!(requests[1].tools, None);
+
+        let tool_result_message = requests[1]
+            .messages
+            .last()
+            .expect("follow-up request should include tool result message");
+        assert_eq!(tool_result_message.role, ProviderMessageRole::System);
+        assert!(tool_result_message
+            .content
+            .contains("Tool get_module_capabilities returned:"));
+        assert!(tool_result_message
+            .content
+            .contains("Module Capabilities Report"));
+        assert!(tool_result_message
+            .content
+            .contains("Winston AI Assistant is a paid add-on"));
+
+        assert_eq!(response.trace.tools_used.len(), 1);
+        assert_eq!(
+            response.trace.tools_used[0].tool_name,
+            "get_module_capabilities"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_with_context_blocks_mutating_tool_from_normal_turn() {
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_tools_supported(true)
+                .with_response_text("final answer")
+                .with_tool_calls(vec![ProviderToolCall {
+                    id: Some("call-001".to_string()),
+                    name: "synthetic_mutating_test_tool".to_string(),
+                    arguments: json!({}),
+                }]),
+        );
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("Please make a change.");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(request, ctx, conversation_id)
+            .await
+            .expect("chat_with_context should succeed");
+
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 2, "expected tool turn and follow-up turn");
+        assert!(requests[0]
+            .tools
+            .as_ref()
+            .expect("initial request should include tools")
+            .iter()
+            .any(|tool| tool.name == "synthetic_mutating_test_tool"));
+        assert_eq!(requests[1].tools, None);
+
+        let tool_result_message = requests[1]
+            .messages
+            .last()
+            .expect("follow-up request should include guard result message");
+        assert_eq!(tool_result_message.role, ProviderMessageRole::System);
+        assert!(tool_result_message.content.contains(
+            "Tool 'synthetic_mutating_test_tool' requires an approved proposal context before execution"
+        ));
+        assert!(tool_result_message
+            .content
+            .contains("Do not claim any mutation occurred."));
+        assert!(
+            !tool_result_message.content.contains("not found"),
+            "guard should reject before dispatch when no approved proposal context is supplied"
+        );
+
+        assert_eq!(response.trace.tools_used.len(), 1);
+        assert_eq!(
+            response.trace.tools_used[0].tool_name,
+            "synthetic_mutating_test_tool"
+        );
     }
 
     /// Verify that the routing reason and route constants used in chat() are stable.
