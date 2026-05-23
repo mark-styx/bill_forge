@@ -1,6 +1,7 @@
 //! Repository implementations for database operations
 
 mod ai_conversation_repo;
+mod ai_action_proposal_repo;
 mod audit_repo;
 mod invoice_repo;
 mod metrics_repo;
@@ -19,6 +20,10 @@ pub use ai_conversation_repo::{
     PersistAiToolResultInput, AiToolResultRecord,
     AiUsageEventInput, AiUsageEventRecord,
     AiAnswerFeedbackRating, PersistAiAnswerFeedbackInput, AiAnswerFeedbackRecord,
+};
+pub use ai_action_proposal_repo::{
+    AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalRisk,
+    AiActionProposalStatus, CreateAiActionProposalInput, UpdateAiActionProposalStatusInput,
 };
 pub use audit_repo::AuditRepositoryImpl;
 pub use invoice_repo::InvoiceRepositoryImpl;
