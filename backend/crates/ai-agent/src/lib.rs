@@ -14,6 +14,8 @@ pub mod provider;
 pub mod fake_provider;
 pub mod openai_compatible_provider;
 
+pub mod issue_intake;
+
 pub use agent::WinstonAgent;
 pub use config::{AiModelConfig, AiProviderConfig, AiProviderType, ConfigError};
 pub use handlers::create_router;

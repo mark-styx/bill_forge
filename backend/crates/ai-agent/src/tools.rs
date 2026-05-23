@@ -1048,6 +1048,7 @@ impl ToolRegistry {
             ("search_known_issues", "Search the known issue register for relevant issues. Args: query (plain text)"),
             ("summarize_release_changes", "Summarize release changes from release notes. Args: query or version (optional plain text)"),
             ("explain_workflow_behavior", "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"),
+            ("request_issue_creation", "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\"}"),
         ];
 
         descriptions
@@ -1093,6 +1094,15 @@ impl ToolRegistry {
             }
             "explain_workflow_behavior" => {
                 ExplainWorkflowBehaviorTool::new(self.pool.clone()).execute(context, args).await
+            }
+            "request_issue_creation" => {
+                let request: super::issue_intake::IssueCreationRequest =
+                    serde_json::from_str(args.trim()).context(
+                        "Invalid JSON for request_issue_creation. \
+                         Expected: {\"target\":\"github\", \"kind\":\"bug\", \"title\":\"...\", \"body\":\"...\"}",
+                    )?;
+                let envelope = super::issue_intake::prepare_issue_creation_for_approval(request)?;
+                serde_json::to_string(&envelope).context("Failed to serialize approval envelope")
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

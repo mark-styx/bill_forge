@@ -406,3 +406,120 @@ async fn test_summarize_release_changes_empty_input_still_returns_release_summar
         "expected CHANGELOG.md in response with empty input, got: {result}"
     );
 }
+
+#[tokio::test]
+async fn test_tool_descriptions_include_request_issue_creation() {
+    let registry = ToolRegistry::new(fake_pool());
+    let descriptions = registry.get_tool_descriptions();
+
+    assert!(
+        descriptions.contains("request_issue_creation"),
+        "missing request_issue_creation, got: {descriptions}"
+    );
+}
+
+#[tokio::test]
+async fn test_request_issue_creation_github_returns_approval_required() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let args = serde_json::json!({
+        "target": "github",
+        "kind": "bug",
+        "title": "Login button not working",
+        "body": "Clicking the login button on the main page results in a blank screen.",
+        "labels": ["bug", "ui"],
+        "source_conversation_id": "conv-123"
+    })
+    .to_string();
+
+    let result = registry
+        .execute_tool("request_issue_creation", &ctx, &args)
+        .await
+        .expect("request_issue_creation should succeed");
+
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .expect("tool output should be valid JSON");
+
+    // Status must be approval_required
+    assert_eq!(
+        parsed["status"].as_str(),
+        Some("approval_required"),
+        "status should be approval_required, got: {result}"
+    );
+
+    // Target preserved
+    assert_eq!(
+        parsed["request"]["target"].as_str(),
+        Some("github"),
+        "target should be github, got: {result}"
+    );
+
+    // Title preserved
+    assert_eq!(
+        parsed["request"]["title"].as_str(),
+        Some("Login button not working"),
+        "title should be preserved, got: {result}"
+    );
+
+    // Must include approval_request_id (non-nil UUID)
+    let approval_id = parsed["approval_request_id"]
+        .as_str()
+        .expect("approval_request_id should be present");
+    assert!(
+        uuid::Uuid::parse_str(approval_id).is_ok(),
+        "approval_request_id should be a valid UUID, got: {approval_id}"
+    );
+
+    // Must contain messaging that no issue was created
+    assert!(
+        result.contains("No external issue"),
+        "response should state no external issue was created, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_request_issue_creation_empty_title_fails() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let args = serde_json::json!({
+        "target": "github",
+        "kind": "bug",
+        "title": "  ",
+        "body": "Valid body text"
+    })
+    .to_string();
+
+    let result = registry
+        .execute_tool("request_issue_creation", &ctx, &args)
+        .await;
+
+    assert!(result.is_err(), "empty title should fail");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Title must not be empty"),
+        "empty title error should mention title, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_request_issue_creation_unsupported_target_fails() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    // The target deserialization will fail for unsupported enum variants
+    let args = serde_json::json!({
+        "target": "bitbucket",
+        "kind": "bug",
+        "title": "A title",
+        "body": "A body"
+    })
+    .to_string();
+
+    let result = registry
+        .execute_tool("request_issue_creation", &ctx, &args)
+        .await;
+
+    assert!(result.is_err(), "unsupported target should fail");
+}
