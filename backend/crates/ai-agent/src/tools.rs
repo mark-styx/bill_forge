@@ -292,7 +292,194 @@ impl Tool for VendorInvoicesTool {
     }
 }
 
-/// Approval requirements query tool
+/// Vendor summary tool - read-only tenant-scoped vendor profile with invoice metrics.
+pub struct VendorSummaryTool {
+    pool: PgPool,
+}
+
+impl VendorSummaryTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for VendorSummaryTool {
+    fn name(&self) -> &str {
+        "get_vendor_summary"
+    }
+
+    fn description(&self) -> &str {
+        "Get a vendor summary including contact, payment terms, and invoice metrics. Args: vendor_id or vendor_name (raw text or JSON)"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide a vendor_id or vendor_name. \
+                 Expected: vendor name, vendor UUID, or {{\"vendor_id\":\"<uuid>\"}} / {{\"vendor_name\":\"...\"}}."
+            );
+        }
+
+        // Parse args: JSON or raw text
+        let (vendor_id_opt, vendor_name_opt) = if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input for get_vendor_summary.")?;
+            let vid = val.get("vendor_id").and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<Uuid>().ok());
+            let vn = val.get("vendor_name").and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (vid, vn)
+        } else if let Ok(uid) = trimmed.parse::<Uuid>() {
+            (Some(uid), None)
+        } else {
+            (None, Some(trimmed.to_string()))
+        };
+
+        // Look up vendor row
+        let vendor = if let Some(vid) = vendor_id_opt {
+            sqlx::query(
+                r#"SELECT id, name, is_active, contact_email, contact_phone, payment_terms
+                   FROM vendors WHERE id = $1 AND tenant_id = $2"#,
+            )
+            .bind(vid)
+            .bind(&context.tenant_id)
+            .fetch_optional(&self.pool)
+            .await?
+        } else if let Some(ref vn) = vendor_name_opt {
+            sqlx::query(
+                r#"SELECT id, name, is_active, contact_email, contact_phone, payment_terms
+                   FROM vendors WHERE name ILIKE $1 AND tenant_id = $2
+                   LIMIT 1"#,
+            )
+            .bind(format!("%{}%", vn))
+            .bind(&context.tenant_id)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            anyhow::bail!("Please provide a vendor_id or vendor_name.");
+        };
+
+        let vendor = match vendor {
+            Some(v) => v,
+            None => {
+                let label = vendor_name_opt
+                    .clone()
+                    .or_else(|| vendor_id_opt.map(|u| u.to_string()))
+                    .unwrap_or_else(|| "specified".to_string());
+                return Ok(format!("No vendor found matching '{}'.", label));
+            }
+        };
+
+        let v_id: Uuid = vendor.try_get("id")?;
+        let v_name: String = vendor.try_get("name")?;
+        let v_active: bool = vendor.try_get("is_active").unwrap_or(true);
+        let v_email: Option<String> = vendor.try_get("contact_email").ok().flatten();
+        let v_phone: Option<String> = vendor.try_get("contact_phone").ok().flatten();
+        let v_terms: Option<String> = vendor.try_get("payment_terms").ok().flatten();
+
+        // Invoice metrics
+        let metrics = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE status IN ('pending','draft','processing','pending_approval')) AS open_count,
+                COALESCE(SUM(total_amount_cents), 0) AS total_cents,
+                MAX(invoice_date) AS latest_date,
+                MAX(due_date) AS latest_due
+            FROM invoices
+            WHERE vendor_id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(v_id)
+        .bind(&context.tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_count: i64 = metrics.try_get("total_count").unwrap_or(0);
+        let open_count: i64 = metrics.try_get("open_count").unwrap_or(0);
+        let total_cents: i64 = metrics.try_get("total_cents").unwrap_or(0);
+        let latest_date: Option<NaiveDate> = metrics.try_get("latest_date").ok().flatten();
+        let latest_due: Option<NaiveDate> = metrics.try_get("latest_due").ok().flatten();
+
+        // Recent invoices (capped at 5)
+        let recent = sqlx::query(
+            r#"
+            SELECT id, invoice_number, status, total_amount_cents, currency, invoice_date, due_date
+            FROM invoices
+            WHERE vendor_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+            LIMIT 5
+            "#,
+        )
+        .bind(v_id)
+        .bind(&context.tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let total_display = format!("{}.{:02}", total_cents / 100, (total_cents % 100).abs());
+
+        let mut lines = vec![
+            format!("**Vendor Summary**"),
+            format!("ID: {}", v_id),
+            format!("Name: {}", v_name),
+            format!("Active: {}", if v_active { "Yes" } else { "No" }),
+        ];
+
+        if let Some(ref email) = v_email {
+            lines.push(format!("Contact Email: {}", email));
+        }
+        if let Some(ref phone) = v_phone {
+            lines.push(format!("Contact Phone: {}", phone));
+        }
+        if let Some(ref terms) = v_terms {
+            lines.push(format!("Payment Terms: {}", terms));
+        }
+
+        lines.push(String::new());
+        lines.push(format!("Total Invoices: {}", total_count));
+        lines.push(format!("Open/Pending Invoices: {}", open_count));
+        lines.push(format!("Total Invoiced: {}", total_display));
+        lines.push(format!(
+            "Latest Invoice Date: {}",
+            latest_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())
+        ));
+        lines.push(format!(
+            "Latest Due Date: {}",
+            latest_due.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string())
+        ));
+
+        if !recent.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("Recent Invoices (up to 5):"));
+            for row in &recent {
+                let inv_num: String = row.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
+                let status: String = row.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+                let cents: Option<i64> = row.try_get("total_amount_cents").ok().flatten();
+                let cur: String = row.try_get("currency").unwrap_or_else(|_| "USD".to_string());
+                let inv_date: Option<NaiveDate> = row.try_get("invoice_date").ok().flatten();
+                let due: Option<NaiveDate> = row.try_get("due_date").ok().flatten();
+                let amt = cents
+                    .map(|c| format!("{}.{:02}", c / 100, (c % 100).abs()))
+                    .unwrap_or_else(|| "N/A".to_string());
+                lines.push(format!(
+                    "  - {} | {} | {} {} | Date: {} | Due: {}",
+                    inv_num,
+                    status,
+                    amt,
+                    cur,
+                    inv_date.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                    due.map(|d| d.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                ));
+            }
+        }
+
+        Ok(lines.join("\n"))
+    }
+}
+
+/// Approval requirements query tool - read-only, queries approval_requests and workflow_rules.
 pub struct ApprovalRequirementsTool {
     pool: PgPool,
 }
@@ -300,6 +487,92 @@ pub struct ApprovalRequirementsTool {
 impl ApprovalRequirementsTool {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Parse invoice_id from args: raw UUID text or JSON {"invoice_id":"..."}.
+    fn parse_invoice_id(args: &str) -> Result<Uuid> {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!(
+                "Please provide an invoice_id to check approval requirements. \
+                 Expected: invoice UUID or {{\"invoice_id\":\"<uuid>\"}}."
+            );
+        }
+        if trimmed.starts_with('{') {
+            let val: serde_json::Value = serde_json::from_str(trimmed)
+                .context("Invalid JSON input. Expected: {\"invoice_id\":\"<uuid>\"}.")?;
+            let id_str = val
+                .get("invoice_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "JSON input missing 'invoice_id' key. Expected: {{\"invoice_id\":\"<uuid>\"}}."
+                    )
+                })?;
+            return id_str
+                .parse::<Uuid>()
+                .context("Invalid invoice_id format in JSON. Please provide a valid UUID.");
+        }
+        trimmed
+            .parse::<Uuid>()
+            .context("Invalid invoice ID format. Please provide a valid UUID.")
+    }
+
+    /// Render `requested_from` JSONB defensively for known serialized shapes.
+    fn render_requested_from(val: &serde_json::Value) -> String {
+        // Object forms: {"User":{...}}, {"Role":{...}}, etc.
+        if let Some(obj) = val.as_object() {
+            // Check for typed variants
+            if let Some(user) = obj.get("User") {
+                return format!("User: {}", Self::describe_user_value(user));
+            }
+            if let Some(role) = obj.get("Role") {
+                return format!("Role: {}", Self::describe_role_value(role));
+            }
+            if let Some(any) = obj.get("AnyOf") {
+                return format!("AnyOf: {}", any);
+            }
+            if let Some(all) = obj.get("AllOf") {
+                return format!("AllOf: {}", all);
+            }
+            // Legacy / lowercase tolerance
+            for key in &["user", "role", "any_of", "all_of", "anyof", "allof"] {
+                if let Some(v) = obj.get(*key) {
+                    return format!("{}: {}", key, v);
+                }
+            }
+            // Fall back to raw JSON
+            return format!("{}", val);
+        }
+        // String or other scalar
+        format!("{}", val)
+    }
+
+    fn describe_user_value(val: &serde_json::Value) -> String {
+        if let Some(obj) = val.as_object() {
+            if let Some(email) = obj.get("email").and_then(|v| v.as_str()) {
+                return email.to_string();
+            }
+            if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+                return name.to_string();
+            }
+            if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                return id.to_string();
+            }
+        }
+        format!("{}", val)
+    }
+
+    fn describe_role_value(val: &serde_json::Value) -> String {
+        if let Some(obj) = val.as_object() {
+            if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+                return name.to_string();
+            }
+        }
+        if let Some(s) = val.as_str() {
+            return s.to_string();
+        }
+        format!("{}", val)
     }
 }
 
@@ -310,17 +583,16 @@ impl Tool for ApprovalRequirementsTool {
     }
 
     fn description(&self) -> &str {
-        "Check who needs to approve an invoice. Args: invoice_id (UUID)"
+        "Check approval requirements and current approval request status for an invoice. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"
     }
 
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
-        let invoice_id: Uuid = args.trim().parse()
-            .context("Invalid invoice ID format. Please provide a valid UUID.")?;
+        let invoice_id = Self::parse_invoice_id(args)?;
 
-        // Get invoice amount
+        // Load tenant-scoped invoice
         let invoice = sqlx::query(
             r#"
-            SELECT total_amount, currency
+            SELECT invoice_number, status, total_amount_cents, currency
             FROM invoices
             WHERE id = $1 AND tenant_id = $2
             "#,
@@ -332,26 +604,38 @@ impl Tool for ApprovalRequirementsTool {
 
         let invoice = match invoice {
             Some(inv) => inv,
-            None => return Ok(format!("Invoice {} not found.", invoice_id)),
+            None => return Ok(format!("Invoice {} not found in your organization.", invoice_id)),
         };
 
-        let total_amount: f64 = invoice.try_get("total_amount")?;
-        let currency: String = invoice.try_get("currency")?;
+        let invoice_number: String = invoice.try_get("invoice_number").unwrap_or_else(|_| "N/A".to_string());
+        let inv_status: String = invoice.try_get("status").unwrap_or_else(|_| "N/A".to_string());
+        let total_cents: Option<i64> = invoice.try_get("total_amount_cents").ok().flatten();
+        let currency: String = invoice.try_get("currency").unwrap_or_else(|_| "USD".to_string());
 
-        // Get approval workflow steps
-        let steps = sqlx::query(
+        let amount_display = total_cents
+            .map(|c| format!("{}.{:02}", c / 100, (c % 100).abs()))
+            .unwrap_or_else(|| "N/A".to_string());
+
+        // Read approval request evidence from approval_requests joined to workflow_rules and users
+        let requests = sqlx::query(
             r#"
             SELECT
-                aws.step_order,
-                aws.approver_role,
-                u.email as approver_email,
-                a.status as approval_status,
-                a.approved_at
-            FROM approval_workflow_steps aws
-            LEFT JOIN approvals a ON a.invoice_id = $1 AND a.workflow_step_id = aws.id
-            LEFT JOIN users u ON a.approver_id = u.id
-            WHERE aws.tenant_id = $2
-            ORDER BY aws.step_order
+                ar.id AS ar_id,
+                ar.status AS ar_status,
+                ar.requested_from,
+                ar.comments,
+                ar.responded_by,
+                ar.responded_at,
+                ar.expires_at,
+                ar.created_at AS ar_created,
+                wr.name AS rule_name,
+                wr.priority AS rule_priority,
+                u.email AS responder_email
+            FROM approval_requests ar
+            LEFT JOIN workflow_rules wr ON wr.id = ar.rule_id
+            LEFT JOIN users u ON u.id = ar.responded_by
+            WHERE ar.invoice_id = $1 AND ar.tenant_id = $2
+            ORDER BY ar.created_at DESC
             "#,
         )
         .bind(invoice_id)
@@ -359,45 +643,65 @@ impl Tool for ApprovalRequirementsTool {
         .fetch_all(&self.pool)
         .await?;
 
-        if steps.is_empty() {
+        if requests.is_empty() {
             return Ok(format!(
-                "Invoice {} ({} {}): No approval workflow configured for this organization.",
-                invoice_id, total_amount, currency
+                "No approval requirements are currently recorded for invoice {} ({} | {} {} | Status: {}).",
+                invoice_id, invoice_number, amount_display, currency, inv_status
             ));
         }
 
-        let mut result = format!(
-            "Approval requirements for invoice {} ({} {}):\n\n",
-            invoice_id, total_amount, currency
-        );
+        let mut lines = vec![
+            format!("Approval Requirements for Invoice {} ({})", invoice_id, invoice_number),
+            format!("Invoice Status: {} | Amount: {} {}", inv_status, amount_display, currency),
+            String::new(),
+            format!("Approval Requests ({}):", requests.len()),
+        ];
 
-        for step in steps {
-            let step_order: i32 = step.try_get("step_order")?;
-            let approver_role: String = step.try_get("approver_role")?;
-            let approver_email: Option<String> = step.try_get("approver_email")?;
-            let approval_status: Option<String> = step.try_get("approval_status")?;
-            let approved_at: Option<DateTime<Utc>> = step.try_get("approved_at")?;
+        for row in &requests {
+            let ar_id: Uuid = row.try_get("ar_id")?;
+            let ar_status: String = row.try_get("ar_status").unwrap_or_else(|_| "Unknown".to_string());
+            let req_from: serde_json::Value =
+                row.try_get("requested_from").unwrap_or(serde_json::Value::Null);
+            let comments: Option<String> = row.try_get("comments").ok().flatten();
+            let responder_email: Option<String> = row.try_get("responder_email").ok().flatten();
+            let responded_at: Option<DateTime<Utc>> = row.try_get("responded_at").ok().flatten();
+            let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at").ok().flatten();
+            let rule_name: Option<String> = row.try_get("rule_name").ok().flatten();
+            let rule_priority: Option<i32> = row.try_get("rule_priority").ok().flatten();
 
-            let status = match approval_status {
-                Some(s) => s,
-                None => "Pending".to_string(),
-            };
-
-            result.push_str(&format!(
-                "{}. {} - {} ({}): {}\n",
-                step_order,
-                approver_role,
-                approver_email.unwrap_or_else(|| "Not assigned".to_string()),
-                if status == "approved" {
-                    approved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "N/A".to_string())
-                } else {
-                    "Pending".to_string()
-                },
-                status,
+            lines.push(format!(
+                "- Request ID: {}",
+                ar_id,
             ));
+            lines.push(format!("  Status: {}", ar_status));
+            lines.push(format!(
+                "  Requested From: {}",
+                Self::render_requested_from(&req_from)
+            ));
+            if let Some(ref rn) = rule_name {
+                lines.push(format!(
+                    "  Rule: {}{}",
+                    rn,
+                    rule_priority
+                        .map(|p| format!(" (priority {})", p))
+                        .unwrap_or_default()
+                ));
+            }
+            if let Some(ref c) = comments {
+                lines.push(format!("  Comments: {}", c));
+            }
+            if let Some(ref email) = responder_email {
+                lines.push(format!("  Responded By: {}", email));
+            }
+            if let Some(ra) = responded_at {
+                lines.push(format!("  Responded At: {}", ra.format("%Y-%m-%d %H:%M")));
+            }
+            if let Some(ea) = expires_at {
+                lines.push(format!("  Expires At: {}", ea.format("%Y-%m-%d %H:%M")));
+            }
         }
 
-        Ok(result)
+        Ok(lines.join("\n"))
     }
 }
 
@@ -1852,7 +2156,7 @@ impl ToolRegistry {
             },
             AiToolDefinition {
                 name: "get_approval_requirements",
-                description: "Check who needs to approve an invoice. Args: invoice_id (UUID)",
+                description: "Check approval requirements and current approval request status for an invoice. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})",
                 class: AiToolClass::Approval,
                 required_permission: AiToolPermission::ApprovalRead,
                 risk_level: AiToolRiskLevel::Low,
@@ -1866,14 +2170,66 @@ impl ToolRegistry {
                 output_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "steps": {
+                        "approval_requests": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "step_order": { "type": "integer" },
-                                    "approver_role": { "type": "string" },
-                                    "status": { "type": "string" }
+                                    "request_id": { "type": "string", "format": "uuid" },
+                                    "status": { "type": "string" },
+                                    "requested_from": { "type": "string" },
+                                    "rule_name": { "type": "string" },
+                                    "rule_priority": { "type": "integer" },
+                                    "comments": { "type": "string" },
+                                    "responded_by": { "type": "string" },
+                                    "responded_at": { "type": "string" },
+                                    "expires_at": { "type": "string" }
+                                }
+                            }
+                        },
+                        "invoice_status": { "type": "string" },
+                        "invoice_amount": { "type": "string" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_vendor_summary",
+                description: "Get a vendor summary including contact info, payment terms, and invoice metrics. Args: vendor_id or vendor_name (UUID, name, or JSON with vendor_id/vendor_name)",
+                class: AiToolClass::Vendor,
+                required_permission: AiToolPermission::VendorRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "vendor_id": { "type": "string", "format": "uuid" },
+                        "vendor_name": { "type": "string" }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "vendor_id": { "type": "string", "format": "uuid" },
+                        "vendor_name": { "type": "string" },
+                        "is_active": { "type": "boolean" },
+                        "contact_email": { "type": "string" },
+                        "contact_phone": { "type": "string" },
+                        "payment_terms": { "type": "string" },
+                        "total_invoices": { "type": "integer" },
+                        "open_pending_invoices": { "type": "integer" },
+                        "total_invoiced": { "type": "string" },
+                        "latest_invoice_date": { "type": "string" },
+                        "latest_due_date": { "type": "string" },
+                        "recent_invoices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "invoice_number": { "type": "string" },
+                                    "status": { "type": "string" },
+                                    "amount": { "type": "string" },
+                                    "invoice_date": { "type": "string" },
+                                    "due_date": { "type": "string" }
                                 }
                             }
                         }
@@ -2276,6 +2632,9 @@ impl ToolRegistry {
             }
             "assess_invoice_payment_risk" => {
                 AssessInvoicePaymentRiskTool::new(self.pool.clone()).execute(context, args).await
+            }
+            "get_vendor_summary" => {
+                VendorSummaryTool::new(self.pool.clone()).execute(context, args).await
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }

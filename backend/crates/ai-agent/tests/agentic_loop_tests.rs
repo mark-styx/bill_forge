@@ -30,6 +30,7 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("search_invoices"), "missing search_invoices");
     assert!(descriptions.contains("find_duplicate_invoice_candidates"), "missing find_duplicate_invoice_candidates");
     assert!(descriptions.contains("assess_invoice_payment_risk"), "missing assess_invoice_payment_risk");
+    assert!(descriptions.contains("get_vendor_summary"), "missing get_vendor_summary");
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -51,6 +52,18 @@ fn test_extract_primary_arg_for_each_tool() {
     let parsed: serde_json::Value = serde_json::from_str(vendor_json).unwrap();
     let result = parsed["vendor_name"].as_str().unwrap();
     assert_eq!(result, "Acme Corp");
+
+    // Vendor summary tool - vendor_id arg
+    let vendor_id_json = format!(r#"{{"vendor_id":"{}"}}"#, uuid);
+    let parsed: serde_json::Value = serde_json::from_str(&vendor_id_json).unwrap();
+    let result = parsed["vendor_id"].as_str().unwrap();
+    assert_eq!(result, uuid, "vendor_id extraction failed for get_vendor_summary");
+
+    // Vendor summary tool - vendor_name arg
+    let vn_json = r#"{"vendor_name":"Acme Corp"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(vn_json).unwrap();
+    let result = parsed["vendor_name"].as_str().unwrap();
+    assert_eq!(result, "Acme Corp", "vendor_name extraction failed for get_vendor_summary");
 
     // Invalid JSON → error
     assert!(serde_json::from_str::<serde_json::Value>("not json").is_err());
@@ -666,7 +679,7 @@ fn test_typed_definition_get_vendor_invoices() {
     );
 }
 
-/// Spot-check: get_approval_requirements
+/// Spot-check: get_approval_requirements (updated schema with approval_requests)
 #[test]
 fn test_typed_definition_get_approval_requirements() {
     let def = ToolRegistry::get_tool_definition("get_approval_requirements")
@@ -687,6 +700,57 @@ fn test_typed_definition_get_approval_requirements() {
         "input_schema should require invoice_id, got: {:?}",
         required_names
     );
+
+    // Output schema should have approval_requests array
+    let props = def.output_schema
+        .get("properties")
+        .expect("output_schema should have properties");
+    assert!(
+        props.get("approval_requests").is_some(),
+        "output_schema should have approval_requests property"
+    );
+    assert!(
+        props.get("invoice_status").is_some(),
+        "output_schema should have invoice_status property"
+    );
+}
+
+/// Spot-check: get_vendor_summary
+#[test]
+fn test_typed_definition_get_vendor_summary() {
+    let def = ToolRegistry::get_tool_definition("get_vendor_summary")
+        .expect("get_vendor_summary should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Vendor);
+    assert_eq!(def.required_permission, AiToolPermission::VendorRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    // Should have vendor_id and vendor_name properties (not required)
+    let props = def.input_schema
+        .get("properties")
+        .expect("input_schema should have properties");
+    assert!(props.get("vendor_id").is_some(), "should have vendor_id property");
+    assert!(props.get("vendor_name").is_some(), "should have vendor_name property");
+
+    // Neither should be required
+    let required = def.input_schema.get("required").and_then(|r| r.as_array());
+    assert!(
+        required.is_none() || required.unwrap().is_empty(),
+        "get_vendor_summary should not require any specific field, got: {:?}",
+        required
+    );
+
+    // Output schema should have expected properties
+    let out_props = def.output_schema
+        .get("properties")
+        .expect("output_schema should have properties");
+    assert!(out_props.get("vendor_id").is_some(), "output should have vendor_id");
+    assert!(out_props.get("vendor_name").is_some(), "output should have vendor_name");
+    assert!(out_props.get("is_active").is_some(), "output should have is_active");
+    assert!(out_props.get("contact_email").is_some(), "output should have contact_email");
+    assert!(out_props.get("total_invoices").is_some(), "output should have total_invoices");
+    assert!(out_props.get("recent_invoices").is_some(), "output should have recent_invoices");
 }
 
 /// Spot-check: summarize_invoice

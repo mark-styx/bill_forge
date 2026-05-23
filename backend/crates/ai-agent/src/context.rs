@@ -73,7 +73,8 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 ## Available Tools
 - get_invoice_status: Get status of an invoice by ID
 - get_vendor_invoices: Find all invoices from a vendor
-- get_approval_requirements: Check who needs to approve an invoice
+- get_vendor_summary: Get a vendor summary including contact info, payment terms, and invoice metrics
+- get_approval_requirements: Check approval requirements and current approval request status for an invoice
 - summarize_invoice: Generate a summary of an invoice
 - get_module_capabilities: Report which modules are enabled for the tenant and describe capability boundaries
 - search_known_issues: Search the known issue register for relevant issues
@@ -82,7 +83,7 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - find_duplicate_invoice_candidates: Find potential duplicate invoices for a given invoice ID
 - assess_invoice_payment_risk: Assess payment risk for an invoice based on due date, processing status, duplicates, and payment/approval activity
 
-All invoice tools are read-only and database-grounded. They query tenant-scoped data without making any mutations.
+All invoice, vendor, and approval tools are read-only and database-grounded. They query tenant-scoped data without making any mutations.
 
 ## Module Availability
 - Module availability is determined by the tenant's enabled_modules list.
