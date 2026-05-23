@@ -74,6 +74,53 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, context: &AgentContext, args: &str) -> Result<String>;
 }
 
+// ── Typed tool registry metadata ──────────────────────────────────────────────
+
+/// Functional class of an AI tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiToolClass {
+    Invoice,
+    Vendor,
+    Approval,
+    TenantCapability,
+    ProductKnowledge,
+    Workflow,
+    IssueIntake,
+}
+
+/// Permission required to invoke an AI tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiToolPermission {
+    InvoiceRead,
+    VendorRead,
+    ApprovalRead,
+    TenantModuleRead,
+    ProductKnowledgeRead,
+    WorkflowRead,
+    IssueRequest,
+}
+
+/// Risk level of invoking an AI tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiToolRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+/// Typed metadata for a single AI tool registered in the [`ToolRegistry`].
+#[derive(Debug, Clone)]
+pub struct AiToolDefinition {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub class: AiToolClass,
+    pub required_permission: AiToolPermission,
+    pub risk_level: AiToolRiskLevel,
+    pub input_schema: serde_json::Value,
+    pub output_schema: serde_json::Value,
+    pub mutates: bool,
+}
+
 /// Invoice status query tool
 pub struct InvoiceStatusTool {
     pool: PgPool,
@@ -1036,24 +1083,331 @@ impl ToolRegistry {
         Self { pool }
     }
 
-    pub fn get_tool_descriptions(&self) -> String {
-        let descriptions = vec![
-            ("get_invoice_status", "Get status of an invoice by ID. Args: invoice_id (UUID)"),
-            ("get_vendor_invoices", "Find all invoices from a vendor. Args: vendor_name"),
-            ("get_approval_requirements", "Check who needs to approve an invoice. Args: invoice_id (UUID)"),
-            ("summarize_invoice", "Generate a summary of an invoice. Args: invoice_id (UUID)"),
-            ("get_module_capabilities", "Report which modules are enabled for the tenant and describe capability boundaries. No args required."),
-            ("search_product_docs", "Search BillForge product documentation for relevant snippets. Args: query (plain text)"),
-            ("explain_feature", "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)"),
-            ("search_known_issues", "Search the known issue register for relevant issues. Args: query (plain text)"),
-            ("summarize_release_changes", "Summarize release changes from release notes. Args: query or version (optional plain text)"),
-            ("explain_workflow_behavior", "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"),
-            ("request_issue_creation", "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\",\"source_conversation_link\":\"...\",\"metadata\":{}}"),
-        ];
+    /// Return the authoritative list of typed tool definitions for every
+    /// executable tool.  The caller must not mutate the returned vec.
+    pub fn tool_definitions() -> Vec<AiToolDefinition> {
+        vec![
+            AiToolDefinition {
+                name: "get_invoice_status",
+                description: "Get status of an invoice by ID. Args: invoice_id (UUID)",
+                class: AiToolClass::Invoice,
+                required_permission: AiToolPermission::InvoiceRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_number": { "type": "string" },
+                        "status": { "type": "string" },
+                        "vendor_name": { "type": "string" },
+                        "total_amount": { "type": "number" },
+                        "currency": { "type": "string" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_vendor_invoices",
+                description: "Find all invoices from a vendor. Args: vendor_name",
+                class: AiToolClass::Vendor,
+                required_permission: AiToolPermission::VendorRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "vendor_name": { "type": "string" }
+                    },
+                    "required": ["vendor_name"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "invoice_number": { "type": "string" },
+                                    "status": { "type": "string" },
+                                    "total_amount": { "type": "number" },
+                                    "currency": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_approval_requirements",
+                description: "Check who needs to approve an invoice. Args: invoice_id (UUID)",
+                class: AiToolClass::Approval,
+                required_permission: AiToolPermission::ApprovalRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "step_order": { "type": "integer" },
+                                    "approver_role": { "type": "string" },
+                                    "status": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "summarize_invoice",
+                description: "Generate a summary of an invoice. Args: invoice_id (UUID)",
+                class: AiToolClass::Invoice,
+                required_permission: AiToolPermission::InvoiceRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_number": { "type": "string" },
+                        "vendor": { "type": "string" },
+                        "amount": { "type": "number" },
+                        "currency": { "type": "string" },
+                        "status": { "type": "string" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_module_capabilities",
+                description: "Report which modules are enabled for the tenant and describe capability boundaries. No args required.",
+                class: AiToolClass::TenantCapability,
+                required_permission: AiToolPermission::TenantModuleRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "modules": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "key": { "type": "string" },
+                                    "enabled": { "type": "boolean" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "search_product_docs",
+                description: "Search BillForge product documentation for relevant snippets. Args: query (plain text)",
+                class: AiToolClass::ProductKnowledge,
+                required_permission: AiToolPermission::ProductKnowledgeRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "snippets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source_path": { "type": "string" },
+                                    "heading": { "type": "string" },
+                                    "excerpt": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "explain_feature",
+                description: "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)",
+                class: AiToolClass::ProductKnowledge,
+                required_permission: AiToolPermission::ProductKnowledgeRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "feature": { "type": "string" }
+                    },
+                    "required": ["feature"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "explanation": { "type": "string" },
+                        "sources": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "search_known_issues",
+                description: "Search the known issue register for relevant issues. Args: query (plain text)",
+                class: AiToolClass::ProductKnowledge,
+                required_permission: AiToolPermission::ProductKnowledgeRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "issues": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source_path": { "type": "string" },
+                                    "heading": { "type": "string" },
+                                    "excerpt": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "summarize_release_changes",
+                description: "Summarize release changes from release notes. Args: query or version (optional plain text)",
+                class: AiToolClass::ProductKnowledge,
+                required_permission: AiToolPermission::ProductKnowledgeRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "summary": { "type": "string" },
+                        "sources": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "explain_workflow_behavior",
+                description: "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})",
+                class: AiToolClass::Workflow,
+                required_permission: AiToolPermission::WorkflowRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["invoice_id"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_state": { "type": "object" },
+                        "queue_items": { "type": "array" },
+                        "approval_requests": { "type": "array" },
+                        "audit_evidence": { "type": "array" },
+                        "interpretation": { "type": "array" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "request_issue_creation",
+                description: "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\",\"source_conversation_link\":\"...\",\"metadata\":{}}",
+                class: AiToolClass::IssueIntake,
+                required_permission: AiToolPermission::IssueRequest,
+                risk_level: AiToolRiskLevel::Medium,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "target": { "type": "string", "enum": ["github", "linear", "jira", "internal_feedback_table"] },
+                        "kind": { "type": "string", "enum": ["bug", "feature_request", "support_request", "other"] },
+                        "title": { "type": "string" },
+                        "body": { "type": "string" },
+                        "labels": { "type": "array", "items": { "type": "string" } },
+                        "source_conversation_id": { "type": "string" },
+                        "source_conversation_link": { "type": "string" },
+                        "metadata": { "type": "object" }
+                    },
+                    "required": ["target", "kind", "title", "body"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "enum": ["approval_required"] },
+                        "approval_request_id": { "type": "string", "format": "uuid" },
+                        "request": { "type": "object" },
+                        "message": { "type": "string" }
+                    }
+                }),
+                mutates: false,
+            },
+        ]
+    }
 
-        descriptions
+    /// Look up a single typed definition by tool name.
+    pub fn get_tool_definition(tool_name: &str) -> Option<AiToolDefinition> {
+        Self::tool_definitions()
+            .into_iter()
+            .find(|d| d.name == tool_name)
+    }
+
+    pub fn get_tool_descriptions(&self) -> String {
+        Self::tool_definitions()
             .iter()
-            .map(|(name, desc)| format!("- {}: {}", name, desc))
+            .map(|d| format!("- {}: {}", d.name, d.description))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -1064,6 +1418,11 @@ impl ToolRegistry {
         context: &AgentContext,
         args: &str,
     ) -> Result<String> {
+        // Reject unknown tools early via the typed registry.
+        if Self::get_tool_definition(tool_name).is_none() {
+            anyhow::bail!("Tool '{}' not found", tool_name);
+        }
+
         match tool_name {
             "get_invoice_status" => {
                 InvoiceStatusTool::new(self.pool.clone()).execute(context, args).await

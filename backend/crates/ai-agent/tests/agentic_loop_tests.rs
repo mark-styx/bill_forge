@@ -3,6 +3,7 @@
 //! These run without a database or OpenAI key (SQLX_OFFLINE=true).
 
 use billforge_ai_agent::tools::ToolRegistry;
+use billforge_ai_agent::tools::{AiToolDefinition, AiToolClass, AiToolPermission, AiToolRiskLevel};
 use sqlx::postgres::PgPoolOptions;
 
 fn fake_pool() -> sqlx::PgPool {
@@ -522,4 +523,189 @@ async fn test_request_issue_creation_unsupported_target_fails() {
         .await;
 
     assert!(result.is_err(), "unsupported target should fail");
+}
+
+// ── Typed tool registry tests ─────────────────────────────────────────────────
+
+/// Every tool exposed in descriptions must have exactly one typed definition.
+#[tokio::test]
+async fn test_typed_tool_registry_covers_all_tool_descriptions() {
+    let registry = ToolRegistry::new(fake_pool());
+    let descriptions = registry.get_tool_descriptions();
+    let definitions = ToolRegistry::tool_definitions();
+
+    // Extract tool names from descriptions (lines starting with "- ")
+    let desc_names: Vec<&str> = descriptions
+        .lines()
+        .filter(|l| l.starts_with("- "))
+        .map(|l| l[2..].split_once(':').map(|(n, _)| n.trim()).unwrap_or(l))
+        .collect();
+
+    assert!(!desc_names.is_empty(), "descriptions should not be empty");
+
+    // Each description name must have exactly one definition
+    for name in &desc_names {
+        let matches: Vec<&AiToolDefinition> =
+            definitions.iter().filter(|d| d.name == *name).collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "tool '{}' should have exactly 1 definition, found {}",
+            name,
+            matches.len()
+        );
+    }
+
+    // Each definition must appear in descriptions
+    for def in &definitions {
+        assert!(
+            descriptions.contains(def.name),
+            "definition '{}' missing from descriptions",
+            def.name
+        );
+    }
+
+    // Counts must match
+    assert_eq!(
+        desc_names.len(),
+        definitions.len(),
+        "description count ({}) != definition count ({})",
+        desc_names.len(),
+        definitions.len()
+    );
+}
+
+/// Every typed definition must have non-empty metadata fields.
+#[test]
+fn test_typed_tool_definitions_have_non_empty_fields() {
+    for def in ToolRegistry::tool_definitions() {
+        assert!(
+            !def.name.is_empty(),
+            "tool definition has empty name"
+        );
+        assert!(
+            !def.description.is_empty(),
+            "tool '{}' has empty description",
+            def.name
+        );
+        assert!(
+            def.input_schema.is_object(),
+            "tool '{}' input_schema is not an object",
+            def.name
+        );
+        assert!(
+            !def.input_schema.as_object().unwrap().is_empty(),
+            "tool '{}' has empty input_schema",
+            def.name
+        );
+        assert!(
+            def.output_schema.is_object(),
+            "tool '{}' output_schema is not an object",
+            def.name
+        );
+        assert!(
+            !def.output_schema.as_object().unwrap().is_empty(),
+            "tool '{}' has empty output_schema",
+            def.name
+        );
+        // Ensure concrete risk level (not a default-like sentinel)
+        assert!(
+            matches!(def.risk_level, AiToolRiskLevel::Low | AiToolRiskLevel::Medium | AiToolRiskLevel::High),
+            "tool '{}' has unexpected risk level",
+            def.name
+        );
+    }
+}
+
+/// Spot-check: get_invoice_status
+#[test]
+fn test_typed_definition_get_invoice_status() {
+    let def = ToolRegistry::get_tool_definition("get_invoice_status")
+        .expect("get_invoice_status should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Invoice);
+    assert_eq!(def.required_permission, AiToolPermission::InvoiceRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"invoice_id"),
+        "input_schema should require invoice_id, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: get_vendor_invoices
+#[test]
+fn test_typed_definition_get_vendor_invoices() {
+    let def = ToolRegistry::get_tool_definition("get_vendor_invoices")
+        .expect("get_vendor_invoices should have a definition");
+
+    assert_eq!(def.class, AiToolClass::Vendor);
+    assert_eq!(def.required_permission, AiToolPermission::VendorRead);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Low);
+    assert!(!def.mutates);
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        required_names.contains(&"vendor_name"),
+        "input_schema should require vendor_name, got: {:?}",
+        required_names
+    );
+}
+
+/// Spot-check: request_issue_creation
+#[test]
+fn test_typed_definition_request_issue_creation() {
+    let def = ToolRegistry::get_tool_definition("request_issue_creation")
+        .expect("request_issue_creation should have a definition");
+
+    assert_eq!(def.class, AiToolClass::IssueIntake);
+    assert_eq!(def.required_permission, AiToolPermission::IssueRequest);
+    assert_eq!(def.risk_level, AiToolRiskLevel::Medium);
+    assert!(!def.mutates, "request_issue_creation should NOT be marked as mutates");
+
+    let required = def.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .expect("input_schema should have required array");
+    let required_names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+    for field in &["target", "kind", "title", "body"] {
+        assert!(
+            required_names.contains(field),
+            "input_schema should require '{}', got: {:?}",
+            field,
+            required_names
+        );
+    }
+}
+
+/// All tools should have mutates == false in this slice.
+#[test]
+fn test_all_tools_are_non_mutating() {
+    for def in ToolRegistry::tool_definitions() {
+        assert!(
+            !def.mutates,
+            "tool '{}' should be mutates: false in this slice",
+            def.name
+        );
+    }
+}
+
+/// get_tool_definition returns None for unknown tools.
+#[test]
+fn test_get_tool_definition_returns_none_for_unknown() {
+    assert!(
+        ToolRegistry::get_tool_definition("nonexistent_tool").is_none(),
+        "unknown tool should return None"
+    );
 }
