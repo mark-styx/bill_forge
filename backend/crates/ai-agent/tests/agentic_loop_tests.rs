@@ -23,6 +23,8 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
     assert!(descriptions.contains("get_module_capabilities"), "missing get_module_capabilities");
     assert!(descriptions.contains("search_product_docs"), "missing search_product_docs");
     assert!(descriptions.contains("explain_feature"), "missing explain_feature");
+    assert!(descriptions.contains("search_known_issues"), "missing search_known_issues");
+    assert!(descriptions.contains("summarize_release_changes"), "missing summarize_release_changes");
     assert!(descriptions.contains("explain_workflow_behavior"), "missing explain_workflow_behavior");
 }
 
@@ -60,6 +62,22 @@ fn test_extract_primary_arg_for_each_tool() {
     let parsed: serde_json::Value = serde_json::from_str(feature_json).unwrap();
     let result = parsed["feature"].as_str().unwrap();
     assert_eq!(result, "vendor management");
+
+    // Known issues tool - query arg
+    let ki_json = r#"{"query":"login timeout"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(ki_json).unwrap();
+    let result = parsed["query"].as_str().unwrap();
+    assert_eq!(result, "login timeout");
+
+    // Release changes tool - optional query/version arg
+    let rc_json = r#"{"query":"2026-03-20"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(rc_json).unwrap();
+    let result = parsed["query"].as_str().unwrap();
+    assert_eq!(result, "2026-03-20");
+    let rc_version_json = r#"{"version":"2026-03-20"}"#;
+    let parsed: serde_json::Value = serde_json::from_str(rc_version_json).unwrap();
+    let result = parsed["version"].as_str().unwrap();
+    assert_eq!(result, "2026-03-20");
 }
 
 /// Build a fake AgentContext with selected enabled modules.
@@ -301,5 +319,90 @@ async fn test_explain_workflow_behavior_invalid_json_returns_message() {
     assert!(
         err_msg.contains("Invalid JSON") || err_msg.contains("Invalid"),
         "invalid JSON should mention format, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_search_known_issues_returns_known_issue_source_references() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("search_known_issues", &ctx, "known issues")
+        .await
+        .expect("search_known_issues should succeed");
+
+    // Should contain known issues source path
+    assert!(
+        result.contains("docs/known_issues.md"),
+        "expected docs/known_issues.md in response, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_search_known_issues_empty_query_returns_message() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("search_known_issues", &ctx, "  ")
+        .await
+        .expect("search_known_issues should succeed");
+
+    assert!(
+        result.contains("Please provide a search query"),
+        "empty query should return helpful message, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_summarize_release_changes_returns_changelog_source_references() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("summarize_release_changes", &ctx, "CI pipeline fixes")
+        .await
+        .expect("summarize_release_changes should succeed");
+
+    // Should contain CHANGELOG.md source reference
+    assert!(
+        result.contains("CHANGELOG.md"),
+        "expected CHANGELOG.md in response, got: {result}"
+    );
+
+    // Should contain release-summary header
+    assert!(
+        result.contains("Release Summary"),
+        "expected Release Summary header, got: {result}"
+    );
+
+    // Should contain source-grounding note
+    assert!(
+        result.contains("indexed release notes"),
+        "expected source-grounding note, got: {result}"
+    );
+}
+
+#[tokio::test]
+async fn test_summarize_release_changes_empty_input_still_returns_release_summary() {
+    let ctx = agent_context_with_modules(vec![]);
+    let registry = ToolRegistry::new(fake_pool());
+
+    let result = registry
+        .execute_tool("summarize_release_changes", &ctx, "")
+        .await
+        .expect("summarize_release_changes should succeed with empty input");
+
+    // Empty input uses default query, should still return results
+    assert!(
+        result.contains("Release Summary"),
+        "expected Release Summary header even with empty input, got: {result}"
+    );
+
+    // Should contain CHANGELOG.md reference
+    assert!(
+        result.contains("CHANGELOG.md"),
+        "expected CHANGELOG.md in response with empty input, got: {result}"
     );
 }

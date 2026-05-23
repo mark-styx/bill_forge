@@ -73,6 +73,8 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - get_approval_requirements: Check who needs to approve an invoice
 - summarize_invoice: Generate a summary of an invoice
 - get_module_capabilities: Report which modules are enabled for the tenant and describe capability boundaries
+- search_known_issues: Search the known issue register for relevant issues
+- summarize_release_changes: Summarize release changes from release notes
 
 ## Module Availability
 - Module availability is determined by the tenant's enabled_modules list.

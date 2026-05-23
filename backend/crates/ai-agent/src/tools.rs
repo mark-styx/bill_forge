@@ -7,7 +7,11 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::models::AgentContext;
-use super::product_knowledge::product_knowledge_context_for_query_with_limit;
+use super::product_knowledge::{
+    product_knowledge_context_for_query_with_limit,
+    search_known_issues_context_for_query_with_limit,
+    release_changes_context_for_query_with_limit,
+};
 
 /// All known BillForge modules, ordered for stable output.
 const ALL_MODULES: &[billforge_core::Module] = &[
@@ -535,6 +539,106 @@ impl Tool for ExplainFeatureTool {
     }
 }
 
+/// Read-only tool that searches the known issue register for relevant snippets.
+/// No database queries, no mutations, no external calls.
+pub struct SearchKnownIssuesTool;
+
+#[async_trait]
+impl Tool for SearchKnownIssuesTool {
+    fn name(&self) -> &str {
+        "search_known_issues"
+    }
+
+    fn description(&self) -> &str {
+        "Search the known issue register for relevant issues. Args: query (plain text)"
+    }
+
+    async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
+        let query = args.trim();
+        if query.is_empty() {
+            return Ok("Please provide a search query to look up known issues.".to_string());
+        }
+
+        let snippets = search_known_issues_context_for_query_with_limit(query, 5);
+
+        if snippets.is_empty() {
+            return Ok(format!(
+                "No known issues found for query: '{}'. Try different keywords.",
+                query
+            ));
+        }
+
+        let mut lines = Vec::new();
+        lines.push(format!("Known issue results for '{}':\n", query));
+
+        for (i, snippet) in snippets.iter().enumerate() {
+            lines.push(format!(
+                "{}. [{}] {}\n   {}",
+                i + 1,
+                snippet.source_path,
+                snippet.heading,
+                snippet.excerpt,
+            ));
+        }
+
+        Ok(lines.join("\n\n"))
+    }
+}
+
+/// Read-only tool that summarizes release changes from indexed release notes.
+/// No database queries, no mutations, no external calls.
+pub struct SummarizeReleaseChangesTool;
+
+#[async_trait]
+impl Tool for SummarizeReleaseChangesTool {
+    fn name(&self) -> &str {
+        "summarize_release_changes"
+    }
+
+    fn description(&self) -> &str {
+        "Summarize release changes from release notes. Args: query or version (optional plain text)"
+    }
+
+    async fn execute(&self, _context: &AgentContext, args: &str) -> Result<String> {
+        let query = args.trim();
+        let effective_query = if query.is_empty() {
+            "recent release changes changelog fixes"
+        } else {
+            query
+        };
+
+        let snippets = release_changes_context_for_query_with_limit(effective_query, 5);
+
+        if snippets.is_empty() {
+            return Ok(format!(
+                "No release changes found for query: '{}'. Try different keywords.",
+                effective_query
+            ));
+        }
+
+        let mut lines = Vec::new();
+        lines.push("Release Summary\n".to_string());
+
+        for (i, snippet) in snippets.iter().enumerate() {
+            lines.push(format!(
+                "{}. [{}] {}\n   {}",
+                i + 1,
+                snippet.source_path,
+                snippet.heading,
+                snippet.excerpt,
+            ));
+        }
+
+        lines.push(String::new());
+        lines.push(
+            "Note: This summary is based solely on indexed release notes (CHANGELOG.md)."
+                .to_string(),
+        );
+
+        Ok(lines.join("\n\n"))
+    }
+}
+
 /// Read-only tool that explains workflow behavior for an invoice by examining
 /// workflow state, queue items, approval requests, and audit history.
 /// No mutations. Gracefully reports missing records.
@@ -941,6 +1045,8 @@ impl ToolRegistry {
             ("get_module_capabilities", "Report which modules are enabled for the tenant and describe capability boundaries. No args required."),
             ("search_product_docs", "Search BillForge product documentation for relevant snippets. Args: query (plain text)"),
             ("explain_feature", "Explain a BillForge feature or concept using product documentation. Args: feature (name or question)"),
+            ("search_known_issues", "Search the known issue register for relevant issues. Args: query (plain text)"),
+            ("summarize_release_changes", "Summarize release changes from release notes. Args: query or version (optional plain text)"),
             ("explain_workflow_behavior", "Explain workflow behavior for an invoice using workflow state and audit logs. Args: invoice_id (UUID or JSON {\"invoice_id\":\"<uuid>\"})"),
         ];
 
@@ -978,6 +1084,12 @@ impl ToolRegistry {
             }
             "explain_feature" => {
                 ExplainFeatureTool.execute(context, args).await
+            }
+            "search_known_issues" => {
+                SearchKnownIssuesTool.execute(context, args).await
+            }
+            "summarize_release_changes" => {
+                SummarizeReleaseChangesTool.execute(context, args).await
             }
             "explain_workflow_behavior" => {
                 ExplainWorkflowBehaviorTool::new(self.pool.clone()).execute(context, args).await

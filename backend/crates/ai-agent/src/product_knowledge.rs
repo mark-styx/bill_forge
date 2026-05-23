@@ -11,6 +11,7 @@
 const NORTHSTAR_MD: &str = include_str!("../../../../docs/northstar.md");
 const CHANGELOG_MD: &str = include_str!("../../../../CHANGELOG.md");
 const RELEASE_YML: &str = include_str!("../../../../.github/workflows/release.yml");
+const KNOWN_ISSUES_MD: &str = include_str!("../../../../docs/known_issues.md");
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -39,6 +40,9 @@ struct Chunk {
 // Index
 // ---------------------------------------------------------------------------
 
+/// Repository-relative source path for known issues.
+pub const KNOWN_ISSUES_SOURCE_PATH: &str = "docs/known_issues.md";
+
 /// In-memory product documentation index.
 ///
 /// Built once at first use from compile-time `include_str!` content. Each
@@ -56,6 +60,7 @@ impl ProductKnowledgeIndex {
         ingest_markdown(&mut chunks, "docs/northstar.md", NORTHSTAR_MD);
         ingest_markdown(&mut chunks, "CHANGELOG.md", CHANGELOG_MD);
         ingest_yaml(&mut chunks, ".github/workflows/release.yml", RELEASE_YML);
+        ingest_markdown(&mut chunks, KNOWN_ISSUES_SOURCE_PATH, KNOWN_ISSUES_MD);
 
         Self { chunks }
     }
@@ -104,6 +109,46 @@ impl ProductKnowledgeIndex {
         }
 
         // Sort descending by score, ascending by index for stable ordering.
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, chunk)| ProductKnowledgeSnippet {
+                source_path: chunk.source_path,
+                heading: chunk.heading.clone(),
+                excerpt: truncate_excerpt(&chunk.body, 300),
+            })
+            .collect()
+    }
+
+    /// Source-filtered search: only return snippets whose `source_path` equals
+    /// the given filter. Uses the same lexical scoring as [`search`].
+    pub fn search_filtered(
+        query: &str,
+        limit: usize,
+        source_filter: &str,
+    ) -> Vec<ProductKnowledgeSnippet> {
+        let idx = Self::instance();
+        let query_tokens = tokenize(query);
+
+        if query_tokens.is_empty() {
+            return Vec::new();
+        }
+
+        let limit = limit.max(1);
+        let mut scored: Vec<(usize, usize, &Chunk)> = Vec::new();
+
+        for (i, chunk) in idx.chunks.iter().enumerate() {
+            if chunk.source_path != source_filter {
+                continue;
+            }
+            let score = score_chunk(&query_tokens, chunk);
+            if score > 0 {
+                scored.push((score, i, chunk));
+            }
+        }
+
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
 
         scored
@@ -414,6 +459,28 @@ pub fn format_product_knowledge_block(snippets: &[ProductKnowledgeSnippet]) -> S
     block
 }
 
+/// Retrieve known-issue snippets relevant to the given `query`.
+///
+/// Searches only the `docs/known_issues.md` source. Returns at most `limit`
+/// snippets sorted by lexical relevance.
+pub fn search_known_issues_context_for_query_with_limit(
+    query: &str,
+    limit: usize,
+) -> Vec<ProductKnowledgeSnippet> {
+    ProductKnowledgeIndex::search_filtered(query, limit, KNOWN_ISSUES_SOURCE_PATH)
+}
+
+/// Retrieve release-changes snippets relevant to the given `query`.
+///
+/// Searches only the `CHANGELOG.md` source. Returns at most `limit` snippets
+/// sorted by lexical relevance.
+pub fn release_changes_context_for_query_with_limit(
+    query: &str,
+    limit: usize,
+) -> Vec<ProductKnowledgeSnippet> {
+    ProductKnowledgeIndex::search_filtered(query, limit, "CHANGELOG.md")
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -574,7 +641,8 @@ mod tests {
             assert!(
                 snippet.source_path == "docs/northstar.md"
                     || snippet.source_path == "CHANGELOG.md"
-                    || snippet.source_path == ".github/workflows/release.yml",
+                    || snippet.source_path == ".github/workflows/release.yml"
+                    || snippet.source_path == "docs/known_issues.md",
                 "unexpected source_path: {}",
                 snippet.source_path
             );
