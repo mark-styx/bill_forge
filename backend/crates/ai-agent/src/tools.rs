@@ -93,6 +93,7 @@ pub enum AiToolClass {
     ProductKnowledge,
     Workflow,
     IssueIntake,
+    AdminAnalysis,
 }
 
 /// Permission required to invoke an AI tool.
@@ -105,6 +106,7 @@ pub enum AiToolPermission {
     ProductKnowledgeRead,
     WorkflowRead,
     IssueRequest,
+    AdminAnalyticsRead,
 }
 
 /// Risk level of invoking an AI tool.
@@ -2486,6 +2488,412 @@ impl Tool for AssessInvoicePaymentRiskTool {
     }
 }
 
+// ── Admin analysis tools ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy)]
+struct AdminAnalysisArgs {
+    window_days: i32,
+    limit: i64,
+}
+
+impl AdminAnalysisArgs {
+    fn parse(args: &str) -> Result<Self> {
+        let trimmed = args.trim();
+        let mut parsed = Self {
+            window_days: 30,
+            limit: 5,
+        };
+
+        if trimmed.is_empty() {
+            return Ok(parsed);
+        }
+
+        let val: serde_json::Value =
+            serde_json::from_str(trimmed).context("Invalid JSON for admin analysis tool args")?;
+
+        if let Some(days) = val.get("window_days").and_then(|v| v.as_i64()) {
+            parsed.window_days = days.clamp(1, 365) as i32;
+        }
+        if let Some(limit) = val.get("limit").and_then(|v| v.as_i64()) {
+            parsed.limit = limit.clamp(1, 25);
+        }
+
+        Ok(parsed)
+    }
+}
+
+fn ensure_admin_context(context: &AgentContext) -> Result<()> {
+    let role = context.user_role.to_ascii_lowercase();
+    let is_admin_role = matches!(
+        role.as_str(),
+        "admin" | "tenant_admin" | "owner" | "super_admin"
+    );
+    let has_admin_permission = context.permissions.iter().any(|p| {
+        let normalized = p.to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "settings:write" | "tenant_admin" | "admin" | "owner"
+        )
+    });
+
+    if is_admin_role || has_admin_permission {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Forbidden: this admin-only analysis tool requires tenant administrator access"
+        )
+    }
+}
+
+fn cents_to_currency(cents: i64) -> String {
+    format!("${:.2}", cents as f64 / 100.0)
+}
+
+pub struct TenantUsageAnalysisTool {
+    pool: PgPool,
+}
+
+impl TenantUsageAnalysisTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for TenantUsageAnalysisTool {
+    fn name(&self) -> &str {
+        "get_tenant_usage_analysis"
+    }
+
+    fn description(&self) -> &str {
+        "Admin-only tenant usage analysis. Args: optional JSON {\"window_days\":30}"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        ensure_admin_context(context)?;
+        let args = AdminAnalysisArgs::parse(args)?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM invoices WHERE tenant_id::text = $1 AND created_at >= NOW() - make_interval(days => $2::int)) AS invoice_count,
+                (SELECT COUNT(*) FROM vendors WHERE tenant_id::text = $1) AS vendor_count,
+                (SELECT COUNT(*) FROM users WHERE tenant_id::text = $1) AS user_count,
+                (SELECT COALESCE(SUM(size_bytes), 0)::BIGINT FROM documents WHERE tenant_id::text = $1) AS document_storage_bytes
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(args.window_days)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let invoice_count: i64 = row.try_get("invoice_count")?;
+        let vendor_count: i64 = row.try_get("vendor_count")?;
+        let user_count: i64 = row.try_get("user_count")?;
+        let storage_bytes: i64 = row.try_get("document_storage_bytes")?;
+
+        Ok(format!(
+            "Tenant usage analysis (last {} day(s)):\n- Invoices created: {}\n- Vendors: {}\n- Users: {}\n- Document storage: {} bytes\nThis is read-only and tenant-scoped.",
+            args.window_days, invoice_count, vendor_count, user_count, storage_bytes
+        ))
+    }
+}
+
+pub struct WorkflowBottlenecksTool {
+    pool: PgPool,
+}
+
+impl WorkflowBottlenecksTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkflowBottlenecksTool {
+    fn name(&self) -> &str {
+        "get_workflow_bottlenecks"
+    }
+
+    fn description(&self) -> &str {
+        "Admin-only workflow bottleneck analysis. Args: optional JSON {\"window_days\":30,\"limit\":5}"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        ensure_admin_context(context)?;
+        let args = AdminAnalysisArgs::parse(args)?;
+
+        let approval_rows = sqlx::query(
+            r#"
+            SELECT status, COUNT(*) AS count, COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400), 0)::DOUBLE PRECISION AS oldest_days
+            FROM approval_requests
+            WHERE tenant_id::text = $1
+              AND created_at >= NOW() - make_interval(days => $2::int)
+              AND status IN ('pending', 'requested')
+            GROUP BY status
+            ORDER BY count DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(args.window_days)
+        .bind(args.limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let queue_rows = sqlx::query(
+            r#"
+            SELECT wq.name, COUNT(qi.id) AS backlog, COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - qi.entered_at)) / 86400), 0)::DOUBLE PRECISION AS oldest_days
+            FROM queue_items qi
+            JOIN work_queues wq ON wq.id = qi.queue_id
+            WHERE qi.tenant_id::text = $1
+              AND qi.status IN ('pending', 'in_progress', 'claimed')
+            GROUP BY wq.name
+            ORDER BY backlog DESC, oldest_days DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(args.limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut lines = vec![format!(
+            "Workflow bottlenecks (last {} day(s), top {}):",
+            args.window_days, args.limit
+        )];
+
+        if approval_rows.is_empty() {
+            lines.push("- Pending approvals: none found".to_string());
+        } else {
+            lines.push("- Pending approvals:".to_string());
+            for row in approval_rows {
+                let status: String = row.try_get("status")?;
+                let count: i64 = row.try_get("count")?;
+                let oldest_days: f64 = row.try_get("oldest_days")?;
+                lines.push(format!(
+                    "  - {}: {} request(s), oldest {:.1} day(s)",
+                    status, count, oldest_days
+                ));
+            }
+        }
+
+        if queue_rows.is_empty() {
+            lines.push("- Queue backlog: none found".to_string());
+        } else {
+            lines.push("- Queue backlog:".to_string());
+            for row in queue_rows {
+                let queue_name: String = row.try_get("name")?;
+                let backlog: i64 = row.try_get("backlog")?;
+                let oldest_days: f64 = row.try_get("oldest_days")?;
+                lines.push(format!(
+                    "  - {}: {} item(s), oldest {:.1} day(s)",
+                    queue_name, backlog, oldest_days
+                ));
+            }
+        }
+
+        lines.push("This is read-only and tenant-scoped.".to_string());
+        Ok(lines.join("\n"))
+    }
+}
+
+pub struct RuleRecommendationsTool {
+    pool: PgPool,
+}
+
+impl RuleRecommendationsTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for RuleRecommendationsTool {
+    fn name(&self) -> &str {
+        "get_rule_recommendations"
+    }
+
+    fn description(&self) -> &str {
+        "Admin-only read-only workflow rule recommendations. Args: optional JSON {\"window_days\":30,\"limit\":5}"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        ensure_admin_context(context)?;
+        let args = AdminAnalysisArgs::parse(args)?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM workflow_rules WHERE tenant_id::text = $1 AND is_active = true) AS active_rules,
+                (SELECT COUNT(*) FROM invoices WHERE tenant_id::text = $1 AND created_at >= NOW() - make_interval(days => $2::int) AND assigned_to IS NULL) AS unassigned_invoices,
+                (SELECT COUNT(*) FROM invoices WHERE tenant_id::text = $1 AND created_at >= NOW() - make_interval(days => $2::int) AND processing_status IN ('draft', 'needs_review', 'pending')) AS unclassified_invoices,
+                (SELECT COUNT(*) FROM approval_requests WHERE tenant_id::text = $1 AND status = 'pending' AND created_at < NOW() - INTERVAL '7 days') AS stale_approvals
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(args.window_days)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let active_rules: i64 = row.try_get("active_rules")?;
+        let unassigned_invoices: i64 = row.try_get("unassigned_invoices")?;
+        let unclassified_invoices: i64 = row.try_get("unclassified_invoices")?;
+        let stale_approvals: i64 = row.try_get("stale_approvals")?;
+
+        let mut recommendations = Vec::new();
+        if active_rules == 0 {
+            recommendations.push(
+                "No active workflow rules found; review whether standard approval/routing rules should be configured.".to_string(),
+            );
+        }
+        if stale_approvals > 0 {
+            recommendations.push(format!(
+                "{} pending approval(s) are older than 7 days; consider escalation or reminder rules.",
+                stale_approvals
+            ));
+        }
+        if unassigned_invoices > 0 {
+            recommendations.push(format!(
+                "{} recent invoice(s) are unassigned; consider assignment rules for intake queues.",
+                unassigned_invoices
+            ));
+        }
+        if unclassified_invoices > 0 {
+            recommendations.push(format!(
+                "{} recent invoice(s) are still draft/needs-review/pending; consider validation or auto-routing rules.",
+                unclassified_invoices
+            ));
+        }
+        if recommendations.is_empty() {
+            recommendations.push(
+                "No obvious workflow-rule recommendations from the current read-only heuristics."
+                    .to_string(),
+            );
+        }
+
+        let mut lines = vec![format!(
+            "Workflow rule recommendations (last {} day(s)):",
+            args.window_days
+        )];
+        for recommendation in recommendations.into_iter().take(args.limit as usize) {
+            lines.push(format!("- {}", recommendation));
+        }
+        lines.push("This tool does not create or mutate workflow rules.".to_string());
+        Ok(lines.join("\n"))
+    }
+}
+
+pub struct SpendAnalysisTool {
+    pool: PgPool,
+}
+
+impl SpendAnalysisTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for SpendAnalysisTool {
+    fn name(&self) -> &str {
+        "get_spend_analysis"
+    }
+
+    fn description(&self) -> &str {
+        "Admin-only tenant spend analysis. Args: optional JSON {\"window_days\":30,\"limit\":5}"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        ensure_admin_context(context)?;
+        let args = AdminAnalysisArgs::parse(args)?;
+
+        let summary = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE created_at >= NOW() - make_interval(days => $1::int)
+                ) AS invoice_count,
+                COALESCE(SUM(total_amount_cents) FILTER (
+                    WHERE created_at >= NOW() - make_interval(days => $1::int)
+                ), 0)::BIGINT AS total_cents,
+                COALESCE(AVG(total_amount_cents) FILTER (
+                    WHERE created_at >= NOW() - make_interval(days => $1::int)
+                ), 0)::DOUBLE PRECISION AS average_cents,
+                COALESCE(SUM(total_amount_cents) FILTER (
+                    WHERE created_at >= NOW() - make_interval(days => ($1::int * 2))
+                      AND created_at < NOW() - make_interval(days => $1::int)
+                ), 0)::BIGINT AS prior_total_cents
+            FROM invoices
+            WHERE tenant_id::text = $2
+              AND created_at >= NOW() - make_interval(days => ($1::int * 2))
+            "#,
+        )
+        .bind(args.window_days)
+        .bind(&context.tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let top_vendors = sqlx::query(
+            r#"
+            SELECT COALESCE(vendor_name, 'Unknown') AS vendor_name, COUNT(*) AS invoice_count, COALESCE(SUM(total_amount_cents), 0)::BIGINT AS total_cents
+            FROM invoices
+            WHERE tenant_id::text = $1
+              AND created_at >= NOW() - make_interval(days => $2::int)
+            GROUP BY COALESCE(vendor_name, 'Unknown')
+            ORDER BY total_cents DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(&context.tenant_id)
+        .bind(args.window_days)
+        .bind(args.limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let invoice_count: i64 = summary.try_get("invoice_count")?;
+        let total_cents: i64 = summary.try_get("total_cents")?;
+        let average_cents: f64 = summary.try_get("average_cents")?;
+        let prior_total_cents: i64 = summary.try_get("prior_total_cents")?;
+        let delta_cents = total_cents - prior_total_cents;
+
+        let mut lines = vec![
+            format!("Spend analysis (last {} day(s)):", args.window_days),
+            format!("- Invoice count: {}", invoice_count),
+            format!("- Total spend: {}", cents_to_currency(total_cents)),
+            format!(
+                "- Average invoice amount: {}",
+                cents_to_currency(average_cents.round() as i64)
+            ),
+            format!(
+                "- Prior-window comparison: {} ({:+})",
+                cents_to_currency(prior_total_cents),
+                cents_to_currency(delta_cents)
+            ),
+        ];
+
+        if top_vendors.is_empty() {
+            lines.push("- Top vendors: none found".to_string());
+        } else {
+            lines.push("- Top vendors:".to_string());
+            for row in top_vendors {
+                let vendor_name: String = row.try_get("vendor_name")?;
+                let count: i64 = row.try_get("invoice_count")?;
+                let cents: i64 = row.try_get("total_cents")?;
+                lines.push(format!(
+                    "  - {}: {} across {} invoice(s)",
+                    vendor_name,
+                    cents_to_currency(cents),
+                    count
+                ));
+            }
+        }
+
+        lines.push("This is read-only and tenant-scoped.".to_string());
+        Ok(lines.join("\n"))
+    }
+}
+
 /// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
@@ -2854,6 +3262,99 @@ impl ToolRegistry {
                 mutates: false,
             },
             AiToolDefinition {
+                name: "get_tenant_usage_analysis",
+                description: "Admin-only read-only tenant usage analysis. Args: optional JSON {\"window_days\":30}. Tenant scope comes from authenticated context; do not pass tenant_id.",
+                class: AiToolClass::AdminAnalysis,
+                required_permission: AiToolPermission::AdminAnalyticsRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "window_days": { "type": "integer", "minimum": 1, "maximum": 365 }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_count": { "type": "integer" },
+                        "vendor_count": { "type": "integer" },
+                        "user_count": { "type": "integer" },
+                        "document_storage_bytes": { "type": "integer" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_workflow_bottlenecks",
+                description: "Admin-only read-only workflow bottleneck analysis. Args: optional JSON {\"window_days\":30,\"limit\":5}. Tenant scope comes from authenticated context; do not pass tenant_id.",
+                class: AiToolClass::AdminAnalysis,
+                required_permission: AiToolPermission::AdminAnalyticsRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "window_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pending_approvals": { "type": "array" },
+                        "queue_backlog": { "type": "array" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_rule_recommendations",
+                description: "Admin-only read-only workflow rule recommendations. Args: optional JSON {\"window_days\":30,\"limit\":5}. Tenant scope comes from authenticated context; do not pass tenant_id.",
+                class: AiToolClass::AdminAnalysis,
+                required_permission: AiToolPermission::AdminAnalyticsRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "window_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "recommendations": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
+                name: "get_spend_analysis",
+                description: "Admin-only read-only tenant spend analysis. Args: optional JSON {\"window_days\":30,\"limit\":5}. Tenant scope comes from authenticated context; do not pass tenant_id.",
+                class: AiToolClass::AdminAnalysis,
+                required_permission: AiToolPermission::AdminAnalyticsRead,
+                risk_level: AiToolRiskLevel::Low,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "window_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+                    }
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "invoice_count": { "type": "integer" },
+                        "total_spend": { "type": "string" },
+                        "average_invoice_amount": { "type": "string" },
+                        "top_vendors": { "type": "array" }
+                    }
+                }),
+                mutates: false,
+            },
+            AiToolDefinition {
                 name: "request_issue_creation",
                 description: "Prepare an issue creation request for approval. Does NOT create a GitHub, Linear, Jira, or internal feedback record. Args: JSON {\"target\":\"github|linear|jira|internal_feedback_table\",\"kind\":\"bug|feature_request|support_request|other\",\"title\":\"...\",\"body\":\"...\",\"labels\":[...],\"source_conversation_id\":\"...\",\"source_conversation_link\":\"...\",\"metadata\":{}}",
                 class: AiToolClass::IssueIntake,
@@ -3056,6 +3557,26 @@ impl ToolRegistry {
             }
             "explain_workflow_state" => {
                 WorkflowStateExplanationTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "get_tenant_usage_analysis" => {
+                TenantUsageAnalysisTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "get_workflow_bottlenecks" => {
+                WorkflowBottlenecksTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "get_rule_recommendations" => {
+                RuleRecommendationsTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "get_spend_analysis" => {
+                SpendAnalysisTool::new(self.pool.clone())
                     .execute(context, args)
                     .await
             }

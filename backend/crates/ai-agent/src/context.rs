@@ -70,6 +70,7 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - Search invoices with flexible filters
 - Find potential duplicate invoices
 - Assess payment risk for invoices
+- Analyze tenant usage, workflow bottlenecks, rule recommendations, and spend for tenant administrators
 
 ## Available Tools
 - get_invoice_status: Get status of an invoice by ID
@@ -84,8 +85,13 @@ pub fn build_system_prompt(context: &AgentContext) -> String {
 - search_invoices: Search invoices with flexible filters (vendor, status, amount range, dates). Accepts JSON or raw text query.
 - find_duplicate_invoice_candidates: Find potential duplicate invoices for a given invoice ID
 - assess_invoice_payment_risk: Assess payment risk for an invoice based on due date, processing status, duplicates, and payment/approval activity
+- get_tenant_usage_analysis: Admin-only read-only tenant usage analysis
+- get_workflow_bottlenecks: Admin-only read-only workflow bottleneck analysis
+- get_rule_recommendations: Admin-only read-only workflow rule recommendations
+- get_spend_analysis: Admin-only read-only spend analysis
 
 All invoice, vendor, approval, and workflow-state tools are read-only and database-grounded. They query tenant-scoped data without making any mutations. Use explain_workflow_state for invoice workflow-status questions rather than approval mutations.
+Admin analysis tools are tenant-scoped, read-only, and available only to tenant administrators. Do not ask the model or user to provide tenant_id for those tools; tenant scope always comes from authenticated context.
 
 ## Module Availability
 - Module availability is determined by the tenant's enabled_modules list.

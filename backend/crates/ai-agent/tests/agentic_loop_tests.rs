@@ -77,6 +77,14 @@ async fn test_tool_descriptions_cover_all_registered_tools() {
         descriptions.contains("get_vendor_summary"),
         "missing get_vendor_summary"
     );
+    for tool in [
+        "get_tenant_usage_analysis",
+        "get_workflow_bottlenecks",
+        "get_rule_recommendations",
+        "get_spend_analysis",
+    ] {
+        assert!(descriptions.contains(tool), "missing {tool}");
+    }
 }
 
 /// Validate primary-argument extraction logic inline (mirrors what
@@ -172,6 +180,58 @@ async fn test_explain_workflow_state_invalid_tenant_uuid_fails_before_db() {
         err.to_string().contains("Invalid tenant_id"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn test_admin_analysis_tools_reject_non_admin_before_db() {
+    let mut ctx = agent_context_with_modules(vec![billforge_core::Module::AiAssistant]);
+    ctx.user_role = "ap_user".to_string();
+    ctx.permissions = vec!["read".to_string()];
+    let registry = ToolRegistry::new(fake_pool());
+
+    for tool in [
+        "get_tenant_usage_analysis",
+        "get_workflow_bottlenecks",
+        "get_rule_recommendations",
+        "get_spend_analysis",
+    ] {
+        let result = registry
+            .execute_tool(tool, &ctx, r#"{"window_days":30}"#)
+            .await;
+        let err = result.expect_err("non-admin context should be rejected before DB access");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("admin-only") || msg.contains("Forbidden"),
+            "unexpected error for {tool}: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_admin_analysis_provider_schemas_do_not_accept_tenant_id() {
+    let registry = ToolRegistry::new(fake_pool());
+    let provider_tools = registry.provider_tool_definitions();
+
+    for tool_name in [
+        "get_tenant_usage_analysis",
+        "get_workflow_bottlenecks",
+        "get_rule_recommendations",
+        "get_spend_analysis",
+    ] {
+        let provider_tool = provider_tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("missing provider tool {tool_name}"));
+        let properties = provider_tool
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("tool schema should have object properties");
+        assert!(
+            !properties.contains_key("tenant_id"),
+            "{tool_name} must use authenticated tenant context, not model-provided tenant_id"
+        );
+    }
 }
 
 /// Build a fake AgentContext with selected enabled modules.
