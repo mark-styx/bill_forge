@@ -11,6 +11,7 @@ use super::context::{build_system_prompt, inject_context};
 use super::models::{
     AgentContext, AnswerContextRecord, AnswerProviderTrace, AnswerTrace,
     BugReportDraftRequest, BugReportDraftResponse,
+    FeatureRequestDraftRequest, FeatureRequestDraftResponse,
     ChatRequest, ChatResponse, Conversation, Message, MessageRole,
     ProviderChatMessage, ProviderChatRequest, ProviderMessageRole, ProviderModelRoute,
 };
@@ -608,6 +609,108 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
             .context("Failed to parse bug report draft from provider response. Expected valid JSON with title, current_behavior, expected_behavior, reproduction_steps, priority, affected_module, acceptance_criteria.")
     }
 
+    /// Generate a structured feature request draft from unstructured notes.
+    ///
+    /// Sends a focused JSON-only prompt to the provider and parses the
+    /// response into a [`FeatureRequestDraftResponse`]. Does not persist any
+    /// records; this is purely a draft generation endpoint.
+    pub async fn generate_feature_request_draft(
+        &self,
+        request: FeatureRequestDraftRequest,
+        tenant_id: String,
+        user_id: Uuid,
+    ) -> Result<FeatureRequestDraftResponse> {
+        let mut context = inject_context(&self.pool, tenant_id.clone(), user_id)
+            .await
+            .context("Failed to inject agent context")?;
+        context.enabled_modules = self.enabled_modules.clone();
+
+        self.generate_feature_request_draft_with_context(request, &context).await
+    }
+
+    /// Inner method that builds prompt, calls provider, and parses JSON response.
+    /// Extracted so tests can call it with a synthetic context, bypassing DB.
+    async fn generate_feature_request_draft_with_context(
+        &self,
+        request: FeatureRequestDraftRequest,
+        context: &AgentContext,
+    ) -> Result<FeatureRequestDraftResponse> {
+
+        let system_prompt = build_system_prompt(context);
+
+        let json_schema_instruction = r#"You are a feature request drafting assistant. Given unstructured feature request notes, produce a JSON object with EXACTLY these fields:
+- "problem_statement": string - the problem or need the feature addresses
+- "proposed_value": string - the proposed solution and its value
+- "affected_module": string - the system area or module affected
+- "priority": string - one of "low", "medium", "high", "critical"
+- "acceptance_criteria": array of strings - conditions that must be true for the feature to be considered complete
+
+Return ONLY the JSON object. No markdown fences, no explanation."#;
+
+        let messages = vec![
+            ProviderChatMessage {
+                role: ProviderMessageRole::System,
+                content: format!("{}\n\n{}", system_prompt, json_schema_instruction),
+            },
+            ProviderChatMessage {
+                role: ProviderMessageRole::User,
+                content: request.description,
+            },
+        ];
+
+        let selected_route = ProviderModelRoute::Default;
+        let selected_model = self.provider.model_name_for_route(selected_route).to_string();
+
+        let provider_request = ProviderChatRequest {
+            model: selected_model,
+            model_route: selected_route,
+            messages,
+            temperature: Some(0.3),
+            max_tokens: None,
+            stop: None,
+            tools: None,
+        };
+
+        let start = std::time::Instant::now();
+        let provider_response = self.provider.chat_completion(provider_request).await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        let provider_response = match provider_response {
+            Ok(resp) => {
+                info!(
+                    selected_provider = %self.provider.provider_name(),
+                    latency_ms = %latency_ms,
+                    outcome = "feature_request_draft_success",
+                    "Feature request draft generated"
+                );
+                resp
+            }
+            Err(e) => {
+                warn!(
+                    selected_provider = %self.provider.provider_name(),
+                    latency_ms = %latency_ms,
+                    outcome = "feature_request_draft_error",
+                    error_kind = ?e.kind,
+                    "Feature request draft generation failed"
+                );
+                return Err(anyhow::anyhow!("Provider error: {}", e.message));
+            }
+        };
+
+        let content = provider_response.message.content.trim().to_string();
+
+        // Strip markdown code fences if present
+        let json_str = content
+            .strip_prefix("```json")
+            .or_else(|| content.strip_prefix("```"))
+            .map(|s| s.strip_suffix("```").unwrap_or(s))
+            .unwrap_or(&content)
+            .trim();
+
+        serde_json::from_str(json_str)
+            .context("Failed to parse feature request draft from provider response. Expected valid JSON with problem_statement, proposed_value, affected_module, priority, acceptance_criteria.")
+    }
+
     /// Get conversation history
     pub async fn get_conversation(&self, _conversation_id: Uuid) -> Result<Option<Conversation>> {
         // In production, this would load from database
@@ -633,7 +736,7 @@ Return ONLY the JSON object. No markdown fences, no explanation."#;
 mod tests {
     use super::*;
     use crate::fake_provider::FakeAiProvider;
-    use crate::models::{AgentContext, BugReportDraftRequest, BugReportPriority, ProviderChatError, ProviderChatErrorKind};
+    use crate::models::{AgentContext, BugReportDraftRequest, BugReportPriority, FeatureRequestDraftRequest, FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind};
     use sqlx::PgPool;
 
     /// Helper: build a ChatRequest for tests.
@@ -984,5 +1087,122 @@ mod tests {
 
         assert_eq!(draft.title, "Slow dashboard load");
         assert_eq!(draft.priority, BugReportPriority::Medium);
+    }
+
+    // -------------------------------------------------------------------------
+    // Feature request draft generation tests
+    // -------------------------------------------------------------------------
+
+    /// Helper: build a FeatureRequestDraftRequest for tests.
+    fn feature_request_request(description: &str) -> FeatureRequestDraftRequest {
+        FeatureRequestDraftRequest {
+            description: description.to_string(),
+            conversation_id: None,
+        }
+    }
+
+    /// Proves that generate_feature_request_draft sends a prompt requesting all
+    /// required fields and successfully parses valid provider JSON into
+    /// FeatureRequestDraftResponse.
+    #[tokio::test]
+    async fn feature_request_draft_parses_valid_json() {
+        let valid_json = serde_json::json!({
+            "problem_statement": "Users cannot export invoices in bulk",
+            "proposed_value": "Add a bulk export feature supporting CSV and PDF formats",
+            "affected_module": "Reporting",
+            "priority": "medium",
+            "acceptance_criteria": [
+                "User can select multiple invoices for export",
+                "Export completes within 30 seconds for up to 1000 invoices",
+                "CSV and PDF formats are supported"
+            ]
+        })
+        .to_string();
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(valid_json));
+        let agent = test_agent(provider.clone());
+
+        let request = feature_request_request("We need to export many invoices at once instead of one by one.");
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_feature_request_draft_with_context(request, &ctx)
+            .await
+            .expect("draft generation should succeed");
+
+        assert_eq!(draft.problem_statement, "Users cannot export invoices in bulk");
+        assert_eq!(draft.proposed_value, "Add a bulk export feature supporting CSV and PDF formats");
+        assert_eq!(draft.affected_module, "Reporting");
+        assert_eq!(draft.priority, FeatureRequestPriority::Medium);
+        assert_eq!(draft.acceptance_criteria.len(), 3);
+        assert_eq!(draft.acceptance_criteria[0], "User can select multiple invoices for export");
+
+        // Verify the provider received the prompt with feature-request-specific instructions
+        let requests = provider.take_requests();
+        assert_eq!(requests.len(), 1);
+        let system_msg = &requests[0].messages[0];
+        assert!(system_msg.content.contains("problem_statement"));
+        assert!(system_msg.content.contains("proposed_value"));
+        assert!(system_msg.content.contains("affected_module"));
+        assert!(system_msg.content.contains("priority"));
+        assert!(system_msg.content.contains("acceptance_criteria"));
+        // Lower temperature for structured output
+        assert_eq!(requests[0].temperature, Some(0.3));
+    }
+
+    /// Proves that generate_feature_request_draft returns an error when the
+    /// provider returns malformed JSON.
+    #[tokio::test]
+    async fn feature_request_draft_rejects_malformed_json() {
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_response_text("This is not JSON, just freeform text about a feature."),
+        );
+        let agent = test_agent(provider);
+
+        let request = feature_request_request("We need a new dashboard.");
+        let ctx = synthetic_context();
+
+        let result = agent
+            .generate_feature_request_draft_with_context(request, &ctx)
+            .await;
+
+        assert!(result.is_err(), "should fail for malformed JSON");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse feature request draft"),
+            "error message should mention parse failure, got: {}",
+            err
+        );
+    }
+
+    /// Proves that generate_feature_request_draft handles JSON wrapped in
+    /// markdown code fences (common provider behavior).
+    #[tokio::test]
+    async fn feature_request_draft_strips_markdown_fences() {
+        let raw_json = serde_json::json!({
+            "problem_statement": "No audit trail for approval overrides",
+            "proposed_value": "Log all override actions with reason codes",
+            "affected_module": "Workflows",
+            "priority": "high",
+            "acceptance_criteria": ["Override reason is mandatory", "Audit log entry is created"]
+        })
+        .to_string();
+
+        let fenced = format!("```json\n{}\n```", raw_json);
+
+        let provider = Arc::new(FakeAiProvider::new().with_response_text(fenced));
+        let agent = test_agent(provider);
+
+        let request = feature_request_request("Need to track approval overrides");
+        let ctx = synthetic_context();
+
+        let draft = agent
+            .generate_feature_request_draft_with_context(request, &ctx)
+            .await
+            .expect("should strip fences and parse");
+
+        assert_eq!(draft.problem_statement, "No audit trail for approval overrides");
+        assert_eq!(draft.priority, FeatureRequestPriority::High);
     }
 }

@@ -168,4 +168,33 @@ describe('aiAssistantApi', () => {
     expect(result.affected_module).toBe('Authentication');
     expect(result.acceptance_criteria).toHaveLength(2);
   });
+
+  it('generateFeatureRequestDraft() POSTs to /api/v1/ai/feature-request-drafts and returns structured fields', async () => {
+    const draftResponse = {
+      problem_statement: 'Users cannot export invoices in bulk',
+      proposed_value: 'Add a bulk export feature supporting CSV and PDF formats',
+      affected_module: 'Reporting',
+      priority: 'medium' as const,
+      acceptance_criteria: [
+        'User can select multiple invoices for export',
+        'Export completes within 30 seconds for up to 1000 invoices',
+      ],
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(draftResponse);
+
+    const result = await aiAssistantApi.generateFeatureRequestDraft({
+      description: 'We need to export many invoices at once instead of one by one.',
+    });
+
+    expect(api.post).toHaveBeenCalledWith('/api/v1/ai/feature-request-drafts', {
+      description: 'We need to export many invoices at once instead of one by one.',
+    });
+    expect(result).toEqual(draftResponse);
+    expect(result.problem_statement).toBe('Users cannot export invoices in bulk');
+    expect(result.proposed_value).toBe('Add a bulk export feature supporting CSV and PDF formats');
+    expect(result.affected_module).toBe('Reporting');
+    expect(result.priority).toBe('medium');
+    expect(result.acceptance_criteria).toHaveLength(2);
+  });
 });

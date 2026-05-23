@@ -312,3 +312,37 @@ pub struct BugReportDraftResponse {
     pub affected_module: String,
     pub acceptance_criteria: Vec<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Feature request draft generation models
+// ---------------------------------------------------------------------------
+
+/// Request to generate a structured feature request draft from unstructured notes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureRequestDraftRequest {
+    /// Free-form feature request description from the user.
+    pub description: String,
+    /// Optional conversation to attach context from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<Uuid>,
+}
+
+/// Priority level for a feature request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureRequestPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Structured feature request draft returned by Winston AI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FeatureRequestDraftResponse {
+    pub problem_statement: String,
+    pub proposed_value: String,
+    pub affected_module: String,
+    pub priority: FeatureRequestPriority,
+    pub acceptance_criteria: Vec<String>,
+}

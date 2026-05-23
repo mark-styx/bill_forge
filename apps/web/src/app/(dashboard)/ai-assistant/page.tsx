@@ -9,23 +9,28 @@ import {
   BugReportDraftRequest,
   BugReportDraftResponse,
   BugReportPriority,
+  FeatureRequestDraftRequest,
+  FeatureRequestDraftResponse,
+  FeatureRequestPriority,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from 'sonner';
-import { Sparkles, Send, ThumbsUp, ThumbsDown, Bug } from 'lucide-react';
+import { Sparkles, Send, ThumbsUp, ThumbsDown, Bug, Lightbulb } from 'lucide-react';
 
 export default function AiAssistantPage() {
   const router = useRouter();
   const hasModule = useAuthStore((s) => s.hasModule);
   const aiEnabled = hasModule('ai_assistant');
 
-  const [mode, setMode] = useState<'chat' | 'bug_report'>('chat');
+  const [mode, setMode] = useState<'chat' | 'bug_report' | 'feature_request'>('chat');
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [feedback, setFeedback] = useState<Record<string, 'positive' | 'negative'>>({});
   const [bugNotes, setBugNotes] = useState('');
   const [bugDraft, setBugDraft] = useState<BugReportDraftResponse | null>(null);
+  const [frNotes, setFrNotes] = useState('');
+  const [frDraft, setFrDraft] = useState<FeatureRequestDraftResponse | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,6 +75,18 @@ export default function AiAssistantPage() {
     },
   });
 
+  const frDraftMutation = useMutation({
+    mutationFn: (description: string) =>
+      aiAssistantApi.generateFeatureRequestDraft({ description }),
+    onSuccess: (data) => {
+      setFrDraft(data);
+      setFrNotes('');
+    },
+    onError: () => {
+      toast.error('Failed to generate feature request draft. Please try again.');
+    },
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
@@ -82,6 +99,13 @@ export default function AiAssistantPage() {
     const trimmed = bugNotes.trim();
     if (!trimmed || bugDraftMutation.isPending) return;
     bugDraftMutation.mutate(trimmed);
+  };
+
+  const handleFrSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = frNotes.trim();
+    if (!trimmed || frDraftMutation.isPending) return;
+    frDraftMutation.mutate(trimmed);
   };
 
   const handleFeedback = async (
@@ -99,6 +123,13 @@ export default function AiAssistantPage() {
   };
 
   const priorityColor: Record<BugReportPriority, string> = {
+    low: 'bg-gray-100 text-gray-700',
+    medium: 'bg-yellow-100 text-yellow-800',
+    high: 'bg-orange-100 text-orange-800',
+    critical: 'bg-red-100 text-red-800',
+  };
+
+  const frPriorityColor: Record<FeatureRequestPriority, string> = {
     low: 'bg-gray-100 text-gray-700',
     medium: 'bg-yellow-100 text-yellow-800',
     high: 'bg-orange-100 text-orange-800',
@@ -136,17 +167,31 @@ export default function AiAssistantPage() {
                 mode === 'bug_report'
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:text-foreground'
-              } rounded-r-md`}
+              }`}
             >
               <Bug className="inline h-3.5 w-3.5 mr-1" />
               Bug Report
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('feature_request')}
+              className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                mode === 'feature_request'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              } rounded-r-md`}
+            >
+              <Lightbulb className="inline h-3.5 w-3.5 mr-1" />
+              Feature Request
             </button>
           </div>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           {mode === 'chat'
             ? 'Ask questions about invoices, vendors, or workflows.'
-            : 'Describe a bug and get a structured report draft.'}
+            : mode === 'bug_report'
+            ? 'Describe a bug and get a structured report draft.'
+            : 'Describe a feature idea and get a structured request draft.'}
         </p>
       </div>
 
@@ -234,7 +279,7 @@ export default function AiAssistantPage() {
             </div>
           </form>
         </>
-      ) : (
+      ) : mode === 'bug_report' ? (
         <>
           <div className="flex-1 overflow-y-auto px-6 py-4">
             {!bugDraft && !bugDraftMutation.isPending && (
@@ -313,6 +358,78 @@ export default function AiAssistantPage() {
               <button
                 type="submit"
                 disabled={bugDraftMutation.isPending || !bugNotes.trim()}
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </form>
+        </>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto px-6 py-4">
+            {!frDraft && !frDraftMutation.isPending && (
+              <p className="text-center text-sm text-muted-foreground pt-12">
+                Describe the feature below and Winston will generate a structured request draft.
+              </p>
+            )}
+            {frDraftMutation.isPending && (
+              <div className="text-center text-sm text-muted-foreground pt-12">
+                Generating structured draft…
+              </div>
+            )}
+            {frDraft && (
+              <div className="space-y-4 max-w-2xl mx-auto">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Problem Statement</label>
+                  <p className="mt-1 text-sm">{frDraft.problem_statement}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Proposed Value</label>
+                  <p className="mt-1 text-sm">{frDraft.proposed_value}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Affected Module</label>
+                  <p className="mt-1 text-sm">{frDraft.affected_module}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Priority</label>
+                  <span className={`ml-2 inline-block rounded px-2 py-0.5 text-xs font-medium ${frPriorityColor[frDraft.priority]}`}>
+                    {frDraft.priority}
+                  </span>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Acceptance Criteria</label>
+                  <ul className="mt-1 list-disc list-inside space-y-1">
+                    {frDraft.acceptance_criteria.map((c, i) => (
+                      <li key={i} className="text-sm">{c}</li>
+                    ))}
+                  </ul>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFrDraft(null)}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Generate another draft
+                </button>
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={handleFrSubmit} className="border-t px-6 py-4">
+            <div className="flex gap-2">
+              <textarea
+                value={frNotes}
+                onChange={(e) => setFrNotes(e.target.value)}
+                placeholder="Describe the feature: what problem it solves and the value it provides…"
+                rows={2}
+                className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                disabled={frDraftMutation.isPending}
+              />
+              <button
+                type="submit"
+                disabled={frDraftMutation.isPending || !frNotes.trim()}
                 className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="h-4 w-4" />

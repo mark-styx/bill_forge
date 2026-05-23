@@ -2115,6 +2115,22 @@ export interface BugReportDraftResponse {
   acceptance_criteria: string[];
 }
 
+// Feature Request Draft Types
+export type FeatureRequestPriority = 'low' | 'medium' | 'high' | 'critical';
+
+export interface FeatureRequestDraftRequest {
+  description: string;
+  conversation_id?: string;
+}
+
+export interface FeatureRequestDraftResponse {
+  problem_statement: string;
+  proposed_value: string;
+  affected_module: string;
+  priority: FeatureRequestPriority;
+  acceptance_criteria: string[];
+}
+
 // AI Assistant API
 export const aiAssistantApi = {
   chat: (body: AiChatRequest) =>
@@ -2138,6 +2154,9 @@ export const aiAssistantApi = {
 
   generateBugReportDraft: (body: BugReportDraftRequest) =>
     api.post<BugReportDraftResponse>('/api/v1/ai/bug-report-drafts', body),
+
+  generateFeatureRequestDraft: (body: FeatureRequestDraftRequest) =>
+    api.post<FeatureRequestDraftResponse>('/api/v1/ai/feature-request-drafts', body),
 };
 
 // ---------------------------------------------------------------------------

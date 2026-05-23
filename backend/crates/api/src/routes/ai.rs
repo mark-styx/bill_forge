@@ -19,6 +19,7 @@ use uuid::Uuid;
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{
     BugReportDraftRequest, BugReportDraftResponse, ChatRequest, ChatResponse, Conversation,
+    FeatureRequestDraftRequest, FeatureRequestDraftResponse,
 };
 use billforge_ai_agent::provider::AiProvider;
 use billforge_ai_agent::OpenAiCompatibleProvider;
@@ -64,6 +65,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/chat", post(chat_handler))
         .route("/bug-report-drafts", post(bug_report_draft_handler))
+        .route("/feature-request-drafts", post(feature_request_draft_handler))
         .route("/conversations", get(list_conversations_handler))
         .route("/conversations/{id}/messages", post(continue_conversation_handler))
         .route(
@@ -184,6 +186,46 @@ async fn bug_report_draft_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: format!("Failed to generate bug report draft: {}", e),
+                }),
+            ))
+        }
+    }
+}
+
+/// POST /ai/feature-request-drafts
+async fn feature_request_draft_handler(
+    State(state): State<AppState>,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    Json(request): Json<FeatureRequestDraftRequest>,
+) -> Result<Json<FeatureRequestDraftResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
+    let provider = build_provider();
+    let agent = WinstonAgent::new(pool, provider)
+        .with_enabled_modules(_tenant.enabled_modules.clone());
+
+    let tenant_id = user.tenant_id.0.to_string();
+    let user_id = user.user_id.0;
+
+    match agent.generate_feature_request_draft(request, tenant_id, user_id).await {
+        Ok(draft) => Ok(Json(draft)),
+        Err(e) => {
+            tracing::error!("Feature request draft error: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to generate feature request draft: {}", e),
                 }),
             ))
         }
