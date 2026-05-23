@@ -130,6 +130,14 @@ pub struct AiToolDefinition {
     pub mutates: bool,
 }
 
+/// Approval context required before executing mutating or high-risk AI tools.
+#[derive(Debug, Clone)]
+pub struct ToolProposalContext {
+    pub proposal_id: Uuid,
+    pub tool_name: String,
+    pub approved: bool,
+}
+
 /// Invoice status query tool
 pub struct InvoiceStatusTool {
     pool: PgPool,
@@ -3513,16 +3521,44 @@ impl ToolRegistry {
             .collect()
     }
 
+    pub fn validate_tool_execution_guard(
+        def: &AiToolDefinition,
+        proposal_context: Option<&ToolProposalContext>,
+    ) -> Result<()> {
+        if !def.mutates && def.risk_level != AiToolRiskLevel::High {
+            return Ok(());
+        }
+
+        match proposal_context {
+            Some(ctx) if ctx.approved && ctx.tool_name == def.name => Ok(()),
+            _ => anyhow::bail!(
+                "Tool '{}' requires an approved proposal context before execution",
+                def.name
+            ),
+        }
+    }
+
     pub async fn execute_tool(
         &self,
         tool_name: &str,
         context: &AgentContext,
         args: &str,
     ) -> Result<String> {
+        self.execute_tool_with_proposal_context(tool_name, context, args, None)
+            .await
+    }
+
+    pub async fn execute_tool_with_proposal_context(
+        &self,
+        tool_name: &str,
+        context: &AgentContext,
+        args: &str,
+        proposal_context: Option<&ToolProposalContext>,
+    ) -> Result<String> {
         // Reject unknown tools early via the typed registry.
-        if Self::get_tool_definition(tool_name).is_none() {
-            anyhow::bail!("Tool '{}' not found", tool_name);
-        }
+        let def = Self::get_tool_definition(tool_name)
+            .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tool_name))?;
+        Self::validate_tool_execution_guard(&def, proposal_context)?;
 
         match tool_name {
             "get_invoice_status" => {

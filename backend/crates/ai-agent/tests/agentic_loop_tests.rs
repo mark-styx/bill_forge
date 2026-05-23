@@ -2,14 +2,31 @@
 //!
 //! These run without a database or OpenAI key (SQLX_OFFLINE=true).
 
-use billforge_ai_agent::tools::ToolRegistry;
 use billforge_ai_agent::tools::{AiToolClass, AiToolDefinition, AiToolPermission, AiToolRiskLevel};
+use billforge_ai_agent::tools::{ToolProposalContext, ToolRegistry};
 use sqlx::postgres::PgPoolOptions;
 
 fn fake_pool() -> sqlx::PgPool {
     PgPoolOptions::new()
         .connect_lazy("postgres://fake")
         .expect("lazy connection should not fail")
+}
+
+fn synthetic_tool_definition(
+    name: &'static str,
+    mutates: bool,
+    risk_level: AiToolRiskLevel,
+) -> AiToolDefinition {
+    AiToolDefinition {
+        name,
+        description: "Synthetic test tool",
+        class: AiToolClass::Invoice,
+        required_permission: AiToolPermission::InvoiceRead,
+        risk_level,
+        input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        output_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        mutates,
+    }
 }
 
 #[tokio::test]
@@ -686,6 +703,97 @@ async fn test_request_issue_creation_unsupported_target_fails() {
 }
 
 // ── Typed tool registry tests ─────────────────────────────────────────────────
+
+#[test]
+fn test_tool_execution_guard_allows_low_risk_non_mutating_without_proposal_context() {
+    let def = synthetic_tool_definition("synthetic_read_tool", false, AiToolRiskLevel::Low);
+
+    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+
+    assert!(result.is_ok(), "low-risk read-only tool should pass");
+}
+
+#[test]
+fn test_tool_execution_guard_rejects_mutating_without_proposal_context() {
+    let def = synthetic_tool_definition("synthetic_mutating_tool", true, AiToolRiskLevel::Low);
+
+    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+
+    let err = result.expect_err("mutating tool should require approval context");
+    assert_eq!(
+        err.to_string(),
+        "Tool 'synthetic_mutating_tool' requires an approved proposal context before execution"
+    );
+}
+
+#[test]
+fn test_tool_execution_guard_rejects_high_risk_without_proposal_context() {
+    let def = synthetic_tool_definition("synthetic_high_risk_tool", false, AiToolRiskLevel::High);
+
+    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+
+    let err = result.expect_err("high-risk tool should require approval context");
+    assert_eq!(
+        err.to_string(),
+        "Tool 'synthetic_high_risk_tool' requires an approved proposal context before execution"
+    );
+}
+
+#[test]
+fn test_tool_execution_guard_allows_risky_tool_with_approved_matching_proposal_context() {
+    for def in [
+        synthetic_tool_definition(
+            "synthetic_approved_mutating_tool",
+            true,
+            AiToolRiskLevel::Low,
+        ),
+        synthetic_tool_definition(
+            "synthetic_approved_high_risk_tool",
+            false,
+            AiToolRiskLevel::High,
+        ),
+    ] {
+        let proposal_context = ToolProposalContext {
+            proposal_id: uuid::Uuid::new_v4(),
+            tool_name: def.name.to_string(),
+            approved: true,
+        };
+
+        let result = ToolRegistry::validate_tool_execution_guard(&def, Some(&proposal_context));
+
+        assert!(
+            result.is_ok(),
+            "approved matching proposal context should pass for {}",
+            def.name
+        );
+    }
+}
+
+#[test]
+fn test_tool_execution_guard_rejects_unapproved_or_mismatched_proposal_context() {
+    let def = synthetic_tool_definition("synthetic_guarded_tool", true, AiToolRiskLevel::High);
+
+    for proposal_context in [
+        ToolProposalContext {
+            proposal_id: uuid::Uuid::new_v4(),
+            tool_name: def.name.to_string(),
+            approved: false,
+        },
+        ToolProposalContext {
+            proposal_id: uuid::Uuid::new_v4(),
+            tool_name: "different_tool".to_string(),
+            approved: true,
+        },
+    ] {
+        let result = ToolRegistry::validate_tool_execution_guard(&def, Some(&proposal_context));
+
+        let err = result.expect_err("invalid proposal context should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "Tool 'synthetic_guarded_tool' requires an approved proposal context before execution"
+        );
+    }
+}
 
 /// Every tool exposed in descriptions must have exactly one typed definition.
 #[tokio::test]
