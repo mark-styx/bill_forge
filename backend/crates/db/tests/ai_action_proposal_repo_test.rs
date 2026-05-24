@@ -6,7 +6,7 @@
 use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
     AiActionProposalRepositoryImpl, AiActionProposalRisk, AiActionProposalStatus,
-    AiConversationRepositoryImpl, CreateAiActionProposalInput,
+    AiConversationRepositoryImpl, CreateAiActionProposalInput, UpdateAiActionProposalStatusInput,
 };
 use billforge_db::PgManager;
 use std::sync::Arc;
@@ -124,7 +124,9 @@ async fn create_and_load_list_action_proposals() {
     assert_eq!(first.payload, payload);
     assert_eq!(first.risk, AiActionProposalRisk::Medium);
     assert_eq!(first.permission, "invoice.approve");
-    assert_eq!(first.status, AiActionProposalStatus::ApprovalRequired);
+    assert_eq!(first.status, AiActionProposalStatus::Pending);
+    assert!(first.execution_error_code.is_none());
+    assert!(first.execution_error_message.is_none());
     assert!(first.created_at <= chrono::Utc::now());
     assert!(first.updated_at <= chrono::Utc::now());
 
@@ -136,7 +138,9 @@ async fn create_and_load_list_action_proposals() {
 
     assert_eq!(loaded.id, first.id);
     assert_eq!(loaded.risk, AiActionProposalRisk::Medium);
-    assert_eq!(loaded.status, AiActionProposalStatus::ApprovalRequired);
+    assert_eq!(loaded.status, AiActionProposalStatus::Pending);
+    assert!(loaded.execution_error_code.is_none());
+    assert!(loaded.execution_error_message.is_none());
     assert_eq!(loaded.payload["invoice_id"], "inv-001");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -178,7 +182,11 @@ async fn create_and_load_list_action_proposals() {
             &tenant_id,
             &uid,
             second.id,
-            AiActionProposalStatus::Approved,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Approved,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
         )
         .await
         .expect("approve second proposal");
@@ -204,7 +212,7 @@ async fn create_and_load_list_action_proposals() {
     assert_eq!(pending[1].id, first.id);
     assert!(pending
         .iter()
-        .all(|proposal| proposal.status == AiActionProposalStatus::ApprovalRequired));
+        .all(|proposal| proposal.status == AiActionProposalStatus::Pending));
 
     manager.delete_tenant(&tenant_id).await.ok();
 }
@@ -245,7 +253,7 @@ async fn update_status_and_enforce_scoped_access() {
         .await
         .expect("create proposal");
 
-    assert_eq!(proposal.status, AiActionProposalStatus::ApprovalRequired);
+    assert_eq!(proposal.status, AiActionProposalStatus::Pending);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -254,7 +262,11 @@ async fn update_status_and_enforce_scoped_access() {
             &tenant_id,
             &uid,
             proposal.id,
-            AiActionProposalStatus::Approved,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Approved,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
         )
         .await
         .expect("update status");
@@ -282,7 +294,11 @@ async fn update_status_and_enforce_scoped_access() {
             &tenant_id,
             &wrong_uid,
             proposal.id,
-            AiActionProposalStatus::Rejected,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Rejected,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
         )
         .await
         .expect_err("wrong user should not update proposal");
@@ -294,6 +310,100 @@ async fn update_status_and_enforce_scoped_access() {
         }
         other => panic!("expected NotFound, got {:?}", other),
     }
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn failed_status_persists_error_fields_and_non_failed_status_clears_them() {
+    let (manager, tenant_id, pool) = setup_single_tenant("proposal-failed-errors").await;
+    let user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+
+    let conversation_repo = AiConversationRepositoryImpl::new(pool.clone());
+    let proposal_repo = AiActionProposalRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+
+    let conversation = conversation_repo
+        .create_conversation(&tenant_id, &uid, None, serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let proposal = proposal_repo
+        .create_proposal(
+            &tenant_id,
+            &uid,
+            CreateAiActionProposalInput {
+                conversation_id: conversation.id,
+                tool_name: "approve_invoice".to_string(),
+                payload: serde_json::json!({"invoice_id": "inv-004"}),
+                risk: AiActionProposalRisk::Low,
+                permission: "invoice.approve".to_string(),
+            },
+        )
+        .await
+        .expect("create proposal");
+
+    let failed = proposal_repo
+        .update_proposal_status(
+            &tenant_id,
+            &uid,
+            proposal.id,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Failed,
+                execution_error_code: Some("execution_timeout".to_string()),
+                execution_error_message: Some("Timed out executing proposal".to_string()),
+            },
+        )
+        .await
+        .expect("mark proposal failed");
+
+    assert_eq!(failed.status, AiActionProposalStatus::Failed);
+    assert_eq!(
+        failed.execution_error_code.as_deref(),
+        Some("execution_timeout")
+    );
+    assert_eq!(
+        failed.execution_error_message.as_deref(),
+        Some("Timed out executing proposal")
+    );
+
+    let loaded_failed = proposal_repo
+        .get_proposal(&tenant_id, &uid, proposal.id)
+        .await
+        .expect("load failed proposal")
+        .expect("proposal should exist");
+
+    assert_eq!(loaded_failed.status, AiActionProposalStatus::Failed);
+    assert_eq!(
+        loaded_failed.execution_error_code.as_deref(),
+        Some("execution_timeout")
+    );
+    assert_eq!(
+        loaded_failed.execution_error_message.as_deref(),
+        Some("Timed out executing proposal")
+    );
+
+    let approved = proposal_repo
+        .update_proposal_status(
+            &tenant_id,
+            &uid,
+            proposal.id,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Approved,
+                execution_error_code: Some("ignored_code".to_string()),
+                execution_error_message: Some("ignored message".to_string()),
+            },
+        )
+        .await
+        .expect("move failed proposal to approved");
+
+    assert_eq!(approved.status, AiActionProposalStatus::Approved);
+    assert!(approved.execution_error_code.is_none());
+    assert!(approved.execution_error_message.is_none());
 
     manager.delete_tenant(&tenant_id).await.ok();
 }

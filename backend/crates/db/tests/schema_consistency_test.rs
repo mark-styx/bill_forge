@@ -344,6 +344,14 @@ async fn test_ai_action_proposals_schema() {
     assert_column(&pool, "ai_action_proposals", "risk", "text").await;
     assert_column(&pool, "ai_action_proposals", "permission", "text").await;
     assert_column(&pool, "ai_action_proposals", "status", "text").await;
+    assert_column(&pool, "ai_action_proposals", "execution_error_code", "text").await;
+    assert_column(
+        &pool,
+        "ai_action_proposals",
+        "execution_error_message",
+        "text",
+    )
+    .await;
     assert_column(
         &pool,
         "ai_action_proposals",
@@ -361,8 +369,7 @@ async fn test_ai_action_proposals_schema() {
 
     assert_column_default_contains(&pool, "ai_action_proposals", "id", "gen_random_uuid").await;
     assert_column_default_contains(&pool, "ai_action_proposals", "payload", "'{}'").await;
-    assert_column_default_contains(&pool, "ai_action_proposals", "status", "approval_required")
-        .await;
+    assert_column_default_contains(&pool, "ai_action_proposals", "status", "pending").await;
 
     let fk_count: i64 = sqlx::query_scalar(
         r#"

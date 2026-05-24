@@ -212,6 +212,13 @@ async fn setup_minimal_schema(pool: &sqlx::PgPool) {
         .execute(pool)
         .await
         .expect("create ai_action_proposals table");
+
+    let migration_087 =
+        include_str!("../../../migrations/087_ai_action_proposal_status_failed_errors.sql");
+    sqlx::raw_sql(migration_087)
+        .execute(pool)
+        .await
+        .expect("migrate ai_action_proposals status contract");
 }
 
 async fn insert_tenant(pool: &sqlx::PgPool, tenant: &TenantContext) {
@@ -245,7 +252,7 @@ async fn insert_user(pool: &sqlx::PgPool, tenant_id: &TenantId, user: &UserConte
 
 #[sqlx::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
-async fn proposal_service_enabled_tenant_creates_approval_required_proposal(pool: sqlx::PgPool) {
+async fn proposal_service_enabled_tenant_creates_pending_proposal(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
     let tenant = tenant_context(vec![Module::AiAssistant]);
@@ -279,5 +286,5 @@ async fn proposal_service_enabled_tenant_creates_approval_required_proposal(pool
     assert_eq!(proposal.payload["target"], "internal_feedback_table");
     assert_eq!(proposal.risk, AiActionProposalRisk::Medium);
     assert_eq!(proposal.permission, "issue.request");
-    assert_eq!(proposal.status, AiActionProposalStatus::ApprovalRequired);
+    assert_eq!(proposal.status, AiActionProposalStatus::Pending);
 }

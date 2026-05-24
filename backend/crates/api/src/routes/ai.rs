@@ -74,6 +74,8 @@ struct PendingAiActionProposalResponse {
     risk: String,
     permission: String,
     status: String,
+    execution_error_code: Option<String>,
+    execution_error_message: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -90,6 +92,8 @@ impl From<AiActionProposalRecord> for PendingAiActionProposalResponse {
             risk: record.risk.as_str().to_string(),
             permission: record.permission,
             status: record.status.as_str().to_string(),
+            execution_error_code: record.execution_error_code,
+            execution_error_message: record.execution_error_message,
             created_at: record.created_at.to_rfc3339(),
             updated_at: record.updated_at.to_rfc3339(),
         }

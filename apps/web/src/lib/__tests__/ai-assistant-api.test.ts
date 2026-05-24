@@ -147,7 +147,9 @@ describe('aiAssistantApi', () => {
         payload: { invoice_id: 'inv-1' },
         risk: 'medium' as const,
         permission: 'invoice.approve',
-        status: 'approval_required' as const,
+        status: 'pending' as const,
+        execution_error_code: null,
+        execution_error_message: null,
         created_at: '2025-01-01T00:01:00Z',
         updated_at: '2025-01-01T00:01:00Z',
       },
@@ -161,7 +163,7 @@ describe('aiAssistantApi', () => {
       '/api/v1/ai/conversations/conv-42/action-proposals/pending',
     );
     expect(result).toEqual(proposals);
-    expect(result[0].status).toBe('approval_required');
+    expect(result[0].status).toBe('pending');
   });
 
   it('generateBugReportDraft() POSTs to /api/v1/ai/bug-report-drafts and returns structured fields', async () => {

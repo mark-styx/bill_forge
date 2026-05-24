@@ -2100,12 +2100,11 @@ export interface AiAnswerFeedbackResponse {
 export type AiActionProposalRisk = 'low' | 'medium' | 'high';
 
 export type AiActionProposalStatus =
-  | 'approval_required'
+  | 'pending'
   | 'approved'
   | 'rejected'
   | 'executed'
-  | 'cancelled'
-  | 'expired';
+  | 'failed';
 
 export interface AiPendingActionProposal {
   id: string;
@@ -2117,6 +2116,8 @@ export interface AiPendingActionProposal {
   risk: AiActionProposalRisk;
   permission: string;
   status: AiActionProposalStatus;
+  execution_error_code: string | null;
+  execution_error_message: string | null;
   created_at: string;
   updated_at: string;
 }

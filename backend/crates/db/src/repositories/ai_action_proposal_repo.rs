@@ -42,34 +42,31 @@ impl AiActionProposalRisk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiActionProposalStatus {
-    ApprovalRequired,
+    Pending,
     Approved,
     Rejected,
     Executed,
-    Cancelled,
-    Expired,
+    Failed,
 }
 
 impl AiActionProposalStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AiActionProposalStatus::ApprovalRequired => "approval_required",
+            AiActionProposalStatus::Pending => "pending",
             AiActionProposalStatus::Approved => "approved",
             AiActionProposalStatus::Rejected => "rejected",
             AiActionProposalStatus::Executed => "executed",
-            AiActionProposalStatus::Cancelled => "cancelled",
-            AiActionProposalStatus::Expired => "expired",
+            AiActionProposalStatus::Failed => "failed",
         }
     }
 
     fn from_db(value: &str) -> Result<Self> {
         match value {
-            "approval_required" => Ok(AiActionProposalStatus::ApprovalRequired),
+            "pending" => Ok(AiActionProposalStatus::Pending),
             "approved" => Ok(AiActionProposalStatus::Approved),
             "rejected" => Ok(AiActionProposalStatus::Rejected),
             "executed" => Ok(AiActionProposalStatus::Executed),
-            "cancelled" => Ok(AiActionProposalStatus::Cancelled),
-            "expired" => Ok(AiActionProposalStatus::Expired),
+            "failed" => Ok(AiActionProposalStatus::Failed),
             other => Err(Error::Database(format!(
                 "Invalid ai_action_proposals.status value: {}",
                 other
@@ -92,6 +89,8 @@ pub struct CreateAiActionProposalInput {
 #[derive(Debug, Clone)]
 pub struct UpdateAiActionProposalStatusInput {
     pub status: AiActionProposalStatus,
+    pub execution_error_code: Option<String>,
+    pub execution_error_message: Option<String>,
 }
 
 /// A persisted AI action proposal row.
@@ -106,6 +105,8 @@ pub struct AiActionProposalRecord {
     pub risk: AiActionProposalRisk,
     pub permission: String,
     pub status: AiActionProposalStatus,
+    pub execution_error_code: Option<String>,
+    pub execution_error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -132,7 +133,8 @@ impl AiActionProposalRepositoryImpl {
                     tenant_id, user_id, conversation_id, tool_name, payload, risk, permission
                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
                RETURNING id, tenant_id, user_id, conversation_id, tool_name, payload,
-                         risk, permission, status, created_at, updated_at"#,
+                         risk, permission, status, execution_error_code,
+                         execution_error_message, created_at, updated_at"#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(user_id.0)
@@ -157,7 +159,8 @@ impl AiActionProposalRepositoryImpl {
     ) -> Result<Option<AiActionProposalRecord>> {
         let row: Option<AiActionProposalRow> = sqlx::query_as::<_, AiActionProposalRow>(
             r#"SELECT id, tenant_id, user_id, conversation_id, tool_name, payload,
-                      risk, permission, status, created_at, updated_at
+                      risk, permission, status, execution_error_code,
+                      execution_error_message, created_at, updated_at
                FROM ai_action_proposals
                WHERE id = $1 AND tenant_id = $2 AND user_id = $3"#,
         )
@@ -180,7 +183,8 @@ impl AiActionProposalRepositoryImpl {
     ) -> Result<Vec<AiActionProposalRecord>> {
         let rows: Vec<AiActionProposalRow> = sqlx::query_as::<_, AiActionProposalRow>(
             r#"SELECT id, tenant_id, user_id, conversation_id, tool_name, payload,
-                      risk, permission, status, created_at, updated_at
+                      risk, permission, status, execution_error_code,
+                      execution_error_message, created_at, updated_at
                FROM ai_action_proposals
                WHERE tenant_id = $1 AND user_id = $2 AND conversation_id = $3
                ORDER BY created_at DESC"#,
@@ -206,12 +210,13 @@ impl AiActionProposalRepositoryImpl {
     ) -> Result<Vec<AiActionProposalRecord>> {
         let rows: Vec<AiActionProposalRow> = sqlx::query_as::<_, AiActionProposalRow>(
             r#"SELECT id, tenant_id, user_id, conversation_id, tool_name, payload,
-                      risk, permission, status, created_at, updated_at
+                      risk, permission, status, execution_error_code,
+                      execution_error_message, created_at, updated_at
                FROM ai_action_proposals
                WHERE tenant_id = $1
                  AND user_id = $2
                  AND conversation_id = $3
-                 AND status = 'approval_required'
+                 AND status = 'pending'
                ORDER BY created_at DESC"#,
         )
         .bind(*tenant_id.as_uuid())
@@ -232,19 +237,44 @@ impl AiActionProposalRepositoryImpl {
         tenant_id: &TenantId,
         user_id: &UserId,
         proposal_id: Uuid,
-        status: AiActionProposalStatus,
+        input: UpdateAiActionProposalStatusInput,
     ) -> Result<AiActionProposalRecord> {
+        let status = input.status;
+        let (execution_error_code, execution_error_message) =
+            if status == AiActionProposalStatus::Failed {
+                (
+                    Some(input.execution_error_code.ok_or_else(|| {
+                        Error::Validation(
+                            "Failed action proposals require execution_error_code".to_string(),
+                        )
+                    })?),
+                    Some(input.execution_error_message.ok_or_else(|| {
+                        Error::Validation(
+                            "Failed action proposals require execution_error_message".to_string(),
+                        )
+                    })?),
+                )
+            } else {
+                (None, None)
+            };
+
         let row: AiActionProposalRow = sqlx::query_as::<_, AiActionProposalRow>(
             r#"UPDATE ai_action_proposals
-               SET status = $4, updated_at = NOW()
+               SET status = $4,
+                   execution_error_code = $5,
+                   execution_error_message = $6,
+                   updated_at = NOW()
                WHERE tenant_id = $1 AND user_id = $2 AND id = $3
                RETURNING id, tenant_id, user_id, conversation_id, tool_name, payload,
-                         risk, permission, status, created_at, updated_at"#,
+                         risk, permission, status, execution_error_code,
+                         execution_error_message, created_at, updated_at"#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(user_id.0)
         .bind(proposal_id)
         .bind(status.as_str())
+        .bind(execution_error_code.as_deref())
+        .bind(execution_error_message.as_deref())
         .fetch_one(&*self.pool)
         .await
         .map_err(|e| {
@@ -277,6 +307,8 @@ struct AiActionProposalRow {
     risk: String,
     permission: String,
     status: String,
+    execution_error_code: Option<String>,
+    execution_error_message: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -293,6 +325,8 @@ impl AiActionProposalRow {
             risk: AiActionProposalRisk::from_db(&self.risk)?,
             permission: self.permission,
             status: AiActionProposalStatus::from_db(&self.status)?,
+            execution_error_code: self.execution_error_code,
+            execution_error_message: self.execution_error_message,
             created_at: self.created_at,
             updated_at: self.updated_at,
         })
