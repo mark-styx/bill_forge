@@ -25,18 +25,23 @@ async fn setup_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
         .await
         .expect("Failed to create PgManager");
 
-    let tenant_id: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("schema-{tag}").as_bytes())
-        .to_string()
-        .parse()
-        .unwrap();
+    let tenant_id: TenantId =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("schema-{tag}").as_bytes())
+            .to_string()
+            .parse()
+            .unwrap();
 
     manager.delete_tenant(&tenant_id).await.ok();
-    manager.create_tenant(&tenant_id, &format!("Schema test {tag}"))
+    manager
+        .create_tenant(&tenant_id, &format!("Schema test {tag}"))
         .await
         .expect("create tenant");
 
     let pool = (*manager.tenant(&tenant_id).await.expect("tenant pool")).clone();
-    manager.run_tenant_migrations(&pool).await.expect("migrations");
+    manager
+        .run_tenant_migrations(&pool)
+        .await
+        .expect("migrations");
 
     (manager, tenant_id, pool)
 }
@@ -85,19 +90,30 @@ async fn assert_column(pool: &sqlx::PgPool, table: &str, column: &str, type_pref
 
 /// Assert that a table exists in the current schema.
 async fn assert_table_exists(pool: &sqlx::PgPool, table: &str) {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT table_name FROM information_schema.tables WHERE table_name = $1",
-    )
-    .bind(table)
-    .fetch_optional(pool)
-    .await
-    .expect("query information_schema");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT table_name FROM information_schema.tables WHERE table_name = $1")
+            .bind(table)
+            .fetch_optional(pool)
+            .await
+            .expect("query information_schema");
 
     assert!(row.is_some(), "Table '{}' does not exist", table);
 }
 
+async fn migration_record_count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM billforge_schema_migrations")
+        .fetch_one(pool)
+        .await
+        .expect("query migration records")
+}
+
 /// Assert that a column has a default value containing the given substring.
-async fn assert_column_default_contains(pool: &sqlx::PgPool, table: &str, column: &str, substring: &str) {
+async fn assert_column_default_contains(
+    pool: &sqlx::PgPool,
+    table: &str,
+    column: &str,
+    substring: &str,
+) {
     let row: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT column_default FROM information_schema.columns WHERE table_name = $1 AND column_name = $2",
     )
@@ -118,7 +134,10 @@ async fn assert_column_default_contains(pool: &sqlx::PgPool, table: &str, column
                 default,
             );
         }
-        _ => panic!("Column {}.{} has no default or does not exist", table, column),
+        _ => panic!(
+            "Column {}.{} has no default or does not exist",
+            table, column
+        ),
     }
 }
 
@@ -139,13 +158,41 @@ async fn test_queue_items_has_tenant_id_and_status() {
 
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
+async fn test_tenant_migrations_are_recorded_durably() {
+    let (manager, _tenant_id, pool) = setup_tenant("migration-tracking").await;
+
+    assert_table_exists(&pool, "billforge_schema_migrations").await;
+
+    let initial_count = migration_record_count(&pool).await;
+    assert!(initial_count > 0, "Expected applied migration records");
+
+    manager
+        .run_tenant_migrations(&pool)
+        .await
+        .expect("rerun tracked migrations");
+
+    assert_eq!(
+        migration_record_count(&pool).await,
+        initial_count,
+        "Rerunning migrations should skip already-recorded migrations"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_approval_requests_has_tenant_id_jsonb_requested_from_and_updated_at() {
     let (_manager, _tenant_id, pool) = setup_tenant("ar-cols").await;
 
     // approval_requests must have tenant_id, requested_from (JSONB), and updated_at
     assert_column(&pool, "approval_requests", "tenant_id", "character varying").await;
     assert_column(&pool, "approval_requests", "requested_from", "jsonb").await;
-    assert_column(&pool, "approval_requests", "updated_at", "timestamp with time zone").await;
+    assert_column(
+        &pool,
+        "approval_requests",
+        "updated_at",
+        "timestamp with time zone",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -154,8 +201,20 @@ async fn test_email_action_tokens_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("eat").await;
 
     assert_table_exists(&pool, "email_action_tokens").await;
-    assert_column(&pool, "email_action_tokens", "tenant_id", "character varying").await;
-    assert_column(&pool, "email_action_tokens", "token_hash", "character varying").await;
+    assert_column(
+        &pool,
+        "email_action_tokens",
+        "tenant_id",
+        "character varying",
+    )
+    .await;
+    assert_column(
+        &pool,
+        "email_action_tokens",
+        "token_hash",
+        "character varying",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -164,7 +223,13 @@ async fn test_workflow_audit_log_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("wal").await;
 
     assert_table_exists(&pool, "workflow_audit_log").await;
-    assert_column(&pool, "workflow_audit_log", "entity_type", "character varying").await;
+    assert_column(
+        &pool,
+        "workflow_audit_log",
+        "entity_type",
+        "character varying",
+    )
+    .await;
     assert_column(&pool, "workflow_audit_log", "ip_address", "inet").await;
 }
 
@@ -208,8 +273,20 @@ async fn test_ai_conversation_tables_schema() {
     assert_column(&pool, "ai_conversations", "user_id", "uuid").await;
     assert_column(&pool, "ai_conversations", "title", "text").await;
     assert_column(&pool, "ai_conversations", "metadata", "jsonb").await;
-    assert_column(&pool, "ai_conversations", "created_at", "timestamp with time zone").await;
-    assert_column(&pool, "ai_conversations", "updated_at", "timestamp with time zone").await;
+    assert_column(
+        &pool,
+        "ai_conversations",
+        "created_at",
+        "timestamp with time zone",
+    )
+    .await;
+    assert_column(
+        &pool,
+        "ai_conversations",
+        "updated_at",
+        "timestamp with time zone",
+    )
+    .await;
     assert_column_default_contains(&pool, "ai_conversations", "id", "gen_random_uuid").await;
 
     // ai_messages table with required columns
@@ -231,7 +308,13 @@ async fn test_ai_conversation_tables_schema() {
     assert_column(&pool, "ai_messages", "provider_request_id", "text").await;
     assert_column(&pool, "ai_messages", "latency_ms", "bigint").await;
     assert_column(&pool, "ai_messages", "metadata", "jsonb").await;
-    assert_column(&pool, "ai_messages", "created_at", "timestamp with time zone").await;
+    assert_column(
+        &pool,
+        "ai_messages",
+        "created_at",
+        "timestamp with time zone",
+    )
+    .await;
     assert_column_default_contains(&pool, "ai_messages", "id", "gen_random_uuid").await;
 
     // Verify composite FK exists on ai_messages referencing (id, tenant_id, user_id)
@@ -282,7 +365,13 @@ async fn test_ai_usage_events_schema() {
     // Provider request ID and metadata
     assert_column(&pool, "ai_usage_events", "provider_request_id", "text").await;
     assert_column(&pool, "ai_usage_events", "metadata", "jsonb").await;
-    assert_column(&pool, "ai_usage_events", "created_at", "timestamp with time zone").await;
+    assert_column(
+        &pool,
+        "ai_usage_events",
+        "created_at",
+        "timestamp with time zone",
+    )
+    .await;
 
     // UUID default on id
     assert_column_default_contains(&pool, "ai_usage_events", "id", "gen_random_uuid").await;
@@ -318,7 +407,10 @@ async fn test_ai_usage_events_schema() {
     .await
     .expect("query RLS policies");
 
-    assert!(policy_count >= 1, "Expected tenant RLS policy on ai_usage_events");
+    assert!(
+        policy_count >= 1,
+        "Expected tenant RLS policy on ai_usage_events"
+    );
 }
 
 #[tokio::test]

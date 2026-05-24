@@ -7,14 +7,22 @@
 
 use anyhow::{Context, Result};
 use billforge_core::{
-    domain::{CaptureStatus, OcrExtractionResult, QueueType},
-    traits::{InvoiceRepository, StorageService, WorkQueueRepository},
+    domain::{CaptureStatus, OcrExtractionResult, ProcessingStatus, QueueType},
+    traits::{
+        ApprovalRepository, InvoiceRepository, StorageService, WorkQueueRepository,
+        WorkflowRuleRepository,
+    },
     types::Money,
 };
-use billforge_db::{LocalStorageService, repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl}};
+use billforge_db::{
+    repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl},
+    LocalStorageService,
+};
 use billforge_invoice_capture::ocr;
 use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
+use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
+use std::sync::Arc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -37,15 +45,15 @@ pub async fn process_ocr(
     config: &WorkerConfig,
     retry_count: u32,
 ) -> Result<()> {
-    let payload: OcrJobPayload = serde_json::from_value(payload.clone())
-        .context("Invalid OcrProcess job payload")?;
+    let payload: OcrJobPayload =
+        serde_json::from_value(payload.clone()).context("Invalid OcrProcess job payload")?;
 
-    let tenant_id: billforge_core::TenantId = tenant_id.parse()
-        .context("Invalid tenant ID")?;
-    let invoice_id: billforge_core::domain::InvoiceId = payload.invoice_id.parse()
+    let tenant_id: billforge_core::TenantId = tenant_id.parse().context("Invalid tenant ID")?;
+    let invoice_id: billforge_core::domain::InvoiceId = payload
+        .invoice_id
+        .parse()
         .map_err(|_| anyhow::anyhow!("Invalid invoice ID: {}", payload.invoice_id))?;
-    let document_id: Uuid = payload.document_id.parse()
-        .context("Invalid document ID")?;
+    let document_id: Uuid = payload.document_id.parse().context("Invalid document ID")?;
 
     info!(
         tenant_id = %tenant_id,
@@ -61,21 +69,31 @@ pub async fn process_ocr(
     // Download and run OCR - if anything fails before we can update the
     // invoice, mark it as Failed so it doesn't stay stuck in Processing.
     let doc_bytes = match async {
-        let storage = LocalStorageService::new(&config.storage_base_path).await
+        let storage = LocalStorageService::new(&config.storage_base_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to create storage service: {}", e))?;
-        storage.download(&tenant_id, document_id).await
+        storage
+            .download(&tenant_id, document_id)
+            .await
             .context("Failed to download document from storage")
-    }.await {
+    }
+    .await
+    {
         Ok(bytes) => bytes,
         Err(e) => {
             if retry_count + 1 >= MAX_RETRIES {
                 // Final attempt failed - mark invoice as Failed and route to error queue
                 error!(invoice_id = %invoice_id, error = %e, "Document download failed after all retries");
-                let _ = repo.update(
-                    &tenant_id, &invoice_id,
-                    serde_json::json!({ "notes": format!("OCR job error: {}", e) }),
-                ).await;
-                let _ = repo.update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed).await;
+                let _ = repo
+                    .update(
+                        &tenant_id,
+                        &invoice_id,
+                        serde_json::json!({ "notes": format!("OCR job error: {}", e) }),
+                    )
+                    .await;
+                let _ = repo
+                    .update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed)
+                    .await;
                 route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
             } else {
                 warn!(invoice_id = %invoice_id, error = %e, retry = retry_count, "Document download failed, will retry");
@@ -90,14 +108,20 @@ pub async fn process_ocr(
             let primary = ocr::create_provider(&config.ocr_provider);
             let fallback = ocr::create_provider(fallback_name);
             let engine = OcrWithFallback::new(primary, fallback);
-            engine.extract_with_fallback(&doc_bytes, &payload.content_type).await
+            engine
+                .extract_with_fallback(&doc_bytes, &payload.content_type)
+                .await
         } else {
             let ocr_provider = ocr::create_provider(&config.ocr_provider);
-            ocr_provider.extract(&doc_bytes, &payload.content_type).await
+            ocr_provider
+                .extract(&doc_bytes, &payload.content_type)
+                .await
         }
     } else {
         let ocr_provider = ocr::create_provider(&config.ocr_provider);
-        ocr_provider.extract(&doc_bytes, &payload.content_type).await
+        ocr_provider
+            .extract(&doc_bytes, &payload.content_type)
+            .await
     };
 
     // Process OCR result and update the invoice
@@ -117,9 +141,9 @@ pub async fn process_ocr(
                             &tenant_id, &invoice_id,
                             serde_json::json!({ "notes": format!("OCR extraction error: {}", reason) }),
                         ).await;
-                        let _ = repo.update_capture_status(
-                            &tenant_id, &invoice_id, CaptureStatus::Failed,
-                        ).await;
+                        let _ = repo
+                            .update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed)
+                            .await;
                         route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
                     } else {
                         warn!(
@@ -189,9 +213,9 @@ pub async fn process_ocr(
                         &tenant_id, &invoice_id,
                         serde_json::json!({ "notes": format!("OCR field update error: {}", e) }),
                     ).await;
-                    let _ = repo.update_capture_status(
-                        &tenant_id, &invoice_id, CaptureStatus::Failed,
-                    ).await;
+                    let _ = repo
+                        .update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed)
+                        .await;
                     route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
                 } else {
                     warn!(
@@ -210,11 +234,16 @@ pub async fn process_ocr(
             if retry_count + 1 >= MAX_RETRIES {
                 // Final attempt - mark as Failed and route to error queue
                 error!(invoice_id = %invoice_id, error = %e, "OCR extraction failed after all retries");
-                let _ = repo.update(
-                    &tenant_id, &invoice_id,
-                    serde_json::json!({ "notes": format!("OCR Error: {}", e) }),
-                ).await;
-                let _ = repo.update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed).await;
+                let _ = repo
+                    .update(
+                        &tenant_id,
+                        &invoice_id,
+                        serde_json::json!({ "notes": format!("OCR Error: {}", e) }),
+                    )
+                    .await;
+                let _ = repo
+                    .update_capture_status(&tenant_id, &invoice_id, CaptureStatus::Failed)
+                    .await;
                 route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
             } else {
                 warn!(invoice_id = %invoice_id, error = %e, retry = retry_count, "OCR extraction failed, will retry");
@@ -231,6 +260,16 @@ pub async fn process_ocr(
     // If OCR produced low confidence, route to error queue
     if capture_status == CaptureStatus::Failed {
         route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+    } else if let Ok(result) = &ocr_result {
+        if let Err(e) =
+            run_straight_through_processing(&repo, &pool, &tenant_id, &invoice_id, result).await
+        {
+            warn!(
+                invoice_id = %invoice_id,
+                error = %e,
+                "Straight-through categorization/workflow failed; invoice remains ready for review"
+            );
+        }
     }
 
     info!(
@@ -241,6 +280,224 @@ pub async fn process_ocr(
     );
 
     Ok(())
+}
+
+async fn run_straight_through_processing(
+    repo: &InvoiceRepositoryImpl,
+    pool: &Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    ocr_result: &OcrExtractionResult,
+) -> Result<()> {
+    let mut invoice = repo
+        .get_by_id(tenant_id, invoice_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Invoice disappeared after OCR update"))?;
+
+    if invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none() {
+        let had_gl_code = invoice.gl_code.is_some();
+        let had_department = invoice.department.is_some();
+        let had_cost_center = invoice.cost_center.is_some();
+
+        let line_items = line_items_from_ocr(ocr_result, &invoice);
+        let total = ocr_result
+            .total_amount
+            .value
+            .unwrap_or(invoice.total_amount.amount as f64 / 100.0);
+        let tenant_id_str = tenant_id.to_string();
+        let cat_engine = billforge_invoice_processing::CategorizationEngine::new((**pool).clone());
+
+        let cat_result = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
+            let ml_categorizer =
+                billforge_invoice_processing::MLCategorizer::new((**pool).clone(), openai_api_key);
+
+            match ml_categorizer
+                .suggest_categories_ml(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
+            {
+                Ok(ml_result) => Ok(ml_result),
+                Err(e) => {
+                    warn!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        "ML categorization failed after OCR, falling back to rule-based"
+                    );
+                    cat_engine
+                        .suggest_categories(
+                            &tenant_id_str,
+                            invoice.vendor_id,
+                            &invoice.vendor_name,
+                            &line_items,
+                            total,
+                        )
+                        .await
+                }
+            }
+        } else {
+            cat_engine
+                .suggest_categories(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
+        };
+
+        match cat_result {
+            Ok(categorization) => {
+                let mut updates = serde_json::json!({
+                    "categorization_confidence": categorization.overall_confidence,
+                });
+
+                if !had_gl_code {
+                    updates["gl_code"] =
+                        serde_json::json!(categorization.gl_code.as_ref().map(|s| &s.value));
+                }
+                if !had_department {
+                    updates["department"] =
+                        serde_json::json!(categorization.department.as_ref().map(|s| &s.value));
+                }
+                if !had_cost_center {
+                    updates["cost_center"] =
+                        serde_json::json!(categorization.cost_center.as_ref().map(|s| &s.value));
+                }
+
+                repo.update(tenant_id, invoice_id, updates).await?;
+                if let Some(refetched) = repo.get_by_id(tenant_id, invoice_id).await? {
+                    invoice = refetched;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Auto-categorization failed after OCR"
+                );
+            }
+        }
+    }
+
+    repo.update_processing_status(tenant_id, invoice_id, ProcessingStatus::Submitted)
+        .await?;
+
+    let workflow_repo = WorkflowRepositoryImpl::new(pool.clone());
+    let engine = billforge_invoice_processing::WorkflowEngine::new(
+        Arc::new(InvoiceRepositoryImpl::new(pool.clone())) as Arc<dyn InvoiceRepository>,
+        Arc::new(workflow_repo) as Arc<dyn WorkflowRuleRepository>,
+        Arc::new(WorkflowRepositoryImpl::new(pool.clone())) as Arc<dyn ApprovalRepository>,
+    );
+    let final_status = engine.process_invoice(tenant_id, &invoice).await?;
+
+    repo.update_processing_status(tenant_id, invoice_id, final_status)
+        .await?;
+    route_to_processing_queue(pool, tenant_id, invoice_id, final_status).await;
+
+    info!(
+        invoice_id = %invoice_id,
+        processing_status = ?final_status,
+        "Straight-through OCR categorization/workflow completed"
+    );
+
+    Ok(())
+}
+
+fn line_items_from_ocr(
+    result: &OcrExtractionResult,
+    invoice: &billforge_core::domain::Invoice,
+) -> Vec<LineItemInput> {
+    let extracted = result
+        .line_items
+        .iter()
+        .map(|item| LineItemInput {
+            description: item.description.value.clone().unwrap_or_default(),
+            quantity: item.quantity.value,
+            amount: item.amount.value.unwrap_or(0.0),
+        })
+        .filter(|item| !item.description.is_empty() || item.amount > 0.0)
+        .collect::<Vec<_>>();
+
+    if !extracted.is_empty() {
+        return extracted;
+    }
+
+    invoice
+        .line_items
+        .iter()
+        .map(|item| LineItemInput {
+            description: item.description.clone(),
+            quantity: item.quantity,
+            amount: item.amount.amount as f64 / 100.0,
+        })
+        .collect()
+}
+
+async fn route_to_processing_queue(
+    pool: &Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    status: ProcessingStatus,
+) {
+    let queue_type = match status {
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment => QueueType::Payment,
+        ProcessingStatus::PendingApproval => QueueType::Approval,
+        ProcessingStatus::Rejected | ProcessingStatus::Voided | ProcessingStatus::Paid => return,
+        _ => QueueType::Review,
+    };
+
+    let queue_repo = WorkflowRepositoryImpl::new(pool.clone());
+    match WorkQueueRepository::get_by_type(&queue_repo, tenant_id, queue_type).await {
+        Ok(Some(queue)) => {
+            if let Err(e) =
+                WorkQueueRepository::move_item(&queue_repo, tenant_id, invoice_id, &queue.id, None)
+                    .await
+            {
+                warn!(
+                    invoice_id = %invoice_id,
+                    queue_id = %queue.id,
+                    error = %e,
+                    "Failed to create workflow queue item after OCR"
+                );
+            }
+
+            if let Err(e) = sqlx::query(
+                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
+            )
+            .bind(queue.id.0)
+            .bind(invoice_id.as_uuid())
+            .execute(&**pool)
+            .await
+            {
+                warn!(
+                    invoice_id = %invoice_id,
+                    queue_id = %queue.id,
+                    error = %e,
+                    "Failed to update invoice queue after OCR"
+                );
+            }
+        }
+        Ok(None) => {
+            warn!(
+                invoice_id = %invoice_id,
+                queue_type = ?queue_type,
+                "No workflow queue found after OCR"
+            );
+        }
+        Err(e) => {
+            warn!(
+                invoice_id = %invoice_id,
+                error = %e,
+                "Failed to look up workflow queue after OCR"
+            );
+        }
+    }
 }
 
 /// Route an invoice to the OcrError work queue for manual review.
@@ -254,8 +511,14 @@ async fn route_to_ocr_error_queue(
     match WorkQueueRepository::get_by_type(&queue_repo, tenant_id, QueueType::OcrError).await {
         Ok(Some(error_queue)) => {
             if let Err(e) = WorkQueueRepository::move_item(
-                &queue_repo, tenant_id, invoice_id, &error_queue.id, None,
-            ).await {
+                &queue_repo,
+                tenant_id,
+                invoice_id,
+                &error_queue.id,
+                None,
+            )
+            .await
+            {
                 warn!(invoice_id = %invoice_id, error = %e, "Failed to create OCR error queue item");
             }
             if let Err(e) = sqlx::query(
@@ -264,7 +527,8 @@ async fn route_to_ocr_error_queue(
             .bind(error_queue.id.0)
             .bind(invoice_id.as_uuid())
             .execute(&**pool)
-            .await {
+            .await
+            {
                 warn!(invoice_id = %invoice_id, error = %e, "Failed to update invoice current_queue_id");
             }
         }
@@ -309,12 +573,7 @@ fn build_invoice_update_from_ocr(
         .invoice_number
         .value
         .clone()
-        .unwrap_or_else(|| {
-            format!(
-                "UPLOAD-{}",
-                &document_id.to_string()[..8].to_uppercase()
-            )
-        });
+        .unwrap_or_else(|| format!("UPLOAD-{}", &document_id.to_string()[..8].to_uppercase()));
     let currency = result
         .currency
         .value

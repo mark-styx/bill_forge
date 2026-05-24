@@ -3,8 +3,9 @@
 //! Implements database-per-tenant isolation using PostgreSQL schemas.
 //! Each tenant gets a dedicated database with its own connection pool.
 
+use crate::migrations::MigrationRunner;
 use billforge_core::{Error, Result, TenantId};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -32,7 +33,9 @@ impl PgManager {
             .max_connections(5)
             .connect(metadata_db_url)
             .await
-            .map_err(|e| Error::Database(format!("Failed to connect to metadata database: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to connect to metadata database: {}", e))
+            })?;
 
         Ok(Self {
             metadata_pool,
@@ -60,13 +63,11 @@ impl PgManager {
         }
 
         // Verify tenant exists in metadata
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
-        )
-        .bind(tenant_id.as_uuid())
-        .fetch_one(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to check tenant existence: {}", e)))?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)")
+            .bind(tenant_id.as_uuid())
+            .fetch_one(&self.metadata_pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to check tenant existence: {}", e)))?;
 
         if !exists {
             return Err(Error::TenantNotFound(tenant_key));
@@ -81,7 +82,12 @@ impl PgManager {
             .max_connections(10)
             .connect(&tenant_url)
             .await
-            .map_err(|e| Error::Database(format!("Failed to connect to tenant database {}: {}", db_name, e)))?;
+            .map_err(|e| {
+                Error::Database(format!(
+                    "Failed to connect to tenant database {}: {}",
+                    db_name, e
+                ))
+            })?;
 
         let pool = Arc::new(pool);
 
@@ -100,15 +106,13 @@ impl PgManager {
         let db_name = format!("tenant_{}", tenant_key.replace('-', "_"));
 
         // Insert into metadata database
-        sqlx::query(
-            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
-        )
-        .bind(tenant_id.as_uuid())
-        .bind(name)
-        .bind(slugify(name))
-        .execute(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to create tenant in metadata: {}", e)))?;
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(tenant_id.as_uuid())
+            .bind(name)
+            .bind(slugify(name))
+            .execute(&self.metadata_pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to create tenant in metadata: {}", e)))?;
 
         // Create the tenant database
         self.ensure_tenant_database(&db_name).await?;
@@ -119,13 +123,14 @@ impl PgManager {
     /// Ensure a tenant database exists
     async fn ensure_tenant_database(&self, db_name: &str) -> Result<()> {
         // Check if database exists
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
-        )
-        .bind(db_name)
-        .fetch_one(&self.metadata_pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to check database existence: {}", e)))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                .bind(db_name)
+                .fetch_one(&self.metadata_pool)
+                .await
+                .map_err(|e| {
+                    Error::Database(format!("Failed to check database existence: {}", e))
+                })?;
 
         if !exists {
             // Create database (cannot use parameters in CREATE DATABASE)
@@ -133,7 +138,9 @@ impl PgManager {
             sqlx::query(&create_sql)
                 .execute(&self.metadata_pool)
                 .await
-                .map_err(|e| Error::Database(format!("Failed to create database {}: {}", db_name, e)))?;
+                .map_err(|e| {
+                    Error::Database(format!("Failed to create database {}: {}", db_name, e))
+                })?;
 
             tracing::info!("Created tenant database: {}", db_name);
         }
@@ -164,7 +171,9 @@ impl PgManager {
             .bind(tenant_id.as_uuid())
             .execute(&self.metadata_pool)
             .await
-            .map_err(|e| Error::Database(format!("Failed to delete tenant from metadata: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to delete tenant from metadata: {}", e))
+            })?;
 
         tracing::info!("Deleted tenant database: {}", db_name);
         Ok(())
@@ -178,8 +187,9 @@ impl PgManager {
             .map_err(|e| Error::Database(format!("Failed to list tenants: {}", e)))?;
 
         for tenant_id_str in tenants {
-            let tenant_id: TenantId = tenant_id_str.parse()
-                .map_err(|e| Error::Database(format!("Invalid tenant ID {}: {}", tenant_id_str, e)))?;
+            let tenant_id: TenantId = tenant_id_str.parse().map_err(|e| {
+                Error::Database(format!("Invalid tenant ID {}: {}", tenant_id_str, e))
+            })?;
             let pool = self.tenant(&tenant_id).await?;
             self.run_tenant_migrations(&pool).await?;
         }
@@ -190,27 +200,51 @@ impl PgManager {
     /// Run migrations on a single tenant database
     pub async fn run_tenant_migrations(&self, pool: &PgPool) -> Result<()> {
         tracing::info!("Running tenant migrations...");
+        let migration_runner = MigrationRunner::new();
 
         // Run all migrations in order
         // These are the same migrations used by the migrate binary
         let migrations = vec![
-            ("001_create_tenants.sql", include_str!("../../../migrations/001_create_tenants.sql")),
-            ("002_create_users.sql", include_str!("../../../migrations/002_create_users.sql")),
-            ("003_create_vendors.sql", include_str!("../../../migrations/003_create_vendors.sql")),
-            ("004_create_invoices.sql", include_str!("../../../migrations/004_create_invoices.sql")),
-            ("005_create_workflow_tables.sql", include_str!("../../../migrations/005_create_workflow_tables.sql")),
-            ("006_create_quickbooks_tables.sql", include_str!("../../../migrations/006_create_quickbooks_tables.sql")),
-            ("007_create_vendor_documents.sql", include_str!("../../../migrations/007_create_vendor_documents.sql")),
-            ("008_create_vendor_contacts.sql", include_str!("../../../migrations/008_create_vendor_contacts.sql")),
-            ("009_create_email_notifications.sql", include_str!("../../../migrations/009_create_email_notifications.sql")),
+            (
+                "001_create_tenants.sql",
+                include_str!("../../../migrations/001_create_tenants.sql"),
+            ),
+            (
+                "002_create_users.sql",
+                include_str!("../../../migrations/002_create_users.sql"),
+            ),
+            (
+                "003_create_vendors.sql",
+                include_str!("../../../migrations/003_create_vendors.sql"),
+            ),
+            (
+                "004_create_invoices.sql",
+                include_str!("../../../migrations/004_create_invoices.sql"),
+            ),
+            (
+                "005_create_workflow_tables.sql",
+                include_str!("../../../migrations/005_create_workflow_tables.sql"),
+            ),
+            (
+                "006_create_quickbooks_tables.sql",
+                include_str!("../../../migrations/006_create_quickbooks_tables.sql"),
+            ),
+            (
+                "007_create_vendor_documents.sql",
+                include_str!("../../../migrations/007_create_vendor_documents.sql"),
+            ),
+            (
+                "008_create_vendor_contacts.sql",
+                include_str!("../../../migrations/008_create_vendor_contacts.sql"),
+            ),
+            (
+                "009_create_email_notifications.sql",
+                include_str!("../../../migrations/009_create_email_notifications.sql"),
+            ),
         ];
 
         for (name, sql) in migrations {
-            tracing::debug!("Running migration: {}", name);
-            sqlx::raw_sql(sql)
-                .execute(pool)
-                .await
-                .map_err(|e| Error::Database(format!("Failed to run migration {}: {}", name, e)))?;
+            migration_runner.apply(pool, name, sql).await?;
         }
 
         // Run additional migration groups (idempotent, uses IF NOT EXISTS)
@@ -219,46 +253,58 @@ impl PgManager {
         crate::tenant_db::run_edi_outbound_migrations(pool).await?;
 
         // Intelligent routing tables (idempotent, uses IF NOT EXISTS)
-        tracing::debug!("Running migration: 051_add_intelligent_routing.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/051_add_intelligent_routing.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run intelligent routing migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "051_add_intelligent_routing.sql",
+                include_str!("../../../migrations/051_add_intelligent_routing.sql"),
+            )
+            .await?;
 
         // Integration webhook support (nonces table + webhook_secret columns)
-        tracing::debug!("Running migration: 070_add_integration_webhook_support.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/070_add_integration_webhook_support.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run integration webhook migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "070_add_integration_webhook_support.sql",
+                include_str!("../../../migrations/070_add_integration_webhook_support.sql"),
+            )
+            .await?;
 
         // Core tenant FK constraints (users, vendors, invoices -> tenants)
-        tracing::debug!("Running migration: 071_add_core_tenant_fk_constraints.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run core tenant FK migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "071_add_core_tenant_fk_constraints.sql",
+                include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql"),
+            )
+            .await?;
 
         // Feedback correction rules + confidence calibration
-        tracing::debug!("Running migration: 072_add_feedback_correction_rules.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/072_add_feedback_correction_rules.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run feedback correction rules migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "072_add_feedback_correction_rules.sql",
+                include_str!("../../../migrations/072_add_feedback_correction_rules.sql"),
+            )
+            .await?;
 
         // Vendor columns for QuickBooks sync (email, phone, vendor_type, status)
-        tracing::debug!("Running migration: 074_add_vendor_sync_columns.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/074_add_vendor_sync_columns.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run vendor sync columns migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "074_add_vendor_sync_columns.sql",
+                include_str!("../../../migrations/074_add_vendor_sync_columns.sql"),
+            )
+            .await?;
 
         // Row Level Security on core tenant tables (invoices, users, vendors)
-        tracing::debug!("Running migration: 080_enable_rls_core_tables.sql");
-        sqlx::raw_sql(include_str!("../../../migrations/080_enable_rls_core_tables.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to run RLS migration: {}", e)))?;
+        migration_runner
+            .apply(
+                pool,
+                "080_enable_rls_core_tables.sql",
+                include_str!("../../../migrations/080_enable_rls_core_tables.sql"),
+            )
+            .await?;
 
         // AI conversations and messages (scoped by tenant + user)
         crate::tenant_db::run_ai_conversation_migrations(pool).await?;
@@ -278,13 +324,7 @@ impl PgManager {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())

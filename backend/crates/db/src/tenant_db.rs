@@ -2,31 +2,28 @@
 //!
 //! Provides migration functions for tenant databases
 
-use billforge_core::{Error, Result, TenantId};
+use billforge_core::{Result, TenantId};
 use sqlx::PgPool;
+
+async fn apply_migration(pool: &PgPool, name: &str, sql: &str) -> Result<()> {
+    crate::migrations::MigrationRunner::new()
+        .apply(pool, name, sql)
+        .await
+}
 
 /// Run all migrations for a tenant database
 pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Result<()> {
     // Migration 002: Users table
     let migration_002 = include_str!("../../../migrations/002_create_users.sql");
-    sqlx::raw_sql(migration_002)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run migration 002: {}", e)))?;
+    apply_migration(pool, "002_create_users.sql", migration_002).await?;
 
     // Migration 003: Vendors table
     let migration_003 = include_str!("../../../migrations/003_create_vendors.sql");
-    sqlx::raw_sql(migration_003)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run migration 003: {}", e)))?;
+    apply_migration(pool, "003_create_vendors.sql", migration_003).await?;
 
     // Migration 004: Invoices table
     let migration_004 = include_str!("../../../migrations/004_create_invoices.sql");
-    sqlx::raw_sql(migration_004)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run migration 004: {}", e)))?;
+    apply_migration(pool, "004_create_invoices.sql", migration_004).await?;
 
     // Additional tenant-specific tables (work queues, workflow rules, etc.)
     run_workflow_migrations(pool).await?;
@@ -47,20 +44,16 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
 pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
     // Core workflow tables from canonical migration file
     let migration_005 = include_str!("../../../migrations/005_create_workflow_tables.sql");
-    sqlx::raw_sql(migration_005)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run workflow migration 005: {}", e)))?;
+    apply_migration(pool, "005_create_workflow_tables.sql", migration_005).await?;
 
     // Workflow templates from canonical migration file
     let migration_057 = include_str!("../../../migrations/057_create_workflow_templates.sql");
-    sqlx::raw_sql(migration_057)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run workflow migration 057: {}", e)))?;
+    apply_migration(pool, "057_create_workflow_templates.sql", migration_057).await?;
 
     // Non-workflow tables that were historically bundled here
-    sqlx::raw_sql(
+    apply_migration(
+        pool,
+        "inline_workflow_support_tables.sql",
         r#"
         -- Documents table
         CREATE TABLE IF NOT EXISTS documents (
@@ -203,16 +196,16 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_edi_nonces_received_at ON edi_webhook_nonces(received_at);
         "#,
     )
-    .execute(pool)
-    .await
-    .map_err(|e| Error::Migration(format!("Failed to run non-workflow migrations: {}", e)))?;
+    .await?;
 
     Ok(())
 }
 
 /// Run vendor statement migrations
 async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(
+    apply_migration(
+        pool,
+        "inline_vendor_statement_support_tables.sql",
         r#"
         -- Invoice line items
         CREATE TABLE IF NOT EXISTS invoice_line_items (
@@ -318,36 +311,31 @@ async fn run_vendor_statement_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_vendor_statements_status ON vendor_statements(tenant_id, status);
         "#,
     )
-    .execute(pool)
-    .await
-    .map_err(|e| Error::Migration(format!("Failed to run vendor statement migrations: {}", e)))?;
+    .await?;
 
     Ok(())
 }
 
 /// Run purchase order and 3-way matching migrations
 pub async fn run_purchase_order_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!("../../../migrations/065_create_purchase_orders.sql"))
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run purchase order migrations: {}", e)))?;
+    apply_migration(
+        pool,
+        "065_create_purchase_orders.sql",
+        include_str!("../../../migrations/065_create_purchase_orders.sql"),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Run EDI outbound and ack tracking migrations
 pub async fn run_edi_outbound_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/066_edi_outbound_ack_tracking.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run EDI outbound/ack migrations: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "066_edi_outbound_ack_tracking.sql",
+        include_str!("../../../migrations/066_edi_outbound_ack_tracking.sql"),
+    )
+    .await?;
 
     Ok(())
 }
@@ -355,73 +343,54 @@ pub async fn run_edi_outbound_migrations(pool: &PgPool) -> Result<()> {
 /// Run categorization ML migrations (vendor embeddings, feedback, metrics)
 async fn run_categorization_migrations(pool: &PgPool) -> Result<()> {
     // Enable pgvector extension
-    sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to enable vector extension: {}", e)))?;
+    apply_migration(
+        pool,
+        "inline_enable_pgvector.sql",
+        "CREATE EXTENSION IF NOT EXISTS vector",
+    )
+    .await?;
 
     let migration_048 = include_str!("../../../migrations/048_add_categorization_ml.sql");
-    sqlx::raw_sql(migration_048)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run categorization migration 048: {}", e)))?;
+    apply_migration(pool, "048_add_categorization_ml.sql", migration_048).await?;
 
     let migration_049 = include_str!("../../../migrations/049_add_categorization_confidence.sql");
-    sqlx::raw_sql(migration_049)
-        .execute(pool)
-        .await
-        .map_err(|e| Error::Migration(format!("Failed to run categorization migration 049: {}", e)))?;
+    apply_migration(pool, "049_add_categorization_confidence.sql", migration_049).await?;
 
     Ok(())
 }
 
 /// Run vendor statement reconciliation migrations (vendor_statement_lines table)
 async fn run_reconciliation_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/068_create_vendor_statements.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run vendor statement reconciliation migrations: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "068_create_vendor_statements.sql",
+        include_str!("../../../migrations/068_create_vendor_statements.sql"),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Run invoice status state machine and audit log migrations
 pub async fn run_invoice_state_machine_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/076_invoice_status_and_audit.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run invoice state machine migrations: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "076_invoice_status_and_audit.sql",
+        include_str!("../../../migrations/076_invoice_status_and_audit.sql"),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Run dashboard KPIs materialized view migration
 pub async fn run_dashboard_kpis_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/078_dashboard_kpis.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run dashboard KPIs migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "078_dashboard_kpis.sql",
+        include_str!("../../../migrations/078_dashboard_kpis.sql"),
+    )
+    .await?;
 
     Ok(())
 }
@@ -432,94 +401,59 @@ pub async fn run_dashboard_kpis_migrations(pool: &PgPool) -> Result<()> {
 /// Postgres will filter rows to only those matching the session variable
 /// `app.current_tenant_id`.
 pub async fn run_rls_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/080_enable_rls_core_tables.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run RLS migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "080_enable_rls_core_tables.sql",
+        include_str!("../../../migrations/080_enable_rls_core_tables.sql"),
+    )
+    .await?;
 
     Ok(())
 }
 
 /// Run AI conversations and messages migrations
 pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/082_create_ai_conversations.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI conversations migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "082_create_ai_conversations.sql",
+        include_str!("../../../migrations/082_create_ai_conversations.sql"),
+    )
+    .await?;
 
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/083_create_ai_tool_call_persistence.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI tool call persistence migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "083_create_ai_tool_call_persistence.sql",
+        include_str!("../../../migrations/083_create_ai_tool_call_persistence.sql"),
+    )
+    .await?;
 
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/084_create_ai_usage_events.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI usage events migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "084_create_ai_usage_events.sql",
+        include_str!("../../../migrations/084_create_ai_usage_events.sql"),
+    )
+    .await?;
 
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/085_create_ai_message_feedback.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI message feedback migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "085_create_ai_message_feedback.sql",
+        include_str!("../../../migrations/085_create_ai_message_feedback.sql"),
+    )
+    .await?;
 
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/086_create_ai_action_proposals.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI action proposals migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "086_create_ai_action_proposals.sql",
+        include_str!("../../../migrations/086_create_ai_action_proposals.sql"),
+    )
+    .await?;
 
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/087_ai_action_proposal_status_failed_errors.sql"
-    ))
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        Error::Migration(format!(
-            "Failed to run AI action proposal status migration: {}",
-            e
-        ))
-    })?;
+    apply_migration(
+        pool,
+        "087_ai_action_proposal_status_failed_errors.sql",
+        include_str!("../../../migrations/087_ai_action_proposal_status_failed_errors.sql"),
+    )
+    .await?;
 
     Ok(())
 }
