@@ -143,6 +143,13 @@ pub enum AuditAction {
     InvoiceMarkedForPayment,
     InvoicePaid,
 
+    // AI action proposal lifecycle
+    AiActionProposalCreated,
+    AiActionProposalApproved,
+    AiActionProposalRejected,
+    AiActionProposalExecuted,
+    AiActionProposalFailed,
+
     // Queue operations
     MovedToQueue,
     AssignedToUser,
@@ -190,6 +197,11 @@ impl AuditAction {
             AuditAction::InvoiceVoided => "Voided invoice",
             AuditAction::InvoiceMarkedForPayment => "Marked invoice for payment",
             AuditAction::InvoicePaid => "Marked invoice as paid",
+            AuditAction::AiActionProposalCreated => "Created AI action proposal",
+            AuditAction::AiActionProposalApproved => "Approved AI action proposal",
+            AuditAction::AiActionProposalRejected => "Rejected AI action proposal",
+            AuditAction::AiActionProposalExecuted => "Executed AI action proposal",
+            AuditAction::AiActionProposalFailed => "AI action proposal failed",
             AuditAction::MovedToQueue => "Moved to queue",
             AuditAction::AssignedToUser => "Assigned to user",
             AuditAction::Claimed => "Claimed work item",
@@ -228,6 +240,7 @@ pub enum ResourceType {
     WorkflowTemplate,
     ApprovalDelegation,
     ApprovalLimit,
+    AiActionProposal,
 }
 
 impl ResourceType {
@@ -249,6 +262,7 @@ impl ResourceType {
             ResourceType::WorkflowTemplate => "Workflow Template",
             ResourceType::ApprovalDelegation => "Approval Delegation",
             ResourceType::ApprovalLimit => "Approval Limit",
+            ResourceType::AiActionProposal => "AI Action Proposal",
         }
     }
 }

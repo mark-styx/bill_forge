@@ -201,6 +201,28 @@ async fn setup_minimal_schema(pool: &sqlx::PgPool) {
         .await
         .expect("create users table");
 
+    sqlx::raw_sql(
+        r#"
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            user_id UUID NOT NULL REFERENCES users(id),
+            action TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT,
+            changes JSONB,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("create audit_log table");
+
     let migration_082 = include_str!("../../../migrations/082_create_ai_conversations.sql");
     sqlx::raw_sql(migration_082)
         .execute(pool)

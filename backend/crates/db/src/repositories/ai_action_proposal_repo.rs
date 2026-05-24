@@ -1,9 +1,12 @@
 //! AI action proposal repository implementation
 
-use billforge_core::{Error, Result, TenantId, UserId};
+use billforge_core::{
+    domain::{AuditAction, ResourceType},
+    Error, Result, TenantId, UserId,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -128,6 +131,12 @@ impl AiActionProposalRepositoryImpl {
         user_id: &UserId,
         input: CreateAiActionProposalInput,
     ) -> Result<AiActionProposalRecord> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+
         let row: AiActionProposalRow = sqlx::query_as::<_, AiActionProposalRow>(
             r#"INSERT INTO ai_action_proposals (
                     tenant_id, user_id, conversation_id, tool_name, payload, risk, permission
@@ -143,11 +152,18 @@ impl AiActionProposalRepositoryImpl {
         .bind(&input.payload)
         .bind(input.risk.as_str())
         .bind(&input.permission)
-        .fetch_one(&*self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to create action proposal: {}", e)))?;
 
-        row.into_record()
+        let proposal = row.into_record()?;
+        Self::write_proposal_created_audit(&mut tx, &proposal).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit action proposal: {}", e)))?;
+
+        Ok(proposal)
     }
 
     /// Load an action proposal scoped by tenant and user.
@@ -258,6 +274,35 @@ impl AiActionProposalRepositoryImpl {
                 (None, None)
             };
 
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+
+        let old_status: String = sqlx::query_scalar(
+            r#"SELECT status
+               FROM ai_action_proposals
+               WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+               FOR UPDATE"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(proposal_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| {
+            Error::Database(format!(
+                "Failed to load action proposal status for update: {}",
+                e
+            ))
+        })?
+        .ok_or_else(|| Error::NotFound {
+            resource_type: "ai_action_proposal".to_string(),
+            id: proposal_id.to_string(),
+        })?;
+        let old_status = AiActionProposalStatus::from_db(&old_status)?;
+
         let row: AiActionProposalRow = sqlx::query_as::<_, AiActionProposalRow>(
             r#"UPDATE ai_action_proposals
                SET status = $4,
@@ -275,20 +320,130 @@ impl AiActionProposalRepositoryImpl {
         .bind(status.as_str())
         .bind(execution_error_code.as_deref())
         .bind(execution_error_message.as_deref())
-        .fetch_one(&*self.pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::RowNotFound = e {
-                Error::NotFound {
-                    resource_type: "ai_action_proposal".to_string(),
-                    id: proposal_id.to_string(),
-                }
-            } else {
-                Error::Database(format!("Failed to update action proposal status: {}", e))
-            }
+        .map_err(|e| Error::Database(format!("Failed to update action proposal status: {}", e)))?;
+
+        let proposal = row.into_record()?;
+        Self::write_proposal_status_audit(&mut tx, &proposal, old_status).await?;
+
+        tx.commit().await.map_err(|e| {
+            Error::Database(format!(
+                "Failed to commit action proposal status update: {}",
+                e
+            ))
         })?;
 
-        row.into_record()
+        Ok(proposal)
+    }
+
+    async fn write_proposal_created_audit(
+        tx: &mut Transaction<'_, Postgres>,
+        proposal: &AiActionProposalRecord,
+    ) -> Result<()> {
+        Self::insert_audit_log(
+            tx,
+            proposal,
+            AuditAction::AiActionProposalCreated,
+            "AI action proposal created",
+            None,
+            None,
+            serde_json::json!({
+                "conversation_id": proposal.conversation_id,
+                "tool_name": &proposal.tool_name,
+                "risk": proposal.risk.as_str(),
+                "permission": &proposal.permission,
+                "status": proposal.status.as_str(),
+            }),
+        )
+        .await
+    }
+
+    async fn write_proposal_status_audit(
+        tx: &mut Transaction<'_, Postgres>,
+        proposal: &AiActionProposalRecord,
+        old_status: AiActionProposalStatus,
+    ) -> Result<()> {
+        let Some(action) = Self::audit_action_for_status(proposal.status) else {
+            return Ok(());
+        };
+
+        let metadata = if proposal.status == AiActionProposalStatus::Failed {
+            serde_json::json!({
+                "execution_error_code": proposal.execution_error_code.as_deref(),
+                "execution_error_message": proposal.execution_error_message.as_deref(),
+            })
+        } else {
+            serde_json::Value::Null
+        };
+
+        Self::insert_audit_log(
+            tx,
+            proposal,
+            action,
+            action.label(),
+            Some(serde_json::json!(old_status.as_str())),
+            Some(serde_json::json!(proposal.status.as_str())),
+            metadata,
+        )
+        .await
+    }
+
+    fn audit_action_for_status(status: AiActionProposalStatus) -> Option<AuditAction> {
+        match status {
+            AiActionProposalStatus::Pending => None,
+            AiActionProposalStatus::Approved => Some(AuditAction::AiActionProposalApproved),
+            AiActionProposalStatus::Rejected => Some(AuditAction::AiActionProposalRejected),
+            AiActionProposalStatus::Executed => Some(AuditAction::AiActionProposalExecuted),
+            AiActionProposalStatus::Failed => Some(AuditAction::AiActionProposalFailed),
+        }
+    }
+
+    async fn insert_audit_log(
+        tx: &mut Transaction<'_, Postgres>,
+        proposal: &AiActionProposalRecord,
+        action: AuditAction,
+        description: &str,
+        old_value: Option<serde_json::Value>,
+        new_value: Option<serde_json::Value>,
+        metadata: serde_json::Value,
+    ) -> Result<()> {
+        let action_str = serde_json::to_string(&action)
+            .map_err(|e| Error::Database(format!("Failed to serialize audit action: {}", e)))?
+            .trim_matches('"')
+            .to_string();
+        let resource_type_str = serde_json::to_string(&ResourceType::AiActionProposal)
+            .map_err(|e| {
+                Error::Database(format!("Failed to serialize audit resource type: {}", e))
+            })?
+            .trim_matches('"')
+            .to_string();
+
+        sqlx::query(
+            r#"INSERT INTO audit_log (
+                id, tenant_id, user_id, action, resource_type, resource_id,
+                changes, ip_address, user_agent, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(proposal.tenant_id)
+        .bind(proposal.user_id)
+        .bind(action_str)
+        .bind(resource_type_str)
+        .bind(proposal.id.to_string())
+        .bind(serde_json::json!({
+            "description": description,
+            "old_value": old_value,
+            "new_value": new_value,
+            "user_email": null,
+            "metadata": metadata,
+        }))
+        .bind(Utc::now())
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to insert proposal audit entry: {}", e)))?;
+
+        Ok(())
     }
 }
 
