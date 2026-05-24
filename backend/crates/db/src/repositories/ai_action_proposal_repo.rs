@@ -1,8 +1,8 @@
 //! AI action proposal repository implementation
 
 use billforge_core::{
-    Error, Result, TenantId, UserId,
     domain::{AuditAction, ResourceType},
+    Error, Result, TenantId, UserId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -278,6 +278,27 @@ impl AiActionProposalRepositoryImpl {
             user_id,
             proposal_id,
             input,
+            Some(AiActionProposalStatus::Pending),
+        )
+        .await
+    }
+
+    /// Approve an action proposal only when the row is still pending.
+    pub async fn approve_pending_proposal(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        proposal_id: Uuid,
+    ) -> Result<AiActionProposalRecord> {
+        self.update_proposal_status_with_required_current_status(
+            tenant_id,
+            user_id,
+            proposal_id,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Approved,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
             Some(AiActionProposalStatus::Pending),
         )
         .await

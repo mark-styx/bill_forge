@@ -61,7 +61,13 @@ async fn fetch_proposal_audit_row(
 }
 
 async fn assert_single_proposal_audit_row(pool: &sqlx::PgPool, proposal_id: Uuid, action: &str) {
-    let count: i64 = sqlx::query_scalar(
+    let count = count_proposal_audit_rows(pool, proposal_id, action).await;
+
+    assert_eq!(count, 1, "expected exactly one {action} audit row");
+}
+
+async fn count_proposal_audit_rows(pool: &sqlx::PgPool, proposal_id: Uuid, action: &str) -> i64 {
+    sqlx::query_scalar(
         r#"SELECT COUNT(*)
            FROM audit_log
            WHERE resource_id = $1 AND action = $2"#,
@@ -70,9 +76,7 @@ async fn assert_single_proposal_audit_row(pool: &sqlx::PgPool, proposal_id: Uuid
     .bind(action)
     .fetch_one(pool)
     .await
-    .expect("count proposal audit rows");
-
-    assert_eq!(count, 1, "expected exactly one {action} audit row");
+    .expect("count proposal audit rows")
 }
 
 fn assert_common_audit_fields(
@@ -434,6 +438,252 @@ async fn update_status_and_enforce_scoped_access() {
         }
         other => panic!("expected NotFound, got {:?}", other),
     }
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn approve_pending_proposal_approves_pending_and_writes_audit() {
+    let (manager, tenant_id, pool) = setup_single_tenant("approve-pending").await;
+    let user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+
+    let conversation_repo = AiConversationRepositoryImpl::new(pool.clone());
+    let proposal_repo = AiActionProposalRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+
+    let conversation = conversation_repo
+        .create_conversation(&tenant_id, &uid, None, serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let proposal = proposal_repo
+        .create_proposal(
+            &tenant_id,
+            &uid,
+            CreateAiActionProposalInput {
+                conversation_id: conversation.id,
+                tool_name: "approve_invoice".to_string(),
+                payload: serde_json::json!({"invoice_id": "inv-approve"}),
+                risk: AiActionProposalRisk::Medium,
+                permission: "invoice.approve".to_string(),
+            },
+        )
+        .await
+        .expect("create proposal");
+
+    assert_eq!(proposal.status, AiActionProposalStatus::Pending);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let approved = proposal_repo
+        .approve_pending_proposal(&tenant_id, &uid, proposal.id)
+        .await
+        .expect("approve pending proposal");
+
+    assert_eq!(approved.id, proposal.id);
+    assert_eq!(approved.status, AiActionProposalStatus::Approved);
+    assert!(approved.updated_at > proposal.updated_at);
+    assert!(approved.execution_error_code.is_none());
+    assert!(approved.execution_error_message.is_none());
+
+    let loaded = proposal_repo
+        .get_proposal(&tenant_id, &uid, proposal.id)
+        .await
+        .expect("load approved proposal")
+        .expect("proposal should exist");
+
+    assert_eq!(loaded.status, AiActionProposalStatus::Approved);
+    assert!(loaded.execution_error_code.is_none());
+    assert!(loaded.execution_error_message.is_none());
+
+    let audit =
+        fetch_proposal_audit_row(pool.as_ref(), proposal.id, "ai_action_proposal_approved").await;
+    assert_common_audit_fields(
+        &audit,
+        &tenant_id,
+        user_id,
+        proposal.id,
+        "ai_action_proposal_approved",
+    );
+    assert_eq!(audit.changes["old_value"], serde_json::json!("pending"));
+    assert_eq!(audit.changes["new_value"], serde_json::json!("approved"));
+    assert_single_proposal_audit_row(pool.as_ref(), proposal.id, "ai_action_proposal_approved")
+        .await;
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn approve_pending_proposal_wrong_user_returns_not_found_and_preserves_pending() {
+    let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-wrong-user").await;
+    let user_id = Uuid::new_v4();
+    let wrong_user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+    seed_user(pool.as_ref(), &tenant_id, wrong_user_id).await;
+
+    let conversation_repo = AiConversationRepositoryImpl::new(pool.clone());
+    let proposal_repo = AiActionProposalRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+    let wrong_uid = UserId(wrong_user_id);
+
+    let conversation = conversation_repo
+        .create_conversation(&tenant_id, &uid, None, serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let proposal = proposal_repo
+        .create_proposal(
+            &tenant_id,
+            &uid,
+            CreateAiActionProposalInput {
+                conversation_id: conversation.id,
+                tool_name: "approve_invoice".to_string(),
+                payload: serde_json::json!({"invoice_id": "inv-wrong-user"}),
+                risk: AiActionProposalRisk::Low,
+                permission: "invoice.approve".to_string(),
+            },
+        )
+        .await
+        .expect("create proposal");
+
+    let err = proposal_repo
+        .approve_pending_proposal(&tenant_id, &wrong_uid, proposal.id)
+        .await
+        .expect_err("wrong user should not approve proposal");
+
+    match err {
+        billforge_core::Error::NotFound { resource_type, id } => {
+            assert_eq!(resource_type, "ai_action_proposal");
+            assert_eq!(id, proposal.id.to_string());
+        }
+        other => panic!("expected NotFound, got {:?}", other),
+    }
+
+    let loaded = proposal_repo
+        .get_proposal(&tenant_id, &uid, proposal.id)
+        .await
+        .expect("load proposal")
+        .expect("proposal should exist");
+
+    assert_eq!(loaded.status, AiActionProposalStatus::Pending);
+    assert_eq!(
+        count_proposal_audit_rows(pool.as_ref(), proposal.id, "ai_action_proposal_approved").await,
+        0
+    );
+
+    manager.delete_tenant(&tenant_id).await.ok();
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn approve_pending_proposal_rejected_or_approved_returns_conflict() {
+    let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-conflict").await;
+    let user_id = Uuid::new_v4();
+
+    let pool = Arc::new(pool);
+    seed_user(pool.as_ref(), &tenant_id, user_id).await;
+
+    let conversation_repo = AiConversationRepositoryImpl::new(pool.clone());
+    let proposal_repo = AiActionProposalRepositoryImpl::new(pool.clone());
+    let uid = UserId(user_id);
+
+    let conversation = conversation_repo
+        .create_conversation(&tenant_id, &uid, None, serde_json::json!({}))
+        .await
+        .expect("create conversation");
+
+    let create_proposal = |tool_name: &str| CreateAiActionProposalInput {
+        conversation_id: conversation.id,
+        tool_name: tool_name.to_string(),
+        payload: serde_json::json!({"invoice_id": tool_name}),
+        risk: AiActionProposalRisk::Medium,
+        permission: "invoice.approve".to_string(),
+    };
+
+    let rejected_proposal = proposal_repo
+        .create_proposal(&tenant_id, &uid, create_proposal("reject_invoice"))
+        .await
+        .expect("create rejected proposal");
+    proposal_repo
+        .update_proposal_status(
+            &tenant_id,
+            &uid,
+            rejected_proposal.id,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Rejected,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
+        )
+        .await
+        .expect("reject proposal");
+
+    let approved_proposal = proposal_repo
+        .create_proposal(&tenant_id, &uid, create_proposal("approve_invoice"))
+        .await
+        .expect("create approved proposal");
+    proposal_repo
+        .update_proposal_status(
+            &tenant_id,
+            &uid,
+            approved_proposal.id,
+            UpdateAiActionProposalStatusInput {
+                status: AiActionProposalStatus::Approved,
+                execution_error_code: None,
+                execution_error_message: None,
+            },
+        )
+        .await
+        .expect("approve proposal");
+
+    for (proposal_id, expected_status) in [
+        (rejected_proposal.id, AiActionProposalStatus::Rejected),
+        (approved_proposal.id, AiActionProposalStatus::Approved),
+    ] {
+        let err = proposal_repo
+            .approve_pending_proposal(&tenant_id, &uid, proposal_id)
+            .await
+            .expect_err("non-pending proposal should not be approved");
+
+        match err {
+            billforge_core::Error::Conflict(message) => {
+                assert!(message.contains(&proposal_id.to_string()));
+                assert!(message.contains("not pending"));
+            }
+            other => panic!("expected Conflict, got {:?}", other),
+        }
+
+        let loaded = proposal_repo
+            .get_proposal(&tenant_id, &uid, proposal_id)
+            .await
+            .expect("load proposal")
+            .expect("proposal should exist");
+
+        assert_eq!(loaded.status, expected_status);
+    }
+
+    assert_eq!(
+        count_proposal_audit_rows(
+            pool.as_ref(),
+            rejected_proposal.id,
+            "ai_action_proposal_approved"
+        )
+        .await,
+        0
+    );
+    assert_single_proposal_audit_row(
+        pool.as_ref(),
+        approved_proposal.id,
+        "ai_action_proposal_approved",
+    )
+    .await;
 
     manager.delete_tenant(&tenant_id).await.ok();
 }
