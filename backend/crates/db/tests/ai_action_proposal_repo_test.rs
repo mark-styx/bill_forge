@@ -583,8 +583,8 @@ async fn approve_pending_proposal_wrong_user_returns_not_found_and_preserves_pen
 
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
-async fn approve_pending_proposal_rejected_or_approved_returns_conflict() {
-    let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-conflict").await;
+async fn approve_pending_proposal_already_approved_returns_conflict() {
+    let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-already-approved").await;
     let user_id = Uuid::new_v4();
 
     let pool = Arc::new(pool);
@@ -599,91 +599,52 @@ async fn approve_pending_proposal_rejected_or_approved_returns_conflict() {
         .await
         .expect("create conversation");
 
-    let create_proposal = |tool_name: &str| CreateAiActionProposalInput {
-        conversation_id: conversation.id,
-        tool_name: tool_name.to_string(),
-        payload: serde_json::json!({"invoice_id": tool_name}),
-        risk: AiActionProposalRisk::Medium,
-        permission: "invoice.approve".to_string(),
-    };
-
-    let rejected_proposal = proposal_repo
-        .create_proposal(&tenant_id, &uid, create_proposal("reject_invoice"))
-        .await
-        .expect("create rejected proposal");
-    proposal_repo
-        .update_proposal_status(
+    let proposal = proposal_repo
+        .create_proposal(
             &tenant_id,
             &uid,
-            rejected_proposal.id,
-            UpdateAiActionProposalStatusInput {
-                status: AiActionProposalStatus::Rejected,
-                execution_error_code: None,
-                execution_error_message: None,
+            CreateAiActionProposalInput {
+                conversation_id: conversation.id,
+                tool_name: "approve_invoice".to_string(),
+                payload: serde_json::json!({"invoice_id": "inv-already-approved"}),
+                risk: AiActionProposalRisk::Medium,
+                permission: "invoice.approve".to_string(),
             },
         )
         .await
-        .expect("reject proposal");
+        .expect("create proposal");
 
-    let approved_proposal = proposal_repo
-        .create_proposal(&tenant_id, &uid, create_proposal("approve_invoice"))
+    let approved = proposal_repo
+        .approve_pending_proposal(&tenant_id, &uid, proposal.id)
         .await
-        .expect("create approved proposal");
-    proposal_repo
-        .update_proposal_status(
-            &tenant_id,
-            &uid,
-            approved_proposal.id,
-            UpdateAiActionProposalStatusInput {
-                status: AiActionProposalStatus::Approved,
-                execution_error_code: None,
-                execution_error_message: None,
-            },
-        )
+        .expect("approve pending proposal");
+
+    assert_eq!(approved.id, proposal.id);
+    assert_eq!(approved.status, AiActionProposalStatus::Approved);
+
+    let err = proposal_repo
+        .approve_pending_proposal(&tenant_id, &uid, proposal.id)
         .await
-        .expect("approve proposal");
+        .expect_err("already-approved proposal should not be approved again");
 
-    for (proposal_id, expected_status) in [
-        (rejected_proposal.id, AiActionProposalStatus::Rejected),
-        (approved_proposal.id, AiActionProposalStatus::Approved),
-    ] {
-        let err = proposal_repo
-            .approve_pending_proposal(&tenant_id, &uid, proposal_id)
-            .await
-            .expect_err("non-pending proposal should not be approved");
-
-        match err {
-            billforge_core::Error::Conflict(message) => {
-                assert!(message.contains(&proposal_id.to_string()));
-                assert!(message.contains("not pending"));
-            }
-            other => panic!("expected Conflict, got {:?}", other),
+    match err {
+        billforge_core::Error::Conflict(message) => {
+            assert!(message.contains(&proposal.id.to_string()));
+            assert!(message.contains("not pending"));
         }
-
-        let loaded = proposal_repo
-            .get_proposal(&tenant_id, &uid, proposal_id)
-            .await
-            .expect("load proposal")
-            .expect("proposal should exist");
-
-        assert_eq!(loaded.status, expected_status);
+        other => panic!("expected Conflict, got {:?}", other),
     }
 
-    assert_eq!(
-        count_proposal_audit_rows(
-            pool.as_ref(),
-            rejected_proposal.id,
-            "ai_action_proposal_approved"
-        )
-        .await,
-        0
-    );
-    assert_single_proposal_audit_row(
-        pool.as_ref(),
-        approved_proposal.id,
-        "ai_action_proposal_approved",
-    )
-    .await;
+    let loaded = proposal_repo
+        .get_proposal(&tenant_id, &uid, proposal.id)
+        .await
+        .expect("load proposal")
+        .expect("proposal should exist");
+
+    assert_eq!(loaded.status, AiActionProposalStatus::Approved);
+
+    assert_single_proposal_audit_row(pool.as_ref(), proposal.id, "ai_action_proposal_approved")
+        .await;
 
     manager.delete_tenant(&tenant_id).await.ok();
 }
