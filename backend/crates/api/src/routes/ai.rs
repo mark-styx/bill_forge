@@ -191,6 +191,47 @@ async fn update_action_proposal_status(
         .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))
 }
 
+async fn approve_action_proposal(
+    state: &AppState,
+    tenant: &TenantContext,
+    user: &UserContext,
+    proposal_id: Uuid,
+) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
+    let repo = AiActionProposalRepositoryImpl::new(std::sync::Arc::new(pool));
+    let proposal = repo
+        .get_proposal(&user.tenant_id, &user.user_id, proposal_id)
+        .await
+        .and_then(|proposal| {
+            proposal.ok_or_else(|| Error::NotFound {
+                resource_type: "ai_action_proposal".to_string(),
+                id: proposal_id.to_string(),
+            })
+        })
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))?;
+
+    validate_action_proposal_decision(tenant, user, &proposal)
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))?;
+
+    repo.approve_pending_proposal(&user.tenant_id, &user.user_id, proposal_id)
+        .await
+        .map(action_proposal_response_from_record)
+        .map(Json)
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))
+}
+
 /// POST /ai/chat
 #[utoipa::path(post, path = "/api/v1/ai/chat", tag = "AI Assistant", request_body = serde_json::Value,
     responses((status = 200, description = "Chat response"), (status = 401, description = "Unauthorized")))]
@@ -520,14 +561,7 @@ async fn approve_action_proposal_handler(
     Path(proposal_id): Path<Uuid>,
     Json(_request): Json<AiActionProposalDecisionRequest>,
 ) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
-    update_action_proposal_status(
-        &state,
-        &tenant,
-        &user,
-        proposal_id,
-        AiActionProposalStatus::Approved,
-    )
-    .await
+    approve_action_proposal(&state, &tenant, &user, proposal_id).await
 }
 
 /// POST /ai/action-proposals/{proposal_id}/reject

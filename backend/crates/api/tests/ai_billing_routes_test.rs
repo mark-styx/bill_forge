@@ -342,7 +342,42 @@ fn test_ai_action_proposal_routes_use_ai_assistant_access_and_shared_models() {
 
     assert!(source.contains(r#""/action-proposals/{proposal_id}/approve""#));
     assert!(source.contains(r#""/action-proposals/{proposal_id}/reject""#));
-    assert!(source.contains("AiAssistantAccess(user, _tenant): AiAssistantAccess"));
     assert!(source.contains("Json(_request): Json<AiActionProposalDecisionRequest>"));
     assert!(source.contains("Result<Json<AiActionProposalResponse>"));
+
+    let approve_handler_start = source
+        .find("async fn approve_action_proposal_handler(")
+        .expect("approve handler exists");
+    let reject_handler_start = source
+        .find("async fn reject_action_proposal_handler(")
+        .expect("reject handler exists");
+    let approve_handler = &source[approve_handler_start..reject_handler_start];
+
+    assert!(approve_handler.contains("AiAssistantAccess(user, tenant): AiAssistantAccess"));
+    assert!(
+        approve_handler
+            .contains("approve_action_proposal(&state, &tenant, &user, proposal_id).await")
+    );
+    assert!(!approve_handler.contains("AiActionProposalStatus::Approved"));
+
+    let approve_helper_start = source
+        .find("async fn approve_action_proposal(")
+        .expect("approve helper exists");
+    let chat_handler_start = source
+        .find("/// POST /ai/chat")
+        .expect("chat handler section exists");
+    let approve_helper = &source[approve_helper_start..chat_handler_start];
+
+    assert!(approve_helper.contains(".get_proposal(&user.tenant_id, &user.user_id, proposal_id)"));
+    assert!(approve_helper.contains("validate_action_proposal_decision(tenant, user, &proposal)"));
+    assert!(
+        approve_helper
+            .contains(".approve_pending_proposal(&user.tenant_id, &user.user_id, proposal_id)")
+    );
+
+    let reject_handler = &source[reject_handler_start..];
+
+    assert!(reject_handler.contains("AiAssistantAccess(user, tenant): AiAssistantAccess"));
+    assert!(reject_handler.contains("update_action_proposal_status("));
+    assert!(reject_handler.contains("AiActionProposalStatus::Rejected"));
 }
