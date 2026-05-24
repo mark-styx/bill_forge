@@ -99,13 +99,13 @@ fn lazy_pool_service() -> WinstonProposalService {
 }
 
 #[test]
-fn validate_action_proposal_decision_enabled_pending_matching_proposal_succeeds() {
+fn validate_action_proposal_decision_enabled_pending_medium_issue_request_is_approval_eligible() {
     let tenant = tenant_context(vec![Module::AiAssistant]);
     let user = user_context(tenant.tenant_id.clone());
     let proposal = proposal_record(&tenant, &user);
 
     validate_action_proposal_decision(&tenant, &user, &proposal)
-        .expect("enabled pending matching proposal should be valid");
+        .expect("enabled pending medium-risk issue request should be approval eligible");
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn validate_action_proposal_decision_disabled_tenant_returns_module_not_availabl
 }
 
 #[test]
-fn validate_action_proposal_decision_non_pending_proposal_returns_conflict() {
+fn validate_action_proposal_decision_non_pending_proposal_returns_not_pending_conflict() {
     let tenant = tenant_context(vec![Module::AiAssistant]);
     let user = user_context(tenant.tenant_id.clone());
     let mut proposal = proposal_record(&tenant, &user);
@@ -178,7 +178,7 @@ fn validate_action_proposal_decision_persisted_risk_mismatch_returns_validation(
 }
 
 #[test]
-fn validate_action_proposal_decision_insufficient_role_returns_forbidden() {
+fn validate_action_proposal_decision_role_without_issue_request_permission_returns_forbidden() {
     let tenant = tenant_context(vec![Module::AiAssistant]);
     let user = user_context_with_roles(tenant.tenant_id.clone(), vec![Role::VendorManager]);
     let proposal = proposal_record(&tenant, &user);
@@ -188,6 +188,21 @@ fn validate_action_proposal_decision_insufficient_role_returns_forbidden() {
 
     match err {
         Error::Forbidden(message) => assert!(message.contains("issue.request")),
+        other => panic!("expected Forbidden, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_role_without_medium_risk_eligibility_returns_forbidden() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context_with_roles(tenant.tenant_id.clone(), vec![Role::ReportViewer]);
+    let proposal = proposal_record(&tenant, &user);
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("medium-risk-ineligible role should be forbidden");
+
+    match err {
+        Error::Forbidden(message) => assert!(message.contains("medium risk")),
         other => panic!("expected Forbidden, got {:?}", other),
     }
 }
@@ -209,7 +224,7 @@ fn validate_action_proposal_decision_tenant_mismatch_returns_cross_tenant_access
 }
 
 #[tokio::test]
-async fn proposal_service_disabled_tenant_returns_module_not_available_before_persistence() {
+async fn proposal_service_unpaid_ai_add_on_returns_module_not_available_before_persistence() {
     let service = lazy_pool_service();
     let tenant = tenant_context(vec![Module::InvoiceCapture]);
     let user = user_context(tenant.tenant_id.clone());
