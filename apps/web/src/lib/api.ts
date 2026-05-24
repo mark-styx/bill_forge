@@ -2097,6 +2097,30 @@ export interface AiAnswerFeedbackResponse {
   updated_at: string;
 }
 
+export type AiActionProposalRisk = 'low' | 'medium' | 'high';
+
+export type AiActionProposalStatus =
+  | 'approval_required'
+  | 'approved'
+  | 'rejected'
+  | 'executed'
+  | 'cancelled'
+  | 'expired';
+
+export interface AiPendingActionProposal {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  conversation_id: string;
+  tool_name: string;
+  payload: Record<string, unknown>;
+  risk: AiActionProposalRisk;
+  permission: string;
+  status: AiActionProposalStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 // Bug Report Draft Types
 export type BugReportPriority = 'low' | 'medium' | 'high' | 'critical';
 
@@ -2159,6 +2183,11 @@ export const aiAssistantApi = {
     api.post<AiAnswerFeedbackResponse>(
       `/api/v1/ai/conversations/${conversationId}/messages/${messageId}/feedback`,
       body,
+    ),
+
+  listPendingActionProposals: (conversationId: string) =>
+    api.get<AiPendingActionProposal[]>(
+      `/api/v1/ai/conversations/${conversationId}/action-proposals/pending`,
     ),
 
   generateBugReportDraft: (body: BugReportDraftRequest) =>

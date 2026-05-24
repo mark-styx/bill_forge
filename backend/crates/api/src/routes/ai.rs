@@ -25,7 +25,8 @@ use billforge_ai_agent::provider::AiProvider;
 use billforge_ai_agent::OpenAiCompatibleProvider;
 
 use billforge_db::repositories::{
-    AiAnswerFeedbackRating, AiConversationRepositoryImpl, PersistAiAnswerFeedbackInput,
+    AiActionProposalRecord, AiActionProposalRepositoryImpl, AiAnswerFeedbackRating,
+    AiConversationRepositoryImpl, PersistAiAnswerFeedbackInput,
 };
 
 use crate::extractors::AiAssistantAccess;
@@ -60,6 +61,41 @@ struct FeedbackResponse {
     updated_at: String,
 }
 
+/// Pending action proposal returned by the conversation-scoped read endpoint.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PendingAiActionProposalResponse {
+    id: Uuid,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    conversation_id: Uuid,
+    tool_name: String,
+    payload: serde_json::Value,
+    risk: String,
+    permission: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<AiActionProposalRecord> for PendingAiActionProposalResponse {
+    fn from(record: AiActionProposalRecord) -> Self {
+        Self {
+            id: record.id,
+            tenant_id: record.tenant_id,
+            user_id: record.user_id,
+            conversation_id: record.conversation_id,
+            tool_name: record.tool_name,
+            payload: record.payload,
+            risk: record.risk.as_str().to_string(),
+            permission: record.permission,
+            status: record.status.as_str().to_string(),
+            created_at: record.created_at.to_rfc3339(),
+            updated_at: record.updated_at.to_rfc3339(),
+        }
+    }
+}
+
 /// Create AI assistant sub-router
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -71,6 +107,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/conversations/{conversation_id}/messages/{message_id}/feedback",
             post(submit_feedback_handler),
+        )
+        .route(
+            "/conversations/{conversation_id}/action-proposals/pending",
+            get(list_pending_action_proposals_handler),
         )
 }
 
@@ -335,6 +375,52 @@ async fn submit_feedback_handler(
                 status,
                 Json(ErrorResponse {
                     error: format!("Failed to submit feedback: {}", e),
+                }),
+            ))
+        }
+    }
+}
+
+/// GET /ai/conversations/{conversation_id}/action-proposals/pending
+#[utoipa::path(get, path = "/api/v1/ai/conversations/{conversation_id}/action-proposals/pending", tag = "AI Assistant",
+    params(("conversation_id" = Uuid, Path, description = "Conversation ID")),
+    responses((status = 200, description = "Pending action proposals"), (status = 401, description = "Unauthorized")))]
+async fn list_pending_action_proposals_handler(
+    State(state): State<AppState>,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    Path(conversation_id): Path<Uuid>,
+) -> Result<Json<Vec<PendingAiActionProposalResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
+    let repo = AiActionProposalRepositoryImpl::new(std::sync::Arc::new(pool));
+
+    match repo
+        .list_pending_proposals_for_conversation(&user.tenant_id, &user.user_id, conversation_id)
+        .await
+    {
+        Ok(records) => Ok(Json(
+            records
+                .into_iter()
+                .map(PendingAiActionProposalResponse::from)
+                .collect(),
+        )),
+        Err(e) => {
+            tracing::error!("List pending action proposals error: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to list pending action proposals: {}", e),
                 }),
             ))
         }

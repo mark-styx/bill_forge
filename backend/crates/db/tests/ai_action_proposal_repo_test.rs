@@ -156,15 +156,55 @@ async fn create_and_load_list_action_proposals() {
         .await
         .expect("create second proposal");
 
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let third = proposal_repo
+        .create_proposal(
+            &tenant_id,
+            &uid,
+            CreateAiActionProposalInput {
+                conversation_id: conversation.id,
+                tool_name: "route_invoice".to_string(),
+                payload: serde_json::json!({"invoice_id": "inv-003"}),
+                risk: AiActionProposalRisk::Low,
+                permission: "invoice.route".to_string(),
+            },
+        )
+        .await
+        .expect("create third proposal");
+
+    proposal_repo
+        .update_proposal_status(
+            &tenant_id,
+            &uid,
+            second.id,
+            AiActionProposalStatus::Approved,
+        )
+        .await
+        .expect("approve second proposal");
+
     let listed = proposal_repo
         .list_proposals_for_conversation(&tenant_id, &uid, conversation.id)
         .await
         .expect("list proposals");
 
-    assert_eq!(listed.len(), 2);
-    assert_eq!(listed[0].id, second.id);
-    assert_eq!(listed[0].risk, AiActionProposalRisk::High);
-    assert_eq!(listed[1].id, first.id);
+    assert_eq!(listed.len(), 3);
+    assert_eq!(listed[0].id, third.id);
+    assert_eq!(listed[0].risk, AiActionProposalRisk::Low);
+    assert_eq!(listed[1].id, second.id);
+    assert_eq!(listed[2].id, first.id);
+
+    let pending = proposal_repo
+        .list_pending_proposals_for_conversation(&tenant_id, &uid, conversation.id)
+        .await
+        .expect("list pending proposals");
+
+    assert_eq!(pending.len(), 2);
+    assert_eq!(pending[0].id, third.id);
+    assert_eq!(pending[1].id, first.id);
+    assert!(pending
+        .iter()
+        .all(|proposal| proposal.status == AiActionProposalStatus::ApprovalRequired));
 
     manager.delete_tenant(&tenant_id).await.ok();
 }
@@ -229,6 +269,13 @@ async fn update_status_and_enforce_scoped_access() {
         .expect("wrong user get should not error");
 
     assert!(wrong_user_loaded.is_none());
+
+    let wrong_user_pending = proposal_repo
+        .list_pending_proposals_for_conversation(&tenant_id, &wrong_uid, conversation.id)
+        .await
+        .expect("wrong user pending list should not error");
+
+    assert!(wrong_user_pending.is_empty());
 
     let err = proposal_repo
         .update_proposal_status(

@@ -197,6 +197,35 @@ impl AiActionProposalRepositoryImpl {
             .collect()
     }
 
+    /// List pending action proposals for a conversation, newest first.
+    pub async fn list_pending_proposals_for_conversation(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        conversation_id: Uuid,
+    ) -> Result<Vec<AiActionProposalRecord>> {
+        let rows: Vec<AiActionProposalRow> = sqlx::query_as::<_, AiActionProposalRow>(
+            r#"SELECT id, tenant_id, user_id, conversation_id, tool_name, payload,
+                      risk, permission, status, created_at, updated_at
+               FROM ai_action_proposals
+               WHERE tenant_id = $1
+                 AND user_id = $2
+                 AND conversation_id = $3
+                 AND status = 'approval_required'
+               ORDER BY created_at DESC"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(conversation_id)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list pending action proposals: {}", e)))?;
+
+        rows.into_iter()
+            .map(AiActionProposalRow::into_record)
+            .collect()
+    }
+
     /// Update action proposal status, scoped by tenant and user.
     pub async fn update_proposal_status(
         &self,

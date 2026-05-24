@@ -136,6 +136,34 @@ describe('aiAssistantApi', () => {
     expect(result.comment).toBe('Not helpful');
   });
 
+  it('listPendingActionProposals() GETs pending action proposals for a conversation', async () => {
+    const proposals = [
+      {
+        id: 'proposal-1',
+        tenant_id: 'tenant-1',
+        user_id: 'user-1',
+        conversation_id: 'conv-42',
+        tool_name: 'approve_invoice',
+        payload: { invoice_id: 'inv-1' },
+        risk: 'medium' as const,
+        permission: 'invoice.approve',
+        status: 'approval_required' as const,
+        created_at: '2025-01-01T00:01:00Z',
+        updated_at: '2025-01-01T00:01:00Z',
+      },
+    ];
+
+    vi.spyOn(api, 'get').mockResolvedValueOnce(proposals);
+
+    const result = await aiAssistantApi.listPendingActionProposals('conv-42');
+
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/v1/ai/conversations/conv-42/action-proposals/pending',
+    );
+    expect(result).toEqual(proposals);
+    expect(result[0].status).toBe('approval_required');
+  });
+
   it('generateBugReportDraft() POSTs to /api/v1/ai/bug-report-drafts and returns structured fields', async () => {
     const draftResponse = {
       title: 'Login page crashes on submit',
