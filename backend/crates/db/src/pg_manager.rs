@@ -103,7 +103,7 @@ impl PgManager {
         sqlx::query(
             "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
         )
-        .bind(tenant_key)
+        .bind(tenant_id.as_uuid())
         .bind(name)
         .bind(slugify(name))
         .execute(&self.metadata_pool)
@@ -161,7 +161,7 @@ impl PgManager {
 
         // Delete from metadata
         sqlx::query("DELETE FROM tenants WHERE id = $1")
-            .bind(tenant_key)
+            .bind(tenant_id.as_uuid())
             .execute(&self.metadata_pool)
             .await
             .map_err(|e| Error::Database(format!("Failed to delete tenant from metadata: {}", e)))?;
