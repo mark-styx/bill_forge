@@ -117,6 +117,32 @@ pub struct ToolResult {
 }
 
 // ---------------------------------------------------------------------------
+// AI action proposal models
+// ---------------------------------------------------------------------------
+
+/// Empty request body for approving or rejecting an AI action proposal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiActionProposalDecisionRequest {}
+
+/// Persisted AI action proposal returned by proposal read and decision endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiActionProposalResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub conversation_id: Uuid,
+    pub tool_name: String,
+    pub payload: serde_json::Value,
+    pub risk: String,
+    pub permission: String,
+    pub status: String,
+    pub execution_error_code: Option<String>,
+    pub execution_error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ---------------------------------------------------------------------------
 // Provider-neutral chat models
 //
 // These types are designed to be consumed by future provider adapters (OpenAI,

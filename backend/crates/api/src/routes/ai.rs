@@ -18,15 +18,18 @@ use uuid::Uuid;
 
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{
-    BugReportDraftRequest, BugReportDraftResponse, ChatRequest, ChatResponse, Conversation,
-    FeatureRequestDraftRequest, FeatureRequestDraftResponse,
+    AiActionProposalDecisionRequest, AiActionProposalResponse, BugReportDraftRequest,
+    BugReportDraftResponse, ChatRequest, ChatResponse, Conversation, FeatureRequestDraftRequest,
+    FeatureRequestDraftResponse,
 };
 use billforge_ai_agent::provider::AiProvider;
 use billforge_ai_agent::OpenAiCompatibleProvider;
+use billforge_core::{Error, UserContext};
 
 use billforge_db::repositories::{
-    AiActionProposalRecord, AiActionProposalRepositoryImpl, AiAnswerFeedbackRating,
-    AiConversationRepositoryImpl, PersistAiAnswerFeedbackInput,
+    AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalStatus,
+    AiAnswerFeedbackRating, AiConversationRepositoryImpl, PersistAiAnswerFeedbackInput,
+    UpdateAiActionProposalStatusInput,
 };
 
 use crate::extractors::AiAssistantAccess;
@@ -61,53 +64,20 @@ struct FeedbackResponse {
     updated_at: String,
 }
 
-/// Pending action proposal returned by the conversation-scoped read endpoint.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-struct PendingAiActionProposalResponse {
-    id: Uuid,
-    tenant_id: Uuid,
-    user_id: Uuid,
-    conversation_id: Uuid,
-    tool_name: String,
-    payload: serde_json::Value,
-    risk: String,
-    permission: String,
-    status: String,
-    execution_error_code: Option<String>,
-    execution_error_message: Option<String>,
-    created_at: String,
-    updated_at: String,
-}
-
-impl From<AiActionProposalRecord> for PendingAiActionProposalResponse {
-    fn from(record: AiActionProposalRecord) -> Self {
-        Self {
-            id: record.id,
-            tenant_id: record.tenant_id,
-            user_id: record.user_id,
-            conversation_id: record.conversation_id,
-            tool_name: record.tool_name,
-            payload: record.payload,
-            risk: record.risk.as_str().to_string(),
-            permission: record.permission,
-            status: record.status.as_str().to_string(),
-            execution_error_code: record.execution_error_code,
-            execution_error_message: record.execution_error_message,
-            created_at: record.created_at.to_rfc3339(),
-            updated_at: record.updated_at.to_rfc3339(),
-        }
-    }
-}
-
 /// Create AI assistant sub-router
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/chat", post(chat_handler))
         .route("/bug-report-drafts", post(bug_report_draft_handler))
-        .route("/feature-request-drafts", post(feature_request_draft_handler))
+        .route(
+            "/feature-request-drafts",
+            post(feature_request_draft_handler),
+        )
         .route("/conversations", get(list_conversations_handler))
-        .route("/conversations/{id}/messages", post(continue_conversation_handler))
+        .route(
+            "/conversations/{id}/messages",
+            post(continue_conversation_handler),
+        )
         .route(
             "/conversations/{conversation_id}/messages/{message_id}/feedback",
             post(submit_feedback_handler),
@@ -116,11 +86,92 @@ pub fn routes() -> Router<AppState> {
             "/conversations/{conversation_id}/action-proposals/pending",
             get(list_pending_action_proposals_handler),
         )
+        .route(
+            "/action-proposals/{proposal_id}/approve",
+            post(approve_action_proposal_handler),
+        )
+        .route(
+            "/action-proposals/{proposal_id}/reject",
+            post(reject_action_proposal_handler),
+        )
 }
 
 /// Build the configured AiProvider for Winston.
 fn build_provider() -> Arc<dyn AiProvider> {
     Arc::new(OpenAiCompatibleProvider::from_env())
+}
+
+fn action_proposal_response_from_record(
+    record: AiActionProposalRecord,
+) -> AiActionProposalResponse {
+    AiActionProposalResponse {
+        id: record.id,
+        tenant_id: record.tenant_id,
+        user_id: record.user_id,
+        conversation_id: record.conversation_id,
+        tool_name: record.tool_name,
+        payload: record.payload,
+        risk: record.risk.as_str().to_string(),
+        permission: record.permission,
+        status: record.status.as_str().to_string(),
+        execution_error_code: record.execution_error_code,
+        execution_error_message: record.execution_error_message,
+        created_at: record.created_at.to_rfc3339(),
+        updated_at: record.updated_at.to_rfc3339(),
+    }
+}
+
+fn map_action_proposal_error(context: &str, error: Error) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match &error {
+        Error::NotFound { .. } => StatusCode::NOT_FOUND,
+        Error::Validation(_) | Error::InvalidInput { .. } => StatusCode::BAD_REQUEST,
+        Error::Forbidden(_) | Error::CrossTenantAccess => StatusCode::FORBIDDEN,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    if status == StatusCode::INTERNAL_SERVER_ERROR {
+        tracing::error!("{}: {}", context, error);
+    }
+
+    (
+        status,
+        Json(ErrorResponse {
+            error: format!("{}: {}", context, error),
+        }),
+    )
+}
+
+async fn update_action_proposal_status(
+    state: &AppState,
+    user: &UserContext,
+    proposal_id: Uuid,
+    status: AiActionProposalStatus,
+) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let pool = match state.db.tenant(&user.tenant_id).await {
+        Ok(pool) => (*pool).clone(),
+        Err(e) => {
+            tracing::error!("Tenant pool error: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve tenant database: {}", e),
+                }),
+            ));
+        }
+    };
+
+    let repo = AiActionProposalRepositoryImpl::new(std::sync::Arc::new(pool));
+    let input = UpdateAiActionProposalStatusInput {
+        status,
+        execution_error_code: None,
+        execution_error_message: None,
+    };
+
+    repo.update_proposal_status(&user.tenant_id, &user.user_id, proposal_id, input)
+        .await
+        .map(action_proposal_response_from_record)
+        .map(Json)
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))
 }
 
 /// POST /ai/chat
@@ -148,8 +199,8 @@ async fn chat_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider)
-        .with_enabled_modules(_tenant.enabled_modules.clone());
+    let agent =
+        WinstonAgent::new(pool, provider).with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
@@ -216,13 +267,16 @@ async fn bug_report_draft_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider)
-        .with_enabled_modules(_tenant.enabled_modules.clone());
+    let agent =
+        WinstonAgent::new(pool, provider).with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
 
-    match agent.generate_bug_report_draft(request, tenant_id, user_id).await {
+    match agent
+        .generate_bug_report_draft(request, tenant_id, user_id)
+        .await
+    {
         Ok(draft) => Ok(Json(draft)),
         Err(e) => {
             tracing::error!("Bug report draft error: {}", e);
@@ -256,13 +310,16 @@ async fn feature_request_draft_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider)
-        .with_enabled_modules(_tenant.enabled_modules.clone());
+    let agent =
+        WinstonAgent::new(pool, provider).with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
 
-    match agent.generate_feature_request_draft(request, tenant_id, user_id).await {
+    match agent
+        .generate_feature_request_draft(request, tenant_id, user_id)
+        .await
+    {
         Ok(draft) => Ok(Json(draft)),
         Err(e) => {
             tracing::error!("Feature request draft error: {}", e);
@@ -300,8 +357,8 @@ async fn continue_conversation_handler(
     };
 
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider)
-        .with_enabled_modules(_tenant.enabled_modules.clone());
+    let agent =
+        WinstonAgent::new(pool, provider).with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
@@ -311,7 +368,10 @@ async fn continue_conversation_handler(
         conversation_id: Some(conversation_id),
     };
 
-    match agent.chat(request_with_conversation, tenant_id, user_id).await {
+    match agent
+        .chat(request_with_conversation, tenant_id, user_id)
+        .await
+    {
         Ok(response) => Ok(Json(response)),
         Err(e) => {
             tracing::error!("Continue conversation error: {}", e);
@@ -354,7 +414,13 @@ async fn submit_feedback_handler(
     };
 
     match repo
-        .persist_answer_feedback(&user.tenant_id, &user.user_id, conversation_id, message_id, input)
+        .persist_answer_feedback(
+            &user.tenant_id,
+            &user.user_id,
+            conversation_id,
+            message_id,
+            input,
+        )
         .await
     {
         Ok(record) => Ok(Json(FeedbackResponse {
@@ -393,7 +459,7 @@ async fn list_pending_action_proposals_handler(
     State(state): State<AppState>,
     AiAssistantAccess(user, _tenant): AiAssistantAccess,
     Path(conversation_id): Path<Uuid>,
-) -> Result<Json<Vec<PendingAiActionProposalResponse>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<AiActionProposalResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let pool = match state.db.tenant(&user.tenant_id).await {
         Ok(pool) => (*pool).clone(),
         Err(e) => {
@@ -416,17 +482,42 @@ async fn list_pending_action_proposals_handler(
         Ok(records) => Ok(Json(
             records
                 .into_iter()
-                .map(PendingAiActionProposalResponse::from)
+                .map(action_proposal_response_from_record)
                 .collect(),
         )),
-        Err(e) => {
-            tracing::error!("List pending action proposals error: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to list pending action proposals: {}", e),
-                }),
-            ))
-        }
+        Err(e) => Err(map_action_proposal_error(
+            "Failed to list pending action proposals",
+            e,
+        )),
     }
+}
+
+/// POST /ai/action-proposals/{proposal_id}/approve
+#[utoipa::path(post, path = "/api/v1/ai/action-proposals/{proposal_id}/approve", tag = "AI Assistant",
+    request_body = serde_json::Value,
+    params(("proposal_id" = Uuid, Path, description = "Action proposal ID")),
+    responses((status = 200, description = "Approved action proposal"), (status = 400, description = "Invalid proposal decision"), (status = 401, description = "Unauthorized"), (status = 403, description = "Forbidden"), (status = 404, description = "Action proposal not found")))]
+async fn approve_action_proposal_handler(
+    State(state): State<AppState>,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    Path(proposal_id): Path<Uuid>,
+    Json(_request): Json<AiActionProposalDecisionRequest>,
+) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
+    update_action_proposal_status(&state, &user, proposal_id, AiActionProposalStatus::Approved)
+        .await
+}
+
+/// POST /ai/action-proposals/{proposal_id}/reject
+#[utoipa::path(post, path = "/api/v1/ai/action-proposals/{proposal_id}/reject", tag = "AI Assistant",
+    request_body = serde_json::Value,
+    params(("proposal_id" = Uuid, Path, description = "Action proposal ID")),
+    responses((status = 200, description = "Rejected action proposal"), (status = 400, description = "Invalid proposal decision"), (status = 401, description = "Unauthorized"), (status = 403, description = "Forbidden"), (status = 404, description = "Action proposal not found")))]
+async fn reject_action_proposal_handler(
+    State(state): State<AppState>,
+    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    Path(proposal_id): Path<Uuid>,
+    Json(_request): Json<AiActionProposalDecisionRequest>,
+) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
+    update_action_proposal_status(&state, &user, proposal_id, AiActionProposalStatus::Rejected)
+        .await
 }
