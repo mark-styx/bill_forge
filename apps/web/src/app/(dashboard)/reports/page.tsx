@@ -163,8 +163,8 @@ export default function ReportsPage() {
                   12%
                 </div>
               </div>
-              <p className="text-2xl font-bold text-foreground">{summary?.invoices_this_month ?? '—'}</p>
-              <p className="text-sm text-muted-foreground">This Month</p>
+              <p className="text-2xl font-bold text-foreground">{summary?.invoices_processed_today ?? '—'}</p>
+              <p className="text-sm text-muted-foreground">Processed Today</p>
             </div>
 
             <div className="bright-stat-card group animate-fade-in-up" style={{ animationDelay: '100ms' }}>
@@ -175,7 +175,7 @@ export default function ReportsPage() {
                 </div>
                 <BillForgeSparkline data={[28, 32, 45, 38, 52, 48, 65]} color="accent" showArea />
               </div>
-              <p className="text-2xl font-bold text-foreground">${(summary?.total_amount_pending ?? 0).toLocaleString()}</p>
+              <p className="text-2xl font-bold text-foreground">${(summary?.total_pending_amount ?? 0).toLocaleString()}</p>
               <p className="text-sm text-muted-foreground">Total Pending</p>
             </div>
           </>

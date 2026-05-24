@@ -783,9 +783,10 @@ export interface DashboardSummary {
   invoices_pending_review: number;
   invoices_pending_approval: number;
   invoices_ready_for_payment: number;
-  total_amount_pending: number;
+  total_pending_amount: number;
   vendors_active: number;
-  invoices_this_month: number;
+  invoices_processed_today: number;
+  avg_processing_time_hours: number;
 }
 
 export interface InvoicesByVendor {

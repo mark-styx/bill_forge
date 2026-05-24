@@ -132,9 +132,10 @@ const mockSummaryData = {
   invoices_pending_review: 5,
   invoices_pending_approval: 3,
   invoices_ready_for_payment: 2,
-  total_amount_pending: 15000,
+  total_pending_amount: 15000,
   vendors_active: 10,
-  invoices_this_month: 25,
+  invoices_processed_today: 25,
+  avg_processing_time_hours: 4.5,
 };
 
 describe('DashboardPage error handling', () => {

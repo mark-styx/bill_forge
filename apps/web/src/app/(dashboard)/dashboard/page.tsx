@@ -139,7 +139,7 @@ export default function DashboardPage() {
     },
     {
       name: 'Total Pending',
-      value: isError ? '$--' : `$${(summary?.total_amount_pending ?? 0).toLocaleString()}`,
+      value: isError ? '$--' : `$${(summary?.total_pending_amount ?? 0).toLocaleString()}`,
       icon: DollarSign,
       colorKey: 'accent',
       href: '/reports',
@@ -584,9 +584,9 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <div className="text-2xl font-semibold text-foreground">
-                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_this_month ?? 0} duration={1200} />}
+                      {isError ? '--' : <AnimatedCounter value={summary?.invoices_processed_today ?? 0} duration={1200} />}
                     </div>
-                    <p className="text-xs text-muted-foreground">This month</p>
+                    <p className="text-xs text-muted-foreground">Processed today</p>
                   </div>
                 </div>
                 <Link href="/invoices">
