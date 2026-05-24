@@ -11,6 +11,7 @@ pub mod handlers;
 pub mod models;
 pub mod openai_compatible_provider;
 pub mod product_knowledge;
+pub mod proposals;
 pub mod provider;
 pub mod tools;
 
@@ -21,4 +22,5 @@ pub use config::{AiModelConfig, AiProviderConfig, AiProviderType, ConfigError};
 pub use fake_provider::FakeAiProvider;
 pub use handlers::create_router;
 pub use openai_compatible_provider::OpenAiCompatibleProvider;
+pub use proposals::{CreateWinstonProposalInput, WinstonProposalService};
 pub use provider::{AiProvider, ProviderChatStream};
