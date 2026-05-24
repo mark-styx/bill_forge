@@ -34,31 +34,45 @@ fn tenant_context(enabled_modules: Vec<Module>) -> TenantContext {
 }
 
 fn user_context(tenant_id: TenantId) -> UserContext {
+    user_context_with_roles(tenant_id, vec![Role::TenantAdmin])
+}
+
+fn user_context_with_roles(tenant_id: TenantId, roles: Vec<Role>) -> UserContext {
     UserContext {
         user_id: UserId::new(),
         tenant_id,
         email: "test@example.com".to_string(),
         name: "Test User".to_string(),
-        roles: vec![Role::TenantAdmin],
+        roles,
     }
 }
 
 fn proposal_input(conversation_id: Uuid) -> CreateWinstonProposalInput {
     CreateWinstonProposalInput {
         conversation_id,
-        tool_name: "approve_invoice".to_string(),
-        payload: serde_json::json!({ "invoice_id": "inv-001" }),
+        tool_name: "request_issue_creation".to_string(),
+        payload: serde_json::json!({
+            "target": "internal_feedback_table",
+            "kind": "bug",
+            "title": "Invoice approval issue",
+            "body": "Approval workflow did not show the expected state."
+        }),
         risk: AiActionProposalRisk::Medium,
-        permission: "invoice.approve".to_string(),
+        permission: "issue.request".to_string(),
     }
+}
+
+fn lazy_pool_service() -> WinstonProposalService {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/should_not_connect")
+        .expect("lazy pool");
+
+    WinstonProposalService::new(Arc::new(pool))
 }
 
 #[tokio::test]
 async fn proposal_service_disabled_tenant_returns_module_not_available_before_persistence() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/should_not_connect")
-        .expect("lazy pool");
-    let service = WinstonProposalService::new(Arc::new(pool));
+    let service = lazy_pool_service();
     let tenant = tenant_context(vec![Module::InvoiceCapture]);
     let user = user_context(tenant.tenant_id.clone());
 
@@ -72,6 +86,105 @@ async fn proposal_service_disabled_tenant_returns_module_not_available_before_pe
             assert_eq!(module, Module::AiAssistant.display_name());
         }
         other => panic!("expected ModuleNotAvailable, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn proposal_service_unknown_tool_returns_validation_before_persistence() {
+    let service = lazy_pool_service();
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut input = proposal_input(Uuid::new_v4());
+    input.tool_name = "unknown_tool".to_string();
+
+    let err = service
+        .create_pending_proposal(&tenant, &user, input)
+        .await
+        .expect_err("unknown tool should be rejected before persistence");
+
+    match err {
+        Error::Validation(message) => assert!(message.contains("Unknown Winston tool")),
+        other => panic!("expected Validation, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn proposal_service_mismatched_permission_returns_validation_before_persistence() {
+    let service = lazy_pool_service();
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut input = proposal_input(Uuid::new_v4());
+    input.permission = "invoice.approve".to_string();
+
+    let err = service
+        .create_pending_proposal(&tenant, &user, input)
+        .await
+        .expect_err("mismatched permission should be rejected before persistence");
+
+    match err {
+        Error::Validation(message) => {
+            assert!(message.contains("Tool metadata permission mismatch"));
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn proposal_service_mismatched_risk_returns_validation_before_persistence() {
+    let service = lazy_pool_service();
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut input = proposal_input(Uuid::new_v4());
+    input.risk = AiActionProposalRisk::Low;
+
+    let err = service
+        .create_pending_proposal(&tenant, &user, input)
+        .await
+        .expect_err("mismatched risk should be rejected before persistence");
+
+    match err {
+        Error::Validation(message) => {
+            assert!(message.contains("Tool metadata risk mismatch"));
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn proposal_service_user_lacking_tool_permission_returns_forbidden_before_persistence() {
+    let service = lazy_pool_service();
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context_with_roles(tenant.tenant_id.clone(), vec![Role::VendorManager]);
+
+    let err = service
+        .create_pending_proposal(&tenant, &user, proposal_input(Uuid::new_v4()))
+        .await
+        .expect_err("user lacking tool permission should be rejected before persistence");
+
+    match err {
+        Error::Forbidden(message) => {
+            assert!(message.contains("issue.request"));
+        }
+        other => panic!("expected Forbidden, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn proposal_service_role_exceeding_risk_eligibility_returns_forbidden_before_persistence() {
+    let service = lazy_pool_service();
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context_with_roles(tenant.tenant_id.clone(), vec![Role::ReportViewer]);
+
+    let err = service
+        .create_pending_proposal(&tenant, &user, proposal_input(Uuid::new_v4()))
+        .await
+        .expect_err("risk-ineligible role should be rejected before persistence");
+
+    match err {
+        Error::Forbidden(message) => {
+            assert!(message.contains("medium risk"));
+        }
+        other => panic!("expected Forbidden, got {:?}", other),
     }
 }
 
@@ -162,9 +275,9 @@ async fn proposal_service_enabled_tenant_creates_approval_required_proposal(pool
     assert_eq!(proposal.tenant_id, *tenant.tenant_id.as_uuid());
     assert_eq!(proposal.user_id, *user.user_id.as_uuid());
     assert_eq!(proposal.conversation_id, conversation.id);
-    assert_eq!(proposal.tool_name, "approve_invoice");
-    assert_eq!(proposal.payload["invoice_id"], "inv-001");
+    assert_eq!(proposal.tool_name, "request_issue_creation");
+    assert_eq!(proposal.payload["target"], "internal_feedback_table");
     assert_eq!(proposal.risk, AiActionProposalRisk::Medium);
-    assert_eq!(proposal.permission, "invoice.approve");
+    assert_eq!(proposal.permission, "issue.request");
     assert_eq!(proposal.status, AiActionProposalStatus::ApprovalRequired);
 }
