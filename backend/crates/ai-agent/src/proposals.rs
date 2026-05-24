@@ -5,7 +5,7 @@ use std::sync::Arc;
 use billforge_core::{Error, Module, Result, Role, TenantContext, UserContext};
 use billforge_db::repositories::{
     AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalRisk,
-    CreateAiActionProposalInput,
+    AiActionProposalStatus, CreateAiActionProposalInput,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -108,6 +108,83 @@ impl WinstonProposalService {
             )
             .await
     }
+}
+
+/// Validate that a user may approve or reject a persisted Winston action proposal.
+pub fn validate_action_proposal_decision(
+    tenant: &TenantContext,
+    user: &UserContext,
+    proposal: &AiActionProposalRecord,
+) -> Result<()> {
+    if !tenant.has_module(Module::AiAssistant) {
+        return Err(Error::ModuleNotAvailable(
+            Module::AiAssistant.display_name().to_string(),
+        ));
+    }
+
+    if proposal.tenant_id != *tenant.tenant_id.as_uuid() {
+        return Err(Error::CrossTenantAccess);
+    }
+
+    if proposal.user_id != user.user_id.0 {
+        return Err(Error::Forbidden(
+            "User may not decide another user's Winston action proposal".to_string(),
+        ));
+    }
+
+    if proposal.status != AiActionProposalStatus::Pending {
+        return Err(Error::Conflict(format!(
+            "Winston action proposal {} is not pending",
+            proposal.id
+        )));
+    }
+
+    let tool_definition =
+        ToolRegistry::get_tool_definition(&proposal.tool_name).ok_or_else(|| {
+            Error::Validation(format!("Unknown Winston tool: {}", proposal.tool_name))
+        })?;
+    let required_permission = permission_to_persisted_string(tool_definition.required_permission);
+    let required_risk = risk_level_to_proposal_risk(tool_definition.risk_level);
+
+    if proposal.permission != required_permission {
+        return Err(Error::Validation(format!(
+            "Tool metadata permission mismatch for {}",
+            proposal.tool_name
+        )));
+    }
+
+    if proposal.risk != required_risk {
+        return Err(Error::Validation(format!(
+            "Tool metadata risk mismatch for {}",
+            proposal.tool_name
+        )));
+    }
+
+    if !user_roles_allow_proposal_risk(user, required_risk) {
+        return Err(Error::Forbidden(format!(
+            "User may not decide {} risk Winston proposals",
+            required_risk.as_str()
+        )));
+    }
+
+    if !user_roles_grant_tool_permission(user, tool_definition.required_permission) {
+        return Err(Error::Forbidden(format!(
+            "User may not decide Winston tool permission {}",
+            required_permission
+        )));
+    }
+
+    if !user_roles_grant_permission_and_risk(
+        user,
+        tool_definition.required_permission,
+        required_risk,
+    ) {
+        return Err(Error::Forbidden(
+            "User role does not grant the requested Winston tool permission and risk".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn permission_to_persisted_string(permission: AiToolPermission) -> &'static str {

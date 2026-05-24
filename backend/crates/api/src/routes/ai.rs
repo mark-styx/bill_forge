@@ -7,24 +7,25 @@
 use std::sync::Arc;
 
 use axum::{
+    Router,
     extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use billforge_ai_agent::OpenAiCompatibleProvider;
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{
     AiActionProposalDecisionRequest, AiActionProposalResponse, BugReportDraftRequest,
     BugReportDraftResponse, ChatRequest, ChatResponse, Conversation, FeatureRequestDraftRequest,
     FeatureRequestDraftResponse,
 };
+use billforge_ai_agent::proposals::validate_action_proposal_decision;
 use billforge_ai_agent::provider::AiProvider;
-use billforge_ai_agent::OpenAiCompatibleProvider;
-use billforge_core::{Error, UserContext};
+use billforge_core::{Error, TenantContext, UserContext};
 
 use billforge_db::repositories::{
     AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalStatus,
@@ -126,6 +127,7 @@ fn map_action_proposal_error(context: &str, error: Error) -> (StatusCode, Json<E
         Error::NotFound { .. } => StatusCode::NOT_FOUND,
         Error::Validation(_) | Error::InvalidInput { .. } => StatusCode::BAD_REQUEST,
         Error::Forbidden(_) | Error::CrossTenantAccess => StatusCode::FORBIDDEN,
+        Error::Conflict(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
 
@@ -143,6 +145,7 @@ fn map_action_proposal_error(context: &str, error: Error) -> (StatusCode, Json<E
 
 async fn update_action_proposal_status(
     state: &AppState,
+    tenant: &TenantContext,
     user: &UserContext,
     proposal_id: Uuid,
     status: AiActionProposalStatus,
@@ -161,13 +164,27 @@ async fn update_action_proposal_status(
     };
 
     let repo = AiActionProposalRepositoryImpl::new(std::sync::Arc::new(pool));
+    let proposal = repo
+        .get_proposal(&user.tenant_id, &user.user_id, proposal_id)
+        .await
+        .and_then(|proposal| {
+            proposal.ok_or_else(|| Error::NotFound {
+                resource_type: "ai_action_proposal".to_string(),
+                id: proposal_id.to_string(),
+            })
+        })
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))?;
+
+    validate_action_proposal_decision(tenant, user, &proposal)
+        .map_err(|e| map_action_proposal_error("Failed to update action proposal", e))?;
+
     let input = UpdateAiActionProposalStatusInput {
         status,
         execution_error_code: None,
         execution_error_message: None,
     };
 
-    repo.update_proposal_status(&user.tenant_id, &user.user_id, proposal_id, input)
+    repo.update_pending_proposal_status(&user.tenant_id, &user.user_id, proposal_id, input)
         .await
         .map(action_proposal_response_from_record)
         .map(Json)
@@ -499,12 +516,18 @@ async fn list_pending_action_proposals_handler(
     responses((status = 200, description = "Approved action proposal"), (status = 400, description = "Invalid proposal decision"), (status = 401, description = "Unauthorized"), (status = 403, description = "Forbidden"), (status = 404, description = "Action proposal not found")))]
 async fn approve_action_proposal_handler(
     State(state): State<AppState>,
-    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    AiAssistantAccess(user, tenant): AiAssistantAccess,
     Path(proposal_id): Path<Uuid>,
     Json(_request): Json<AiActionProposalDecisionRequest>,
 ) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
-    update_action_proposal_status(&state, &user, proposal_id, AiActionProposalStatus::Approved)
-        .await
+    update_action_proposal_status(
+        &state,
+        &tenant,
+        &user,
+        proposal_id,
+        AiActionProposalStatus::Approved,
+    )
+    .await
 }
 
 /// POST /ai/action-proposals/{proposal_id}/reject
@@ -514,10 +537,16 @@ async fn approve_action_proposal_handler(
     responses((status = 200, description = "Rejected action proposal"), (status = 400, description = "Invalid proposal decision"), (status = 401, description = "Unauthorized"), (status = 403, description = "Forbidden"), (status = 404, description = "Action proposal not found")))]
 async fn reject_action_proposal_handler(
     State(state): State<AppState>,
-    AiAssistantAccess(user, _tenant): AiAssistantAccess,
+    AiAssistantAccess(user, tenant): AiAssistantAccess,
     Path(proposal_id): Path<Uuid>,
     Json(_request): Json<AiActionProposalDecisionRequest>,
 ) -> Result<Json<AiActionProposalResponse>, (StatusCode, Json<ErrorResponse>)> {
-    update_action_proposal_status(&state, &user, proposal_id, AiActionProposalStatus::Rejected)
-        .await
+    update_action_proposal_status(
+        &state,
+        &tenant,
+        &user,
+        proposal_id,
+        AiActionProposalStatus::Rejected,
+    )
+    .await
 }

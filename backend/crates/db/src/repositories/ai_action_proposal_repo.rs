@@ -1,8 +1,8 @@
 //! AI action proposal repository implementation
 
 use billforge_core::{
-    domain::{AuditAction, ResourceType},
     Error, Result, TenantId, UserId,
+    domain::{AuditAction, ResourceType},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -255,6 +255,42 @@ impl AiActionProposalRepositoryImpl {
         proposal_id: Uuid,
         input: UpdateAiActionProposalStatusInput,
     ) -> Result<AiActionProposalRecord> {
+        self.update_proposal_status_with_required_current_status(
+            tenant_id,
+            user_id,
+            proposal_id,
+            input,
+            None,
+        )
+        .await
+    }
+
+    /// Update action proposal status only when the row is still pending.
+    pub async fn update_pending_proposal_status(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        proposal_id: Uuid,
+        input: UpdateAiActionProposalStatusInput,
+    ) -> Result<AiActionProposalRecord> {
+        self.update_proposal_status_with_required_current_status(
+            tenant_id,
+            user_id,
+            proposal_id,
+            input,
+            Some(AiActionProposalStatus::Pending),
+        )
+        .await
+    }
+
+    async fn update_proposal_status_with_required_current_status(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        proposal_id: Uuid,
+        input: UpdateAiActionProposalStatusInput,
+        required_current_status: Option<AiActionProposalStatus>,
+    ) -> Result<AiActionProposalRecord> {
         let status = input.status;
         let (execution_error_code, execution_error_message) =
             if status == AiActionProposalStatus::Failed {
@@ -302,6 +338,16 @@ impl AiActionProposalRepositoryImpl {
             id: proposal_id.to_string(),
         })?;
         let old_status = AiActionProposalStatus::from_db(&old_status)?;
+
+        if let Some(required_current_status) = required_current_status {
+            if old_status != required_current_status {
+                return Err(Error::Conflict(format!(
+                    "AI action proposal {} is not {}",
+                    proposal_id,
+                    required_current_status.as_str()
+                )));
+            }
+        }
 
         let row: AiActionProposalRow = sqlx::query_as::<_, AiActionProposalRow>(
             r#"UPDATE ai_action_proposals

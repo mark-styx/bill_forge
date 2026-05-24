@@ -6,14 +6,17 @@
 
 use std::sync::Arc;
 
+use billforge_ai_agent::proposals::validate_action_proposal_decision;
 use billforge_ai_agent::{CreateWinstonProposalInput, WinstonProposalService};
 use billforge_core::{
     Error, Module, Role, TenantContext, TenantFeatures, TenantId, TenantSettings, UserContext,
     UserId,
 };
 use billforge_db::repositories::{
-    AiActionProposalRisk, AiActionProposalStatus, AiConversationRepositoryImpl,
+    AiActionProposalRecord, AiActionProposalRisk, AiActionProposalStatus,
+    AiConversationRepositoryImpl,
 };
+use chrono::Utc;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
@@ -62,12 +65,147 @@ fn proposal_input(conversation_id: Uuid) -> CreateWinstonProposalInput {
     }
 }
 
+fn proposal_record(tenant: &TenantContext, user: &UserContext) -> AiActionProposalRecord {
+    let now = Utc::now();
+
+    AiActionProposalRecord {
+        id: Uuid::new_v4(),
+        tenant_id: *tenant.tenant_id.as_uuid(),
+        user_id: user.user_id.0,
+        conversation_id: Uuid::new_v4(),
+        tool_name: "request_issue_creation".to_string(),
+        payload: serde_json::json!({
+            "target": "internal_feedback_table",
+            "kind": "bug",
+            "title": "Invoice approval issue",
+            "body": "Approval workflow did not show the expected state."
+        }),
+        risk: AiActionProposalRisk::Medium,
+        permission: "issue.request".to_string(),
+        status: AiActionProposalStatus::Pending,
+        execution_error_code: None,
+        execution_error_message: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
 fn lazy_pool_service() -> WinstonProposalService {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/should_not_connect")
         .expect("lazy pool");
 
     WinstonProposalService::new(Arc::new(pool))
+}
+
+#[test]
+fn validate_action_proposal_decision_enabled_pending_matching_proposal_succeeds() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let proposal = proposal_record(&tenant, &user);
+
+    validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect("enabled pending matching proposal should be valid");
+}
+
+#[test]
+fn validate_action_proposal_decision_disabled_tenant_returns_module_not_available() {
+    let tenant = tenant_context(vec![Module::InvoiceCapture]);
+    let user = user_context(tenant.tenant_id.clone());
+    let proposal = proposal_record(&tenant, &user);
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("disabled tenant should not decide proposal");
+
+    match err {
+        Error::ModuleNotAvailable(module) => {
+            assert_eq!(module, Module::AiAssistant.display_name());
+        }
+        other => panic!("expected ModuleNotAvailable, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_non_pending_proposal_returns_conflict() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut proposal = proposal_record(&tenant, &user);
+    proposal.status = AiActionProposalStatus::Approved;
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("non-pending proposal should not be decided");
+
+    match err {
+        Error::Conflict(message) => assert!(message.contains("not pending")),
+        other => panic!("expected Conflict, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_persisted_permission_mismatch_returns_validation() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut proposal = proposal_record(&tenant, &user);
+    proposal.permission = "invoice.read".to_string();
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("permission mismatch should be rejected");
+
+    match err {
+        Error::Validation(message) => {
+            assert!(message.contains("Tool metadata permission mismatch"));
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_persisted_risk_mismatch_returns_validation() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let mut proposal = proposal_record(&tenant, &user);
+    proposal.risk = AiActionProposalRisk::Low;
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("risk mismatch should be rejected");
+
+    match err {
+        Error::Validation(message) => {
+            assert!(message.contains("Tool metadata risk mismatch"));
+        }
+        other => panic!("expected Validation, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_insufficient_role_returns_forbidden() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context_with_roles(tenant.tenant_id.clone(), vec![Role::VendorManager]);
+    let proposal = proposal_record(&tenant, &user);
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("insufficient role should be forbidden");
+
+    match err {
+        Error::Forbidden(message) => assert!(message.contains("issue.request")),
+        other => panic!("expected Forbidden, got {:?}", other),
+    }
+}
+
+#[test]
+fn validate_action_proposal_decision_tenant_mismatch_returns_cross_tenant_access() {
+    let tenant = tenant_context(vec![Module::AiAssistant]);
+    let other_tenant = tenant_context(vec![Module::AiAssistant]);
+    let user = user_context(tenant.tenant_id.clone());
+    let proposal = proposal_record(&other_tenant, &user);
+
+    let err = validate_action_proposal_decision(&tenant, &user, &proposal)
+        .expect_err("tenant mismatch should be rejected");
+
+    match err {
+        Error::CrossTenantAccess => {}
+        other => panic!("expected CrossTenantAccess, got {:?}", other),
+    }
 }
 
 #[tokio::test]
