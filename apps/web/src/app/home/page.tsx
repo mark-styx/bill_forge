@@ -112,6 +112,7 @@ const steps = [
 const pricingPlans = [
   {
     name: 'Starter',
+    slug: 'starter',
     description: 'Teams processing up to 300 invoices/month',
     price: 99,
     period: 'month',
@@ -130,6 +131,7 @@ const pricingPlans = [
   },
   {
     name: 'Professional',
+    slug: 'professional',
     description: 'Growing AP teams, 300–2,000 invoices/month',
     price: 299,
     period: 'month',
@@ -416,7 +418,7 @@ export default function LandingPage() {
                       </li>
                     ))}
                   </ul>
-                  <Link href="/onboard" className="block">
+                  <Link href={plan.slug ? `/onboard?plan=${plan.slug}` : '/onboard'} className="block">
                     {plan.popular ? (
                       <GradientButton gradient="primary" className="w-full">
                         {plan.cta}

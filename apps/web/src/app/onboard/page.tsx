@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FileText, Building2, ScanLine, Link2, Rocket } from 'lucide-react';
 import { useAuthStore, setupApiCallbacks } from '@/stores/auth';
-import { authApi, api } from '@/lib/api';
+import { authApi, billingApi, api } from '@/lib/api';
 import { StepperWithContent, StepContent, Step } from '@/components/ui/stepper';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,7 +32,17 @@ const ERP_OPTIONS = [
 ];
 
 export default function OnboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <OnboardInner />
+    </Suspense>
+  );
+}
+
+function OnboardInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const plan = searchParams.get('plan');
   const login = useAuthStore((state) => state.login);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,6 +124,25 @@ export default function OnboardPage() {
           settings: response.tenant.settings,
         },
       });
+
+      // If a paid plan was selected from the pricing page, initiate checkout
+      if (plan && plan !== 'free') {
+        try {
+          const res = await billingApi.createCheckout({ plan_id: plan });
+          if (res.url.startsWith('http')) {
+            // Real Stripe redirect
+            window.location.href = res.url;
+            return;
+          }
+          // Mock/relative URL - use client-side navigation
+          router.push(res.url);
+          return;
+        } catch {
+          // Checkout failed but account was created - land on dashboard
+          router.push('/dashboard');
+          return;
+        }
+      }
 
       router.push('/dashboard');
     } catch (err: any) {

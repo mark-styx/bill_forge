@@ -1,13 +1,23 @@
 //! Billing API routes - exposes plan definitions, subscription status, and usage metering
 
-use axum::{extract::State, response::Json, routing::get, Router};
+use axum::{extract::State, response::Json, routing::{get, post}, Router};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use utoipa::ToSchema;
 
-use billforge_billing::{BillingConfig, BillingService, BillingServiceTrait, Plan};
+use billforge_billing::{
+    BillingConfig, BillingService, BillingServiceTrait, Plan,
+};
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::extractors::AuthUser;
 use crate::state::AppState;
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct CheckoutRequest {
+    plan_id: String,
+    billing_cycle: Option<String>,
+}
 
 /// Create billing sub-router
 pub fn routes() -> Router<AppState> {
@@ -15,6 +25,7 @@ pub fn routes() -> Router<AppState> {
         .route("/plans", get(list_plans))
         .route("/subscription", get(get_subscription))
         .route("/usage", get(get_usage))
+        .route("/checkout", post(create_checkout))
 }
 
 /// GET /billing/plans - return all public plans
@@ -93,3 +104,46 @@ async fn get_usage(
         "plan_id": sub.plan_id,
     })))
 }
+
+/// POST /billing/checkout - create a Stripe checkout session (or mock checkout)
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/checkout",
+    tag = "Billing",
+    request_body = CheckoutRequest,
+    responses(
+        (status = 200, description = "Checkout session created"),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
+async fn create_checkout(
+    AuthUser(user): AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<CheckoutRequest>,
+) -> ApiResult<Json<Value>> {
+    use billforge_billing::{BillingCycle, PlanId};
+    use std::str::FromStr;
+
+    let plan_id: PlanId = req
+        .plan_id
+        .parse()
+        .map_err(|e| ApiError(billforge_core::Error::Validation(e)))?;
+
+    let cycle = BillingCycle::from_str(req.billing_cycle.as_deref().unwrap_or("monthly"))
+        .map_err(|e| ApiError(billforge_core::Error::Validation(e)))?;
+
+    let service = BillingService::new(BillingConfig::from_env(), state.db.metadata());
+    let base =
+        std::env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let outcome = service
+        .create_checkout(&user.tenant_id, &user.email, plan_id, cycle, &base)
+        .await?;
+
+    Ok(Json(json!({
+        "mode": outcome.mode,
+        "url": outcome.url,
+    })))
+}
+

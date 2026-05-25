@@ -3,12 +3,20 @@
 use async_trait::async_trait;
 use billforge_core::{Error, Result, TenantId};
 use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::plans::{Plan, PlanId};
-use crate::stripe::StripeClient;
+use crate::stripe::{CreateCheckoutSessionParams, CreateCustomerParams, StripeClient};
 use crate::subscription::{BillingCycle, Subscription, SubscriptionId, SubscriptionStatus};
+
+/// Outcome of a checkout flow
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CheckoutOutcome {
+    pub mode: String,
+    pub url: String,
+}
 
 /// Billing configuration
 #[derive(Debug, Clone)]
@@ -113,6 +121,75 @@ impl BillingService {
     /// Get Stripe client
     pub fn stripe(&self) -> Option<Arc<StripeClient>> {
         self.stripe.clone()
+    }
+
+    /// Create a checkout session (or mock checkout) for a paid plan
+    pub async fn create_checkout(
+        &self,
+        tenant_id: &TenantId,
+        email: &str,
+        plan_id: PlanId,
+        billing_cycle: BillingCycle,
+        base_url: &str,
+    ) -> Result<CheckoutOutcome> {
+        if plan_id == PlanId::Free {
+            return Err(Error::Validation(
+                "Free plan does not require checkout".to_string(),
+            ));
+        }
+
+        if !self.is_enabled() {
+            // Mock mode: persist a trialing paid subscription and return a
+            // dashboard redirect URL. Keeps the dev/demo flow working without
+            // Stripe keys.
+            self.create_subscription(tenant_id, plan_id, billing_cycle)
+                .await?;
+            return Ok(CheckoutOutcome {
+                mode: "mock".to_string(),
+                url: format!("{}/dashboard?checkout=mock", base_url),
+            });
+        }
+
+        // Stripe mode
+        let stripe = self
+            .stripe()
+            .expect("stripe client must be present when billing is enabled");
+
+        let plan = Plan::by_id(plan_id);
+        let price_id = match billing_cycle {
+            BillingCycle::Annual => plan.stripe_annual_price_id.as_deref(),
+            BillingCycle::Monthly | _ => plan.stripe_monthly_price_id.as_deref(),
+        };
+        let price_id = price_id
+            .ok_or_else(|| Error::Validation(format!("No Stripe price ID for plan {}", plan_id)))?
+            .to_string();
+
+        let customer = stripe
+            .create_customer(CreateCustomerParams {
+                email: email.to_string(),
+                name: None,
+                metadata: HashMap::from([("tenant_id".to_string(), tenant_id.to_string())]),
+            })
+            .await?;
+
+        let session = stripe
+            .create_checkout_session(CreateCheckoutSessionParams {
+                customer_id: customer.id.clone(),
+                price_id,
+                mode: "subscription".to_string(),
+                success_url: format!("{}/dashboard?checkout=success", base_url),
+                cancel_url: format!("{}/onboard?checkout=cancelled", base_url),
+                metadata: HashMap::from([
+                    ("tenant_id".to_string(), tenant_id.to_string()),
+                    ("plan_id".to_string(), plan_id.to_string()),
+                ]),
+            })
+            .await?;
+
+        Ok(CheckoutOutcome {
+            mode: "stripe".to_string(),
+            url: session.url,
+        })
     }
 
     fn row_to_subscription(row: &sqlx::postgres::PgRow) -> Result<Subscription> {
@@ -600,6 +677,61 @@ mod tests {
         let sub = svc2.get_subscription(&tenant_id).await.unwrap();
         assert_eq!(sub.plan_id, PlanId::Professional);
         assert_eq!(sub.status, SubscriptionStatus::Trialing);
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_checkout_mock_mode() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
+        let tenant_id = TenantId::new();
+        seed_tenant(&pool, &tenant_id).await;
+
+        let service = BillingService::new(BillingConfig::default(), pool.clone());
+        let outcome = service
+            .create_checkout(
+                &tenant_id,
+                "a@b.com",
+                PlanId::Starter,
+                BillingCycle::Monthly,
+                "http://localhost:3000",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.mode, "mock");
+        assert!(outcome.url.contains("/dashboard?checkout=mock"));
+
+        // Verify the paid plan was persisted as trialing
+        let sub = service.get_subscription(&tenant_id).await.unwrap();
+        assert_eq!(sub.plan_id, PlanId::Starter);
+        assert_eq!(sub.status, SubscriptionStatus::Trialing);
+
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_checkout_rejects_free() {
+        let db = TestDb::new().await;
+        let pool = db.pool.clone();
+        let tenant_id = TenantId::new();
+        seed_tenant(&pool, &tenant_id).await;
+
+        let service = BillingService::new(BillingConfig::default(), pool.clone());
+        let result = service
+            .create_checkout(
+                &tenant_id,
+                "a@b.com",
+                PlanId::Free,
+                BillingCycle::Monthly,
+                "http://localhost:3000",
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Free plan does not require checkout"));
+
         db.cleanup().await;
     }
 }

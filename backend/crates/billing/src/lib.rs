@@ -16,5 +16,5 @@ pub mod usage;
 pub use addons::{ModuleAddOn, SubscriptionQuote, effective_features, quote_subscription};
 pub use plans::{Plan, PlanFeatures, PlanId, PlanTier};
 pub use subscription::{Subscription, SubscriptionStatus, BillingCycle};
-pub use service::{BillingService, BillingConfig, BillingServiceTrait};
+pub use service::{BillingService, BillingConfig, BillingServiceTrait, CheckoutOutcome};
 pub use usage::{get_tenant_usage, record_invoice_meter_event};

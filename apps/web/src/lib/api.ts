@@ -1609,6 +1609,9 @@ export const billingApi = {
 
   getSubscription: () =>
     api.get<{ subscription: BillingSubscription }>('/api/v1/billing/subscription'),
+
+  createCheckout: (data: { plan_id: string; billing_cycle?: string }) =>
+    api.post<{ mode: string; url: string }>('/api/v1/billing/checkout', data),
 };
 
 // ---------------------------------------------------------------------------
