@@ -123,7 +123,6 @@ async fn create_checkout(
     Json(req): Json<CheckoutRequest>,
 ) -> ApiResult<Json<Value>> {
     use billforge_billing::{BillingCycle, PlanId};
-    use std::str::FromStr;
 
     let plan_id: PlanId = req
         .plan_id

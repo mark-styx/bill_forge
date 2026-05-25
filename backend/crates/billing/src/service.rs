@@ -158,7 +158,7 @@ impl BillingService {
         let plan = Plan::by_id(plan_id);
         let price_id = match billing_cycle {
             BillingCycle::Annual => plan.stripe_annual_price_id.as_deref(),
-            BillingCycle::Monthly | _ => plan.stripe_monthly_price_id.as_deref(),
+            BillingCycle::Monthly => plan.stripe_monthly_price_id.as_deref(),
         };
         let price_id = price_id
             .ok_or_else(|| Error::Validation(format!("No Stripe price ID for plan {}", plan_id)))?
@@ -212,9 +212,9 @@ impl BillingService {
                 row.try_get("tenant_id")
                     .map_err(|e| Error::Database(e.to_string()))?,
             ),
-            plan_id: plan_str.parse().map_err(|e| Error::Database(e))?,
-            status: SubscriptionStatus::from_str(&status_str).map_err(|e| Error::Database(e))?,
-            billing_cycle: BillingCycle::from_str(&cycle_str).map_err(|e| Error::Database(e))?,
+            plan_id: plan_str.parse().map_err(Error::Database)?,
+            status: SubscriptionStatus::from_str(&status_str).map_err(Error::Database)?,
+            billing_cycle: BillingCycle::from_str(&cycle_str).map_err(Error::Database)?,
             started_at: row
                 .try_get("started_at")
                 .map_err(|e| Error::Database(e.to_string()))?,
@@ -390,7 +390,7 @@ impl BillingServiceTrait for BillingService {
         let status_str: String = existing
             .try_get("status")
             .map_err(|e| Error::Database(e.to_string()))?;
-        let status = SubscriptionStatus::from_str(&status_str).map_err(|e| Error::Database(e))?;
+        let status = SubscriptionStatus::from_str(&status_str).map_err(Error::Database)?;
         if status != SubscriptionStatus::Canceled {
             return Err(Error::Validation(
                 "Can only resume canceled subscriptions".to_string(),
