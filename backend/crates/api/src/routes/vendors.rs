@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters, VendorId},
+    domain::{AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters, VendorId, VendorType},
     traits::{AuditService, TaxDocumentRepository, VendorRepository},
     types::{PaginatedResponse, Pagination, TenantId},
     Error, Result as CoreResult,
@@ -67,6 +67,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/messages", get(list_messages))
         .route("/:id/messages", post(send_message))
         .route("/:id/portal-link", post(create_portal_link))
+        .route("/import", post(import_vendors_csv))
 }
 
 #[derive(Debug, Deserialize)]
@@ -659,4 +660,325 @@ async fn create_portal_link(
         "token": token,
         "url": portal_url,
     })))
+}
+
+/// Response for CSV vendor import
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ImportVendorsResponse {
+    /// Number of vendors imported
+    pub imported: u64,
+    /// Number of vendors skipped (duplicate name)
+    pub skipped: u64,
+    /// Number of rows that failed to parse or create
+    pub errors: u64,
+    /// Up to 20 error detail strings
+    #[serde(default)]
+    pub error_details: Vec<String>,
+}
+
+/// Parse a CSV byte slice into a list of CreateVendorInput values.
+///
+/// Returns a tuple of (parsed inputs, row-level error strings).
+/// The first non-empty line is treated as the header.
+fn parse_vendor_csv(bytes: &[u8]) -> Result<(Vec<CreateVendorInput>, Vec<String>), String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+
+    let mut lines = text.lines().enumerate().peekable();
+    let mut header_line: Option<String> = None;
+    let mut header_cols: Vec<String> = Vec::new();
+
+    // Find first non-empty line as header
+    while let Some((_, line)) = lines.peek() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            header_line = Some(trimmed.to_string());
+            header_cols = parse_csv_line(trimmed)
+                .into_iter()
+                .map(|c| c.to_lowercase())
+                .collect();
+            lines.next();
+            break;
+        }
+        lines.next();
+    }
+
+    let header_cols = header_cols;
+    let name_idx = header_cols.iter().position(|c| c == "name")
+        .ok_or_else(|| "Missing required column header: name".to_string())?;
+    let email_idx = header_cols.iter().position(|c| c == "email");
+    let vendor_type_idx = header_cols.iter().position(|c| c == "vendor_type");
+    let phone_idx = header_cols.iter().position(|c| c == "phone");
+    let tax_id_idx = header_cols.iter().position(|c| c == "tax_id");
+    let payment_terms_idx = header_cols.iter().position(|c| c == "payment_terms");
+    let vendor_code_idx = header_cols.iter().position(|c| c == "vendor_code");
+
+    let mut inputs: Vec<CreateVendorInput> = Vec::new();
+    let mut parse_errors: Vec<String> = Vec::new();
+
+    for (line_num, line) in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let fields = parse_csv_line(trimmed);
+
+        let get_field = |idx: Option<usize>| -> Option<String> {
+            idx.and_then(|i| fields.get(i)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        };
+
+        let name = match get_field(Some(name_idx)) {
+            Some(n) => n,
+            None => {
+                parse_errors.push(format!("Line {}: missing vendor name", line_num + 1));
+                continue;
+            }
+        };
+
+        let vendor_type_str = get_field(vendor_type_idx).unwrap_or_default();
+        let vendor_type = match vendor_type_str.to_lowercase().as_str() {
+            "business" | "" => VendorType::Business,
+            "contractor" => VendorType::Contractor,
+            "employee" => VendorType::Employee,
+            "government" => VendorType::Government,
+            "nonprofit" | "non_profit" | "non-profit" => VendorType::NonProfit,
+            _ => VendorType::Business,
+        };
+
+        inputs.push(CreateVendorInput {
+            name,
+            legal_name: None,
+            vendor_type,
+            email: get_field(email_idx),
+            phone: get_field(phone_idx),
+            website: None,
+            address: None,
+            tax_id: get_field(tax_id_idx),
+            tax_id_type: None,
+            payment_terms: get_field(payment_terms_idx),
+            default_payment_method: None,
+            vendor_code: get_field(vendor_code_idx),
+            default_gl_code: None,
+            default_department: None,
+            notes: None,
+            tags: Vec::new(),
+        });
+    }
+
+    Ok((inputs, parse_errors))
+}
+
+/// Parse a single CSV line respecting double-quoted fields containing commas.
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                // Peek ahead: doubled quote means literal quote
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' {
+            in_quotes = true;
+        } else if ch == ',' {
+            fields.push(current.clone());
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+#[utoipa::path(post, path = "/api/v1/vendors/import", tag = "Vendors",
+    request_body(content = inline(()), content_type = "multipart/form-data"),
+    responses((status = 200, description = "Vendors imported", body = ImportVendorsResponse),
+              (status = 401, description = "Unauthorized")))]
+async fn import_vendors_csv(
+    State(state): State<AppState>,
+    VendorMgmtAccess(user, tenant): VendorMgmtAccess,
+    mut multipart: Multipart,
+) -> ApiResult<Json<ImportVendorsResponse>> {
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        billforge_core::Error::Validation(format!("Failed to read multipart data: {}", e))
+    })? {
+        let field_name = field.name().unwrap_or("").to_string();
+        if field_name == "file" {
+            file_bytes = Some(field.bytes().await.map_err(|e| {
+                billforge_core::Error::Validation(format!("Failed to read file bytes: {}", e))
+            })?.to_vec());
+            break;
+        }
+    }
+
+    let file_bytes = file_bytes
+        .ok_or_else(|| billforge_core::Error::Validation("No file uploaded".to_string()))?;
+
+    let (inputs, parse_errors) = parse_vendor_csv(&file_bytes)
+        .map_err(|e| billforge_core::Error::Validation(e))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
+
+    let mut imported: u64 = 0;
+    let mut skipped: u64 = 0;
+    let mut error_count: u64 = 0;
+    let mut error_details: Vec<String> = parse_errors.clone();
+    let pagination = Pagination { page: 1, per_page: 10000 };
+
+    for input in &inputs {
+        // Idempotency: skip if vendor with same name already exists
+        let filters = VendorFilters {
+            search: Some(input.name.clone()),
+            ..Default::default()
+        };
+        match repo.list(&tenant.tenant_id, &filters, &pagination).await {
+            Ok(existing) => {
+                if existing.data.iter().any(|v| v.name.eq_ignore_ascii_case(&input.name)) {
+                    skipped += 1;
+                    continue;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to check existing vendors");
+            }
+        }
+
+        match repo.create(&tenant.tenant_id, input.clone()).await {
+            Ok(_) => imported += 1,
+            Err(e) => {
+                error_count += 1;
+                if error_details.len() < 20 {
+                    error_details.push(format!("Failed to create vendor '{}': {}", input.name, e));
+                }
+            }
+        }
+    }
+
+    // Add parse errors to error count
+    error_count += parse_errors.len() as u64;
+
+    // Audit
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Create, ResourceType::Vendor,
+        "bulk-import".to_string(),
+        format!("Imported {} vendors via spreadsheet ({} skipped, {} errors)", imported, skipped, error_count),
+    ).with_user_email(&user.email);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    Ok(Json(ImportVendorsResponse {
+        imported,
+        skipped,
+        errors: error_count,
+        error_details,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_vendor_csv_happy_path() {
+        let csv = "name,email,vendor_type\nAcme Corp,acme@test.com,Business\nBeta LLC,beta@test.com,Contractor\n";
+        let (inputs, errors) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert!(errors.is_empty());
+
+        assert_eq!(inputs[0].name, "Acme Corp");
+        assert_eq!(inputs[0].email.as_deref(), Some("acme@test.com"));
+        assert_eq!(inputs[0].vendor_type, VendorType::Business);
+
+        assert_eq!(inputs[1].name, "Beta LLC");
+        assert_eq!(inputs[1].email.as_deref(), Some("beta@test.com"));
+        assert_eq!(inputs[1].vendor_type, VendorType::Contractor);
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_missing_name_column() {
+        let csv = "email,vendor_type\ntest@test.com,Business\n";
+        let result = parse_vendor_csv(csv.as_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required column header: name"));
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_blank_vendor_type_defaults_to_business() {
+        let csv = "name,email,vendor_type\nAcme Corp,acme@test.com,\n";
+        let (inputs, _) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].vendor_type, VendorType::Business);
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_unknown_vendor_type_defaults_to_business() {
+        let csv = "name,vendor_type\nAcme Corp,something_unknown\n";
+        let (inputs, _) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert_eq!(inputs[0].vendor_type, VendorType::Business);
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_quoted_field_with_comma() {
+        let csv = "name,email\n\"Acme, Inc.\",acme@test.com\n";
+        let (inputs, _) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].name, "Acme, Inc.");
+        assert_eq!(inputs[0].email.as_deref(), Some("acme@test.com"));
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_missing_name_in_row() {
+        let csv = "name,email\n,beta@test.com\n";
+        let (inputs, errors) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert!(inputs.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("missing vendor name"));
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_optional_fields() {
+        let csv = "name,tax_id,payment_terms,vendor_code\nAcme Corp,12-3456789,Net 30,V-001\n";
+        let (inputs, _) = parse_vendor_csv(csv.as_bytes()).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].tax_id.as_deref(), Some("12-3456789"));
+        assert_eq!(inputs[0].payment_terms.as_deref(), Some("Net 30"));
+        assert_eq!(inputs[0].vendor_code.as_deref(), Some("V-001"));
+        assert!(inputs[0].email.is_none());
+    }
+
+    #[test]
+    fn test_parse_csv_line_simple() {
+        let result = parse_csv_line("a,b,c");
+        assert_eq!(result, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_line_quoted_comma() {
+        let result = parse_csv_line("\"hello, world\",b,c");
+        assert_eq!(result, vec!["hello, world", "b", "c"]);
+    }
+
+    #[test]
+    fn test_parse_csv_line_doubled_quote() {
+        let result = parse_csv_line("\"he said \"\"hi\"\"\",b");
+        assert_eq!(result, vec!["he said \"hi\"", "b"]);
+    }
 }

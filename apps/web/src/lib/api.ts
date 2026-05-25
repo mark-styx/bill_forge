@@ -412,6 +412,12 @@ export const vendorsApi = {
     api.put<Vendor>(`/api/v1/vendors/${id}`, data),
 
   delete: (id: string) => api.delete(`/api/v1/vendors/${id}`),
+
+  importCsv: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.upload<ImportVendorsResult>('/api/v1/vendors/import', formData);
+  },
 };
 
 // Workflows API
@@ -613,6 +619,13 @@ export interface CreateVendorInput {
   name: string;
   vendor_type: string;
   email?: string;
+}
+
+export interface ImportVendorsResult {
+  imported: number;
+  skipped: number;
+  errors: number;
+  error_details: string[];
 }
 
 export interface WorkflowRule {

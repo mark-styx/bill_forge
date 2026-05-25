@@ -13,6 +13,7 @@ import {
   Phone,
   Building2,
   ArrowRight,
+  Upload,
 } from 'lucide-react';
 
 export default function VendorsPage() {
@@ -36,10 +37,16 @@ export default function VendorsPage() {
             Manage your vendor relationships
           </p>
         </div>
-        <Link href="/vendors/new" className="btn btn-primary btn-sm">
-          <Plus className="w-4 h-4 mr-1.5" />
-          Add Vendor
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/migrate" className="btn btn-secondary btn-sm">
+            <Upload className="w-4 h-4 mr-1.5" />
+            Import Vendors
+          </Link>
+          <Link href="/vendors/new" className="btn btn-primary btn-sm">
+            <Plus className="w-4 h-4 mr-1.5" />
+            Add Vendor
+          </Link>
+        </div>
       </div>
 
       {/* Search & Filters */}
