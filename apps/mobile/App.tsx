@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -56,6 +58,10 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalKind, setModalKind] = useState<'approve' | 'reject'>('approve');
+  const [modalItem, setModalItem] = useState<ApprovalItem | null>(null);
+  const [modalText, setModalText] = useState('');
 
   // Flush the offline queue on mount
   useEffect(() => {
@@ -189,40 +195,28 @@ export default function App() {
   );
 
   const promptAction = (item: ApprovalItem, kind: 'approve' | 'reject') => {
-    if (kind === 'approve') {
-      Alert.prompt(
-        'Approve Invoice',
-        `${item.invoice.vendor_name} - ${item.invoice.invoice_number}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Approve',
-            onPress: (comment) => handleAction(item.id, 'approve', comment || ''),
-          },
-        ],
-        'plain-text',
-      );
-    } else {
-      Alert.prompt(
-        'Reject Invoice',
-        `${item.invoice.vendor_name} - ${item.invoice.invoice_number}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Reject',
-            style: 'destructive',
-            onPress: (reason) => {
-              if (!reason?.trim()) {
-                Alert.alert('Reason required', 'Please provide a rejection reason.');
-                return;
-              }
-              handleAction(item.id, 'reject', reason);
-            },
-          },
-        ],
-        'plain-text',
-      );
+    setModalItem(item);
+    setModalKind(kind);
+    setModalText('');
+    setModalVisible(true);
+  };
+
+  const submitModal = () => {
+    if (!modalItem) return;
+    if (modalKind === 'reject' && !modalText.trim()) {
+      Alert.alert('Reason required', 'Please provide a rejection reason.');
+      return;
     }
+    handleAction(modalItem.id, modalKind, modalText);
+    setModalVisible(false);
+    setModalItem(null);
+    setModalText('');
+  };
+
+  const cancelModal = () => {
+    setModalVisible(false);
+    setModalItem(null);
+    setModalText('');
   };
 
   return (
@@ -282,6 +276,54 @@ export default function App() {
           ))}
         </ScrollView>
       )}
+      {/* Approve / Reject Modal */}
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              {modalKind === 'approve' ? 'Approve Invoice' : 'Reject Invoice'}
+            </Text>
+            {modalItem && (
+              <Text style={styles.modalSubtitle}>
+                {modalItem.invoice.vendor_name} - {modalItem.invoice.invoice_number}
+              </Text>
+            )}
+            <TextInput
+              style={styles.modalInput}
+              placeholder={modalKind === 'approve' ? 'Comment (optional)' : 'Reason (required)'}
+              value={modalText}
+              onChangeText={setModalText}
+              autoFocus
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={cancelModal}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  modalKind === 'approve'
+                    ? styles.approveButton
+                    : styles.rejectButton,
+                ]}
+                onPress={submitModal}
+              >
+                <Text style={styles.buttonText}>
+                  {modalKind === 'approve' ? 'Approve' : 'Reject'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -385,5 +427,55 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    width: '85%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 16,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 15,
+    marginBottom: 16,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalCancelButton: {
+    backgroundColor: '#e5e7eb',
+  },
+  modalButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
   },
 });
