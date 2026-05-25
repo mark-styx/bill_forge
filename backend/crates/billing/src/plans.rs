@@ -1,7 +1,11 @@
 //! Subscription plan definitions
 
-use serde::{Deserialize, Serialize};
 use billforge_core::Module;
+use serde::{Deserialize, Serialize};
+
+pub const STARTER_INVOICE_UNIT_PRICE_CENTS: u64 = 150;
+pub const PROFESSIONAL_INVOICE_UNIT_PRICE_CENTS: u64 = 100;
+pub const ENTERPRISE_INVOICE_UNIT_PRICE_CENTS: u64 = 65;
 
 /// Plan identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -128,6 +132,10 @@ pub struct Plan {
     pub monthly_price_cents: u64,
     /// Annual price in cents (typically discounted)
     pub annual_price_cents: u64,
+    /// Price for each processed invoice reported through usage metering.
+    pub metered_invoice_unit_price_cents: u64,
+    /// Whether processed invoices should be reported to Stripe usage metering.
+    pub stripe_invoice_metering_enabled: bool,
     /// Plan features
     pub features: PlanFeatures,
     /// Stripe price ID for monthly billing
@@ -147,6 +155,8 @@ impl Plan {
             description: "Get started with basic invoice capture".to_string(),
             monthly_price_cents: 0,
             annual_price_cents: 0,
+            metered_invoice_unit_price_cents: 0,
+            stripe_invoice_metering_enabled: false,
             features: PlanFeatures {
                 max_users: 1,
                 max_invoices_per_month: 25,
@@ -176,9 +186,11 @@ impl Plan {
             description: "Perfect for small businesses".to_string(),
             monthly_price_cents: 4900, // $49/month
             annual_price_cents: 47000, // $470/year (~20% discount)
+            metered_invoice_unit_price_cents: STARTER_INVOICE_UNIT_PRICE_CENTS,
+            stripe_invoice_metering_enabled: true,
             features: PlanFeatures {
                 max_users: 3,
-                max_invoices_per_month: 200,
+                max_invoices_per_month: u32::MAX,
                 max_vendors: 50,
                 storage_gb: 10,
                 modules: vec![Module::InvoiceCapture, Module::VendorManagement],
@@ -205,9 +217,11 @@ impl Plan {
             description: "Full AP automation for growing teams".to_string(),
             monthly_price_cents: 14900, // $149/month
             annual_price_cents: 142800, // $1428/year (~20% discount)
+            metered_invoice_unit_price_cents: PROFESSIONAL_INVOICE_UNIT_PRICE_CENTS,
+            stripe_invoice_metering_enabled: true,
             features: PlanFeatures {
                 max_users: 10,
-                max_invoices_per_month: 1000,
+                max_invoices_per_month: u32::MAX,
                 max_vendors: 500,
                 storage_gb: 50,
                 modules: vec![
@@ -239,6 +253,8 @@ impl Plan {
             description: "Custom solutions for large organizations".to_string(),
             monthly_price_cents: 49900, // $499/month (base price)
             annual_price_cents: 479000, // $4790/year (~20% discount)
+            metered_invoice_unit_price_cents: ENTERPRISE_INVOICE_UNIT_PRICE_CENTS,
+            stripe_invoice_metering_enabled: true,
             features: PlanFeatures {
                 max_users: u32::MAX,
                 max_invoices_per_month: u32::MAX,
@@ -305,6 +321,11 @@ impl Plan {
         let monthly_total = self.monthly_price() * 12.0;
         monthly_total - self.annual_price()
     }
+
+    /// Price per processed invoice as dollars.
+    pub fn metered_invoice_unit_price(&self) -> f64 {
+        self.metered_invoice_unit_price_cents as f64 / 100.0
+    }
 }
 
 #[cfg(test)]
@@ -316,7 +337,13 @@ mod tests {
         let starter = Plan::starter();
         assert_eq!(starter.monthly_price(), 49.0);
         assert_eq!(starter.annual_price(), 470.0);
+        assert_eq!(starter.metered_invoice_unit_price(), 1.5);
+        assert!(starter.stripe_invoice_metering_enabled);
         assert!(starter.annual_savings() > 0.0);
+
+        assert_eq!(Plan::professional().metered_invoice_unit_price_cents, 100);
+        assert_eq!(Plan::enterprise().metered_invoice_unit_price_cents, 65);
+        assert!(!Plan::free().stripe_invoice_metering_enabled);
     }
 
     #[test]
@@ -346,7 +373,10 @@ mod tests {
     #[test]
     fn test_plan_id_from_str() {
         assert_eq!("free".parse::<PlanId>().unwrap(), PlanId::Free);
-        assert_eq!("PROFESSIONAL".parse::<PlanId>().unwrap(), PlanId::Professional);
+        assert_eq!(
+            "PROFESSIONAL".parse::<PlanId>().unwrap(),
+            PlanId::Professional
+        );
         assert!("invalid".parse::<PlanId>().is_err());
     }
 }

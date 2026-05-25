@@ -4,7 +4,7 @@
 //! rather than fabricating data locally.
 
 use billforge_billing::stripe::{
-    CreateCustomerParams, StripeClient, StripeSubscription,
+    CreateCustomerParams, CreateMeterEventParams, StripeClient, StripeSubscription,
 };
 use std::collections::HashMap;
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -82,4 +82,41 @@ async fn get_subscription_parses_status_from_response() {
     assert_eq!(sub.status, "past_due");
     assert_eq!(sub.id, "sub_X");
     assert_eq!(sub.customer, "cus_ABC123");
+}
+
+#[tokio::test]
+async fn create_meter_event_posts_invoice_usage_to_stripe() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/billing/meter_events"))
+        .and(header("authorization", "Bearer sk_test_abc123"))
+        .and(body_string_contains("event_name=billforge_invoice_processed"))
+        .and(body_string_contains("payload%5Bstripe_customer_id%5D=cus_ABC123"))
+        .and(body_string_contains("payload%5Bvalue%5D=1"))
+        .and(body_string_contains("identifier=tenant%3At_1%3Ainvoice%3Ainv_1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "mtr_evt_123",
+            "event_name": "billforge_invoice_processed",
+            "identifier": "tenant:t_1:invoice:inv_1",
+            "timestamp": 1700000000
+        })))
+        .mount(&server)
+        .await;
+
+    let client = make_client(&server).await;
+    let event = client
+        .create_meter_event(CreateMeterEventParams {
+            event_name: "billforge_invoice_processed".to_string(),
+            stripe_customer_id: "cus_ABC123".to_string(),
+            value: 1,
+            identifier: "tenant:t_1:invoice:inv_1".to_string(),
+            timestamp: Some(1700000000),
+            payload: HashMap::new(),
+        })
+        .await
+        .expect("create_meter_event should succeed");
+
+    assert_eq!(event.id, "mtr_evt_123");
+    assert_eq!(event.identifier, "tenant:t_1:invoice:inv_1");
 }

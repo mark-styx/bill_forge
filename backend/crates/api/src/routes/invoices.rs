@@ -9,12 +9,17 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateInvoiceInput, CreateLineItemInput, ExtractedLineItem, Invoice, InvoiceFilters, CaptureStatus, ProcessingStatus, QueueType, ResourceType},
+    domain::{
+        AuditAction, AuditEntry, CaptureStatus, CreateInvoiceInput, CreateLineItemInput,
+        ExtractedLineItem, Invoice, InvoiceFilters, ProcessingStatus, QueueType, ResourceType,
+    },
     traits::{AuditService, InvoiceRepository},
     types::{Money, PaginatedResponse, Pagination},
 };
 use billforge_invoice_capture::ocr;
-use billforge_invoice_processing::feedback_loop::{CategorizationFeedback, FeedbackLearning, FeedbackType};
+use billforge_invoice_processing::feedback_loop::{
+    CategorizationFeedback, FeedbackLearning, FeedbackType,
+};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -74,8 +79,12 @@ async fn list_invoices(
     let filters = InvoiceFilters {
         vendor_id: query.vendor_id.and_then(|s| Uuid::parse_str(&s).ok()),
         search: query.search,
-        capture_status: query.capture_status.and_then(|s| CaptureStatus::from_str(&s)),
-        processing_status: query.processing_status.and_then(|s| ProcessingStatus::from_str(&s)),
+        capture_status: query
+            .capture_status
+            .and_then(|s| CaptureStatus::from_str(&s)),
+        processing_status: query
+            .processing_status
+            .and_then(|s| ProcessingStatus::from_str(&s)),
         ..Default::default()
     };
 
@@ -104,12 +113,15 @@ async fn get_invoice(
     InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Invoice>> {
-    let invoice_id = id.parse()
+    let invoice_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    let invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+    let invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: id.clone(),
@@ -137,14 +149,18 @@ async fn create_invoice(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     let invoice = repo.create(&tenant.tenant_id, input, &user.user_id).await?;
+    record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Invoice,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Invoice,
         invoice.id.to_string(),
         format!("Created invoice {}", invoice.invoice_number),
-    ).with_user_email(&user.email)
-     .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -172,14 +188,17 @@ async fn update_invoice(
     Path(id): Path<String>,
     Json(updates): Json<serde_json::Value>,
 ) -> ApiResult<Json<Invoice>> {
-    let invoice_id = id.parse()
+    let invoice_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
 
     let old_invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?;
-    let invoice = repo.update(&tenant.tenant_id, &invoice_id, updates.clone()).await?;
+    let invoice = repo
+        .update(&tenant.tenant_id, &invoice_id, updates.clone())
+        .await?;
 
     // Best-effort categorization feedback recording (refs #159)
     if let Some(ref old) = old_invoice {
@@ -226,8 +245,9 @@ async fn update_invoice(
                 total_amount_cents: invoice.total_amount.amount,
                 feedback_type,
             };
-            if let Err(e) =
-                FeedbackLearning::new((*pool).clone()).record_feedback(feedback).await
+            if let Err(e) = FeedbackLearning::new((*pool).clone())
+                .record_feedback(feedback)
+                .await
             {
                 tracing::warn!(
                     error = %e,
@@ -239,12 +259,15 @@ async fn update_invoice(
     }
 
     let mut audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Update, ResourceType::Invoice,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Invoice,
         invoice.id.to_string(),
         format!("Updated invoice {}", invoice.invoice_number),
-    ).with_user_email(&user.email)
-     .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
     if let Some(old) = old_invoice {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
     }
@@ -274,7 +297,8 @@ async fn delete_invoice(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let invoice_id = id.parse()
+    let invoice_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -284,10 +308,14 @@ async fn delete_invoice(
     repo.delete(&tenant.tenant_id, &invoice_id).await?;
 
     let mut audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Delete, ResourceType::Invoice,
-        id.clone(), "Deleted invoice",
-    ).with_user_email(&user.email);
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Delete,
+        ResourceType::Invoice,
+        id.clone(),
+        "Deleted invoice",
+    )
+    .with_user_email(&user.email);
     if let Some(old) = old_invoice {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
     }
@@ -306,6 +334,39 @@ pub struct UploadResponse {
     pub message: String,
 }
 
+async fn record_invoice_metering_usage(
+    state: &AppState,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &Uuid,
+) {
+    let config = billforge_billing::BillingConfig::from_env();
+    if !config.enabled {
+        return;
+    }
+
+    let service = billforge_billing::BillingService::new(config, state.db.metadata());
+    let stripe = service.stripe();
+    let Some(stripe) = stripe.as_deref() else {
+        return;
+    };
+
+    if let Err(e) = billforge_billing::record_invoice_meter_event(
+        &state.db.metadata(),
+        Some(stripe),
+        tenant_id,
+        invoice_id,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            tenant_id = %tenant_id,
+            invoice_id = %invoice_id,
+            "Failed to record Stripe invoice meter event"
+        );
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/invoices/upload",
@@ -322,21 +383,32 @@ async fn upload_invoice(
     mut multipart: Multipart,
 ) -> ApiResult<Json<UploadResponse>> {
     // Process multipart upload
-    while let Some(field) = multipart.next_field().await
+    while let Some(field) = multipart
+        .next_field()
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Upload error: {}", e)))?
     {
         let name = field.name().unwrap_or("").to_string();
 
         if name == "file" {
             let file_name = field.file_name().unwrap_or("document.pdf").to_string();
-            let content_type = field.content_type().unwrap_or("application/pdf").to_string();
-            let data = field.bytes().await
-                .map_err(|e| billforge_core::Error::Validation(format!("Failed to read file: {}", e)))?;
+            let content_type = field
+                .content_type()
+                .unwrap_or("application/pdf")
+                .to_string();
+            let data = field.bytes().await.map_err(|e| {
+                billforge_core::Error::Validation(format!("Failed to read file: {}", e))
+            })?;
 
             // Store the document via storage service
             let file_name_for_msg = file_name.clone();
-            let document_id = state.storage.upload(&tenant.tenant_id, &file_name, &data, &content_type).await
-                .map_err(|e| billforge_core::Error::Database(format!("Failed to store document: {}", e)))?;
+            let document_id = state
+                .storage
+                .upload(&tenant.tenant_id, &file_name, &data, &content_type)
+                .await
+                .map_err(|e| {
+                    billforge_core::Error::Database(format!("Failed to store document: {}", e))
+                })?;
 
             let storage_key = format!("{}/{}", tenant.tenant_id.as_str(), document_id);
 
@@ -364,10 +436,14 @@ async fn upload_invoice(
 
             let pool = state.db.tenant(&tenant.tenant_id).await?;
             let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-            let invoice = repo.create(&tenant.tenant_id, invoice_input, &user.user_id).await?;
+            let invoice = repo
+                .create(&tenant.tenant_id, invoice_input, &user.user_id)
+                .await?;
+            record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
             // Set capture status to Processing
-            repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing).await?;
+            repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing)
+                .await?;
 
             // Store document metadata
             sqlx::query(
@@ -388,16 +464,19 @@ async fn upload_invoice(
 
             // Audit: invoice created via upload
             let audit_entry = AuditEntry::new(
-                tenant.tenant_id.clone(), Some(user.user_id.clone()),
-                AuditAction::Create, ResourceType::Invoice,
+                tenant.tenant_id.clone(),
+                Some(user.user_id.clone()),
+                AuditAction::Create,
+                ResourceType::Invoice,
                 invoice.id.to_string(),
                 format!("Uploaded invoice from file '{}'", file_name),
-            ).with_user_email(&user.email)
-             .with_metadata(serde_json::json!({
-                 "document_id": document_id.to_string(),
-                 "file_name": file_name,
-                 "content_type": content_type,
-             }));
+            )
+            .with_user_email(&user.email)
+            .with_metadata(serde_json::json!({
+                "document_id": document_id.to_string(),
+                "file_name": file_name,
+                "content_type": content_type,
+            }));
             let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
             if let Err(e) = audit_repo.log(audit_entry).await {
                 tracing::warn!(error = %e, "Failed to log audit entry");
@@ -411,7 +490,9 @@ async fn upload_invoice(
                     &invoice.id,
                     document_id,
                     &content_type,
-                ).await {
+                )
+                .await
+                {
                     Ok(_) => {
                         tracing::info!(
                             invoice_id = %invoice.id,
@@ -426,13 +507,31 @@ async fn upload_invoice(
                             "Failed to enqueue OCR job, falling back to sync"
                         );
                         // Fall back to synchronous OCR
-                        let status = run_sync_ocr(&state, &tenant.tenant_id, &invoice.id, &data, &content_type, &repo, &pool).await;
+                        let status = run_sync_ocr(
+                            &state,
+                            &tenant.tenant_id,
+                            &invoice.id,
+                            &data,
+                            &content_type,
+                            &repo,
+                            &pool,
+                        )
+                        .await;
                         sync_ocr_message(&file_name_for_msg, status)
                     }
                 }
             } else {
                 // No Redis configured, run OCR synchronously
-                let status = run_sync_ocr(&state, &tenant.tenant_id, &invoice.id, &data, &content_type, &repo, &pool).await;
+                let status = run_sync_ocr(
+                    &state,
+                    &tenant.tenant_id,
+                    &invoice.id,
+                    &data,
+                    &content_type,
+                    &repo,
+                    &pool,
+                )
+                .await;
                 sync_ocr_message(&file_name_for_msg, status)
             };
 
@@ -468,8 +567,9 @@ async fn enqueue_ocr_job(
         "retry_count": 0,
     });
 
-    let job_json = serde_json::to_string(&job)
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to serialize OCR job: {}", e)))?;
+    let job_json = serde_json::to_string(&job).map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to serialize OCR job: {}", e))
+    })?;
 
     let mut conn = redis_client
         .get_async_connection()
@@ -478,7 +578,9 @@ async fn enqueue_ocr_job(
 
     conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to enqueue OCR job: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to enqueue OCR job: {}", e))
+        })?;
 
     Ok(())
 }
@@ -515,12 +617,20 @@ async fn run_sync_ocr(
                 CaptureStatus::ReadyForReview
             };
 
-            let vendor_name = result.vendor_name.value.clone()
+            let vendor_name = result
+                .vendor_name
+                .value
+                .clone()
                 .unwrap_or_else(|| "Unknown Vendor".to_string());
-            let invoice_number = result.invoice_number.value.clone()
-                .unwrap_or_else(|| format!("UPLOAD-{}", &Uuid::new_v4().to_string()[..8].to_uppercase()));
+            let invoice_number = result.invoice_number.value.clone().unwrap_or_else(|| {
+                format!("UPLOAD-{}", &Uuid::new_v4().to_string()[..8].to_uppercase())
+            });
             let total_amount = Money::usd(result.total_amount.value.unwrap_or(0.0));
-            let currency = result.currency.value.clone().unwrap_or_else(|| "USD".to_string());
+            let currency = result
+                .currency
+                .value
+                .clone()
+                .unwrap_or_else(|| "USD".to_string());
 
             // Use repo.update() for fields it supports
             let mut updates = serde_json::json!({
@@ -587,16 +697,21 @@ async fn run_sync_ocr(
         }
         Err(e) => {
             tracing::warn!(invoice_id = %invoice_id, error = %e, "Sync OCR failed");
-            let _ = repo.update(
-                tenant_id,
-                invoice_id,
-                serde_json::json!({ "notes": format!("OCR Error: {}", e) }),
-            ).await;
+            let _ = repo
+                .update(
+                    tenant_id,
+                    invoice_id,
+                    serde_json::json!({ "notes": format!("OCR Error: {}", e) }),
+                )
+                .await;
             CaptureStatus::Failed
         }
     };
 
-    if let Err(e) = repo.update_capture_status(tenant_id, invoice_id, capture_status).await {
+    if let Err(e) = repo
+        .update_capture_status(tenant_id, invoice_id, capture_status)
+        .await
+    {
         tracing::error!(invoice_id = %invoice_id, error = %e, "Failed to update capture status");
     }
 
@@ -607,16 +722,19 @@ async fn run_sync_ocr(
             &queue_repo,
             tenant_id,
             QueueType::OcrError,
-        ).await {
+        )
+        .await
+        {
             let _ = billforge_core::traits::WorkQueueRepository::move_item(
                 &queue_repo,
                 tenant_id,
                 invoice_id,
                 &error_queue.id,
                 None,
-            ).await;
+            )
+            .await;
             let _ = sqlx::query(
-                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
+                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
             )
             .bind(error_queue.id.0)
             .bind(invoice_id.as_uuid())
@@ -646,38 +764,50 @@ async fn rerun_ocr(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let invoice_id: billforge_core::domain::InvoiceId = id.parse()
+    let invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
 
     // Verify invoice exists and get its document_id
-    let invoice = repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+    let invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: id.clone(),
         })?;
 
     // Look up the stored MIME type for this invoice's primary document
-    let mime_type: String = sqlx::query_scalar(
-        "SELECT mime_type FROM documents WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(invoice.document_id)
-    .bind(*tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to look up document MIME type: {}", e)))?
-    .unwrap_or_else(|| "application/pdf".to_string());
+    let mime_type: String =
+        sqlx::query_scalar("SELECT mime_type FROM documents WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice.document_id)
+            .bind(*tenant.tenant_id.as_uuid())
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!(
+                    "Failed to look up document MIME type: {}",
+                    e
+                ))
+            })?
+            .unwrap_or_else(|| "application/pdf".to_string());
 
     // Mark as Processing
-    repo.update_capture_status(&tenant.tenant_id, &invoice_id, CaptureStatus::Processing).await?;
+    repo.update_capture_status(&tenant.tenant_id, &invoice_id, CaptureStatus::Processing)
+        .await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::OcrRerun, ResourceType::Invoice,
-        id.clone(), format!("Reran OCR for invoice {}", invoice.invoice_number),
-    ).with_user_email(&user.email);
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::OcrRerun,
+        ResourceType::Invoice,
+        id.clone(),
+        format!("Reran OCR for invoice {}", invoice.invoice_number),
+    )
+    .with_user_email(&user.email);
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -691,7 +821,9 @@ async fn rerun_ocr(
             &invoice_id,
             invoice.document_id,
             &mime_type,
-        ).await {
+        )
+        .await
+        {
             Ok(_) => {
                 tracing::info!(invoice_id = %invoice_id, "OCR reprocessing job enqueued");
                 return Ok(Json(serde_json::json!({
@@ -714,7 +846,9 @@ async fn rerun_ocr(
         state.storage.clone(),
     );
 
-    let ocr_result = capture_service.reprocess_ocr(&tenant.tenant_id, &invoice_id).await?;
+    let ocr_result = capture_service
+        .reprocess_ocr(&tenant.tenant_id, &invoice_id)
+        .await?;
 
     Ok(Json(serde_json::json!({
         "message": "OCR reprocessing completed",
@@ -745,14 +879,17 @@ async fn submit_for_processing(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let invoice_id = id.parse()
+    let invoice_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     // Get the invoice
     let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-    let mut invoice = invoice_repo.get_by_id(&tenant.tenant_id, &invoice_id).await?
+    let mut invoice = invoice_repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: id.clone(),
@@ -766,11 +903,9 @@ async fn submit_for_processing(
     }
 
     // Update status to Submitted
-    invoice_repo.update_processing_status(
-        &tenant.tenant_id,
-        &invoice_id,
-        ProcessingStatus::Submitted,
-    ).await?;
+    invoice_repo
+        .update_processing_status(&tenant.tenant_id, &invoice_id, ProcessingStatus::Submitted)
+        .await?;
     invoice.processing_status = ProcessingStatus::Submitted;
 
     // Run auto-categorization if ANY categorization field is missing
@@ -781,23 +916,25 @@ async fn submit_for_processing(
         let had_cost_center = invoice.cost_center.is_some();
 
         let cat_engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
-        let line_items: Vec<billforge_invoice_processing::categorization::LineItemInput> = invoice.line_items.iter().map(|li| {
-            billforge_invoice_processing::categorization::LineItemInput {
-                description: li.description.clone(),
-                quantity: li.quantity,
-                amount: li.amount.amount as f64 / 100.0,
-            }
-        }).collect();
+        let line_items: Vec<billforge_invoice_processing::categorization::LineItemInput> = invoice
+            .line_items
+            .iter()
+            .map(
+                |li| billforge_invoice_processing::categorization::LineItemInput {
+                    description: li.description.clone(),
+                    quantity: li.quantity,
+                    amount: li.amount.amount as f64 / 100.0,
+                },
+            )
+            .collect();
         let total = invoice.total_amount.amount as f64 / 100.0;
         let tenant_id_str = tenant.tenant_id.to_string();
 
         // Try ML-based categorization first if OpenAI API key is available,
         // then fall back to rule-based engine
         let cat_result = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
-            let ml_categorizer = billforge_invoice_processing::MLCategorizer::new(
-                (*pool).clone(),
-                openai_api_key,
-            );
+            let ml_categorizer =
+                billforge_invoice_processing::MLCategorizer::new((*pool).clone(), openai_api_key);
             match ml_categorizer
                 .suggest_categories_ml(
                     &tenant_id_str,
@@ -822,23 +959,27 @@ async fn submit_for_processing(
                         error = %e,
                         "ML auto-categorization failed, falling back to rule-based"
                     );
-                    cat_engine.suggest_categories(
-                        &tenant_id_str,
-                        invoice.vendor_id,
-                        &invoice.vendor_name,
-                        &line_items,
-                        total,
-                    ).await
+                    cat_engine
+                        .suggest_categories(
+                            &tenant_id_str,
+                            invoice.vendor_id,
+                            &invoice.vendor_name,
+                            &line_items,
+                            total,
+                        )
+                        .await
                 }
             }
         } else {
-            cat_engine.suggest_categories(
-                &tenant_id_str,
-                invoice.vendor_id,
-                &invoice.vendor_name,
-                &line_items,
-                total,
-            ).await
+            cat_engine
+                .suggest_categories(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
         };
 
         match cat_result {
@@ -848,25 +989,28 @@ async fn submit_for_processing(
                     "categorization_confidence": categorization.overall_confidence,
                 });
                 if !had_gl_code {
-                    updates["gl_code"] = serde_json::json!(
-                        categorization.gl_code.as_ref().map(|s| &s.value)
-                    );
+                    updates["gl_code"] =
+                        serde_json::json!(categorization.gl_code.as_ref().map(|s| &s.value));
                 }
                 if !had_department {
-                    updates["department"] = serde_json::json!(
-                        categorization.department.as_ref().map(|s| &s.value)
-                    );
+                    updates["department"] =
+                        serde_json::json!(categorization.department.as_ref().map(|s| &s.value));
                 }
                 if !had_cost_center {
-                    updates["cost_center"] = serde_json::json!(
-                        categorization.cost_center.as_ref().map(|s| &s.value)
-                    );
+                    updates["cost_center"] =
+                        serde_json::json!(categorization.cost_center.as_ref().map(|s| &s.value));
                 }
-                if let Err(e) = invoice_repo.update(&tenant.tenant_id, &invoice_id, updates).await {
+                if let Err(e) = invoice_repo
+                    .update(&tenant.tenant_id, &invoice_id, updates)
+                    .await
+                {
                     tracing::warn!(invoice_id = %invoice_id, error = %e, "Failed to persist auto-categorization");
                 } else {
                     // Re-fetch so the workflow engine sees populated fields
-                    if let Some(refetched) = invoice_repo.get_by_id(&tenant.tenant_id, &invoice_id).await? {
+                    if let Some(refetched) = invoice_repo
+                        .get_by_id(&tenant.tenant_id, &invoice_id)
+                        .await?
+                    {
                         invoice = refetched;
                     }
                 }
@@ -887,7 +1031,8 @@ async fn submit_for_processing(
         &workflow_repo,
         &tenant.tenant_id,
         None,
-    ).await?;
+    )
+    .await?;
 
     // Filter to active rules only
     let _active_rules: Vec<_> = rules.into_iter().filter(|r| r.is_active).collect();
@@ -897,8 +1042,9 @@ async fn submit_for_processing(
     let engine = billforge_invoice_processing::WorkflowEngine::new(
         Arc::new(invoice_repo) as Arc<dyn billforge_core::traits::InvoiceRepository>,
         Arc::new(workflow_repo) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
-        Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone()))
-            as Arc<dyn billforge_core::traits::ApprovalRepository>,
+        Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+            pool.clone(),
+        )) as Arc<dyn billforge_core::traits::ApprovalRepository>,
     );
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
@@ -906,19 +1052,23 @@ async fn submit_for_processing(
     // Update invoice with final status from workflow
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-    invoice_repo.update_processing_status(
-        &tenant.tenant_id,
-        &invoice_id,
-        final_status,
-    ).await?;
+    invoice_repo
+        .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
+        .await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::InvoiceSubmitted, ResourceType::Invoice,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::InvoiceSubmitted,
+        ResourceType::Invoice,
         id.clone(),
-        format!("Submitted invoice for processing, status: {:?}", final_status),
-    ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "processing_status": format!("{:?}", final_status) }));
+        format!(
+            "Submitted invoice for processing, status: {:?}",
+            final_status
+        ),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({ "processing_status": format!("{:?}", final_status) }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -944,7 +1094,9 @@ async fn submit_for_processing(
         &queue_repo,
         &tenant.tenant_id,
         target_queue_type,
-    ).await {
+    )
+    .await
+    {
         Ok(Some(queue)) => Some(queue.id),
         Ok(None) => {
             tracing::warn!(
@@ -973,7 +1125,9 @@ async fn submit_for_processing(
             &invoice_id,
             qid,
             None,
-        ).await {
+        )
+        .await
+        {
             tracing::warn!(
                 invoice_id = %invoice_id,
                 queue_id = %qid,
@@ -983,14 +1137,12 @@ async fn submit_for_processing(
         }
 
         // Update invoice's current_queue_id (matching OCR-error pattern)
-        sqlx::query(
-            "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2"
-        )
-        .bind(qid.0)
-        .bind(invoice_id.0)
-        .execute(&*pool)
-        .await
-        .ok();
+        sqlx::query("UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2")
+            .bind(qid.0)
+            .bind(invoice_id.0)
+            .execute(&*pool)
+            .await
+            .ok();
 
         response_queue_id = Some(qid.to_string());
     }
@@ -1037,10 +1189,8 @@ async fn suggest_categories(
     // Try ML-based categorization first if OpenAI API key is available
     let categorization = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
         // Use ML categorizer with fallback to rule-based engine
-        let ml_categorizer = billforge_invoice_processing::MLCategorizer::new(
-            (*pool).clone(),
-            openai_api_key,
-        );
+        let ml_categorizer =
+            billforge_invoice_processing::MLCategorizer::new((*pool).clone(), openai_api_key);
 
         match ml_categorizer
             .suggest_categories_ml(
@@ -1068,7 +1218,8 @@ async fn suggest_categories(
                     "ML categorization failed, falling back to rule-based engine"
                 );
                 // Fallback to rule-based categorization
-                let engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+                let engine =
+                    billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
                 engine
                     .suggest_categories(
                         &tenant_id_str,
@@ -1078,7 +1229,9 @@ async fn suggest_categories(
                         req.total_amount,
                     )
                     .await
-                    .map_err(|e| billforge_core::Error::Database(format!("Categorization failed: {}", e)))?
+                    .map_err(|e| {
+                        billforge_core::Error::Database(format!("Categorization failed: {}", e))
+                    })?
             }
         }
     } else {
@@ -1106,9 +1259,15 @@ async fn suggest_categories(
 /// Build response message based on sync OCR result status.
 fn sync_ocr_message(file_name: &str, status: CaptureStatus) -> String {
     if status == CaptureStatus::Failed {
-        format!("File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.", file_name)
+        format!(
+            "File '{}' uploaded. OCR failed - invoice sent to error queue for manual review.",
+            file_name
+        )
     } else {
-        format!("File '{}' uploaded and processed. Invoice ready for review.", file_name)
+        format!(
+            "File '{}' uploaded and processed. Invoice ready for review.",
+            file_name
+        )
     }
 }
 

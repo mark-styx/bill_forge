@@ -98,20 +98,22 @@ impl StripeClient {
             form.push((format!("metadata[{}]", k), v.clone()));
         }
 
-        let resp = self.post("/customers").form(&form).send().await.map_err(
-            |e| Error::ExternalService {
+        let resp = self
+            .post("/customers")
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!("request failed: {}", e),
-            },
-        )?;
+            })?;
         let body = Self::handle_response(resp).await?;
 
-        let raw: StripeCustomerResponse = serde_json::from_str(&body).map_err(|e| {
-            Error::ExternalService {
+        let raw: StripeCustomerResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!("failed to parse customer response: {} - body: {}", e, body),
-            }
-        })?;
+            })?;
 
         Ok(StripeCustomer {
             id: raw.id,
@@ -145,23 +147,25 @@ impl StripeClient {
             form.push((format!("metadata[{}]", k), v.clone()));
         }
 
-        let resp = self.post("/checkout/sessions").form(&form).send().await.map_err(
-            |e| Error::ExternalService {
+        let resp = self
+            .post("/checkout/sessions")
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!("request failed: {}", e),
-            },
-        )?;
+            })?;
         let body = Self::handle_response(resp).await?;
 
-        let raw: CheckoutSessionResponse = serde_json::from_str(&body).map_err(|e| {
-            Error::ExternalService {
+        let raw: CheckoutSessionResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!(
                     "failed to parse checkout session response: {} - body: {}",
                     e, body
                 ),
-            }
-        })?;
+            })?;
 
         Ok(CheckoutSession {
             id: raw.id,
@@ -195,15 +199,14 @@ impl StripeClient {
             })?;
         let body = Self::handle_response(resp).await?;
 
-        let raw: PortalSessionResponse = serde_json::from_str(&body).map_err(|e| {
-            Error::ExternalService {
+        let raw: PortalSessionResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!(
                     "failed to parse portal session response: {} - body: {}",
                     e, body
                 ),
-            }
-        })?;
+            })?;
 
         Ok(PortalSession {
             id: raw.id,
@@ -225,15 +228,14 @@ impl StripeClient {
             })?;
         let body = Self::handle_response(resp).await?;
 
-        let raw: StripeSubscriptionResponse = serde_json::from_str(&body).map_err(|e| {
-            Error::ExternalService {
+        let raw: StripeSubscriptionResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!(
                     "failed to parse subscription response: {} - body: {}",
                     e, body
                 ),
-            }
-        })?;
+            })?;
 
         Ok(StripeSubscription {
             id: raw.id,
@@ -269,15 +271,14 @@ impl StripeClient {
             })?;
         let body = Self::handle_response(resp).await?;
 
-        let raw: StripeSubscriptionResponse = serde_json::from_str(&body).map_err(|e| {
-            Error::ExternalService {
+        let raw: StripeSubscriptionResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
                 service: "stripe".to_string(),
                 message: format!(
                     "failed to parse cancel subscription response: {} - body: {}",
                     e, body
                 ),
-            }
-        })?;
+            })?;
 
         Ok(StripeSubscription {
             id: raw.id,
@@ -299,6 +300,64 @@ impl StripeClient {
         })
     }
 
+    /// Report a usage event to Stripe Billing Meter Events.
+    pub async fn create_meter_event(
+        &self,
+        params: CreateMeterEventParams,
+    ) -> Result<StripeMeterEvent> {
+        info!(
+            event_name = %params.event_name,
+            stripe_customer_id = %params.stripe_customer_id,
+            value = params.value,
+            "Creating Stripe meter event"
+        );
+
+        let mut form: Vec<(String, String)> = vec![
+            ("event_name".to_string(), params.event_name),
+            (
+                "payload[stripe_customer_id]".to_string(),
+                params.stripe_customer_id,
+            ),
+            ("payload[value]".to_string(), params.value.to_string()),
+            ("identifier".to_string(), params.identifier),
+        ];
+
+        if let Some(timestamp) = params.timestamp {
+            form.push(("timestamp".to_string(), timestamp.to_string()));
+        }
+
+        for (k, v) in &params.payload {
+            form.push((format!("payload[{}]", k), v.clone()));
+        }
+
+        let resp = self
+            .post("/billing/meter_events")
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| Error::ExternalService {
+                service: "stripe".to_string(),
+                message: format!("request failed: {}", e),
+            })?;
+        let body = Self::handle_response(resp).await?;
+
+        let raw: StripeMeterEventResponse =
+            serde_json::from_str(&body).map_err(|e| Error::ExternalService {
+                service: "stripe".to_string(),
+                message: format!(
+                    "failed to parse meter event response: {} - body: {}",
+                    e, body
+                ),
+            })?;
+
+        Ok(StripeMeterEvent {
+            id: raw.id,
+            event_name: raw.event_name,
+            identifier: raw.identifier,
+            timestamp: raw.timestamp,
+        })
+    }
+
     /// Verify webhook signature using HMAC-SHA256 per Stripe's specification.
     ///
     /// The `signature` header has the format `t=<timestamp>,v1=<sig>[,v1=<sig>...]`.
@@ -313,9 +372,7 @@ impl StripeClient {
         debug!("Verifying webhook signature");
 
         if webhook_secret.is_empty() {
-            return Err(Error::Validation(
-                "missing webhook secret".to_string(),
-            ));
+            return Err(Error::Validation("missing webhook secret".to_string()));
         }
 
         // Parse the signature header: t=<timestamp>,v1=<sig1>[,v1=<sig2>...]
@@ -422,6 +479,14 @@ struct StripePriceResponse {
     id: String,
 }
 
+#[derive(Deserialize)]
+struct StripeMeterEventResponse {
+    id: String,
+    event_name: String,
+    identifier: String,
+    timestamp: i64,
+}
+
 /// Parameters for creating a customer
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateCustomerParams {
@@ -439,6 +504,17 @@ pub struct CreateCheckoutSessionParams {
     pub cancel_url: String,
     pub mode: String,
     pub metadata: std::collections::HashMap<String, String>,
+}
+
+/// Parameters for creating a Stripe Billing Meter Event.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateMeterEventParams {
+    pub event_name: String,
+    pub stripe_customer_id: String,
+    pub value: u64,
+    pub identifier: String,
+    pub timestamp: Option<i64>,
+    pub payload: std::collections::HashMap<String, String>,
 }
 
 /// Stripe customer
@@ -484,6 +560,15 @@ pub struct SubscriptionItem {
     pub id: String,
     pub price_id: String,
     pub quantity: u32,
+}
+
+/// Stripe Billing Meter Event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripeMeterEvent {
+    pub id: String,
+    pub event_name: String,
+    pub identifier: String,
+    pub timestamp: i64,
 }
 
 /// Webhook event
@@ -552,8 +637,7 @@ mod tests {
     fn compute_signature_header(payload: &[u8], secret: &str, timestamp: i64) -> String {
         let payload_str = std::str::from_utf8(payload).unwrap_or("");
         let signed_payload = format!("{}.{}", timestamp, payload_str);
-        let mut mac =
-            HmacSha256::new_from_slice(secret.as_bytes()).expect("valid secret length");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("valid secret length");
         mac.update(signed_payload.as_bytes());
         let sig = hex::encode(mac.finalize().into_bytes());
         format!("t={},v1={}", timestamp, sig)
@@ -578,7 +662,8 @@ mod tests {
         let header = compute_signature_header(original_payload, secret, 1700000000);
 
         // Tamper with the payload after signing
-        let tampered_payload = br#"{"id":"evt_TAMPERED","type":"invoice.paid","data":{"object":{}}}"#;
+        let tampered_payload =
+            br#"{"id":"evt_TAMPERED","type":"invoice.paid","data":{"object":{}}}"#;
         let result = client.verify_webhook_signature(tampered_payload, &header, secret);
         assert_eq!(result.unwrap(), false);
     }

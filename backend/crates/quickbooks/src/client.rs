@@ -15,9 +15,8 @@ use tokio::time::sleep;
 /// Re-export shared HTTP retry error type as ClientError for backward compatibility
 pub use billforge_core::http_retry::HttpRetryError as ClientError;
 
-type TokenRefresher = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync,
->;
+type TokenRefresher =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
 use billforge_core::http_retry::{self, RetryConfig};
 
@@ -135,7 +134,9 @@ impl QuickBooksClient {
                     .expect("access_token lock poisoned")
                     .clone()
             };
-            let headers = self.build_headers().map_err(|e| ClientError::Transport(e.to_string()))?;
+            let headers = self
+                .build_headers()
+                .map_err(|e| ClientError::Transport(e.to_string()))?;
 
             let result = request_fn(token, headers).send().await;
 
@@ -147,7 +148,10 @@ impl QuickBooksClient {
                         attempt += 1;
                         continue;
                     }
-                    return Err(ClientError::Transport(format!("Transport error after retry: {}", err)));
+                    return Err(ClientError::Transport(format!(
+                        "Transport error after retry: {}",
+                        err
+                    )));
                 }
             };
 
@@ -159,7 +163,10 @@ impl QuickBooksClient {
             }
 
             let retry_after_header = http_retry::parse_retry_after(
-                response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok()),
             );
             let body_text = response.text().await.unwrap_or_default();
 
@@ -169,7 +176,10 @@ impl QuickBooksClient {
                         tracing::warn!(attempt, "Received 401, attempting token refresh");
                         match refresher().await {
                             Ok(new_token) => {
-                                let mut guard = self.access_token.write().expect("access_token lock poisoned");
+                                let mut guard = self
+                                    .access_token
+                                    .write()
+                                    .expect("access_token lock poisoned");
                                 *guard = new_token;
                                 refreshed = true;
                                 continue;
@@ -187,17 +197,38 @@ impl QuickBooksClient {
                 attempt += 1;
                 if attempt >= config.max_retries {
                     if status_code == 429 {
-                        return Err(ClientError::RateLimited { retry_after: retry_after_header });
+                        return Err(ClientError::RateLimited {
+                            retry_after: retry_after_header,
+                        });
                     }
-                    return Err(ClientError::ApiError { status: status_code, body: body_text });
+                    return Err(ClientError::ApiError {
+                        status: status_code,
+                        body: body_text,
+                    });
                 }
-                let backoff = http_retry::compute_backoff(&config, attempt, if status_code == 429 { retry_after_header } else { None });
-                tracing::warn!(attempt, status_code, ?backoff, "Retryable error, backing off");
+                let backoff = http_retry::compute_backoff(
+                    &config,
+                    attempt,
+                    if status_code == 429 {
+                        retry_after_header
+                    } else {
+                        None
+                    },
+                );
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
 
-            return Err(ClientError::ApiError { status: status_code, body: body_text });
+            return Err(ClientError::ApiError {
+                status: status_code,
+                body: body_text,
+            });
         }
     }
 
@@ -245,7 +276,11 @@ impl QuickBooksClient {
     }
 
     /// Query vendors
-    pub async fn query_vendors(&self, start_position: i32, max_results: i32) -> Result<Vec<QBVendor>> {
+    pub async fn query_vendors(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBVendor>> {
         let query = format!(
             "SELECT * FROM Vendor STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
@@ -267,7 +302,11 @@ impl QuickBooksClient {
     }
 
     /// Query accounts
-    pub async fn query_accounts(&self, start_position: i32, max_results: i32) -> Result<Vec<QBAccount>> {
+    pub async fn query_accounts(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBAccount>> {
         let query = format!(
             "SELECT * FROM Account STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
@@ -313,6 +352,11 @@ impl QuickBooksClient {
             .unwrap_or_default())
     }
 
+    /// Get bill by ID.
+    pub async fn get_bill(&self, bill_id: &str) -> Result<QBBill> {
+        self.get(&format!("bill/{}", bill_id)).await
+    }
+
     /// Update a bill in QuickBooks using sparse update.
     ///
     /// The caller must populate `Id` and `SyncToken` from a prior fetch (e.g. `query_bills`);
@@ -323,9 +367,7 @@ impl QuickBooksClient {
             bill: bill.clone(),
         };
 
-        let response: UpdateBillResponse = self
-            .post("bill?operation=update", &request)
-            .await?;
+        let response: UpdateBillResponse = self.post("bill?operation=update", &request).await?;
 
         Ok(response.Bill)
     }
@@ -340,9 +382,7 @@ impl QuickBooksClient {
             vendor: vendor.clone(),
         };
 
-        let response: UpdateVendorResponse = self
-            .post("vendor?operation=update", &request)
-            .await?;
+        let response: UpdateVendorResponse = self.post("vendor?operation=update", &request).await?;
 
         Ok(response.Vendor)
     }
@@ -355,7 +395,10 @@ impl QuickBooksClient {
     /// Execute a GET request to an arbitrary URL using the retry logic.
     /// This is exposed for integration testing only.
     #[doc(hidden)]
-    pub async fn execute_get_for_test(&self, url: &str) -> std::result::Result<String, ClientError> {
+    pub async fn execute_get_for_test(
+        &self,
+        url: &str,
+    ) -> std::result::Result<String, ClientError> {
         let response = self
             .execute_with_retry(|token, headers| {
                 self.http_client
