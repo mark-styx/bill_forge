@@ -685,14 +685,12 @@ fn parse_vendor_csv(bytes: &[u8]) -> Result<(Vec<CreateVendorInput>, Vec<String>
         .map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
     let mut lines = text.lines().enumerate().peekable();
-    let mut header_line: Option<String> = None;
     let mut header_cols: Vec<String> = Vec::new();
 
     // Find first non-empty line as header
     while let Some((_, line)) = lines.peek() {
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            header_line = Some(trimmed.to_string());
             header_cols = parse_csv_line(trimmed)
                 .into_iter()
                 .map(|c| c.to_lowercase())

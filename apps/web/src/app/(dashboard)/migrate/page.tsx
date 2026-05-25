@@ -61,12 +61,11 @@ export default function MigratePage() {
         setIsLoading(true);
         try {
           const res = await quickbooksApi.syncVendors();
-          // Map SyncResult to ImportVendorsResult shape
           setResult({
-            imported: res.created ?? 0,
-            skipped: res.synced ?? 0,
-            errors: res.errors?.length ?? 0,
-            error_details: res.errors ?? [],
+            imported: res.imported,
+            skipped: res.skipped,
+            errors: res.errors,
+            error_details: [],
           });
           return true;
         } catch (err: any) {

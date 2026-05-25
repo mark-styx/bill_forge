@@ -918,10 +918,10 @@ export interface AccountMapping {
 }
 
 export interface SyncResult {
-  synced: number;
-  created: number;
+  imported: number;
   updated: number;
-  errors: string[];
+  skipped: number;
+  errors: number;
 }
 
 export interface OAuthConnectResponse {

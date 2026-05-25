@@ -97,10 +97,10 @@ describe('MigratePage', () => {
     const user = userEvent.setup();
 
     vi.mocked(quickbooksApi.syncVendors).mockResolvedValueOnce({
-      synced: 10,
-      created: 8,
+      imported: 8,
       updated: 2,
-      errors: ['Connection failed for vendor X'],
+      skipped: 10,
+      errors: 1,
     });
 
     render(<MigratePage />);
@@ -128,7 +128,6 @@ describe('MigratePage', () => {
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
-    expect(screen.getByText('Connection failed for vendor X')).toBeInTheDocument();
   });
 
   it('shows error when no source is selected and Next is clicked', async () => {
