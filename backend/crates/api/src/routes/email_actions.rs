@@ -187,7 +187,7 @@ async fn handle_email_action(
 /// - Delegation fallback: if the acting user is a delegate for the original
 ///   approver, the original approver's request is updated with the delegate
 ///   recorded in `responded_by`.
-async fn update_approval_request(
+pub(crate) async fn update_approval_request(
     pool: &sqlx::PgPool,
     tenant_id: &billforge_core::TenantId,
     invoice_id: uuid::Uuid,

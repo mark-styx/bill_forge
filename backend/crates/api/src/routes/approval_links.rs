@@ -31,6 +31,7 @@ use uuid::Uuid;
 use crate::error::ApiResult;
 use crate::state::AppState;
 use crate::state_machine::{transition, InvoiceStatus};
+use billforge_core::UserId;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -186,6 +187,62 @@ struct CommentQuery {
 }
 
 // ---------------------------------------------------------------------------
+// Approval-request resolution helper (bridges magic-link email to user-scoped
+// approval_request update + invoice resolution)
+// ---------------------------------------------------------------------------
+
+/// Look up the user for `approver_email` scoped to the tenant, update the
+/// matching `approval_requests` row, and run the all-approvers-resolved check.
+///
+/// If no user matches the email, logs a warning and returns `Ok(())` so that
+/// existing behaviour (tokens whose email is not a real user) is preserved.
+pub async fn resolve_approval_for_link(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: Uuid,
+    approver_email: &str,
+    new_status: &str,
+) -> billforge_core::Result<()> {
+    // 1. Resolve email -> user_id within the tenant
+    let user_id: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM users WHERE tenant_id = $1 AND email = $2",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(approver_email)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
+    let Some((user_id,)) = user_id else {
+        tracing::warn!(
+            approver_email = %approver_email,
+            invoice_id = %invoice_id,
+            "No matching user for magic-link approver email"
+        );
+        return Ok(());
+    };
+
+    // 2. Update the approval request row
+    super::email_actions::update_approval_request(
+        pool,
+        tenant_id,
+        invoice_id,
+        &UserId(user_id),
+        new_status,
+    )
+    .await?;
+
+    // 3. Resolve invoice approval status (only transitions if ALL requests resolved)
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
 
@@ -233,6 +290,11 @@ async fn approve_via_link(
     .await
     .map_err(ApprovalError::Core)?;
 
+    // Resolve the matching approval_request row so multi-approver logic works.
+    resolve_approval_for_link(&pool, &tenant_id, claims.invoice_id, &claims.approver_email, "approved")
+        .await
+        .map_err(ApprovalError::Core)?;
+
     mark_token_used(claims.jti).await;
 
     Ok(Html(success_page_html(
@@ -275,6 +337,11 @@ async fn reject_via_link(
     )
     .await
     .map_err(ApprovalError::Core)?;
+
+    // Resolve the matching approval_request row so multi-approver logic works.
+    resolve_approval_for_link(&pool, &tenant_id, claims.invoice_id, &claims.approver_email, "rejected")
+        .await
+        .map_err(ApprovalError::Core)?;
 
     mark_token_used(claims.jti).await;
 

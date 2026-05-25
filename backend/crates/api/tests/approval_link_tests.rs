@@ -5,6 +5,7 @@
 
 use billforge_api::routes::approval_links::{
     create_approval_token, create_approval_token_with_exp, verify_approval_token,
+    resolve_approval_for_link,
 };
 use billforge_core::TenantId;
 use chrono::Utc;
@@ -77,6 +78,12 @@ async fn set_invoice_status(pool: &sqlx::PgPool, invoice_id: Uuid, status: &str)
 /// Clean up test invoice and its audit rows.
 async fn cleanup_invoice(pool: &sqlx::PgPool, invoice_id: Uuid) {
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    sqlx::query("DELETE FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2")
+        .bind(invoice_id)
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .ok();
     sqlx::query("DELETE FROM invoice_audit_log WHERE invoice_id = $1 AND tenant_id = $2")
         .bind(invoice_id)
         .bind(tenant_id)
@@ -391,6 +398,124 @@ async fn test_comment_via_link_does_not_change_status() {
     .await
     .expect("comment body");
     assert_eq!(comment, comment_body);
+
+    cleanup_invoice(&pool, invoice_id).await;
+}
+
+// ===========================================================================
+// Approval-request resolution tests
+// ===========================================================================
+
+#[tokio::test]
+async fn test_approve_via_link_resolves_approval_request() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    let invoice_id = create_test_invoice(&pool).await;
+
+    // Insert a pending approval_requests row for this invoice
+    sqlx::query(
+        "INSERT INTO approval_requests (id, tenant_id, invoice_id, requested_from, status)
+         VALUES ($1, $2, $3, $4, 'pending')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id.to_string())
+    .bind(invoice_id)
+    .bind(serde_json::json!({"User": user_id.to_string()}))
+    .execute(&pool)
+    .await
+    .expect("insert approval_request");
+
+    // Call resolve_approval_for_link with "approved"
+    resolve_approval_for_link(
+        &pool,
+        &TenantId(tenant_id),
+        invoice_id,
+        "approval-link-test@example.com",
+        "approved",
+    )
+    .await
+    .expect("resolve_approval_for_link should succeed");
+
+    // Assert the approval_requests row is now approved with responded_by set
+    let row: (String, Option<Uuid>) = sqlx::query_as(
+        "SELECT status, responded_by FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("should find approval_request");
+    assert_eq!(row.0, "approved");
+    assert_eq!(row.1, Some(user_id));
+
+    // Assert processing_status is 'approved' (single-approver case fully resolves)
+    let processing_status: String = sqlx::query_scalar(
+        "SELECT processing_status FROM invoices WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should find invoice");
+    assert_eq!(processing_status, "approved");
+
+    cleanup_invoice(&pool, invoice_id).await;
+}
+
+#[tokio::test]
+async fn test_reject_via_link_resolves_approval_request() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    let invoice_id = create_test_invoice(&pool).await;
+
+    // Insert a pending approval_requests row for this invoice
+    sqlx::query(
+        "INSERT INTO approval_requests (id, tenant_id, invoice_id, requested_from, status)
+         VALUES ($1, $2, $3, $4, 'pending')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id.to_string())
+    .bind(invoice_id)
+    .bind(serde_json::json!({"User": user_id.to_string()}))
+    .execute(&pool)
+    .await
+    .expect("insert approval_request");
+
+    // Call resolve_approval_for_link with "rejected"
+    resolve_approval_for_link(
+        &pool,
+        &TenantId(tenant_id),
+        invoice_id,
+        "approval-link-test@example.com",
+        "rejected",
+    )
+    .await
+    .expect("resolve_approval_for_link should succeed");
+
+    // Assert the approval_requests row is now rejected with responded_by set
+    let row: (String, Option<Uuid>) = sqlx::query_as(
+        "SELECT status, responded_by FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("should find approval_request");
+    assert_eq!(row.0, "rejected");
+    assert_eq!(row.1, Some(user_id));
+
+    // Assert processing_status is 'rejected'
+    let processing_status: String = sqlx::query_scalar(
+        "SELECT processing_status FROM invoices WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .expect("should find invoice");
+    assert_eq!(processing_status, "rejected");
 
     cleanup_invoice(&pool, invoice_id).await;
 }
