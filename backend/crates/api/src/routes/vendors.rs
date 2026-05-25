@@ -66,6 +66,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/documents", post(upload_tax_document))
         .route("/:id/messages", get(list_messages))
         .route("/:id/messages", post(send_message))
+        .route("/:id/portal-link", post(create_portal_link))
 }
 
 #[derive(Debug, Deserialize)]
@@ -609,5 +610,53 @@ async fn send_message(
         "id": message.id,
         "message": "Message sent successfully",
         "created_at": message.created_at
+    })))
+}
+
+/// Generate a vendor-portal access token and URL for a specific vendor.
+/// Internal endpoint - requires VendorManager or TenantAdmin role.
+#[utoipa::path(post, path = "/api/v1/vendors/{id}/portal-link", tag = "Vendors",
+    params(("id" = String, Path, description = "Vendor ID")),
+    responses((status = 200, description = "Portal link generated"), (status = 404, description = "Vendor not found")))]
+async fn create_portal_link(
+    State(state): State<AppState>,
+    VendorMgmtAccess(user, tenant): VendorMgmtAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let vendor_id: VendorId = id.parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
+
+    // Verify vendor exists
+    let vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Vendor".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Create vendor-portal token
+    let token = state.auth.jwt_service()
+        .create_vendor_portal_token(&tenant.tenant_id, &vendor_id)
+        .map_err(|e| billforge_core::Error::Internal(format!("Failed to create portal token: {}", e)))?;
+
+    let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let portal_url = format!("{}/vendor-portal?token={}", app_url, token);
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(), Some(user.user_id.clone()),
+        AuditAction::Create, ResourceType::Vendor,
+        id.clone(), format!("Generated portal link for vendor {}", vendor.name),
+    ).with_user_email(&user.email)
+     .with_metadata(serde_json::json!({ "vendor_id": id }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    Ok(Json(serde_json::json!({
+        "token": token,
+        "url": portal_url,
     })))
 }

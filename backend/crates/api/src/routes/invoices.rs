@@ -148,7 +148,7 @@ async fn create_invoice(
 ) -> ApiResult<Json<Invoice>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-    let invoice = repo.create(&tenant.tenant_id, input, &user.user_id).await?;
+    let invoice = repo.create(&tenant.tenant_id, input, Some(&user.user_id)).await?;
     record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
     let audit_entry = AuditEntry::new(
@@ -437,7 +437,7 @@ async fn upload_invoice(
             let pool = state.db.tenant(&tenant.tenant_id).await?;
             let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
             let invoice = repo
-                .create(&tenant.tenant_id, invoice_input, &user.user_id)
+                .create(&tenant.tenant_id, invoice_input, Some(&user.user_id))
                 .await?;
             record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 

@@ -22,6 +22,9 @@ pub struct Claims {
     pub exp: i64,
     /// Token type
     pub token_type: TokenType,
+    /// Vendor ID (set for VendorPortal tokens only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +32,7 @@ pub struct Claims {
 pub enum TokenType {
     Access,
     Refresh,
+    VendorPortal,
 }
 
 impl Claims {
@@ -114,6 +118,7 @@ impl JwtService {
             iat: now.timestamp(),
             exp: exp.timestamp(),
             token_type: TokenType::Access,
+            vendor_id: None,
         };
 
         encode(&Header::default(), &claims, &self.encoding_key)
@@ -137,6 +142,7 @@ impl JwtService {
             iat: now.timestamp(),
             exp: exp.timestamp(),
             token_type: TokenType::Refresh,
+            vendor_id: None,
         };
 
         encode(&Header::default(), &claims, &self.encoding_key)
@@ -162,6 +168,46 @@ impl JwtService {
     /// Get the configured refresh token expiry in days
     pub fn refresh_token_expiry_days(&self) -> i64 {
         self.config.refresh_token_expiry_days
+    }
+
+    /// Create a vendor-portal token (7-day TTL, carries tenant_id + vendor_id)
+    pub fn create_vendor_portal_token(
+        &self,
+        tenant_id: &TenantId,
+        vendor_id: &billforge_core::domain::VendorId,
+    ) -> Result<String> {
+        let now = Utc::now();
+        let exp = now + Duration::days(7);
+
+        let claims = Claims {
+            sub: vendor_id.0.to_string(),
+            tenant_id: tenant_id.as_str(),
+            email: String::new(),
+            roles: Vec::new(),
+            iat: now.timestamp(),
+            exp: exp.timestamp(),
+            token_type: TokenType::VendorPortal,
+            vendor_id: Some(vendor_id.0.to_string()),
+        };
+
+        encode(&Header::default(), &claims, &self.encoding_key)
+            .map_err(|e| Error::Internal(format!("Failed to create vendor portal token: {}", e)))
+    }
+
+    /// Validate and decode a vendor-portal token
+    pub fn validate_vendor_portal_token(&self, token: &str) -> Result<Claims> {
+        let validation = Validation::default();
+        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
+            .map_err(|e| match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => Error::TokenExpired,
+                _ => Error::InvalidToken(e.to_string()),
+            })?;
+
+        if token_data.claims.token_type != TokenType::VendorPortal {
+            return Err(Error::InvalidToken("Not a vendor portal token".to_string()));
+        }
+
+        Ok(token_data.claims)
     }
 
     /// Validate and decode a refresh token

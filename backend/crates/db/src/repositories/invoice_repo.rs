@@ -28,7 +28,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         &self,
         tenant_id: &TenantId,
         input: CreateInvoiceInput,
-        created_by: &UserId,
+        created_by: Option<&UserId>,
     ) -> Result<Invoice> {
         let id = InvoiceId::new();
         let now = Utc::now();
@@ -65,7 +65,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         .bind(&input.department)
         .bind(&input.gl_code)
         .bind(&input.cost_center)
-        .bind(created_by.0)
+        .bind(created_by.map(|u| u.0))
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create invoice: {}", e)))?;
@@ -111,7 +111,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             notes: input.notes,
             tags: input.tags,
             custom_fields: serde_json::Value::Object(serde_json::Map::new()),
-            created_by: created_by.clone(),
+            created_by: created_by.cloned(),
             created_at: now,
             updated_at: now,
         };
@@ -447,7 +447,7 @@ struct InvoiceRow {
     notes: Option<String>,
     tags: sqlx::types::Json<Vec<String>>,
     custom_fields: sqlx::types::Json<serde_json::Value>,
-    created_by: Uuid,
+    created_by: Option<Uuid>,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
 }
@@ -482,7 +482,7 @@ impl InvoiceRow {
             notes: self.notes,
             tags: self.tags.0,
             custom_fields: self.custom_fields.0,
-            created_by: UserId(self.created_by),
+            created_by: self.created_by.map(UserId),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

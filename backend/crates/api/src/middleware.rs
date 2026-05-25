@@ -38,6 +38,7 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/v1/bill-com/webhook/",
     "/api/v1/workday/webhook/",
     "/api/v1/sage-intacct/webhook/",
+    "/api/v1/vendor-portal/",
     "/api/v1/billing/plans",
 ];
 

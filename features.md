@@ -309,12 +309,12 @@
 
 ### Vendor Self-Service Portal
 
-- [ ] **Vendor Invoice Submission**
-  - [ ] Vendors can submit invoices directly
+- [x] **Vendor Invoice Submission**
+  - [x] Vendors can submit invoices directly
 
-- [ ] **Vendor Payment Status**
-  - [ ] Vendors can check payment status
-  - [ ] Invoice history visible to vendors
+- [x] **Vendor Payment Status**
+  - [x] Vendors can check payment status
+  - [x] Invoice history visible to vendors
 
 ### Advanced Compliance Features
 

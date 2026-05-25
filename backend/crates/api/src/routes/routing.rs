@@ -398,7 +398,7 @@ impl InvoiceMinRow {
             custom_fields: serde_json::json!({}),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-            created_by: billforge_core::UserId(Uuid::nil()),
+            created_by: Some(billforge_core::UserId(Uuid::nil())),
         }
     }
 }

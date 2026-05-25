@@ -2199,6 +2199,52 @@ export const aiAssistantApi = {
     api.post<FeatureRequestDraftResponse>('/api/v1/ai/feature-request-drafts', body),
 };
 
+// Vendor Portal API (vendor-facing, uses vendor-portal JWT, not user token)
+export const vendorPortalApi = {
+  submitInvoice: (token: string, body: {
+    invoice_number: string;
+    invoice_date?: string;
+    due_date?: string;
+    amount: number;
+    currency?: string;
+    notes?: string;
+  }) =>
+    fetch(`${API_BASE_URL}/api/v1/vendor-portal/invoices`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<{ id: string; invoice_number: string }>;
+    }),
+
+  listInvoices: (token: string) =>
+    fetch(`${API_BASE_URL}/api/v1/vendor-portal/invoices`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<Array<{
+        id: string;
+        invoice_number: string;
+        invoice_date: string | null;
+        due_date: string | null;
+        total_amount: number;
+        currency: string;
+        processing_status: string;
+      }>>;
+    }),
+};
+
 // ---------------------------------------------------------------------------
 // Intelligent Routing types & API
 // Mirrors backend/crates/api/src/routes/routing.rs + billforge_core::intelligent_routing

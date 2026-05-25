@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// Repository for invoice operations
 #[async_trait]
 pub trait InvoiceRepository: Send + Sync {
-    async fn create(&self, tenant_id: &TenantId, input: CreateInvoiceInput, created_by: &UserId) -> Result<Invoice>;
+    async fn create(&self, tenant_id: &TenantId, input: CreateInvoiceInput, created_by: Option<&UserId>) -> Result<Invoice>;
     async fn get_by_id(&self, tenant_id: &TenantId, id: &InvoiceId) -> Result<Option<Invoice>>;
     async fn list(&self, tenant_id: &TenantId, filters: &InvoiceFilters, pagination: &Pagination) -> Result<PaginatedResponse<Invoice>>;
     async fn update(&self, tenant_id: &TenantId, id: &InvoiceId, updates: serde_json::Value) -> Result<Invoice>;

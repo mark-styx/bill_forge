@@ -204,16 +204,19 @@ impl<
         let vendor_name = if invoice.vendor_name.is_empty() { "Unknown Vendor" } else { &invoice.vendor_name };
         let amount = format!("${:.2}", invoice.total_amount.amount as f64 / 100.0);
 
-        let submitted_by = match self.user_repo.get_name_by_id(tenant_id, &invoice.created_by).await {
-            Ok(Some(name)) => name,
-            Ok(None) => {
-                tracing::warn!("User {} not found for invoice {}", invoice.created_by, invoice.id);
-                "Unknown User".to_string()
-            }
-            Err(e) => {
-                tracing::warn!("Failed to get submitter name for invoice {}: {}", invoice.id, e);
-                "AP Team".to_string()
-            }
+        let submitted_by = match invoice.created_by {
+            Some(ref uid) => match self.user_repo.get_name_by_id(tenant_id, uid).await {
+                Ok(Some(name)) => name,
+                Ok(None) => {
+                    tracing::warn!("User {} not found for invoice {}", uid, invoice.id);
+                    "Unknown User".to_string()
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get submitter name for invoice {}: {}", invoice.id, e);
+                    "AP Team".to_string()
+                }
+            },
+            None => "Vendor Portal".to_string(),
         };
 
         let subject = format!(

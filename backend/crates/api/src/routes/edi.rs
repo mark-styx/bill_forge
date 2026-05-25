@@ -294,7 +294,7 @@ async fn webhook_inbound(
             let created_by = UserId::from_uuid(admin_user_id);
             let invoice_repo = InvoiceRepositoryImpl::new(Arc::clone(&tenant_pool));
 
-            let invoice = invoice_repo.create(&tenant_id, invoice_input, &created_by)
+            let invoice = invoice_repo.create(&tenant_id, invoice_input, Some(&created_by))
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create invoice from EDI: {}", e);

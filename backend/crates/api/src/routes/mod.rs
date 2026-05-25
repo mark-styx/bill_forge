@@ -41,6 +41,7 @@ pub mod billing;
 pub mod routing;
 pub mod approval_links;
 pub mod qbo;
+pub mod vendor_portal;
 
 use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
 use crate::state::AppState;
@@ -153,6 +154,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/payment-requests", payment_requests::routes())
         // Approval magic links (email-based approve/reject/comment)
         .nest("/approval-links", approval_links::routes())
+        // Vendor self-service portal (public, validates own vendor-portal JWT)
+        .nest("/vendor-portal", vendor_portal::routes())
         // Lightweight QBO integration (OAuth + vendor pull)
         .nest("/qbo", qbo::routes())
         // Invoice Capture (standalone OCR upload)

@@ -67,7 +67,7 @@ export interface Invoice {
   notes?: string;
   tags: string[];
   custom_fields?: Record<string, unknown>;
-  created_by: string;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 }

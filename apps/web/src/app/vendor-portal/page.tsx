@@ -1,0 +1,250 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { FileText } from 'lucide-react';
+import { vendorPortalApi } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+
+interface InvoiceRow {
+  id: string;
+  invoice_number: string;
+  invoice_date: string | null;
+  due_date: string | null;
+  total_amount: number;
+  currency: string;
+  processing_status: string;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  submitted: 'bg-blue-100 text-blue-800',
+  pending_review: 'bg-yellow-100 text-yellow-800',
+  pending_approval: 'bg-orange-100 text-orange-800',
+  approved: 'bg-green-100 text-green-800',
+  ready_for_payment: 'bg-emerald-100 text-emerald-800',
+  paid: 'bg-green-200 text-green-900',
+  on_hold: 'bg-red-100 text-red-800',
+  rejected: 'bg-red-200 text-red-900',
+  draft: 'bg-gray-100 text-gray-800',
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const color = STATUS_COLORS[status] || 'bg-gray-100 text-gray-800';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${color}`}>
+      {status.replace(/_/g, ' ')}
+    </span>
+  );
+}
+
+function formatCents(cents: number, currency: string) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+  }).format(cents / 100);
+}
+
+export default function VendorPortalPage() {
+  const searchParams = useSearchParams();
+  const [token, setToken] = useState<string | null>(null);
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Form state
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState('USD');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Extract and store token
+  useEffect(() => {
+    const queryToken = searchParams.get('token');
+    if (queryToken) {
+      localStorage.setItem('vendor_portal_token', queryToken);
+      setToken(queryToken);
+    } else {
+      const stored = localStorage.getItem('vendor_portal_token');
+      if (stored) {
+        setToken(stored);
+      } else {
+        setLoading(false);
+        setError('No access token provided. Please use the link sent by the AP team.');
+      }
+    }
+  }, [searchParams]);
+
+  const fetchInvoices = useCallback(async () => {
+    if (!token) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await vendorPortalApi.listInvoices(token);
+      setInvoices(data);
+    } catch (err: any) {
+      if (err?.status === 401) {
+        setError('Your access token is invalid or expired. Please request a new link.');
+        localStorage.removeItem('vendor_portal_token');
+        setToken(null);
+      } else {
+        setError(err?.message || 'Failed to load invoices');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchInvoices();
+  }, [fetchInvoices]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const amountCents = Math.round(parseFloat(amount) * 100);
+      if (isNaN(amountCents) || amountCents <= 0) {
+        setError('Please enter a valid amount');
+        return;
+      }
+
+      await vendorPortalApi.submitInvoice(token, {
+        invoice_number: invoiceNumber,
+        invoice_date: invoiceDate || undefined,
+        due_date: dueDate || undefined,
+        amount: amountCents,
+        currency: currency || undefined,
+        notes: notes || undefined,
+      });
+
+      setInvoiceNumber('');
+      setInvoiceDate('');
+      setDueDate('');
+      setAmount('');
+      setNotes('');
+      await fetchInvoices();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to submit invoice');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl p-8 text-center">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-red-500/20 mb-3">
+            <FileText className="w-6 h-6 text-red-400" />
+          </div>
+          <h1 className="text-xl font-bold text-foreground mb-2">Access Required</h1>
+          <p className="text-muted-foreground text-sm">
+            {error || 'No access token found. Please use the link provided by the AP team.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-500/20 mb-3">
+            <FileText className="w-6 h-6 text-blue-400" />
+          </div>
+          <h1 className="text-2xl font-bold text-foreground">Vendor Portal</h1>
+          <p className="text-muted-foreground mt-1">Submit invoices and track payment status</p>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="bg-card border border-border rounded-xl shadow-lg p-6 mb-6">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Submit Invoice</h2>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="invoiceNumber">Invoice Number</Label>
+                <Input id="invoiceNumber" placeholder="INV-001" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} required className="mt-1" />
+              </div>
+              <div>
+                <Label htmlFor="amount">Amount</Label>
+                <div className="flex gap-2 mt-1">
+                  <Input id="amount" type="number" step="0.01" min="0.01" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} required className="flex-1" />
+                  <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="GBP">GBP</option>
+                    <option value="CAD">CAD</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="invoiceDate">Invoice Date</Label>
+                <Input id="invoiceDate" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="mt-1" />
+              </div>
+              <div>
+                <Label htmlFor="dueDate">Due Date</Label>
+                <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="mt-1" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="notes">Notes (optional)</Label>
+              <Input id="notes" placeholder="Additional details" value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1" />
+            </div>
+            <Button type="submit" disabled={submitting} className="w-full md:w-auto">
+              {submitting ? 'Submitting...' : 'Submit Invoice'}
+            </Button>
+          </form>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl shadow-lg p-6">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Invoice History</h2>
+          {loading ? (
+            <p className="text-muted-foreground text-sm">Loading invoices...</p>
+          ) : invoices.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No invoices found. Submit your first invoice above.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2 px-3 text-muted-foreground font-medium">Invoice #</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground font-medium">Date</th>
+                    <th className="text-left py-2 px-3 text-muted-foreground font-medium">Due</th>
+                    <th className="text-right py-2 px-3 text-muted-foreground font-medium">Amount</th>
+                    <th className="text-center py-2 px-3 text-muted-foreground font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((inv) => (
+                    <tr key={inv.id} className="border-b border-border/50 hover:bg-muted/30">
+                      <td className="py-2 px-3 font-medium">{inv.invoice_number}</td>
+                      <td className="py-2 px-3 text-muted-foreground">{inv.invoice_date || '-'}</td>
+                      <td className="py-2 px-3 text-muted-foreground">{inv.due_date || '-'}</td>
+                      <td className="py-2 px-3 text-right font-medium">{formatCents(inv.total_amount, inv.currency)}</td>
+                      <td className="py-2 px-3 text-center"><StatusBadge status={inv.processing_status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

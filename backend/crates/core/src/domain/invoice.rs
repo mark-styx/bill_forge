@@ -201,7 +201,7 @@ pub struct Invoice {
     pub custom_fields: serde_json::Value,
     
     // Audit
-    pub created_by: UserId,
+    pub created_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

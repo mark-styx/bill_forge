@@ -135,7 +135,7 @@ impl InvoiceCaptureService {
             tags: Vec::new(),
         };
 
-        self.invoice_repo.create(tenant_id, input, user_id).await
+        self.invoice_repo.create(tenant_id, input, Some(user_id)).await
     }
 
     /// Calculate overall confidence score from OCR result

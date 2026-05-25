@@ -387,6 +387,11 @@ impl AuthService {
         })
     }
 
+    /// Access the underlying JwtService (used by vendor-portal token validation)
+    pub fn jwt_service(&self) -> &JwtService {
+        &self.jwt_service
+    }
+
     /// Validate access token and return user context
     pub async fn validate_token(&self, token: &str) -> Result<UserContext> {
         let claims = self.jwt_service.validate_access_token(token)?;
