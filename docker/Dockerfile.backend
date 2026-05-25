@@ -15,8 +15,15 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire backend directory (includes .sqlx/ cache)
-COPY backend/ ./
+# Preserve the repository layout expected by Rust include_str! paths.
+# The backend crates embed a few top-level docs/workflow files at compile time.
+COPY backend/ ./backend/
+COPY docs/ ./docs/
+COPY CHANGELOG.md ./CHANGELOG.md
+COPY landing.html ./landing.html
+COPY .github/workflows/release.yml ./.github/workflows/release.yml
+
+WORKDIR /app/backend
 
 # Build with sqlx offline mode using committed cache
 ENV SQLX_OFFLINE=true
@@ -39,7 +46,7 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd --gid 1001 billforge && \
     useradd --uid 1001 --gid billforge --shell /bin/false billforge
 
-COPY --from=builder /app/target/release/billforge-server /app/billforge-server
+COPY --from=builder /app/backend/target/release/billforge-server /app/billforge-server
 
 RUN mkdir -p /app/data/files && \
     chown -R billforge:billforge /app
