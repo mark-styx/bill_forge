@@ -410,7 +410,7 @@ async fn upload_invoice(
                     billforge_core::Error::Database(format!("Failed to store document: {}", e))
                 })?;
 
-            let storage_key = format!("{}/{}", tenant.tenant_id.as_str(), document_id);
+            let storage_key = billforge_db::build_storage_key(&tenant.tenant_id, document_id);
 
             // Create invoice with Processing status (placeholder data until OCR completes)
             let invoice_input = CreateInvoiceInput {

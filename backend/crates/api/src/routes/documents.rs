@@ -50,7 +50,7 @@ pub struct UploadQuery {
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_document(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
@@ -123,14 +123,14 @@ async fn upload_document(
     // Save metadata to database
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
-    let doc = doc_repo
+    let _doc = doc_repo
         .create(
             &tenant.tenant_id,
             document_id,
             filename.clone(),
             content_type.clone(),
             data.len() as u64,
-            document_id.to_string(),
+            billforge_db::build_storage_key(&tenant.tenant_id, document_id),
             invoice_id,
             doc_type,
         )
@@ -154,7 +154,7 @@ async fn upload_document(
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_invoice_document(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(invoice_id): Path<String>,
     mut multipart: Multipart,
@@ -193,14 +193,14 @@ async fn upload_invoice_document(
     // Save metadata to database
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let doc_repo = billforge_db::DocumentRepositoryImpl::new(pool);
-    let doc = doc_repo
+    let _doc = doc_repo
         .create(
             &tenant.tenant_id,
             document_id,
             filename.clone(),
             content_type.clone(),
             data.len() as u64,
-            document_id.to_string(),
+            billforge_db::build_storage_key(&tenant.tenant_id, document_id),
             Some(InvoiceId(invoice_uuid)),
             DocumentType::InvoiceOriginal,
         )
@@ -269,7 +269,7 @@ async fn download_document(
     responses((status = 200, description = "Document metadata"), (status = 404, description = "Not found")))]
 async fn get_document_metadata(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<String>,
 ) -> ApiResult<Json<DocumentMetadataResponse>> {
@@ -316,7 +316,7 @@ pub struct DocumentMetadataResponse {
     responses((status = 200, description = "Document deleted"), (status = 404, description = "Not found")))]
 async fn delete_document(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -343,7 +343,7 @@ async fn delete_document(
     responses((status = 200, description = "Invoice documents")))]
 async fn list_invoice_documents(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(invoice_id): Path<String>,
 ) -> ApiResult<Json<Vec<DocumentMetadataResponse>>> {

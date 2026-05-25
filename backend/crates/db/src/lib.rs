@@ -44,7 +44,7 @@ pub mod seed;
 pub use manager::DatabaseManager;
 pub use pg_manager::PgManager;
 pub use metadata_db::MetadataDatabase;
-pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, create_storage_service};
+pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, create_storage_service, build_storage_key};
 #[cfg(feature = "s3")]
 pub use storage::S3StorageService;
 pub use repositories::{AuditRepositoryImpl, PaymentRequestRepositoryImpl, WorkflowRepositoryImpl};

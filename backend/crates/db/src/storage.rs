@@ -21,6 +21,19 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 // =============================================================================
+// Canonical Storage Key
+// =============================================================================
+
+/// Build the canonical tenant-prefixed storage key for a document.
+///
+/// All storage layers (Local, S3) and metadata write paths must use this
+/// helper so the persisted `storage_key` always matches the actual object
+/// location on disk / in the bucket.
+pub fn build_storage_key(tenant_id: &TenantId, document_id: Uuid) -> String {
+    format!("{}/{}", tenant_id.as_str(), document_id)
+}
+
+// =============================================================================
 // Storage Configuration
 // =============================================================================
 
@@ -161,7 +174,7 @@ impl StorageService for LocalStorageService {
         mime_type: &str,
     ) -> Result<Uuid> {
         let document_id = Uuid::new_v4();
-        let storage_key = format!("{}/{}", tenant_id.as_str(), document_id);
+        let storage_key = build_storage_key(tenant_id, document_id);
         let path = self.get_path(&storage_key);
 
         // Create parent directories
@@ -459,7 +472,7 @@ mod s3_storage {
             mime_type: &str,
         ) -> Result<Uuid> {
             let document_id = Uuid::new_v4();
-            let storage_key = format!("{}/{}", tenant_id.as_str(), document_id);
+            let storage_key = build_storage_key(tenant_id, document_id);
             let key = self.build_key(&storage_key);
 
             self.client
@@ -618,5 +631,48 @@ mod tests {
         // Path must include tenant ID
         assert!(path.to_string_lossy().contains(&tenant_id.as_str()));
         assert!(path.to_string_lossy().contains(&file_id.to_string()));
+    }
+
+    #[test]
+    fn build_storage_key_is_tenant_prefixed() {
+        let tenant_id = TenantId::new();
+        let doc_id = Uuid::new_v4();
+
+        let key = build_storage_key(&tenant_id, doc_id);
+
+        let expected = format!("{}/{}", tenant_id.as_str(), doc_id);
+        assert_eq!(key, expected, "build_storage_key must produce tenant_id/document_id");
+
+        // Key must start with the tenant ID
+        assert!(key.starts_with(&tenant_id.as_str()), "key must start with tenant id");
+        // Key must contain the document ID after the separator
+        assert!(key.ends_with(&doc_id.to_string()), "key must end with document id");
+        // Exactly one slash separator
+        assert_eq!(key.matches('/').count(), 1, "key must have exactly one '/' separator");
+    }
+
+    #[tokio::test]
+    async fn upload_download_round_trips_with_build_storage_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorageService::new(dir.path()).await.unwrap();
+        let tenant_id = TenantId::new();
+
+        let file_id = storage
+            .upload(&tenant_id, "test.pdf", b"hello world", "application/pdf")
+            .await
+            .unwrap();
+
+        // Verify the metadata-style key produced by build_storage_key matches
+        // what the storage layer actually used (download succeeds).
+        let metadata_key = build_storage_key(&tenant_id, file_id);
+        let path_on_disk = storage.get_path(&metadata_key);
+        assert!(
+            path_on_disk.exists(),
+            "file must exist at the path derived from build_storage_key"
+        );
+
+        // Round-trip: download by tenant+file_id must return original data
+        let data = storage.download(&tenant_id, file_id).await.unwrap();
+        assert_eq!(data, b"hello world");
     }
 }
