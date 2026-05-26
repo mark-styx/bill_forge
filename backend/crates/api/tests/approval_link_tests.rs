@@ -3,9 +3,11 @@
 //! Tests the sign/verify token logic and the three HTTP handlers
 //! (approve, reject, comment) against a real PostgreSQL database.
 
+#![allow(warnings)]
+
 use billforge_api::routes::approval_links::{
-    create_approval_token, create_approval_token_with_exp, verify_approval_token,
-    resolve_approval_for_link,
+    create_approval_token, create_approval_token_with_exp, resolve_approval_for_link,
+    verify_approval_token,
 };
 use billforge_core::TenantId;
 use chrono::Utc;
@@ -250,7 +252,10 @@ async fn test_approve_via_valid_token_transitions_state_and_audits() {
     .fetch_one(&pool)
     .await
     .expect("audit count");
-    assert_eq!(audit_count, 1, "Should have exactly one approve_via_email audit row");
+    assert_eq!(
+        audit_count, 1,
+        "Should have exactly one approve_via_email audit row"
+    );
 
     // Verify approver_email is in the metadata
     let email: String = sqlx::query_scalar(
@@ -375,7 +380,10 @@ async fn test_comment_via_link_does_not_change_status() {
             .fetch_one(&pool)
             .await
             .expect("status");
-    assert_eq!(status, "pending_approval", "Comment should not change status");
+    assert_eq!(
+        status, "pending_approval",
+        "Comment should not change status"
+    );
 
     // Verify audit row exists
     let audit_count: i64 = sqlx::query_scalar(

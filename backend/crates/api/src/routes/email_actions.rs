@@ -10,7 +10,8 @@ use crate::state::AppState;
 use axum::{
     extract::{Query, State},
     response::{Html, IntoResponse, Redirect},
-    routing::get, Router,
+    routing::get,
+    Router,
 };
 use billforge_core::{
     domain::{AuditAction, AuditEntry, ResourceType},
@@ -114,10 +115,7 @@ async fn handle_email_action(
 
     // Verify action matches
     if std::mem::discriminant(&token_data.action) != std::mem::discriminant(&expected_action) {
-        return Err(billforge_core::Error::Validation(
-            "Token action mismatch".to_string(),
-        )
-        .into());
+        return Err(billforge_core::Error::Validation("Token action mismatch".to_string()).into());
     }
 
     // Get tenant database pool
@@ -129,22 +127,39 @@ async fn handle_email_action(
     // Perform the action based on type
     let action_label = match token_data.action {
         EmailAction::ApproveInvoice => {
-            perform_approval(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            perform_approval(
+                &tenant_pool,
+                &tenant_id,
+                token_data.resource_id,
+                &UserId(token_data.user_id),
+            )
+            .await?;
             "approved"
         }
         EmailAction::RejectInvoice => {
-            perform_rejection(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            perform_rejection(
+                &tenant_pool,
+                &tenant_id,
+                token_data.resource_id,
+                &UserId(token_data.user_id),
+            )
+            .await?;
             "rejected"
         }
         EmailAction::HoldInvoice => {
-            perform_hold(&tenant_pool, &tenant_id, token_data.resource_id, &UserId(token_data.user_id)).await?;
+            perform_hold(
+                &tenant_pool,
+                &tenant_id,
+                token_data.resource_id,
+                &UserId(token_data.user_id),
+            )
+            .await?;
             "placed on hold"
         }
         _ => {
-            return Err(billforge_core::Error::Validation(
-                "Unsupported action type".to_string(),
+            return Err(
+                billforge_core::Error::Validation("Unsupported action type".to_string()).into(),
             )
-            .into())
         }
     };
 
@@ -202,7 +217,7 @@ pub(crate) async fn update_approval_request(
              AND (
                requested_from->>'User' = $5
                OR (requested_from ? 'AnyOf' AND requested_from->'AnyOf' @> to_jsonb($5::text))
-             )"#
+             )"#,
     )
     .bind(new_status)
     .bind(user_id.as_uuid())
@@ -271,7 +286,10 @@ async fn perform_approval(
     update_approval_request(pool, tenant_id, invoice_id, user_id, "approved").await?;
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
     super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
 
     Ok(())
@@ -287,7 +305,10 @@ async fn perform_rejection(
     update_approval_request(pool, tenant_id, invoice_id, user_id, "rejected").await?;
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let mut conn = pool.acquire().await.map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
     super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
 
     Ok(())
@@ -302,12 +323,15 @@ async fn perform_hold(
 ) -> billforge_core::Result<()> {
     // Update invoice status to on-hold
     let invoice_id_typed = billforge_core::InvoiceId(invoice_id);
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
-    invoice_repo.update_processing_status(
-        tenant_id,
-        &invoice_id_typed,
-        billforge_core::domain::ProcessingStatus::OnHold,
-    ).await?;
+    let invoice_repo =
+        billforge_db::repositories::InvoiceRepositoryImpl::new(std::sync::Arc::new(pool.clone()));
+    invoice_repo
+        .update_processing_status(
+            tenant_id,
+            &invoice_id_typed,
+            billforge_core::domain::ProcessingStatus::OnHold,
+        )
+        .await?;
 
     Ok(())
 }

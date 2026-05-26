@@ -6,19 +6,19 @@
 //!
 //! Each tenant's files are isolated by storage key prefix: {tenant_id}/{document_id}
 
+use async_trait::async_trait;
 use billforge_core::{
     domain::{DocumentRef, DocumentType},
     traits::StorageService,
     types::TenantId,
     Error, Result,
 };
-use async_trait::async_trait;
+use chrono::Utc;
+use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
-use chrono::Utc;
-use sqlx::PgPool;
 
 // =============================================================================
 // Canonical Storage Key
@@ -41,9 +41,7 @@ pub fn build_storage_key(tenant_id: &TenantId, document_id: Uuid) -> String {
 #[derive(Debug, Clone)]
 pub enum StorageConfig {
     /// Local filesystem storage (for development)
-    Local {
-        base_path: PathBuf,
-    },
+    Local { base_path: PathBuf },
     /// AWS S3 storage (for production)
     #[cfg(feature = "s3")]
     S3 {
@@ -93,7 +91,8 @@ impl StorageConfig {
         match provider.to_lowercase().as_str() {
             #[cfg(feature = "s3")]
             "s3" => {
-                let bucket = std::env::var("S3_BUCKET").expect("S3_BUCKET required when STORAGE_PROVIDER=s3");
+                let bucket = std::env::var("S3_BUCKET")
+                    .expect("S3_BUCKET required when STORAGE_PROVIDER=s3");
                 let region = std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
                 let endpoint = std::env::var("S3_ENDPOINT").ok();
                 let key_prefix = std::env::var("S3_KEY_PREFIX").ok();
@@ -106,8 +105,8 @@ impl StorageConfig {
                 }
             }
             _ => {
-                let base_path = std::env::var("LOCAL_STORAGE_PATH")
-                    .unwrap_or_else(|_| "./data".to_string());
+                let base_path =
+                    std::env::var("LOCAL_STORAGE_PATH").unwrap_or_else(|_| "./data".to_string());
                 Self::Local {
                     base_path: PathBuf::from(base_path),
                 }
@@ -124,7 +123,12 @@ pub async fn create_storage_service(config: StorageConfig) -> Result<Box<dyn Sto
             Ok(Box::new(storage))
         }
         #[cfg(feature = "s3")]
-        StorageConfig::S3 { bucket, region, endpoint, key_prefix } => {
+        StorageConfig::S3 {
+            bucket,
+            region,
+            endpoint,
+            key_prefix,
+        } => {
             let storage = S3StorageService::new(bucket, region, endpoint, key_prefix).await?;
             Ok(Box::new(storage))
         }
@@ -217,25 +221,38 @@ impl StorageService for LocalStorageService {
         Ok(())
     }
 
-    async fn get_url(&self, _tenant_id: &TenantId, _file_id: Uuid, _expires_in_secs: u64) -> Result<String> {
+    async fn get_url(
+        &self,
+        _tenant_id: &TenantId,
+        _file_id: Uuid,
+        _expires_in_secs: u64,
+    ) -> Result<String> {
         // Local storage doesn't support presigned URLs
-        Err(Error::Storage("Presigned URLs not supported for local storage".to_string()))
+        Err(Error::Storage(
+            "Presigned URLs not supported for local storage".to_string(),
+        ))
     }
 
     async fn health_check(&self) -> Result<()> {
         let base_path = &self.base_path;
 
         if !base_path.exists() {
-            return Err(Error::Storage("Storage base path does not exist".to_string()));
+            return Err(Error::Storage(
+                "Storage base path does not exist".to_string(),
+            ));
         }
 
         if !base_path.is_dir() {
-            return Err(Error::Storage("Storage base path is not a directory".to_string()));
+            return Err(Error::Storage(
+                "Storage base path is not a directory".to_string(),
+            ));
         }
 
         let docs_path = base_path.join("documents");
         if docs_path.exists() && !docs_path.is_dir() {
-            return Err(Error::Storage("Documents path is not a directory".to_string()));
+            return Err(Error::Storage(
+                "Documents path is not a directory".to_string(),
+            ));
         }
 
         Ok(())
@@ -253,6 +270,7 @@ impl DocumentRepositoryImpl {
     }
 
     /// Create a new document record
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         tenant_id: &TenantId,
@@ -336,7 +354,10 @@ impl DocumentRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to list documents: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_ref(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_ref(tenant_id))
+            .collect())
     }
 
     /// Delete a document record
@@ -414,10 +435,10 @@ impl DocumentRow {
 mod s3_storage {
     use super::*;
     use aws_sdk_s3::{
-        config::{Region, Builder as S3ConfigBuilder},
+        config::{Builder as S3ConfigBuilder, Region},
+        presigning::PresigningConfig,
         primitives::ByteStream,
         Client as S3Client,
-        presigning::PresigningConfig,
     };
     use std::time::Duration;
 
@@ -444,7 +465,7 @@ mod s3_storage {
             }
 
             let config = config_builder.load().await;
-            let s3_config = S3ConfigBuilder::new().from(&config).build();
+            let s3_config = S3ConfigBuilder::from(&config).build();
             let client = S3Client::from_conf(s3_config);
 
             Ok(Self {
@@ -493,7 +514,8 @@ mod s3_storage {
             let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
             let key = self.build_key(&storage_key);
 
-            let output = self.client
+            let output = self
+                .client
                 .get_object()
                 .bucket(&self.bucket)
                 .key(&key)
@@ -501,7 +523,8 @@ mod s3_storage {
                 .await
                 .map_err(|e| Error::Storage(format!("Failed to download from S3: {}", e)))?;
 
-            let bytes = output.body
+            let bytes = output
+                .body
                 .collect()
                 .await
                 .map_err(|e| Error::Storage(format!("Failed to read S3 response: {}", e)))?
@@ -526,14 +549,21 @@ mod s3_storage {
             Ok(())
         }
 
-        async fn get_url(&self, tenant_id: &TenantId, file_id: Uuid, expires_in_secs: u64) -> Result<String> {
+        async fn get_url(
+            &self,
+            tenant_id: &TenantId,
+            file_id: Uuid,
+            expires_in_secs: u64,
+        ) -> Result<String> {
             let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
             let key = self.build_key(&storage_key);
 
-            let presigning_config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
-                .map_err(|e| Error::Storage(format!("Invalid presigning duration: {}", e)))?;
+            let presigning_config =
+                PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
+                    .map_err(|e| Error::Storage(format!("Invalid presigning duration: {}", e)))?;
 
-            let presigned = self.client
+            let presigned = self
+                .client
                 .get_object()
                 .bucket(&self.bucket)
                 .key(&key)
@@ -641,14 +671,27 @@ mod tests {
         let key = build_storage_key(&tenant_id, doc_id);
 
         let expected = format!("{}/{}", tenant_id.as_str(), doc_id);
-        assert_eq!(key, expected, "build_storage_key must produce tenant_id/document_id");
+        assert_eq!(
+            key, expected,
+            "build_storage_key must produce tenant_id/document_id"
+        );
 
         // Key must start with the tenant ID
-        assert!(key.starts_with(&tenant_id.as_str()), "key must start with tenant id");
+        assert!(
+            key.starts_with(&tenant_id.as_str()),
+            "key must start with tenant id"
+        );
         // Key must contain the document ID after the separator
-        assert!(key.ends_with(&doc_id.to_string()), "key must end with document id");
+        assert!(
+            key.ends_with(&doc_id.to_string()),
+            "key must end with document id"
+        );
         // Exactly one slash separator
-        assert_eq!(key.matches('/').count(), 1, "key must have exactly one '/' separator");
+        assert_eq!(
+            key.matches('/').count(),
+            1,
+            "key must have exactly one '/' separator"
+        );
     }
 
     #[tokio::test]

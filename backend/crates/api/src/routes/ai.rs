@@ -7,16 +7,15 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use billforge_ai_agent::OpenAiCompatibleProvider;
 use billforge_ai_agent::agent::WinstonAgent;
 use billforge_ai_agent::models::{
     AiActionProposalDecisionRequest, AiActionProposalResponse, BugReportDraftRequest,
@@ -25,6 +24,7 @@ use billforge_ai_agent::models::{
 };
 use billforge_ai_agent::proposals::validate_action_proposal_decision;
 use billforge_ai_agent::provider::AiProvider;
+use billforge_ai_agent::OpenAiCompatibleProvider;
 use billforge_core::{Error, TenantContext, UserContext};
 
 use billforge_db::repositories::{

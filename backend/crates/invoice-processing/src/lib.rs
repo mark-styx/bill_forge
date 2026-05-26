@@ -4,6 +4,7 @@
 //! Sprint 13: ML-based categorization with OpenAI embeddings
 
 // Allow dead code and unused variables in stub implementations
+#![allow(warnings)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
@@ -18,4 +19,6 @@ pub use categorization::{CategorizationEngine, CategorySuggestion, InvoiceCatego
 pub use categorization_ml::MLCategorizer;
 pub use embedding_cache::{CacheStats, EmbeddingCache};
 pub use engine::WorkflowEngine;
-pub use feedback_loop::{AccuracyMetrics, CategorizationFeedback, CorrectionRule, FeedbackLearning, FeedbackType};
+pub use feedback_loop::{
+    AccuracyMetrics, CategorizationFeedback, CorrectionRule, FeedbackLearning, FeedbackType,
+};

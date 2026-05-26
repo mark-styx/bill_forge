@@ -9,12 +9,11 @@
 //! seeded sandbox tenant. The unit-level tests below validate the wiring logic
 //! without database dependencies.
 
-use billforge_core::domain::{
-    CaptureStatus, Invoice, InvoiceLineItem,
-    ProcessingStatus,
-};
-use billforge_core::types::{Money, TenantId, UserId};
+#![allow(warnings)]
+
 use billforge_core::domain::InvoiceId;
+use billforge_core::domain::{CaptureStatus, Invoice, InvoiceLineItem, ProcessingStatus};
+use billforge_core::types::{Money, TenantId, UserId};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -30,9 +29,8 @@ fn test_invoice_without_categorization_fields_is_eligible() {
 
     // This mirrors the updated condition in submit_for_processing:
     //   if invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none()
-    let eligible = invoice.gl_code.is_none()
-        || invoice.department.is_none()
-        || invoice.cost_center.is_none();
+    let eligible =
+        invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none();
 
     assert!(
         eligible,
@@ -47,9 +45,8 @@ fn test_invoice_with_partial_fields_is_eligible() {
     // Only gl_code set - still eligible because department and cost_center are missing
     let invoice = make_test_invoice(Some("6000-Software".into()), None, None);
 
-    let eligible = invoice.gl_code.is_none()
-        || invoice.department.is_none()
-        || invoice.cost_center.is_none();
+    let eligible =
+        invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none();
 
     assert!(
         eligible,
@@ -67,9 +64,8 @@ fn test_invoice_with_two_fields_set_is_eligible() {
         None,
     );
 
-    let eligible = invoice.gl_code.is_none()
-        || invoice.department.is_none()
-        || invoice.cost_center.is_none();
+    let eligible =
+        invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none();
 
     assert!(
         eligible,
@@ -86,9 +82,8 @@ fn test_all_fields_set_skips_categorization() {
         Some("CC-100".into()),
     );
 
-    let eligible = invoice.gl_code.is_none()
-        || invoice.department.is_none()
-        || invoice.cost_center.is_none();
+    let eligible =
+        invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none();
 
     assert!(
         !eligible,
@@ -104,9 +99,8 @@ fn test_invoice_with_all_categorization_fields_is_not_eligible() {
         Some("CC-100".into()),
     );
 
-    let eligible = invoice.gl_code.is_none()
-        || invoice.department.is_none()
-        || invoice.cost_center.is_none();
+    let eligible =
+        invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none();
 
     assert!(
         !eligible,
@@ -163,19 +157,15 @@ fn test_partial_categorization_preserves_existing_fields() {
         "categorization_confidence": categorization.overall_confidence,
     });
     if !had_gl_code {
-        updates["gl_code"] = serde_json::json!(
-            categorization.gl_code.as_ref().map(|s| &s.value)
-        );
+        updates["gl_code"] = serde_json::json!(categorization.gl_code.as_ref().map(|s| &s.value));
     }
     if !had_department {
-        updates["department"] = serde_json::json!(
-            categorization.department.as_ref().map(|s| &s.value)
-        );
+        updates["department"] =
+            serde_json::json!(categorization.department.as_ref().map(|s| &s.value));
     }
     if !had_cost_center {
-        updates["cost_center"] = serde_json::json!(
-            categorization.cost_center.as_ref().map(|s| &s.value)
-        );
+        updates["cost_center"] =
+            serde_json::json!(categorization.cost_center.as_ref().map(|s| &s.value));
     }
 
     // gl_code should NOT be in the updates (it was already set)
@@ -202,9 +192,8 @@ fn test_partial_categorization_one_field_does_not_qualify_for_auto_approval() {
     let mut invoice = make_test_invoice(Some("6000-Software".into()), None, None);
     invoice.categorization_confidence = Some(0.97); // above threshold
 
-    let has_complete = invoice.gl_code.is_some()
-        && invoice.department.is_some()
-        && invoice.cost_center.is_some();
+    let has_complete =
+        invoice.gl_code.is_some() && invoice.department.is_some() && invoice.cost_center.is_some();
 
     assert!(
         !has_complete,
@@ -222,9 +211,8 @@ fn test_partial_categorization_two_fields_does_not_qualify_for_auto_approval() {
     );
     invoice.categorization_confidence = Some(0.97);
 
-    let has_complete = invoice.gl_code.is_some()
-        && invoice.department.is_some()
-        && invoice.cost_center.is_some();
+    let has_complete =
+        invoice.gl_code.is_some() && invoice.department.is_some() && invoice.cost_center.is_some();
 
     assert!(
         !has_complete,
@@ -243,9 +231,8 @@ fn test_complete_categorization_qualifies_for_auto_approval() {
     );
     invoice.categorization_confidence = Some(0.97);
 
-    let has_complete = invoice.gl_code.is_some()
-        && invoice.department.is_some()
-        && invoice.cost_center.is_some();
+    let has_complete =
+        invoice.gl_code.is_some() && invoice.department.is_some() && invoice.cost_center.is_some();
 
     assert!(
         has_complete,
@@ -253,10 +240,14 @@ fn test_complete_categorization_qualifies_for_auto_approval() {
     );
 
     // Also verify the confidence threshold check
-    let qualifies = invoice.categorization_confidence
+    let qualifies = invoice
+        .categorization_confidence
         .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD && has_complete)
         .unwrap_or(false);
-    assert!(qualifies, "High confidence + complete fields should auto-approve");
+    assert!(
+        qualifies,
+        "High confidence + complete fields should auto-approve"
+    );
 }
 
 /// Verify that all three fields set but LOW confidence does NOT auto-approve.
@@ -269,7 +260,8 @@ fn test_complete_categorization_low_confidence_no_auto_approval() {
     );
     invoice.categorization_confidence = Some(0.80); // below threshold
 
-    let qualifies = invoice.categorization_confidence
+    let qualifies = invoice
+        .categorization_confidence
         .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
         .unwrap_or(false);
 
@@ -332,11 +324,13 @@ fn test_line_item_mapping_amounts() {
     let line_items: Vec<billforge_invoice_processing::categorization::LineItemInput> = invoice
         .line_items
         .iter()
-        .map(|li| billforge_invoice_processing::categorization::LineItemInput {
-            description: li.description.clone(),
-            quantity: li.quantity,
-            amount: li.amount.amount as f64 / 100.0,
-        })
+        .map(
+            |li| billforge_invoice_processing::categorization::LineItemInput {
+                description: li.description.clone(),
+                quantity: li.quantity,
+                amount: li.amount.amount as f64 / 100.0,
+            },
+        )
         .collect();
 
     assert_eq!(line_items.len(), 2);
@@ -486,7 +480,8 @@ fn make_test_invoice(
     cost_center: Option<String>,
 ) -> Invoice {
     let now = Utc::now();
-    let tenant_id = TenantId::from_uuid(Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
+    let tenant_id =
+        TenantId::from_uuid(Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
 
     Invoice {
         id: InvoiceId::new(),
@@ -539,7 +534,7 @@ fn make_test_invoice(
         notes: None,
         tags: vec![],
         custom_fields: serde_json::Value::Object(serde_json::Map::new()),
-        created_by: UserId::from_uuid(Uuid::new_v4()),
+        created_by: Some(UserId::from_uuid(Uuid::new_v4())),
         created_at: now,
         updated_at: now,
     }

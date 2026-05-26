@@ -17,13 +17,18 @@ use uuid::Uuid;
 async fn create_test_state() -> AppState {
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
-    std::env::set_var("DATABASE_URL", "postgres://postgres@localhost:5432/billforge_test");
+    std::env::set_var(
+        "DATABASE_URL",
+        "postgres://postgres@localhost:5432/billforge_test",
+    );
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
 
     let config = Config::from_env().expect("Failed to load test config");
-    AppState::new(&config).await.expect("Failed to create test state")
+    AppState::new(&config)
+        .await
+        .expect("Failed to create test state")
 }
 
 /// Helper to create the test router
@@ -64,21 +69,22 @@ async fn get_auth_token(app: &axum::Router) -> String {
 /// Create a minimal 1x1 PNG image that will trigger OCR failure (no readable text).
 fn create_minimal_image() -> Vec<u8> {
     vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE,
-        0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54,
-        0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00,
-        0x05, 0xFE, 0x02, 0xFE,
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
-        0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
     ]
 }
 
 /// Upload a file and return the response JSON.
-async fn upload_file(app: &axum::Router, token: &str, filename: &str, content_type: &str, data: &[u8]) -> (axum::http::StatusCode, Value) {
+async fn upload_file(
+    app: &axum::Router,
+    token: &str,
+    filename: &str,
+    content_type: &str,
+    data: &[u8],
+) -> (axum::http::StatusCode, Value) {
     let boundary = "----TestBoundary12345";
     let mut body = Vec::new();
     body.extend_from_slice(format!(
@@ -95,7 +101,10 @@ async fn upload_file(app: &axum::Router, token: &str, filename: &str, content_ty
                 .method(Method::POST)
                 .uri("/api/v1/invoices/upload")
                 .header(header::AUTHORIZATION, format!("Bearer {}", token))
-                .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={}", boundary))
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={}", boundary),
+                )
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -131,10 +140,14 @@ async fn ocr_failure_routes_to_error_queue() {
         status
     );
 
-    let invoice_id = json["invoice_id"].as_str().expect("Response should have invoice_id");
+    let invoice_id = json["invoice_id"]
+        .as_str()
+        .expect("Response should have invoice_id");
 
     // The message should indicate OCR failure
-    let message = json["message"].as_str().expect("Response should have message");
+    let message = json["message"]
+        .as_str()
+        .expect("Response should have message");
     assert!(
         message.to_lowercase().contains("ocr") || message.to_lowercase().contains("error"),
         "Message should indicate OCR failure, got: {}",
@@ -208,7 +221,14 @@ async fn ocr_failure_logs_when_queue_missing() {
 
     // Upload a 1x1 pixel image - OCR will produce very low confidence
     let image_data = create_minimal_image();
-    let (status, json) = upload_file(&app, &token, "unocrable_no_queue.png", "image/png", &image_data).await;
+    let (status, json) = upload_file(
+        &app,
+        &token,
+        "unocrable_no_queue.png",
+        "image/png",
+        &image_data,
+    )
+    .await;
 
     // Upload should still succeed even without the error queue
     assert!(
@@ -217,12 +237,18 @@ async fn ocr_failure_logs_when_queue_missing() {
         status
     );
 
-    let invoice_id = json["invoice_id"].as_str().expect("Response should have invoice_id");
+    let invoice_id = json["invoice_id"]
+        .as_str()
+        .expect("Response should have invoice_id");
 
     // The message should still indicate OCR failure
-    let message = json["message"].as_str().expect("Response should have message");
+    let message = json["message"]
+        .as_str()
+        .expect("Response should have message");
     assert!(
-        message.to_lowercase().contains("ocr") || message.to_lowercase().contains("error") || message.to_lowercase().contains("failed"),
+        message.to_lowercase().contains("ocr")
+            || message.to_lowercase().contains("error")
+            || message.to_lowercase().contains("failed"),
         "Message should indicate OCR failure, got: {}",
         message
     );

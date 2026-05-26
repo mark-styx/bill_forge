@@ -25,19 +25,18 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
+use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_core::types::{TenantId, UserId};
 use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
-use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_edi::{
-    verify_webhook_signature, validate_timestamp_freshness, check_replay_nonce,
-    EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper,
-    EdiPurchaseOrder, EdiShipNotice, EdiWebhookPayload, process_inbound_ack,
-    OutboundEdiService, EdiClient, EdiConfig, check_ack_timeouts,
+    check_ack_timeouts, check_replay_nonce, process_inbound_ack, validate_timestamp_freshness,
+    verify_webhook_signature, EdiClient, EdiConfig, EdiDocumentType, EdiFunctionalAck, EdiInvoice,
+    EdiMapper, EdiPurchaseOrder, EdiShipNotice, EdiWebhookPayload, OutboundEdiService,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use sha2::Digest;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -132,11 +131,10 @@ async fn webhook_inbound(
         .unwrap_or("");
 
     // Parse the webhook payload
-    let payload: EdiWebhookPayload = serde_json::from_slice(&body)
-        .map_err(|e| {
-            tracing::error!("Failed to parse EDI webhook payload: {}", e);
-            axum::http::StatusCode::BAD_REQUEST
-        })?;
+    let payload: EdiWebhookPayload = serde_json::from_slice(&body).map_err(|e| {
+        tracing::error!("Failed to parse EDI webhook payload: {}", e);
+        axum::http::StatusCode::BAD_REQUEST
+    })?;
 
     tracing::info!(
         event_type = %payload.event_type,
@@ -147,8 +145,8 @@ async fn webhook_inbound(
     // Process based on document type
     match payload.document_type {
         EdiDocumentType::Invoice810 => {
-            let edi_invoice: EdiInvoice = serde_json::from_value(payload.payload.clone())
-                .map_err(|e| {
+            let edi_invoice: EdiInvoice =
+                serde_json::from_value(payload.payload.clone()).map_err(|e| {
                     tracing::error!("Failed to parse EDI invoice: {}", e);
                     axum::http::StatusCode::BAD_REQUEST
                 })?;
@@ -162,16 +160,15 @@ async fn webhook_inbound(
 
             // 1. Look up tenant from receiver_id
             let metadata_pool = state.db.metadata();
-            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
-            )
-            .bind(&edi_invoice.receiver_id)
-            .fetch_optional(&*metadata_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to look up tenant from receiver_id: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            let tenant_uuid: Option<Uuid> =
+                sqlx::query_scalar("SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1")
+                    .bind(&edi_invoice.receiver_id)
+                    .fetch_optional(&*metadata_pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to look up tenant from receiver_id: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
             let tenant_uuid = tenant_uuid.ok_or_else(|| {
                 tracing::warn!(
@@ -199,15 +196,15 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-                if let Some(secret) = &webhook_secret {
-                    if !secret.is_empty() && !signature.is_empty() {
-                        if !verify_webhook_signature(&body, signature, secret) {
-                            tracing::warn!("EDI webhook signature verification failed");
-                            return Err(axum::http::StatusCode::UNAUTHORIZED);
-                        }
-                        tracing::debug!("EDI webhook signature verified");
+            if let Some(secret) = &webhook_secret {
+                if !secret.is_empty() && !signature.is_empty() {
+                    if !verify_webhook_signature(&body, signature, secret) {
+                        tracing::warn!("EDI webhook signature verification failed");
+                        return Err(axum::http::StatusCode::UNAUTHORIZED);
                     }
+                    tracing::debug!("EDI webhook signature verified");
                 }
+            }
 
             // --- Replay protection ---
             // 1. Timestamp freshness
@@ -221,10 +218,13 @@ async fn webhook_inbound(
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
-                tracing::error!("Replay nonce check failed: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })? {
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Replay nonce check failed: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?
+            {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
                 return Err(axum::http::StatusCode::CONFLICT);
             }
@@ -267,11 +267,13 @@ async fn webhook_inbound(
             // Use a separate document_id (not the edi_documents row ID) since
             // document_id is used for blob storage references elsewhere.
             let invoice_doc_id = Uuid::new_v4();
-            let invoice_input = EdiMapper::invoice_from_edi(&edi_invoice, vendor_id, invoice_doc_id)
-                .map_err(|e| {
-                    tracing::error!("Failed to map EDI invoice: {}", e);
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
-                })?;
+            let invoice_input =
+                EdiMapper::invoice_from_edi(&edi_invoice, vendor_id, invoice_doc_id).map_err(
+                    |e| {
+                        tracing::error!("Failed to map EDI invoice: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    },
+                )?;
 
             let mapped_data = serde_json::to_value(&invoice_input).ok();
 
@@ -294,7 +296,8 @@ async fn webhook_inbound(
             let created_by = UserId::from_uuid(admin_user_id);
             let invoice_repo = InvoiceRepositoryImpl::new(Arc::clone(&tenant_pool));
 
-            let invoice = invoice_repo.create(&tenant_id, invoice_input, Some(&created_by))
+            let invoice = invoice_repo
+                .create(&tenant_id, invoice_input, Some(&created_by))
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create invoice from EDI: {}", e);
@@ -333,8 +336,8 @@ async fn webhook_inbound(
             if let Some(ref po_number) = edi_invoice.po_number {
                 let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
                 if let Ok(Some(po)) = po_repo.find_by_po_number(&tenant_id, po_number).await {
-                    use billforge_edi::matching::{InvoiceLineForMatch, MatchEngine};
                     use billforge_core::domain::MatchTolerances;
+                    use billforge_edi::matching::{InvoiceLineForMatch, MatchEngine};
 
                     // Load receiving records for this PO
                     let recv_rows = sqlx::query_as::<_, (Uuid, i32, f32, f32, Option<String>)>(
@@ -350,7 +353,10 @@ async fn webhook_inbound(
                     let recv_rows = match recv_rows {
                         Ok(rows) => rows,
                         Err(e) => {
-                            tracing::warn!("Failed to load receiving records for auto-match: {}", e);
+                            tracing::warn!(
+                                "Failed to load receiving records for auto-match: {}",
+                                e
+                            );
                             vec![]
                         }
                     };
@@ -379,7 +385,10 @@ async fn webhook_inbound(
 
                     let tolerances = MatchTolerances::default();
                     let match_output = MatchEngine::run(
-                        &po.line_items, &receiving_lines, &invoice_lines, &tolerances,
+                        &po.line_items,
+                        &receiving_lines,
+                        &invoice_lines,
+                        &tolerances,
                     );
 
                     let details = serde_json::to_value(&match_output).unwrap_or_default();
@@ -464,16 +473,15 @@ async fn webhook_inbound(
 
             // Tenant lookup + signature verification (same pattern as 810)
             let metadata_pool = state.db.metadata();
-            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
-            )
-            .bind(&edi_po.receiver_id)
-            .fetch_optional(&*metadata_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to look up tenant from receiver_id: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            let tenant_uuid: Option<Uuid> =
+                sqlx::query_scalar("SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1")
+                    .bind(&edi_po.receiver_id)
+                    .fetch_optional(&*metadata_pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to look up tenant from receiver_id: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
             let tenant_uuid = tenant_uuid.ok_or_else(|| {
                 tracing::warn!(receiver_id = %edi_po.receiver_id, "No tenant for EDI receiver_id");
@@ -517,10 +525,13 @@ async fn webhook_inbound(
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
-                tracing::error!("Replay nonce check failed: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })? {
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Replay nonce check failed: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?
+            {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
                 return Err(axum::http::StatusCode::CONFLICT);
             }
@@ -566,11 +577,10 @@ async fn webhook_inbound(
             })?;
 
             // Map to BillForge PO and create
-            let po_input = EdiMapper::purchase_order_from_edi(&edi_po, vendor_id)
-                .map_err(|e| {
-                    tracing::error!("Failed to map EDI purchase order: {}", e);
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
-                })?;
+            let po_input = EdiMapper::purchase_order_from_edi(&edi_po, vendor_id).map_err(|e| {
+                tracing::error!("Failed to map EDI purchase order: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
             let admin_user_id: Uuid = sqlx::query_scalar(
                 "SELECT id FROM users WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1",
@@ -589,7 +599,8 @@ async fn webhook_inbound(
 
             let created_by = UserId::from_uuid(admin_user_id);
             let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
-            let po = po_repo.create(&tenant_id, po_input, &created_by)
+            let po = po_repo
+                .create(&tenant_id, po_input, &created_by)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create purchase order from EDI: {}", e);
@@ -625,8 +636,8 @@ async fn webhook_inbound(
             })))
         }
         EdiDocumentType::ShipNotice856 => {
-            let edi_asn: EdiShipNotice = serde_json::from_value(payload.payload.clone())
-                .map_err(|e| {
+            let edi_asn: EdiShipNotice =
+                serde_json::from_value(payload.payload.clone()).map_err(|e| {
                     tracing::error!("Failed to parse EDI ship notice: {}", e);
                     axum::http::StatusCode::BAD_REQUEST
                 })?;
@@ -639,16 +650,15 @@ async fn webhook_inbound(
 
             // Tenant lookup + signature verification
             let metadata_pool = state.db.metadata();
-            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
-            )
-            .bind(&edi_asn.receiver_id)
-            .fetch_optional(&*metadata_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to look up tenant: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            let tenant_uuid: Option<Uuid> =
+                sqlx::query_scalar("SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1")
+                    .bind(&edi_asn.receiver_id)
+                    .fetch_optional(&*metadata_pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to look up tenant: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
             let tenant_uuid = tenant_uuid.ok_or_else(|| {
                 tracing::warn!(receiver_id = %edi_asn.receiver_id, "No tenant for EDI receiver_id");
@@ -692,10 +702,13 @@ async fn webhook_inbound(
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
-                tracing::error!("Replay nonce check failed: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })? {
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Replay nonce check failed: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?
+            {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
                 return Err(axum::http::StatusCode::CONFLICT);
             }
@@ -723,7 +736,8 @@ async fn webhook_inbound(
 
             // Find matching PO by po_number
             let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
-            let po = po_repo.find_by_po_number(&tenant_id, &edi_asn.po_number)
+            let po = po_repo
+                .find_by_po_number(&tenant_id, &edi_asn.po_number)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to look up PO: {}", e);
@@ -774,14 +788,18 @@ async fn webhook_inbound(
                 })?;
 
                 // Update PO line received quantity
-                po_repo.update_received_quantities(
-                    &tenant_id, &po.id, line.po_line_number, line.quantity_received
-                )
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to update PO received qty: {}", e);
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
-                })?;
+                po_repo
+                    .update_received_quantities(
+                        &tenant_id,
+                        &po.id,
+                        line.po_line_number,
+                        line.quantity_received,
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to update PO received qty: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
             }
 
             // Check if all PO lines are fulfilled
@@ -802,17 +820,15 @@ async fn webhook_inbound(
                 "partially_fulfilled"
             };
 
-            sqlx::query(
-                "UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE id = $2",
-            )
-            .bind(new_status)
-            .bind(po.id.0)
-            .execute(&*tenant_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to update PO status: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            sqlx::query("UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE id = $2")
+                .bind(new_status)
+                .bind(po.id.0)
+                .execute(&*tenant_pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to update PO status: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?;
 
             // Update EDI document: mapped, link po_id
             sqlx::query(
@@ -854,8 +870,8 @@ async fn webhook_inbound(
             })))
         }
         EdiDocumentType::FunctionalAck997 => {
-            let ack: EdiFunctionalAck = serde_json::from_value(payload.payload.clone())
-                .map_err(|e| {
+            let ack: EdiFunctionalAck =
+                serde_json::from_value(payload.payload.clone()).map_err(|e| {
                     tracing::error!("Failed to parse EDI 997 ack: {}", e);
                     axum::http::StatusCode::BAD_REQUEST
                 })?;
@@ -869,16 +885,15 @@ async fn webhook_inbound(
             // The 997's receiver_id is our ISA ID (we sent the original doc).
             // Use it to look up the tenant, same as 810/850/856 handlers.
             let metadata_pool = state.db.metadata();
-            let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1",
-            )
-            .bind(&ack.receiver_id)
-            .fetch_optional(&*metadata_pool)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to look up tenant for 997: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            let tenant_uuid: Option<Uuid> =
+                sqlx::query_scalar("SELECT tenant_id FROM edi_receiver_map WHERE receiver_id = $1")
+                    .bind(&ack.receiver_id)
+                    .fetch_optional(&*metadata_pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to look up tenant for 997: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
             let tenant_uuid = tenant_uuid.ok_or_else(|| {
                 tracing::warn!(
@@ -925,10 +940,13 @@ async fn webhook_inbound(
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce).await.map_err(|e| {
-                tracing::error!("Replay nonce check failed: {}", e);
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            })? {
+            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Replay nonce check failed: {}", e);
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                })?
+            {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
                 return Err(axum::http::StatusCode::CONFLICT);
             }
@@ -992,7 +1010,10 @@ async fn edi_connect(
     TenantCtx(tenant): TenantCtx,
     Json(req): Json<EdiConnectRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let isa_id = req.our_isa_id.as_deref().unwrap_or("");
@@ -1064,14 +1085,19 @@ async fn edi_disconnect(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    sqlx::query("UPDATE edi_connections SET is_active = false, updated_at = NOW() WHERE tenant_id = $1")
-        .bind(*tenant.tenant_id.as_uuid())
-        .execute(&*pool)
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    sqlx::query(
+        "UPDATE edi_connections SET is_active = false, updated_at = NOW() WHERE tenant_id = $1",
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .execute(&*pool)
+    .await
+    .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Remove receiver mapping from metadata DB
     let metadata_pool = state.db.metadata();
@@ -1094,7 +1120,10 @@ async fn edi_status(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<EdiStatusResponse>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let connected: bool = sqlx::query_scalar(
@@ -1105,13 +1134,12 @@ async fn edi_status(
     .await
     .unwrap_or(false);
 
-    let doc_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM edi_documents WHERE tenant_id = $1",
-    )
-    .bind(*tenant.tenant_id.as_uuid())
-    .fetch_one(&*pool)
-    .await
-    .unwrap_or(0);
+    let doc_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM edi_documents WHERE tenant_id = $1")
+            .bind(*tenant.tenant_id.as_uuid())
+            .fetch_one(&*pool)
+            .await
+            .unwrap_or(0);
 
     let partner_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM edi_trading_partners WHERE tenant_id = $1 AND is_active = true",
@@ -1152,7 +1180,10 @@ async fn list_documents(
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<ListDocumentsQuery>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let page = query.page.unwrap_or(1);
@@ -1207,7 +1238,10 @@ async fn get_document(
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<String>, String, Option<Uuid>, serde_json::Value, Option<serde_json::Value>, Option<String>, chrono::DateTime<Utc>)>(
@@ -1261,7 +1295,10 @@ async fn send_remittance(
     Json(req): Json<SendRemittanceRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Load the invoice
@@ -1307,26 +1344,40 @@ async fn send_remittance(
     })?;
 
     // Load EDI connection config
-    let conn_row: Option<(String, String, String, Option<String>, Option<String>, Option<String>, i32)> =
-        sqlx::query_as(
-            r#"SELECT api_key_encrypted, webhook_secret, provider,
+    let conn_row: Option<(
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i32,
+    )> = sqlx::query_as(
+        r#"SELECT api_key_encrypted, webhook_secret, provider,
                       our_isa_qualifier, our_isa_id, api_base_url, ack_timeout_hours
                FROM edi_connections
                WHERE tenant_id = $1 AND is_active = true"#,
-        )
-        .bind(tenant_uuid)
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to load EDI connection: {}", e);
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    )
+    .bind(tenant_uuid)
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to load EDI connection: {}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    let (api_key, webhook_secret, provider_str, isa_qualifier, isa_id, api_base_url, ack_timeout_hours) =
-        conn_row.ok_or_else(|| {
-            tracing::warn!("No active EDI connection for tenant");
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY
-        })?;
+    let (
+        api_key,
+        webhook_secret,
+        provider_str,
+        isa_qualifier,
+        isa_id,
+        api_base_url,
+        ack_timeout_hours,
+    ) = conn_row.ok_or_else(|| {
+        tracing::warn!("No active EDI connection for tenant");
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    })?;
 
     let sender_id = isa_id.unwrap_or_default();
     let provider = match provider_str.as_str() {
@@ -1339,7 +1390,8 @@ async fn send_remittance(
         api_key,
         webhook_secret,
         provider,
-        api_base_url: api_base_url.unwrap_or_else(|| "https://core.us.stedi.com/2023-08-01".to_string()),
+        api_base_url: api_base_url
+            .unwrap_or_else(|| "https://core.us.stedi.com/2023-08-01".to_string()),
         our_isa_qualifier: isa_qualifier.unwrap_or_else(|| "ZZ".to_string()),
         our_isa_id: sender_id.clone(),
     };
@@ -1384,14 +1436,33 @@ async fn list_outbound(
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<ListDocumentsQuery>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(25).min(100);
     let offset = ((page - 1) * per_page) as i32;
 
-    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>, String, Option<Uuid>, Option<String>, Option<String>, i32, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<Uuid>,
+            Option<String>,
+            Option<String>,
+            i32,
+            chrono::DateTime<Utc>,
+            Option<chrono::DateTime<Utc>>,
+            Option<chrono::DateTime<Utc>>,
+        ),
+    >(
         r#"SELECT id, document_type, sender_id, receiver_id, status, invoice_id,
                   ack_status, middleware_id, ack_retry_count,
                   created_at, processed_at, ack_received_at
@@ -1445,15 +1516,16 @@ async fn get_ack_timeouts(
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let timed_out = check_ack_timeouts(&pool, tenant_uuid)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to check ack timeouts: {}", e);
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let timed_out = check_ack_timeouts(&pool, tenant_uuid).await.map_err(|e| {
+        tracing::error!("Failed to check ack timeouts: {}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(serde_json::json!({
         "timed_out_count": timed_out.len(),
@@ -1470,7 +1542,10 @@ async fn list_partners(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<Uuid>, bool, chrono::DateTime<Utc>)>(
@@ -1507,7 +1582,10 @@ async fn create_partner(
     TenantCtx(tenant): TenantCtx,
     Json(req): Json<CreatePartnerRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let id = Uuid::new_v4();
@@ -1545,7 +1623,10 @@ async fn update_partner(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdatePartnerRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if let Some(name) = &req.name {
@@ -1588,7 +1669,10 @@ async fn delete_partner(
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let pool = state.db.tenant(&tenant.tenant_id).await
+    let pool = state
+        .db
+        .tenant(&tenant.tenant_id)
+        .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     sqlx::query("DELETE FROM edi_trading_partners WHERE id = $1 AND tenant_id = $2")

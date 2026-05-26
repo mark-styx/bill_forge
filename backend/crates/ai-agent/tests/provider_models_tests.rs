@@ -1,7 +1,8 @@
 //! Tests for the provider-neutral chat models (serialization round-trips).
 
+#![allow(warnings)]
+
 use billforge_ai_agent::models::*;
-use serde_json;
 
 #[test]
 fn provider_chat_request_serializes_with_system_and_user_messages() {

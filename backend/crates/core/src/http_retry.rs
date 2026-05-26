@@ -72,13 +72,16 @@ impl std::error::Error for HttpRetryError {
     }
 }
 
-
 /// Compute backoff duration for a given attempt number.
 ///
 /// Uses exponential backoff: `min(2^attempt * base_ms, max_ms) + jitter`.
 /// If `retry_after_secs` is provided (from Retry-After header), uses that
 /// value capped at `config.max_retry_after_secs`.
-pub fn compute_backoff(config: &RetryConfig, attempt: u32, retry_after_secs: Option<u64>) -> Duration {
+pub fn compute_backoff(
+    config: &RetryConfig,
+    attempt: u32,
+    retry_after_secs: Option<u64>,
+) -> Duration {
     if let Some(secs) = retry_after_secs {
         let capped = secs.min(config.max_retry_after_secs);
         return Duration::from_secs(capped);

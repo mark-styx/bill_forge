@@ -32,7 +32,11 @@ impl FakeOcr {
 
 #[async_trait]
 impl OcrService for FakeOcr {
-    async fn extract(&self, _document_bytes: &[u8], _mime_type: &str) -> Result<OcrExtractionResult> {
+    async fn extract(
+        &self,
+        _document_bytes: &[u8],
+        _mime_type: &str,
+    ) -> Result<OcrExtractionResult> {
         *self.call_count.lock().unwrap() += 1;
         Ok(self.result.clone())
     }
@@ -145,7 +149,7 @@ impl InvoiceRepository for FakeInvoiceRepo {
         &self,
         _tenant_id: &TenantId,
         input: CreateInvoiceInput,
-        created_by: &UserId,
+        created_by: Option<&UserId>,
     ) -> Result<Invoice> {
         let id = InvoiceId::new();
         let now = chrono::Utc::now();
@@ -194,7 +198,7 @@ impl InvoiceRepository for FakeInvoiceRepo {
             notes: input.notes,
             tags: input.tags,
             custom_fields: serde_json::Value::Null,
-            created_by: created_by.clone(),
+            created_by: created_by.cloned(),
             created_at: now,
             updated_at: now,
         };
@@ -205,11 +209,7 @@ impl InvoiceRepository for FakeInvoiceRepo {
         Ok(invoice)
     }
 
-    async fn get_by_id(
-        &self,
-        _tenant_id: &TenantId,
-        id: &InvoiceId,
-    ) -> Result<Option<Invoice>> {
+    async fn get_by_id(&self, _tenant_id: &TenantId, id: &InvoiceId) -> Result<Option<Invoice>> {
         Ok(self.invoices.lock().unwrap().get(id).cloned())
     }
 
@@ -273,11 +273,8 @@ fn make_service() -> (
     let storage = Arc::new(FakeStorage::new());
     let repo = Arc::new(FakeInvoiceRepo::new());
 
-    let service = InvoiceCaptureService::with_provider(
-        Box::new(ocr),
-        repo.clone(),
-        storage.clone(),
-    );
+    let service =
+        InvoiceCaptureService::with_provider(Box::new(ocr), repo.clone(), storage.clone());
 
     (service, call_count, storage, repo)
 }
@@ -325,7 +322,13 @@ async fn upload_invoice_happy_path() {
     let user_id = UserId::new();
 
     let invoice = service
-        .upload_invoice(&tenant_id, &user_id, "invoice.pdf", b"fake-pdf-bytes", "application/pdf")
+        .upload_invoice(
+            &tenant_id,
+            &user_id,
+            "invoice.pdf",
+            b"fake-pdf-bytes",
+            "application/pdf",
+        )
         .await
         .expect("upload_invoice should succeed");
 
@@ -376,17 +379,20 @@ async fn upload_invoice_missing_fields_uses_defaults() {
     let storage = Arc::new(FakeStorage::new());
     let repo = Arc::new(FakeInvoiceRepo::new());
 
-    let service = InvoiceCaptureService::with_provider(
-        Box::new(ocr),
-        repo.clone(),
-        storage.clone(),
-    );
+    let service =
+        InvoiceCaptureService::with_provider(Box::new(ocr), repo.clone(), storage.clone());
 
     let tenant_id = TenantId::new();
     let user_id = UserId::new();
 
     let invoice = service
-        .upload_invoice(&tenant_id, &user_id, "blank.pdf", b"empty", "application/pdf")
+        .upload_invoice(
+            &tenant_id,
+            &user_id,
+            "blank.pdf",
+            b"empty",
+            "application/pdf",
+        )
         .await
         .expect("upload_invoice should succeed with empty OCR");
 
@@ -449,17 +455,14 @@ async fn reprocess_ocr_transitions_status() {
         notes: None,
         tags: vec![],
         custom_fields: serde_json::Value::Null,
-        created_by: user_id,
+        created_by: Some(user_id),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
     repo.seed(seed_invoice);
 
-    let service = InvoiceCaptureService::with_provider(
-        Box::new(ocr),
-        repo.clone(),
-        storage.clone(),
-    );
+    let service =
+        InvoiceCaptureService::with_provider(Box::new(ocr), repo.clone(), storage.clone());
 
     let result = service
         .reprocess_ocr(&tenant_id, &invoice_id)

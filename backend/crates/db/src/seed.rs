@@ -24,7 +24,10 @@ pub async fn seed_pilot_customers(pool: &PgPool) -> Result<()> {
         seed_tenant(pool, name, slug).await?;
     }
 
-    println!("✅ Successfully seeded {} pilot customers", PILOT_CUSTOMERS.len());
+    println!(
+        "✅ Successfully seeded {} pilot customers",
+        PILOT_CUSTOMERS.len()
+    );
     Ok(())
 }
 
@@ -236,13 +239,21 @@ async fn create_tenant_tables(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-async fn seed_users(pool: &PgPool, tenant_id: Uuid, tenant_name: &str) -> Result<Vec<(Uuid, String)>> {
+async fn seed_users(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    tenant_name: &str,
+) -> Result<Vec<(Uuid, String)>> {
     let mut users = Vec::new();
 
     let user_templates = vec![
         ("AP Clerk", "ap@example.com", vec!["ap_clerk"]),
         ("AP Manager", "ap.manager@example.com", vec!["ap_manager"]),
-        ("Controller", "controller@example.com", vec!["controller", "approver_l2"]),
+        (
+            "Controller",
+            "controller@example.com",
+            vec!["controller", "approver_l2"],
+        ),
         ("CFO", "cfo@example.com", vec!["cfo", "approver_l3"]),
     ];
 
@@ -278,7 +289,11 @@ async fn seed_users(pool: &PgPool, tenant_id: Uuid, tenant_name: &str) -> Result
     Ok(users)
 }
 
-async fn seed_vendors(pool: &PgPool, tenant_id: Uuid, tenant_name: &str) -> Result<Vec<(Uuid, String)>> {
+async fn seed_vendors(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    tenant_name: &str,
+) -> Result<Vec<(Uuid, String)>> {
     let mut vendors = Vec::new();
 
     // Industry-specific vendors
@@ -355,11 +370,13 @@ async fn seed_invoices(
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
-    let statuses = [("captured", "pending_review"),
+    let statuses = [
+        ("captured", "pending_review"),
         ("captured", "in_review"),
         ("approved", "approved"),
         ("approved", "exported"),
-        ("rejected", "rejected")];
+        ("rejected", "rejected"),
+    ];
 
     let mut invoice_count = 0;
 
@@ -427,14 +444,50 @@ async fn seed_invoices(
 
 async fn seed_default_queues(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
     let default_queues = vec![
-        ("AP Processing", "review", "Main AP processing queue for incoming invoices", true, 24, 48),
-        ("Review Queue", "review", "Secondary review queue for flagged invoices", false, 16, 32),
-        ("Error Queue", "exception", "Queue for invoices with processing errors", false, 8, 16),
-        ("Approval Queue", "approval", "Queue for invoices pending approval", false, 24, 48),
-        ("Payment Queue", "payment", "Queue for approved invoices ready for payment", false, 48, 72),
+        (
+            "AP Processing",
+            "review",
+            "Main AP processing queue for incoming invoices",
+            true,
+            24,
+            48,
+        ),
+        (
+            "Review Queue",
+            "review",
+            "Secondary review queue for flagged invoices",
+            false,
+            16,
+            32,
+        ),
+        (
+            "Error Queue",
+            "exception",
+            "Queue for invoices with processing errors",
+            false,
+            8,
+            16,
+        ),
+        (
+            "Approval Queue",
+            "approval",
+            "Queue for invoices pending approval",
+            false,
+            24,
+            48,
+        ),
+        (
+            "Payment Queue",
+            "payment",
+            "Queue for approved invoices ready for payment",
+            false,
+            48,
+            72,
+        ),
     ];
 
-    for (name, queue_type, description, is_default, sla_hours, escalation_hours) in &default_queues {
+    for (name, queue_type, description, is_default, sla_hours, escalation_hours) in &default_queues
+    {
         let settings = serde_json::json!({
             "default_sort": "priority_desc",
             "sla_hours": sla_hours,
@@ -468,24 +521,160 @@ async fn seed_default_queues(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
 async fn seed_default_status_config(pool: &PgPool, tenant_id: Uuid) -> Result<()> {
     let statuses = vec![
         // Processing statuses
-        ("draft", "Draft", "gray", "bg-secondary", "text-muted-foreground", 0, false, "processing"),
-        ("submitted", "Submitted", "blue", "bg-primary/10", "text-primary", 1, false, "processing"),
-        ("pending_approval", "Pending Approval", "yellow", "bg-warning/10", "text-warning", 2, false, "processing"),
-        ("approved", "Approved", "green", "bg-success/10", "text-success", 3, false, "processing"),
-        ("rejected", "Rejected", "red", "bg-error/10", "text-error", 4, true, "processing"),
-        ("on_hold", "On Hold", "yellow", "bg-warning/10", "text-warning", 5, false, "processing"),
-        ("ready_for_payment", "Ready for Payment", "green", "bg-success/10", "text-success", 6, false, "processing"),
-        ("paid", "Paid", "green", "bg-success/10", "text-success", 7, true, "processing"),
-        ("voided", "Voided", "gray", "bg-secondary", "text-muted-foreground", 8, true, "processing"),
+        (
+            "draft",
+            "Draft",
+            "gray",
+            "bg-secondary",
+            "text-muted-foreground",
+            0,
+            false,
+            "processing",
+        ),
+        (
+            "submitted",
+            "Submitted",
+            "blue",
+            "bg-primary/10",
+            "text-primary",
+            1,
+            false,
+            "processing",
+        ),
+        (
+            "pending_approval",
+            "Pending Approval",
+            "yellow",
+            "bg-warning/10",
+            "text-warning",
+            2,
+            false,
+            "processing",
+        ),
+        (
+            "approved",
+            "Approved",
+            "green",
+            "bg-success/10",
+            "text-success",
+            3,
+            false,
+            "processing",
+        ),
+        (
+            "rejected",
+            "Rejected",
+            "red",
+            "bg-error/10",
+            "text-error",
+            4,
+            true,
+            "processing",
+        ),
+        (
+            "on_hold",
+            "On Hold",
+            "yellow",
+            "bg-warning/10",
+            "text-warning",
+            5,
+            false,
+            "processing",
+        ),
+        (
+            "ready_for_payment",
+            "Ready for Payment",
+            "green",
+            "bg-success/10",
+            "text-success",
+            6,
+            false,
+            "processing",
+        ),
+        (
+            "paid",
+            "Paid",
+            "green",
+            "bg-success/10",
+            "text-success",
+            7,
+            true,
+            "processing",
+        ),
+        (
+            "voided",
+            "Voided",
+            "gray",
+            "bg-secondary",
+            "text-muted-foreground",
+            8,
+            true,
+            "processing",
+        ),
         // Capture statuses
-        ("pending", "Pending", "yellow", "bg-warning/10", "text-warning", 0, false, "capture"),
-        ("processing", "Processing", "blue", "bg-primary/10", "text-primary", 1, false, "capture"),
-        ("ready_for_review", "Ready for Review", "yellow", "bg-warning/10", "text-warning", 2, false, "capture"),
-        ("reviewed", "Reviewed", "green", "bg-success/10", "text-success", 3, true, "capture"),
-        ("failed", "Failed", "red", "bg-error/10", "text-error", 4, true, "capture"),
+        (
+            "pending",
+            "Pending",
+            "yellow",
+            "bg-warning/10",
+            "text-warning",
+            0,
+            false,
+            "capture",
+        ),
+        (
+            "processing",
+            "Processing",
+            "blue",
+            "bg-primary/10",
+            "text-primary",
+            1,
+            false,
+            "capture",
+        ),
+        (
+            "ready_for_review",
+            "Ready for Review",
+            "yellow",
+            "bg-warning/10",
+            "text-warning",
+            2,
+            false,
+            "capture",
+        ),
+        (
+            "reviewed",
+            "Reviewed",
+            "green",
+            "bg-success/10",
+            "text-success",
+            3,
+            true,
+            "capture",
+        ),
+        (
+            "failed",
+            "Failed",
+            "red",
+            "bg-error/10",
+            "text-error",
+            4,
+            true,
+            "capture",
+        ),
     ];
 
-    for (status_key, display_label, color, bg_color, text_color, sort_order, is_terminal, category) in &statuses {
+    for (
+        status_key,
+        display_label,
+        color,
+        bg_color,
+        text_color,
+        sort_order,
+        is_terminal,
+        category,
+    ) in &statuses
+    {
         sqlx::query(
             r#"
             INSERT INTO invoice_status_config
@@ -511,6 +700,9 @@ async fn seed_default_status_config(pool: &PgPool, tenant_id: Uuid) -> Result<()
         .await?;
     }
 
-    println!("    ✓ Created {} default invoice status configs", statuses.len());
+    println!(
+        "    ✓ Created {} default invoice status configs",
+        statuses.len()
+    );
     Ok(())
 }

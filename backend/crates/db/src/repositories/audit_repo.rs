@@ -1,12 +1,12 @@
 //! Audit log repository implementation
 
+use async_trait::async_trait;
 use billforge_core::{
     domain::{AuditAction, AuditEntry, ResourceType},
     traits::{AuditFilters, AuditService},
-    types::{Pagination, PaginatedResponse, PaginationMeta, TenantId},
+    types::{PaginatedResponse, Pagination, PaginationMeta, TenantId},
     Error, Result,
 };
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl AuditService for AuditRepositoryImpl {
             r#"INSERT INTO audit_log (
                 id, tenant_id, user_id, action, resource_type, resource_id,
                 changes, ip_address, user_agent, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
         )
         .bind(entry.id)
         .bind(*entry.tenant_id.as_uuid())
@@ -54,7 +54,7 @@ impl AuditService for AuditRepositoryImpl {
         .bind(&action_str)
         .bind(&resource_type_str)
         .bind(&entry.resource_id)
-        .bind(&serde_json::json!({
+        .bind(serde_json::json!({
             "description": entry.description,
             "old_value": entry.old_value,
             "new_value": entry.new_value,
@@ -87,7 +87,7 @@ impl AuditService for AuditRepositoryImpl {
         // Build dynamic query
         let mut query_str = String::from(
             "SELECT id, tenant_id, user_id, action, resource_type, resource_id, \
-             changes, ip_address, user_agent, created_at FROM audit_log WHERE tenant_id = $1"
+             changes, ip_address, user_agent, created_at FROM audit_log WHERE tenant_id = $1",
         );
         let mut param_count = 2;
 
@@ -125,8 +125,7 @@ impl AuditService for AuditRepositoryImpl {
         ));
 
         // Build the query
-        let mut query = sqlx::query_as::<_, AuditRow>(&query_str)
-            .bind(*tenant_id.as_uuid());
+        let mut query = sqlx::query_as::<_, AuditRow>(&query_str).bind(*tenant_id.as_uuid());
 
         if let Some(ref user_id) = filters.user_id {
             query = query.bind(user_id.0);
@@ -158,10 +157,7 @@ impl AuditService for AuditRepositoryImpl {
             .await
             .map_err(|e| Error::Database(format!("Failed to query audit log: {}", e)))?;
 
-        let entries: Vec<AuditEntry> = rows
-            .into_iter()
-            .map(|row| row.into_entry())
-            .collect();
+        let entries: Vec<AuditEntry> = rows.into_iter().map(|row| row.into_entry()).collect();
 
         // Get total count
         let count_query_str = query_str.replace(
@@ -170,8 +166,7 @@ impl AuditService for AuditRepositoryImpl {
         );
         let count_str = count_query_str.split(" ORDER BY").next().unwrap();
 
-        let mut count_query = sqlx::query_scalar::<_, i64>(count_str)
-            .bind(*tenant_id.as_uuid());
+        let mut count_query = sqlx::query_scalar::<_, i64>(count_str).bind(*tenant_id.as_uuid());
 
         if let Some(ref user_id) = filters.user_id {
             count_query = count_query.bind(user_id.0);
@@ -232,10 +227,17 @@ impl AuditRow {
         let (description, old_value, new_value, user_email, metadata) =
             if let Some(ref changes) = self.changes {
                 (
-                    changes.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    changes
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     changes.get("old_value").cloned().filter(|v| !v.is_null()),
                     changes.get("new_value").cloned().filter(|v| !v.is_null()),
-                    changes.get("user_email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    changes
+                        .get("user_email")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     changes.get("metadata").cloned().filter(|v| !v.is_null()),
                 )
             } else {
@@ -247,8 +249,10 @@ impl AuditRow {
             tenant_id: TenantId(self.tenant_id),
             user_id: self.user_id.map(billforge_core::UserId),
             user_email,
-            action: serde_json::from_str(&format!("\"{}\"", self.action)).unwrap_or(AuditAction::Read),
-            resource_type: serde_json::from_str(&format!("\"{}\"", self.resource_type)).unwrap_or(ResourceType::Invoice),
+            action: serde_json::from_str(&format!("\"{}\"", self.action))
+                .unwrap_or(AuditAction::Read),
+            resource_type: serde_json::from_str(&format!("\"{}\"", self.resource_type))
+                .unwrap_or(ResourceType::Invoice),
             resource_id: self.resource_id,
             description,
             old_value,

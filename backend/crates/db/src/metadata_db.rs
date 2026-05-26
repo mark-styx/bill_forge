@@ -17,9 +17,9 @@ impl MetadataDatabase {
     }
 
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to connect to metadata database: {}", e)))?;
+        let pool = PgPool::connect(database_url).await.map_err(|e| {
+            Error::Database(format!("Failed to connect to metadata database: {}", e))
+        })?;
 
         let db = Self { pool };
         db.run_migrations().await?;
@@ -33,23 +33,25 @@ impl MetadataDatabase {
             .map_err(|e| Error::Migration(format!("Failed to run metadata migrations: {}", e)))?;
 
         // EDI receiver ID -> tenant mapping for webhook tenant lookup
-        sqlx::raw_sql(include_str!("../../../migrations/064_create_edi_receiver_map.sql"))
-            .execute(&self.pool)
-            .await
-            .map_err(|e| Error::Migration(format!("Failed to run EDI receiver map migration: {}", e)))?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/064_create_edi_receiver_map.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!("Failed to run EDI receiver map migration: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Check if a tenant exists
     pub async fn tenant_exists(&self, tenant_id: &TenantId) -> Result<bool> {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
-        )
-        .bind(tenant_id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to check tenant: {}", e)))?;
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)")
+            .bind(tenant_id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to check tenant: {}", e)))?;
 
         Ok(exists)
     }
@@ -57,15 +59,13 @@ impl MetadataDatabase {
     /// Create a new tenant
     pub async fn create_tenant(&self, tenant_id: &TenantId, name: &str) -> Result<()> {
         let slug = slugify(name);
-        sqlx::query(
-            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)"
-        )
-        .bind(tenant_id.as_uuid())
-        .bind(name)
-        .bind(&slug)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to create tenant: {}", e)))?;
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(tenant_id.as_uuid())
+            .bind(name)
+            .bind(&slug)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to create tenant: {}", e)))?;
 
         Ok(())
     }
@@ -99,7 +99,7 @@ impl MetadataDatabase {
     /// Get tenant settings and enabled modules
     pub async fn get_tenant(&self, tenant_id: &TenantId) -> Result<Option<TenantRecord>> {
         let result = sqlx::query_as::<_, TenantRecord>(
-            "SELECT id, name, settings, enabled_modules, is_active FROM tenants WHERE id = $1"
+            "SELECT id, name, settings, enabled_modules, is_active FROM tenants WHERE id = $1",
         )
         .bind(tenant_id.as_uuid())
         .fetch_optional(&self.pool)
@@ -118,14 +118,12 @@ impl MetadataDatabase {
         let settings_json = serde_json::to_value(settings)
             .map_err(|e| Error::Database(format!("Failed to serialize settings: {}", e)))?;
 
-        sqlx::query(
-            "UPDATE tenants SET settings = $1, updated_at = NOW() WHERE id = $2"
-        )
-        .bind(&settings_json)
-        .bind(tenant_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to update tenant settings: {}", e)))?;
+        sqlx::query("UPDATE tenants SET settings = $1, updated_at = NOW() WHERE id = $2")
+            .bind(&settings_json)
+            .bind(tenant_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to update tenant settings: {}", e)))?;
 
         Ok(())
     }
@@ -139,14 +137,12 @@ impl MetadataDatabase {
         let modules_json = serde_json::to_value(modules)
             .map_err(|e| Error::Database(format!("Failed to serialize modules: {}", e)))?;
 
-        sqlx::query(
-            "UPDATE tenants SET enabled_modules = $1, updated_at = NOW() WHERE id = $2"
-        )
-        .bind(&modules_json)
-        .bind(tenant_id.as_uuid())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to update tenant modules: {}", e)))?;
+        sqlx::query("UPDATE tenants SET enabled_modules = $1, updated_at = NOW() WHERE id = $2")
+            .bind(&modules_json)
+            .bind(tenant_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to update tenant modules: {}", e)))?;
 
         Ok(())
     }
@@ -159,7 +155,7 @@ impl MetadataDatabase {
 
         sqlx::query(
             r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles)
-               VALUES ($1, $2, $3, $4, $5, $6)"#
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
         )
         .bind(id.0)
         .bind(user.tenant_id.as_uuid())
@@ -181,7 +177,7 @@ impl MetadataDatabase {
 
         Ok(UserRecord {
             id: id.0,
-            tenant_id: user.tenant_id.as_uuid().clone(),
+            tenant_id: *user.tenant_id.as_uuid(),
             email: user.email.clone(),
             password_hash: user.password_hash.clone(),
             name: user.name.clone(),
@@ -226,13 +222,11 @@ impl MetadataDatabase {
 
     /// Update user's last login time
     pub async fn update_last_login(&self, user_id: &UserId) -> Result<()> {
-        sqlx::query(
-            "UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1"
-        )
-        .bind(user_id.0)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to update last login: {}", e)))?;
+        sqlx::query("UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1")
+            .bind(user_id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to update last login: {}", e)))?;
 
         Ok(())
     }
@@ -266,14 +260,16 @@ impl MetadataDatabase {
             r#"SELECT user_id FROM refresh_tokens
                WHERE token_hash = $1
                AND revoked_at IS NULL
-               AND expires_at > NOW()"#
+               AND expires_at > NOW()"#,
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to validate refresh token: {}", e)))?;
 
-        Ok(result.and_then(|(user_id,)| user_id.parse().ok()).map(UserId))
+        Ok(result
+            .and_then(|(user_id,)| user_id.parse().ok())
+            .map(UserId))
     }
 
     /// Revoke a refresh token
@@ -311,6 +307,7 @@ impl MetadataDatabase {
     }
 
     /// Create a new API key
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_api_key(
         &self,
         id: uuid::Uuid,
@@ -348,7 +345,7 @@ impl MetadataDatabase {
     /// Get API key by prefix
     pub async fn get_api_key_by_prefix(&self, key_prefix: &str) -> Result<Option<ApiKeyRecord>> {
         let result = sqlx::query_as::<_, ApiKeyRecord>(
-            "SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL"
+            "SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL",
         )
         .bind(key_prefix)
         .fetch_optional(&self.pool)

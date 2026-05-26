@@ -651,7 +651,7 @@ mod tests {
         let header = compute_signature_header(payload, secret, 1700000000);
 
         let result = client.verify_webhook_signature(payload, &header, secret);
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -665,7 +665,7 @@ mod tests {
         let tampered_payload =
             br#"{"id":"evt_TAMPERED","type":"invoice.paid","data":{"object":{}}}"#;
         let result = client.verify_webhook_signature(tampered_payload, &header, secret);
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Round-trip tests for vendor-portal JWT tokens.
 
 use billforge_auth::{Claims, JwtConfig, JwtService, TokenType};
-use billforge_core::{Error, TenantId};
 use billforge_core::domain::VendorId;
+use billforge_core::{Error, TenantId};
 
 fn test_jwt_config() -> JwtConfig {
     JwtConfig {

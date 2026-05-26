@@ -207,19 +207,23 @@ impl PurchaseOrderRepository for PurchaseOrderRepositoryImpl {
         }
 
         let where_clause = where_clauses.join(" AND ");
-        let count_sql = format!("SELECT COUNT(*) FROM purchase_orders WHERE {}", where_clause);
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM purchase_orders WHERE {}",
+            where_clause
+        );
         let list_sql = format!(
             r#"SELECT id, tenant_id, po_number, vendor_id, vendor_name, order_date,
                       expected_delivery, status, total_amount_cents, total_currency,
                       ship_to_address, notes, created_by, created_at, updated_at
                FROM purchase_orders WHERE {}
                ORDER BY created_at DESC LIMIT ${} OFFSET ${}"#,
-            where_clause, bind_idx, bind_idx + 1
+            where_clause,
+            bind_idx,
+            bind_idx + 1
         );
 
         // Build count query
-        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql)
-            .bind(*tenant_id.as_uuid());
+        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql).bind(*tenant_id.as_uuid());
         if let Some(vendor_id) = &filters.vendor_id {
             count_query = count_query.bind(vendor_id);
         }
@@ -233,11 +237,12 @@ impl PurchaseOrderRepository for PurchaseOrderRepositoryImpl {
         let total_items = count_query
             .fetch_one(&*self.pool)
             .await
-            .map_err(|e| Error::Database(format!("Failed to count purchase orders: {}", e)))? as u64;
+            .map_err(|e| Error::Database(format!("Failed to count purchase orders: {}", e)))?
+            as u64;
 
         // Build list query
-        let mut list_query = sqlx::query_as::<_, PurchaseOrderRow>(&list_sql)
-            .bind(*tenant_id.as_uuid());
+        let mut list_query =
+            sqlx::query_as::<_, PurchaseOrderRow>(&list_sql).bind(*tenant_id.as_uuid());
         if let Some(vendor_id) = &filters.vendor_id {
             list_query = list_query.bind(vendor_id);
         }
@@ -340,11 +345,7 @@ impl PurchaseOrderRepository for PurchaseOrderRepositoryImpl {
         Ok(())
     }
 
-    async fn delete(
-        &self,
-        tenant_id: &TenantId,
-        id: &PurchaseOrderId,
-    ) -> Result<()> {
+    async fn delete(&self, tenant_id: &TenantId, id: &PurchaseOrderId) -> Result<()> {
         sqlx::query("DELETE FROM purchase_orders WHERE id = $1 AND tenant_id = $2")
             .bind(id.0)
             .bind(*tenant_id.as_uuid())

@@ -126,11 +126,20 @@ fn test_create_invoice_returns_duplicate_warning() {
     // Find the anomaly that references the incoming invoice
     let dup = anomalies.iter().find(|a| {
         let meta = &a.metadata;
-        let id1 = meta.get("invoice1").and_then(|v| v.get("id")).and_then(|v| v.as_str());
-        let id2 = meta.get("invoice2").and_then(|v| v.get("id")).and_then(|v| v.as_str());
+        let id1 = meta
+            .get("invoice1")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str());
+        let id2 = meta
+            .get("invoice2")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str());
         id1 == Some("INV-NEW-001") || id2 == Some("INV-NEW-001")
     });
-    assert!(dup.is_some(), "Anomaly should reference the incoming invoice");
+    assert!(
+        dup.is_some(),
+        "Anomaly should reference the incoming invoice"
+    );
 
     let anomaly = dup.unwrap();
     assert!(
@@ -138,7 +147,10 @@ fn test_create_invoice_returns_duplicate_warning() {
         "Expected High or Critical severity, got {:?}",
         anomaly.severity
     );
-    assert!(anomaly.detected_value > 0.8, "Similarity should exceed 0.8 threshold");
+    assert!(
+        anomaly.detected_value > 0.8,
+        "Similarity should exceed 0.8 threshold"
+    );
 }
 
 // ---------------------------------------------------------------------------

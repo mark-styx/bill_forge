@@ -99,21 +99,38 @@ impl SageIntacctClient {
 
             if http_retry::is_retryable_status(status_code) {
                 let retry_after = http_retry::parse_retry_after(
-                    response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                    response
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|v| v.to_str().ok()),
                 );
                 attempt += 1;
                 if attempt >= config.max_retries {
                     let body = response.text().await.unwrap_or_default();
-                    anyhow::bail!("Sage Intacct API failed after {} retries ({}): {}", attempt, status_code, body);
+                    anyhow::bail!(
+                        "Sage Intacct API failed after {} retries ({}): {}",
+                        attempt,
+                        status_code,
+                        body
+                    );
                 }
                 let backoff = http_retry::compute_backoff(&config, attempt, retry_after);
-                tracing::warn!(attempt, status_code, ?backoff, "Sage Intacct retryable error, backing off");
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Sage Intacct retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
 
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Sage Intacct API request failed (HTTP {}): {}", status, body);
+            anyhow::bail!(
+                "Sage Intacct API request failed (HTTP {}): {}",
+                status,
+                body
+            );
         }
     }
 
@@ -246,10 +263,26 @@ impl SageIntacctClient {
 "#,
                 gl_account_no = line.gl_account_no,
                 amount = line.amount,
-                memo = line.memo.as_ref().map(|m| format!("<memo>{}</memo>", m)).unwrap_or_default(),
-                department = line.department_id.as_ref().map(|d| format!("<departmentid>{}</departmentid>", d)).unwrap_or_default(),
-                location = line.location_id.as_ref().map(|l| format!("<locationid>{}</locationid>", l)).unwrap_or_default(),
-                project = line.project_id.as_ref().map(|p| format!("<projectid>{}</projectid>", p)).unwrap_or_default(),
+                memo = line
+                    .memo
+                    .as_ref()
+                    .map(|m| format!("<memo>{}</memo>", m))
+                    .unwrap_or_default(),
+                department = line
+                    .department_id
+                    .as_ref()
+                    .map(|d| format!("<departmentid>{}</departmentid>", d))
+                    .unwrap_or_default(),
+                location = line
+                    .location_id
+                    .as_ref()
+                    .map(|l| format!("<locationid>{}</locationid>", l))
+                    .unwrap_or_default(),
+                project = line
+                    .project_id
+                    .as_ref()
+                    .map(|p| format!("<projectid>{}</projectid>", p))
+                    .unwrap_or_default(),
             ));
         }
 
@@ -278,23 +311,38 @@ impl SageIntacctClient {
             month = bill.date_created.format("%m"),
             day = bill.date_created.format("%d"),
             vendor_id = bill.vendor_id,
-            doc_number = bill.document_number.as_ref()
+            doc_number = bill
+                .document_number
+                .as_ref()
                 .map(|d| format!("<documentno>{}</documentno>", d))
                 .unwrap_or_default(),
-            ref_number = bill.reference_number.as_ref()
+            ref_number = bill
+                .reference_number
+                .as_ref()
                 .map(|r| format!("<referenceno>{}</referenceno>", r))
                 .unwrap_or_default(),
-            description = bill.description.as_ref()
+            description = bill
+                .description
+                .as_ref()
                 .map(|d| format!("<description>{}</description>", d))
                 .unwrap_or_default(),
-            due_date = bill.date_due.map(|d| format!(
-                "<datedue><year>{}</year><month>{}</month><day>{}</day></datedue>",
-                d.format("%Y"), d.format("%m"), d.format("%d")
-            )).unwrap_or_default(),
-            location = bill.location_id.as_ref()
+            due_date = bill
+                .date_due
+                .map(|d| format!(
+                    "<datedue><year>{}</year><month>{}</month><day>{}</day></datedue>",
+                    d.format("%Y"),
+                    d.format("%m"),
+                    d.format("%d")
+                ))
+                .unwrap_or_default(),
+            location = bill
+                .location_id
+                .as_ref()
                 .map(|l| format!("<locationid>{}</locationid>", l))
                 .unwrap_or_default(),
-            department = bill.department_id.as_ref()
+            department = bill
+                .department_id
+                .as_ref()
                 .map(|d| format!("<departmentid>{}</departmentid>", d))
                 .unwrap_or_default(),
             lines_xml = lines_xml,
@@ -478,7 +526,8 @@ fn parse_gl_account_query_response(xml: &str) -> Result<SageQueryResult<SageGLAc
                 account_type: extract_xml_string(record_xml, "ACCOUNTTYPE").unwrap_or_default(),
                 normal_balance: extract_xml_string(record_xml, "NORMALBALANCE").unwrap_or_default(),
                 category: extract_xml_string(record_xml, "CATEGORY").ok(),
-                status: extract_xml_string(record_xml, "STATUS").unwrap_or_else(|_| "active".to_string()),
+                status: extract_xml_string(record_xml, "STATUS")
+                    .unwrap_or_else(|_| "active".to_string()),
                 department: extract_xml_string(record_xml, "DEPARTMENTID").ok(),
                 location: extract_xml_string(record_xml, "LOCATIONID").ok(),
             });

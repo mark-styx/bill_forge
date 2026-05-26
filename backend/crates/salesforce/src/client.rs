@@ -58,9 +58,8 @@ fn validate_custom_filter(filter: &str) -> Result<()> {
         anyhow::bail!("custom_filter contains comment marker '--': rejected");
     }
     // Check for unescaped single quotes: a bare ' not preceded by backslash
-    let mut chars = filter.chars().peekable();
     let mut prev_was_backslash = false;
-    while let Some(c) = chars.next() {
+    for c in filter.chars() {
         if c == '\'' && !prev_was_backslash {
             anyhow::bail!("custom_filter contains unescaped single quote: rejected");
         }
@@ -129,15 +128,28 @@ impl SalesforceClient {
 
             if http_retry::is_retryable_status(status_code) {
                 let retry_after = http_retry::parse_retry_after(
-                    response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                    response
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|v| v.to_str().ok()),
                 );
                 attempt += 1;
                 if attempt >= config.max_retries {
                     let body = response.text().await.unwrap_or_default();
-                    anyhow::bail!("Salesforce API request failed after {} retries ({}): {}", attempt, status_code, body);
+                    anyhow::bail!(
+                        "Salesforce API request failed after {} retries ({}): {}",
+                        attempt,
+                        status_code,
+                        body
+                    );
                 }
                 let backoff = http_retry::compute_backoff(&config, attempt, retry_after);
-                tracing::warn!(attempt, status_code, ?backoff, "Salesforce retryable error, backing off");
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Salesforce retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
@@ -167,11 +179,7 @@ impl SalesforceClient {
     }
 
     /// Make a POST request to Salesforce API
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        resource: &str,
-        body: &B,
-    ) -> Result<T> {
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
         let url = self.build_url(resource);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
@@ -343,10 +351,7 @@ impl SalesforceClient {
     ) -> Result<Vec<SalesforceOpportunity>> {
         let where_clause = if let Some(acct_id) = account_id {
             validate_sf_id(acct_id)?;
-            format!(
-                "AccountId = '{}' AND StageName = 'Closed Won'",
-                acct_id
-            )
+            format!("AccountId = '{}' AND StageName = 'Closed Won'", acct_id)
         } else {
             "StageName = 'Closed Won'".to_string()
         };
@@ -376,11 +381,7 @@ impl SalesforceClient {
         let url = format!("{}/services/oauth2/userinfo", self.instance_url);
 
         let response = self
-            .send_with_retry(|| {
-                self.http_client
-                    .get(&url)
-                    .bearer_auth(&self.access_token)
-            })
+            .send_with_retry(|| self.http_client.get(&url).bearer_auth(&self.access_token))
             .await?;
 
         response
@@ -391,7 +392,8 @@ impl SalesforceClient {
 
     /// Describe an SObject (get field metadata)
     pub async fn describe_object(&self, object_name: &str) -> Result<serde_json::Value> {
-        self.get(&format!("sobjects/{}/describe", object_name)).await
+        self.get(&format!("sobjects/{}/describe", object_name))
+            .await
     }
 
     /// Update a record's custom field (e.g., push payment status to Account)
@@ -515,30 +517,24 @@ mod tests {
 
     #[test]
     fn constructor_trims_trailing_slash() {
-        let client = SalesforceClient::new(
-            "token".into(),
-            "https://na1.salesforce.com/".into(),
-        );
+        let client = SalesforceClient::new("token".into(), "https://na1.salesforce.com/".into());
         assert_eq!(client.instance_url, "https://na1.salesforce.com");
         assert_eq!(client.access_token, "token");
     }
 
     #[test]
     fn constructor_keeps_url_without_trailing_slash() {
-        let client = SalesforceClient::new(
-            "token".into(),
-            "https://na1.salesforce.com".into(),
-        );
+        let client = SalesforceClient::new("token".into(), "https://na1.salesforce.com".into());
         assert_eq!(client.instance_url, "https://na1.salesforce.com");
     }
 
     #[test]
     fn build_url_formats_correctly() {
-        let client = SalesforceClient::new(
-            "tok".into(),
-            "https://na1.salesforce.com".into(),
-        );
+        let client = SalesforceClient::new("tok".into(), "https://na1.salesforce.com".into());
         let url = client.build_url("sobjects/Account");
-        assert_eq!(url, "https://na1.salesforce.com/services/data/v59.0/sobjects/Account");
+        assert_eq!(
+            url,
+            "https://na1.salesforce.com/services/data/v59.0/sobjects/Account"
+        );
     }
 }

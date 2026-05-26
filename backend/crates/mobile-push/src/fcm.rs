@@ -24,7 +24,9 @@ impl FcmClient {
     /// Create a new FCM client
     pub fn new(config: FcmConfig) -> Result<Self, FcmError> {
         if config.api_key.is_empty() {
-            return Err(FcmError::InvalidConfig("API key cannot be empty".to_string()));
+            return Err(FcmError::InvalidConfig(
+                "API key cannot be empty".to_string(),
+            ));
         }
 
         Ok(Self {
@@ -35,6 +37,7 @@ impl FcmClient {
     }
 
     /// Send a notification to a specific device
+    #[allow(dead_code)]
     async fn send_notification(
         &self,
         device_token: &str,
@@ -115,13 +118,17 @@ impl PushNotificationProvider for FcmClient {
         }
 
         let fcm_response: FcmResponse = response.json().await?;
-        info!("FCM notification sent successfully: {:?}", fcm_response.message_id);
+        info!(
+            "FCM notification sent successfully: {:?}",
+            fcm_response.message_id
+        );
 
         Ok(PushResult {
             success: fcm_response.success > 0,
             message_id: fcm_response.message_id,
             error_message: if fcm_response.success == 0 {
-                fcm_response.results
+                fcm_response
+                    .results
                     .and_then(|r| r.first().map(|r| r.error.clone()))
                     .unwrap_or(None)
             } else {
@@ -159,6 +166,7 @@ struct FcmResponse {
     #[serde(default)]
     success: u32,
     #[serde(default)]
+    #[allow(dead_code)]
     failure: u32,
     #[serde(default)]
     results: Option<Vec<FcmResult>>,
@@ -168,6 +176,7 @@ struct FcmResponse {
 #[derive(Debug, Deserialize)]
 struct FcmResult {
     #[serde(default)]
+    #[allow(dead_code)]
     message_id: Option<String>,
     #[serde(default)]
     error: Option<String>,

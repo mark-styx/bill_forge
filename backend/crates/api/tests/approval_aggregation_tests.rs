@@ -11,6 +11,8 @@
 //! to the specific user's approval_request rather than bulk-updating ALL
 //! pending requests for the invoice (the critical review gap fix).
 
+#![allow(warnings)]
+
 // ============================================================================
 // ProcessingStatus Decision Logic Tests
 // ============================================================================
@@ -100,9 +102,7 @@ fn three_requests_two_approved_one_rejected_becomes_rejected() {
 /// - If all resolved with any rejected -> Rejected
 /// - If all resolved and all approved -> Approved
 /// - No requests -> None
-fn compute_expected_status(
-    statuses: &[&str],
-) -> Option<billforge_core::domain::ProcessingStatus> {
+fn compute_expected_status(statuses: &[&str]) -> Option<billforge_core::domain::ProcessingStatus> {
     use billforge_core::domain::ProcessingStatus;
 
     if statuses.is_empty() {
@@ -169,7 +169,10 @@ fn processing_status_as_str_roundtrip() {
 
 /// Simulates the old (buggy) query behavior: bulk-update all pending requests.
 /// Returns how many requests would be affected.
-fn simulate_bulk_update<'a>(invoice_requests: &mut [(&str, &'a str)], new_status: &'a str) -> usize {
+fn simulate_bulk_update<'a>(
+    invoice_requests: &mut [(&str, &'a str)],
+    new_status: &'a str,
+) -> usize {
     let mut count = 0;
     for (_user_id, status) in invoice_requests.iter_mut() {
         if *status == "pending" {
@@ -200,13 +203,13 @@ fn simulate_user_scoped_update<'a>(
 #[test]
 fn bulk_update_affects_all_pending_requests() {
     // Old bug: updating all pending requests when one approver clicks approve
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     let affected = simulate_bulk_update(&mut requests, "approved");
-    assert_eq!(affected, 2, "Bulk update should affect ALL pending requests");
+    assert_eq!(
+        affected, 2,
+        "Bulk update should affect ALL pending requests"
+    );
     assert_eq!(requests[0].1, "approved");
     assert_eq!(requests[1].1, "approved");
 }
@@ -214,15 +217,18 @@ fn bulk_update_affects_all_pending_requests() {
 #[test]
 fn user_scoped_update_affects_only_matching_request() {
     // Fix: only the acting user's request is updated
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     let affected = simulate_user_scoped_update(&mut requests, "user-a", "approved");
-    assert_eq!(affected, 1, "Scoped update should affect only the user's request");
+    assert_eq!(
+        affected, 1,
+        "Scoped update should affect only the user's request"
+    );
     assert_eq!(requests[0].1, "approved");
-    assert_eq!(requests[1].1, "pending", "Other user's request must stay pending");
+    assert_eq!(
+        requests[1].1, "pending",
+        "Other user's request must stay pending"
+    );
 }
 
 #[test]
@@ -230,10 +236,7 @@ fn user_scoped_update_preserves_aggregation_semantics() {
     // After user-a approves, the aggregation logic should still see one pending request.
     // This is the core test: the fix ensures resolve_invoice_approval_status
     // correctly sees remaining pending requests.
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     // user-a approves via email link
     simulate_user_scoped_update(&mut requests, "user-a", "approved");
@@ -241,15 +244,15 @@ fn user_scoped_update_preserves_aggregation_semantics() {
     // Now check aggregation: should see 1 pending, 1 approved -> no status change
     let statuses: Vec<&str> = requests.iter().map(|(_, s)| *s).collect();
     let result = compute_expected_status(&statuses);
-    assert_eq!(result, None, "Invoice should NOT transition: user-b still pending");
+    assert_eq!(
+        result, None,
+        "Invoice should NOT transition: user-b still pending"
+    );
 }
 
 #[test]
 fn after_both_approve_aggregation_transitions() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     simulate_user_scoped_update(&mut requests, "user-a", "approved");
     simulate_user_scoped_update(&mut requests, "user-b", "approved");
@@ -265,10 +268,7 @@ fn after_both_approve_aggregation_transitions() {
 
 #[test]
 fn rejection_by_one_user_does_not_affect_others_request() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     // user-a rejects via email link
     simulate_user_scoped_update(&mut requests, "user-a", "rejected");
@@ -391,35 +391,32 @@ fn simulate_mobile_update_with_guard<'a>(
 fn mobile_guard_prevents_re_approving_rejected_request() {
     // Bug scenario: user-a already rejected, then tries to approve again.
     // Without the pending guard, this would flip status to 'approved'.
-    let mut requests = vec![
-        ("user-a", "rejected"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "rejected"), ("user-b", "pending")];
 
     let affected = simulate_mobile_update_with_guard(&mut requests, "user-a", "approved");
     assert_eq!(affected, 0, "Should NOT update a non-pending request");
-    assert_eq!(requests[0].1, "rejected", "Already-rejected request must stay rejected");
+    assert_eq!(
+        requests[0].1, "rejected",
+        "Already-rejected request must stay rejected"
+    );
     assert_eq!(requests[1].1, "pending", "Other user's request unchanged");
 }
 
 #[test]
 fn mobile_guard_prevents_re_rejecting_approved_request() {
-    let mut requests = vec![
-        ("user-a", "approved"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "approved"), ("user-b", "pending")];
 
     let affected = simulate_mobile_update_with_guard(&mut requests, "user-a", "rejected");
     assert_eq!(affected, 0, "Should NOT update a non-pending request");
-    assert_eq!(requests[0].1, "approved", "Already-approved request must stay approved");
+    assert_eq!(
+        requests[0].1, "approved",
+        "Already-approved request must stay approved"
+    );
 }
 
 #[test]
 fn mobile_guard_allows_valid_approval_then_aggregation_correct() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
 
     // user-a approves - should succeed
     let affected = simulate_mobile_update_with_guard(&mut requests, "user-a", "approved");
@@ -462,7 +459,10 @@ fn bulk_approve_should_be_blocked_when_pending_approvals_exist() {
     // transitioned by bulk approve/reject operations.
     let pending_count = 2; // two pending approval requests
     let allowed = simulate_bulk_approval_gate(pending_count);
-    assert!(!allowed, "Bulk approve must be blocked when pending approvals exist");
+    assert!(
+        !allowed,
+        "Bulk approve must be blocked when pending approvals exist"
+    );
 }
 
 #[test]
@@ -470,7 +470,10 @@ fn bulk_approve_allowed_when_no_approval_requests() {
     // Invoices without any approval_requests can still be bulk-approved directly.
     let pending_count = 0;
     let allowed = simulate_bulk_approval_gate(pending_count);
-    assert!(allowed, "Bulk approve should be allowed when no approval requests exist");
+    assert!(
+        allowed,
+        "Bulk approve should be allowed when no approval requests exist"
+    );
 }
 
 // ============================================================================
@@ -496,7 +499,10 @@ fn po_auto_approve_blocked_when_pending_approvals_exist() {
     let pending_approvals = 1;
 
     let allowed = simulate_po_auto_approve_gate(is_full_match, under_threshold, pending_approvals);
-    assert!(!allowed, "PO auto-approve must be blocked when pending approvals exist");
+    assert!(
+        !allowed,
+        "PO auto-approve must be blocked when pending approvals exist"
+    );
 }
 
 #[test]
@@ -506,14 +512,18 @@ fn po_auto_approve_allowed_when_no_pending_approvals() {
     let pending_approvals = 0;
 
     let allowed = simulate_po_auto_approve_gate(is_full_match, under_threshold, pending_approvals);
-    assert!(allowed, "PO auto-approve should work when no pending approvals exist");
+    assert!(
+        allowed,
+        "PO auto-approve should work when no pending approvals exist"
+    );
 }
 
 #[test]
 fn po_auto_approve_blocked_sql_pattern_includes_pending_check() {
     // Verify the SQL query pattern used to check for pending approvals
     // includes the correct status filter.
-    let check_sql = "SELECT COUNT(*) FROM approval_requests WHERE invoice_id = $1 AND status = 'pending'";
+    let check_sql =
+        "SELECT COUNT(*) FROM approval_requests WHERE invoice_id = $1 AND status = 'pending'";
 
     assert!(
         check_sql.contains("status = 'pending'"),
@@ -566,7 +576,10 @@ fn bulk_approve_db_error_must_propagate_not_bypass() {
     // When the approval_requests query fails, the operation MUST fail
     // rather than silently proceeding with the direct status update.
     let result = simulate_bulk_approval_gate_fallible(None);
-    assert!(result.is_err(), "DB error must propagate, not silently bypass the approval gate");
+    assert!(
+        result.is_err(),
+        "DB error must propagate, not silently bypass the approval gate"
+    );
     assert!(
         result.unwrap_err().contains("database error"),
         "Error message must describe the DB failure"
@@ -592,9 +605,7 @@ fn bulk_approve_db_error_unwrap_or_false_would_bypass() {
 fn po_auto_approve_db_error_must_propagate_not_bypass() {
     // Simulates the PO auto-approve guard with a fallible DB check.
     // Returns Err on DB failure, Ok(pending_count) otherwise.
-    fn simulate_po_gate_fallible(
-        pending: Option<i64>,
-    ) -> Result<i64, &'static str> {
+    fn simulate_po_gate_fallible(pending: Option<i64>) -> Result<i64, &'static str> {
         match pending {
             Some(count) => Ok(count),
             None => Err("database error: deadlock detected"),
@@ -602,7 +613,10 @@ fn po_auto_approve_db_error_must_propagate_not_bypass() {
     }
 
     let result = simulate_po_gate_fallible(None);
-    assert!(result.is_err(), "DB error must propagate, not silently bypass PO auto-approve gate");
+    assert!(
+        result.is_err(),
+        "DB error must propagate, not silently bypass PO auto-approve gate"
+    );
     assert!(
         result.unwrap_err().contains("database error"),
         "Error message must describe the DB failure"
@@ -638,7 +652,8 @@ fn simulate_delegation_update<'a>(
     new_status: &'a str,
 ) -> usize {
     // First: try direct match
-    let direct = invoice_requests.iter_mut()
+    let direct = invoice_requests
+        .iter_mut()
         .filter(|(user_id, status)| *status == "pending" && *user_id == acting_user_id)
         .count();
 
@@ -655,9 +670,9 @@ fn simulate_delegation_update<'a>(
     let mut count = 0;
     for (user_id, status) in invoice_requests.iter_mut() {
         if *status == "pending" {
-            let is_delegated = delegations.iter().any(|(delegator, delegate)| {
-                *delegator == *user_id && *delegate == acting_user_id
-            });
+            let is_delegated = delegations
+                .iter()
+                .any(|(delegator, delegate)| *delegator == *user_id && *delegate == acting_user_id);
             if is_delegated {
                 *status = new_status;
                 count += 1;
@@ -669,9 +684,7 @@ fn simulate_delegation_update<'a>(
 
 #[test]
 fn delegate_can_approve_on_behalf_of_ooo_approver() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending")];
     let delegations = vec![("user-a", "user-b")]; // user-a delegated to user-b
 
     let affected = simulate_delegation_update(&mut requests, &delegations, "user-b", "approved");
@@ -681,9 +694,7 @@ fn delegate_can_approve_on_behalf_of_ooo_approver() {
 
 #[test]
 fn non_delegate_cannot_approve_others_request() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending")];
     let delegations = vec![]; // no delegations
 
     let affected = simulate_delegation_update(&mut requests, &delegations, "user-c", "approved");
@@ -693,18 +704,21 @@ fn non_delegate_cannot_approve_others_request() {
 
 #[test]
 fn direct_match_takes_precedence_over_delegation() {
-    let mut requests = vec![
-        ("user-a", "pending"),
-        ("user-b", "pending"),
-    ];
+    let mut requests = vec![("user-a", "pending"), ("user-b", "pending")];
     let delegations = vec![("user-a", "user-b")];
 
     // user-b has their own pending request AND is a delegate for user-a.
     // Direct match should take precedence (only user-b's request updated).
     let affected = simulate_delegation_update(&mut requests, &delegations, "user-b", "approved");
     assert_eq!(affected, 1);
-    assert_eq!(requests[0].1, "pending", "user-a's request should not be touched");
-    assert_eq!(requests[1].1, "approved", "user-b's own request should be approved");
+    assert_eq!(
+        requests[0].1, "pending",
+        "user-a's request should not be touched"
+    );
+    assert_eq!(
+        requests[1].1, "approved",
+        "user-b's own request should be approved"
+    );
 }
 
 #[test]
@@ -720,9 +734,24 @@ fn delegation_sql_includes_active_date_checks() {
              AND ad.start_date <= NOW()
              AND ad.end_date > NOW()"#;
 
-    assert!(delegation_sql.contains("is_active = true"), "Must check delegation is active");
-    assert!(delegation_sql.contains("start_date <= NOW()"), "Must check delegation start date");
-    assert!(delegation_sql.contains("end_date > NOW()"), "Must check delegation end date");
-    assert!(delegation_sql.contains("delegate_id"), "Must match delegate user ID");
-    assert!(delegation_sql.contains("status = 'pending'"), "Must only update pending requests");
+    assert!(
+        delegation_sql.contains("is_active = true"),
+        "Must check delegation is active"
+    );
+    assert!(
+        delegation_sql.contains("start_date <= NOW()"),
+        "Must check delegation start date"
+    );
+    assert!(
+        delegation_sql.contains("end_date > NOW()"),
+        "Must check delegation end date"
+    );
+    assert!(
+        delegation_sql.contains("delegate_id"),
+        "Must match delegate user ID"
+    );
+    assert!(
+        delegation_sql.contains("status = 'pending'"),
+        "Must only update pending requests"
+    );
 }

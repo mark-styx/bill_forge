@@ -113,7 +113,11 @@ impl FeedbackRepository {
         start_date: DateTime<Utc>,
         end_date: DateTime<Utc>,
     ) -> Result<FeedbackTrend> {
-        let period = format!("{} to {}", start_date.format("%Y-%m-%d"), end_date.format("%Y-%m-%d"));
+        let period = format!(
+            "{} to {}",
+            start_date.format("%Y-%m-%d"),
+            end_date.format("%Y-%m-%d")
+        );
 
         let stats: (i64, Option<f64>, i64, i64, i64) = sqlx::query_as(
             r#"
@@ -188,19 +192,56 @@ impl FeedbackRepository {
         let text_lower = text.to_lowercase();
 
         let positive_words = [
-            "great", "excellent", "amazing", "wonderful", "fantastic", "awesome",
-            "good", "love", "perfect", "helpful", "fast", "easy", "intuitive",
-            "satisfied", "happy", "pleased", "best", "recommend",
+            "great",
+            "excellent",
+            "amazing",
+            "wonderful",
+            "fantastic",
+            "awesome",
+            "good",
+            "love",
+            "perfect",
+            "helpful",
+            "fast",
+            "easy",
+            "intuitive",
+            "satisfied",
+            "happy",
+            "pleased",
+            "best",
+            "recommend",
         ];
 
         let negative_words = [
-            "bad", "terrible", "awful", "horrible", "worst", "hate", "slow",
-            "difficult", "confusing", "frustrating", "disappointed", "unhappy",
-            "poor", "broken", "bug", "error", "issue", "problem", "fail",
+            "bad",
+            "terrible",
+            "awful",
+            "horrible",
+            "worst",
+            "hate",
+            "slow",
+            "difficult",
+            "confusing",
+            "frustrating",
+            "disappointed",
+            "unhappy",
+            "poor",
+            "broken",
+            "bug",
+            "error",
+            "issue",
+            "problem",
+            "fail",
         ];
 
-        let positive_count = positive_words.iter().filter(|word| text_lower.contains(*word)).count();
-        let negative_count = negative_words.iter().filter(|word| text_lower.contains(*word)).count();
+        let positive_count = positive_words
+            .iter()
+            .filter(|word| text_lower.contains(*word))
+            .count();
+        let negative_count = negative_words
+            .iter()
+            .filter(|word| text_lower.contains(*word))
+            .count();
 
         let total = positive_count + negative_count;
         if total == 0 {

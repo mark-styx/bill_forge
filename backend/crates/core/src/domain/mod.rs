@@ -2,6 +2,8 @@
 //!
 //! Contains the core business entities used across modules.
 
+#![allow(ambiguous_glob_reexports)]
+
 mod audit;
 mod invoice;
 mod purchase_order;

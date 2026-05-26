@@ -1,51 +1,51 @@
 //! API routes
 
+pub mod ai;
+pub mod approval_links;
 pub(crate) mod audit;
 pub mod auth;
+#[cfg(feature = "bill-com")]
+pub mod bill_com;
+pub mod billing;
 pub mod dashboard;
 pub(crate) mod documents;
+#[cfg(feature = "edi")]
+pub mod edi;
+pub mod email_actions;
+pub(crate) mod export;
+pub(crate) mod feedback;
 mod health;
 pub mod invoices;
-pub(crate) mod vendors;
-pub(crate) mod workflows;
-pub(crate) mod reports;
-pub(crate) mod export;
-pub(crate) mod sandbox;
-pub mod email_actions;
+pub mod mobile;
+pub mod notifications;
+pub mod payment_requests;
+pub mod predictive;
+#[cfg(feature = "edi")]
+pub mod purchase_orders;
+pub mod qbo;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
-#[cfg(feature = "xero")]
-pub mod xero;
+pub(crate) mod reports;
+pub mod routing;
 #[cfg(feature = "sage-intacct")]
 pub mod sage_intacct;
 #[cfg(feature = "salesforce")]
 pub mod salesforce;
+pub(crate) mod sandbox;
+pub(crate) mod settings;
+pub mod theme;
+pub mod vendor_portal;
+pub mod vendor_statements;
+pub(crate) mod vendors;
 #[cfg(feature = "workday")]
 pub mod workday;
-#[cfg(feature = "bill-com")]
-pub mod bill_com;
-#[cfg(feature = "edi")]
-pub mod edi;
-#[cfg(feature = "edi")]
-pub mod purchase_orders;
-pub mod payment_requests;
-pub mod vendor_statements;
-pub mod notifications;
-pub mod predictive;
-pub mod mobile;
-pub(crate) mod settings;
-pub(crate) mod feedback;
-pub mod theme;
-pub mod ai;
-pub mod billing;
-pub mod routing;
-pub mod approval_links;
-pub mod qbo;
-pub mod vendor_portal;
+pub(crate) mod workflows;
+#[cfg(feature = "xero")]
+pub mod xero;
 
+use crate::metrics;
 use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
 use crate::state::AppState;
-use crate::metrics;
 use axum::{middleware, routing::get, Extension, Router};
 
 /// Create the main API router
@@ -84,11 +84,17 @@ async fn landing_page() -> axum::response::Html<String> {
 fn api_routes(state: AppState) -> Router<AppState> {
     let router = Router::new()
         // Authentication (rate limited: 20 requests per 60 seconds per source IP)
-        .nest("/auth", auth::routes()
-            .layer(middleware::from_fn(rate_limit_auth))
-            .layer(Extension(RateLimiterState::new(20, 60))))
+        .nest(
+            "/auth",
+            auth::routes()
+                .layer(middleware::from_fn(rate_limit_auth))
+                .layer(Extension(RateLimiterState::new(20, 60))),
+        )
         // Invoice Capture module + status state machine transitions
-        .nest("/invoices", invoices::routes().merge(crate::state_machine::routes()))
+        .nest(
+            "/invoices",
+            invoices::routes().merge(crate::state_machine::routes()),
+        )
         // Vendor Management module
         .nest("/vendors", vendors::routes())
         // Invoice Processing module
@@ -150,8 +156,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .merge(vendor_statements::routes())
         // Intelligent Routing & Workload Balancing
         .nest("/routing", routing::routes())
-        // Payment Requests
-        .nest("/payment-requests", payment_requests::routes())
         // Approval magic links (email-based approve/reject/comment)
         .nest("/approval-links", approval_links::routes())
         // Vendor self-service portal (public, validates own vendor-portal JWT)
@@ -160,7 +164,20 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/qbo", qbo::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
+        // Payment execution surfaces are deferred from MVP scope and must be
+        // enabled explicitly for builds that ship payment batching.
+        .merge(payment_request_routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
         .layer(middleware::from_fn(require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
+}
+
+#[cfg(feature = "payment-requests")]
+fn payment_request_routes() -> Router<AppState> {
+    Router::new().nest("/payment-requests", payment_requests::routes())
+}
+
+#[cfg(not(feature = "payment-requests"))]
+fn payment_request_routes() -> Router<AppState> {
+    Router::new()
 }

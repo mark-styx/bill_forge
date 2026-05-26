@@ -107,7 +107,7 @@ fn test_quickbooks_tokens_structure() {
 
 #[test]
 fn test_quickbooks_oauth_config() {
-    use billforge_quickbooks::oauth::{QuickBooksOAuthConfig, QuickBooksEnvironment};
+    use billforge_quickbooks::oauth::{QuickBooksEnvironment, QuickBooksOAuthConfig};
 
     let config = QuickBooksOAuthConfig {
         client_id: "test_client".to_string(),
@@ -175,8 +175,9 @@ fn test_sync_vendors_response_with_errors_field() {
     // Verify SyncVendorsResponse includes the `errors` field for partial-success reporting.
     // This is backward-compatible (additive field) — the frontend can show a warning if errors > 0.
     let response = serde_json::from_str::<serde_json::Value>(
-        r#"{"imported": 3, "updated": 1, "skipped": 0, "errors": 2}"#
-    ).unwrap();
+        r#"{"imported": 3, "updated": 1, "skipped": 0, "errors": 2}"#,
+    )
+    .unwrap();
 
     assert_eq!(response["imported"], 3);
     assert_eq!(response["updated"], 1);
@@ -305,17 +306,20 @@ fn test_update_bill_request_body_shape() {
         MetaData: None,
     };
 
-    let request = UpdateBillRequest {
-        sparse: true,
-        bill,
-    };
+    let request = UpdateBillRequest { sparse: true, bill };
 
     let json = serde_json::to_value(&request).unwrap();
 
     assert_eq!(json["sparse"], true, "sparse flag must be true");
     assert_eq!(json["Id"], "bill-1", "Id must be present at top level");
-    assert_eq!(json["SyncToken"], "3", "SyncToken must be present at top level");
-    assert_eq!(json["TotalAmt"], 10000, "domain fields must be flattened into top level");
+    assert_eq!(
+        json["SyncToken"], "3",
+        "SyncToken must be present at top level"
+    );
+    assert_eq!(
+        json["TotalAmt"], 10000,
+        "domain fields must be flattened into top level"
+    );
 }
 
 #[test]
@@ -344,6 +348,12 @@ fn test_update_vendor_request_body_shape() {
 
     assert_eq!(json["sparse"], true, "sparse flag must be true");
     assert_eq!(json["Id"], "vendor-42", "Id must be present at top level");
-    assert_eq!(json["SyncToken"], "7", "SyncToken must be present at top level");
-    assert_eq!(json["DisplayName"], "Acme Corp", "domain fields must be flattened into top level");
+    assert_eq!(
+        json["SyncToken"], "7",
+        "SyncToken must be present at top level"
+    );
+    assert_eq!(
+        json["DisplayName"], "Acme Corp",
+        "domain fields must be flattened into top level"
+    );
 }

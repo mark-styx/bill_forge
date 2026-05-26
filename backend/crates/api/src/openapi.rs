@@ -100,67 +100,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::dashboard::get_approval_metrics,
         crate::routes::dashboard::get_vendor_metrics,
         crate::routes::dashboard::get_team_metrics,
-        // QuickBooks integration
-        crate::routes::quickbooks::quickbooks_connect,
-        crate::routes::quickbooks::quickbooks_callback,
-        crate::routes::quickbooks::quickbooks_disconnect,
-        crate::routes::quickbooks::quickbooks_status,
-        crate::routes::quickbooks::sync_vendors,
-        crate::routes::quickbooks::sync_accounts,
-        crate::routes::quickbooks::export_invoice_to_quickbooks,
-        crate::routes::quickbooks::get_account_mappings,
-        crate::routes::quickbooks::update_account_mappings,
-        // Xero integration
-        crate::routes::xero::xero_connect,
-        crate::routes::xero::xero_callback,
-        crate::routes::xero::xero_disconnect,
-        crate::routes::xero::xero_status,
-        crate::routes::xero::sync_contacts,
-        crate::routes::xero::sync_accounts,
-        crate::routes::xero::export_invoice_to_xero,
-        crate::routes::xero::get_account_mappings,
-        crate::routes::xero::update_account_mappings,
-        // Sage Intacct integration
-        crate::routes::sage_intacct::sage_intacct_connect,
-        crate::routes::sage_intacct::sage_intacct_disconnect,
-        crate::routes::sage_intacct::sage_intacct_status,
-        crate::routes::sage_intacct::sync_vendors,
-        crate::routes::sage_intacct::sync_accounts,
-        crate::routes::sage_intacct::export_invoice_to_sage,
-        crate::routes::sage_intacct::get_account_mappings,
-        crate::routes::sage_intacct::update_account_mappings,
-        crate::routes::sage_intacct::list_entities,
-        // Salesforce integration
-        crate::routes::salesforce::salesforce_connect,
-        crate::routes::salesforce::salesforce_callback,
-        crate::routes::salesforce::salesforce_disconnect,
-        crate::routes::salesforce::salesforce_status,
-        crate::routes::salesforce::sync_accounts,
-        crate::routes::salesforce::sync_contacts,
-        crate::routes::salesforce::get_account_mappings,
-        crate::routes::salesforce::update_account_mappings,
-        // Workday integration
-        crate::routes::workday::workday_connect,
-        crate::routes::workday::workday_callback,
-        crate::routes::workday::workday_disconnect,
-        crate::routes::workday::workday_status,
-        crate::routes::workday::sync_suppliers,
-        crate::routes::workday::sync_accounts,
-        crate::routes::workday::export_invoice_to_workday,
-        crate::routes::workday::get_account_mappings,
-        crate::routes::workday::update_account_mappings,
-        crate::routes::workday::list_companies,
-        // Bill.com integration
-        crate::routes::bill_com::bill_com_connect,
-        crate::routes::bill_com::bill_com_disconnect,
-        crate::routes::bill_com::bill_com_status,
-        crate::routes::bill_com::sync_vendors,
-        crate::routes::bill_com::push_bill_to_bill_com,
-        crate::routes::bill_com::pay_bill,
-        crate::routes::bill_com::pay_bulk,
-        crate::routes::bill_com::list_payments,
-        crate::routes::bill_com::list_funding_accounts,
-
         // Vendors
         crate::routes::vendors::list_vendors,
         crate::routes::vendors::create_vendor,
@@ -233,6 +172,8 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::reports::category_breakdown,
         crate::routes::reports::vendor_performance,
         crate::routes::reports::approval_analytics,
+        crate::routes::reports::approval_sla,
+        crate::routes::reports::cash_flow_obligations,
         crate::routes::reports::list_digests,
         crate::routes::reports::create_digest,
         crate::routes::reports::delete_digest,
@@ -254,27 +195,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::sandbox::get_current_persona,
         crate::routes::sandbox::switch_persona,
         crate::routes::sandbox::get_tenant_context,
-        // EDI
-        crate::routes::edi::webhook_inbound,
-        crate::routes::edi::edi_connect,
-        crate::routes::edi::edi_disconnect,
-        crate::routes::edi::edi_status,
-        crate::routes::edi::list_documents,
-        crate::routes::edi::get_document,
-        crate::routes::edi::send_remittance,
-        crate::routes::edi::list_outbound,
-        crate::routes::edi::get_ack_timeouts,
-        crate::routes::edi::list_partners,
-        crate::routes::edi::create_partner,
-        crate::routes::edi::update_partner,
-        crate::routes::edi::delete_partner,
-        // Purchase Orders
-        crate::routes::purchase_orders::list_purchase_orders,
-        crate::routes::purchase_orders::create_purchase_order,
-        crate::routes::purchase_orders::get_purchase_order,
-        crate::routes::purchase_orders::delete_purchase_order,
-        crate::routes::purchase_orders::run_match,
-
         // Notifications
         crate::routes::notifications::install_slack,
         crate::routes::notifications::slack_callback,
@@ -359,12 +279,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::routing::set_availability,
         crate::routes::routing::get_routing_config,
         crate::routes::routing::update_routing_config,
-        // Payment Requests
-        crate::routes::payment_requests::create_payment_request,
-        crate::routes::payment_requests::list_payment_requests,
-        crate::routes::payment_requests::get_payment_request,
-        crate::routes::payment_requests::add_invoices,
-        crate::routes::payment_requests::submit_request,
         // Vendor Statements
         crate::routes::vendor_statements::create_statement,
         crate::routes::vendor_statements::list_statements,
@@ -399,6 +313,131 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
     )
 )]
 pub struct ApiDoc;
+
+#[cfg(feature = "quickbooks")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::quickbooks::quickbooks_connect,
+    crate::routes::quickbooks::quickbooks_callback,
+    crate::routes::quickbooks::quickbooks_disconnect,
+    crate::routes::quickbooks::quickbooks_status,
+    crate::routes::quickbooks::sync_vendors,
+    crate::routes::quickbooks::sync_accounts,
+    crate::routes::quickbooks::export_invoice_to_quickbooks,
+    crate::routes::quickbooks::get_account_mappings,
+    crate::routes::quickbooks::update_account_mappings,
+))]
+struct QuickBooksApiDoc;
+
+#[cfg(feature = "xero")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::xero::xero_connect,
+    crate::routes::xero::xero_callback,
+    crate::routes::xero::xero_disconnect,
+    crate::routes::xero::xero_status,
+    crate::routes::xero::sync_contacts,
+    crate::routes::xero::sync_accounts,
+    crate::routes::xero::export_invoice_to_xero,
+    crate::routes::xero::get_account_mappings,
+    crate::routes::xero::update_account_mappings,
+))]
+struct XeroApiDoc;
+
+#[cfg(feature = "sage-intacct")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::sage_intacct::sage_intacct_connect,
+    crate::routes::sage_intacct::sage_intacct_disconnect,
+    crate::routes::sage_intacct::sage_intacct_status,
+    crate::routes::sage_intacct::sync_vendors,
+    crate::routes::sage_intacct::sync_accounts,
+    crate::routes::sage_intacct::export_invoice_to_sage,
+    crate::routes::sage_intacct::get_account_mappings,
+    crate::routes::sage_intacct::update_account_mappings,
+    crate::routes::sage_intacct::list_entities,
+))]
+struct SageIntacctApiDoc;
+
+#[cfg(feature = "salesforce")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::salesforce::salesforce_connect,
+    crate::routes::salesforce::salesforce_callback,
+    crate::routes::salesforce::salesforce_disconnect,
+    crate::routes::salesforce::salesforce_status,
+    crate::routes::salesforce::sync_accounts,
+    crate::routes::salesforce::sync_contacts,
+    crate::routes::salesforce::get_account_mappings,
+    crate::routes::salesforce::update_account_mappings,
+))]
+struct SalesforceApiDoc;
+
+#[cfg(feature = "workday")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::workday::workday_connect,
+    crate::routes::workday::workday_callback,
+    crate::routes::workday::workday_disconnect,
+    crate::routes::workday::workday_status,
+    crate::routes::workday::sync_suppliers,
+    crate::routes::workday::sync_accounts,
+    crate::routes::workday::export_invoice_to_workday,
+    crate::routes::workday::get_account_mappings,
+    crate::routes::workday::update_account_mappings,
+    crate::routes::workday::list_companies,
+))]
+struct WorkdayApiDoc;
+
+#[cfg(feature = "bill-com")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::bill_com::bill_com_connect,
+    crate::routes::bill_com::bill_com_disconnect,
+    crate::routes::bill_com::bill_com_status,
+    crate::routes::bill_com::sync_vendors,
+    crate::routes::bill_com::push_bill_to_bill_com,
+    crate::routes::bill_com::pay_bill,
+    crate::routes::bill_com::pay_bulk,
+    crate::routes::bill_com::list_payments,
+    crate::routes::bill_com::list_funding_accounts,
+))]
+struct BillComApiDoc;
+
+#[cfg(feature = "edi")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::edi::webhook_inbound,
+    crate::routes::edi::edi_connect,
+    crate::routes::edi::edi_disconnect,
+    crate::routes::edi::edi_status,
+    crate::routes::edi::list_documents,
+    crate::routes::edi::get_document,
+    crate::routes::edi::send_remittance,
+    crate::routes::edi::list_outbound,
+    crate::routes::edi::get_ack_timeouts,
+    crate::routes::edi::list_partners,
+    crate::routes::edi::create_partner,
+    crate::routes::edi::update_partner,
+    crate::routes::edi::delete_partner,
+    crate::routes::purchase_orders::list_purchase_orders,
+    crate::routes::purchase_orders::create_purchase_order,
+    crate::routes::purchase_orders::get_purchase_order,
+    crate::routes::purchase_orders::delete_purchase_order,
+    crate::routes::purchase_orders::run_match,
+))]
+struct EdiApiDoc;
+
+#[cfg(feature = "payment-requests")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::payment_requests::create_payment_request,
+    crate::routes::payment_requests::list_payment_requests,
+    crate::routes::payment_requests::get_payment_request,
+    crate::routes::payment_requests::add_invoices,
+    crate::routes::payment_requests::submit_request,
+))]
+struct PaymentRequestsApiDoc;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -690,7 +729,27 @@ pub struct PaginationInfo {
 
 /// Create the Swagger UI router
 pub fn swagger_ui() -> Router {
+    #[allow(unused_mut)]
+    let mut openapi = ApiDoc::openapi();
+
+    #[cfg(feature = "quickbooks")]
+    openapi.merge(QuickBooksApiDoc::openapi());
+    #[cfg(feature = "xero")]
+    openapi.merge(XeroApiDoc::openapi());
+    #[cfg(feature = "sage-intacct")]
+    openapi.merge(SageIntacctApiDoc::openapi());
+    #[cfg(feature = "salesforce")]
+    openapi.merge(SalesforceApiDoc::openapi());
+    #[cfg(feature = "workday")]
+    openapi.merge(WorkdayApiDoc::openapi());
+    #[cfg(feature = "bill-com")]
+    openapi.merge(BillComApiDoc::openapi());
+    #[cfg(feature = "edi")]
+    openapi.merge(EdiApiDoc::openapi());
+    #[cfg(feature = "payment-requests")]
+    openapi.merge(PaymentRequestsApiDoc::openapi());
+
     SwaggerUi::new("/swagger-ui")
-        .url("/api-docs/openapi.json", ApiDoc::openapi())
+        .url("/api-docs/openapi.json", openapi)
         .into()
 }

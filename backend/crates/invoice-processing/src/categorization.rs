@@ -119,7 +119,8 @@ impl CategorizationEngine {
         let cost_center = self.apply_correction(&cost_center, &correction_rules);
 
         // Calculate overall confidence
-        let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
+        let overall_confidence =
+            self.calculate_overall_confidence(&gl_code, &department, &cost_center);
 
         Ok(InvoiceCategorization {
             invoice_id: Uuid::nil(), // Will be set by caller
@@ -322,9 +323,9 @@ impl CategorizationEngine {
         rules: &[CorrectionRule],
     ) -> Option<CategorySuggestion> {
         let s = suggestion.as_ref()?;
-        let matching_rule = rules.iter().find(|r| {
-            r.category_type == s.category_type && r.suggested_value == s.value
-        });
+        let matching_rule = rules
+            .iter()
+            .find(|r| r.category_type == s.category_type && r.suggested_value == s.value);
 
         match matching_rule {
             Some(rule) => Some(CategorySuggestion {
@@ -375,15 +376,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_line_item_analysis_software() {
-        let items = vec![
-            LineItemInput {
-                description: "Annual software license".to_string(),
-                quantity: Some(1.0),
-                amount: 1200.0,
-            },
-        ];
+        let items = vec![LineItemInput {
+            description: "Annual software license".to_string(),
+            quantity: Some(1.0),
+            amount: 1200.0,
+        }];
 
-        let engine = CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
+        let engine =
+            CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
 
         // Can't test async easily in unit tests without runtime
         // This would be tested in integration tests
@@ -391,9 +391,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_correction_rewrites_value_and_boosts_confidence() {
-        let engine = CategorizationEngine::new(
-            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
-        );
+        let engine =
+            CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
         let suggestion = Some(CategorySuggestion {
             category_type: CategoryType::GlCode,
             value: "6000-Software".to_string(),
@@ -413,15 +412,18 @@ mod tests {
         assert_eq!(result.value, "6100-SaaS Licenses");
         assert!(result.confidence > 0.85);
         assert!(result.confidence <= 0.99);
-        assert!(result.reasoning.as_ref().unwrap().contains("user corrections"));
+        assert!(result
+            .reasoning
+            .as_ref()
+            .unwrap()
+            .contains("user corrections"));
         assert_eq!(result.source, SuggestionSource::VendorHistory);
     }
 
     #[tokio::test]
     async fn test_apply_correction_no_matching_rule_returns_unchanged() {
-        let engine = CategorizationEngine::new(
-            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
-        );
+        let engine =
+            CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
         let suggestion = Some(CategorySuggestion {
             category_type: CategoryType::GlCode,
             value: "6000-Software".to_string(),
@@ -444,9 +446,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_correction_respects_category_type() {
-        let engine = CategorizationEngine::new(
-            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
-        );
+        let engine =
+            CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
         let suggestion = Some(CategorySuggestion {
             category_type: CategoryType::Department,
             value: "Engineering".to_string(),

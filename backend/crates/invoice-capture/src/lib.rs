@@ -2,7 +2,12 @@
 //!
 //! OCR-powered invoice data extraction with support for multiple providers.
 
+#![allow(dead_code)]
+
 pub mod ocr;
 pub mod service;
 
-pub use service::InvoiceCaptureService;
+pub use service::{
+    resolve_ocr_provider_name, InvoiceCaptureService, LOCAL_OCR_PROVIDER,
+    OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+};

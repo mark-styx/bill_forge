@@ -1,16 +1,13 @@
 //! Health score calculation algorithm
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use anyhow::Result;
 
 use super::models::{HealthClassification, HealthScore};
 
 /// Calculate health score for a tenant
-pub async fn calculate_health_score(
-    pool: &PgPool,
-    tenant_id: &str,
-) -> Result<HealthScore> {
+pub async fn calculate_health_score(pool: &PgPool, tenant_id: &str) -> Result<HealthScore> {
     // Calculate individual scores
     let usage_score = calculate_usage_score(pool, tenant_id).await?;
     let feature_adoption_score = calculate_feature_adoption_score(pool, tenant_id).await?;
@@ -133,7 +130,7 @@ async fn calculate_sentiment_score(pool: &PgPool, tenant_id: &str) -> Result<f64
     // Convert 1-5 rating to 0-100 score
     let score = match avg_rating {
         Some(rating) => (rating - 1.0) * 25.0, // 1->0, 5->100
-        None => 50.0, // Default neutral score if no feedback
+        None => 50.0,                          // Default neutral score if no feedback
     };
 
     Ok(score)

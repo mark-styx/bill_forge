@@ -6,6 +6,8 @@
 //! run as part of the CI/CD pipeline. The tests here verify basic
 //! routing and request/response structure without database dependencies.
 
+#![allow(warnings)]
+
 // ============================================================================
 // Health Check Tests
 // ============================================================================
@@ -47,7 +49,10 @@ fn test_login_request_rejects_missing_email() {
     let json = r#"{"tenant_id":"11111111-1111-1111-1111-111111111111","password":"secret123"}"#;
     let result = serde_json::from_str::<LoginRequest>(json);
 
-    assert!(result.is_err(), "LoginRequest without email should fail to deserialize");
+    assert!(
+        result.is_err(),
+        "LoginRequest without email should fail to deserialize"
+    );
 }
 
 #[test]
@@ -115,7 +120,10 @@ fn test_error_response_serialization_shape() {
     let json = serde_json::to_value(&body).unwrap();
     assert_eq!(json["code"], "VALIDATION_ERROR");
     assert_eq!(json["message"], "Invalid email format");
-    assert!(json.get("details").is_none(), "details should be absent when None");
+    assert!(
+        json.get("details").is_none(),
+        "details should be absent when None"
+    );
 }
 
 #[test]
@@ -143,7 +151,8 @@ fn test_error_response_with_field_errors() {
 fn test_list_invoices_query_defaults() {
     use billforge_api::routes::invoices::ListInvoicesQuery;
 
-    let query: ListInvoicesQuery = serde_json::from_str("{}").expect("empty object should deserialize");
+    let query: ListInvoicesQuery =
+        serde_json::from_str("{}").expect("empty object should deserialize");
     assert!(query.page.is_none());
     assert!(query.per_page.is_none());
     assert!(query.vendor_id.is_none());
@@ -164,7 +173,11 @@ fn test_approve_already_approved_returns_conflict() {
 
     let err = Error::Conflict("Approval request has already been processed".to_string());
 
-    assert_eq!(err.status_code(), 409, "Conflict error should map to HTTP 409");
+    assert_eq!(
+        err.status_code(),
+        409,
+        "Conflict error should map to HTTP 409"
+    );
     assert_eq!(err.error_code(), "CONFLICT");
     assert!(err.to_string().contains("already been processed"));
 }
@@ -177,7 +190,11 @@ fn test_reject_already_rejected_returns_conflict() {
 
     let err = Error::Conflict("Approval request has already been processed".to_string());
 
-    assert_eq!(err.status_code(), 409, "Conflict error should map to HTTP 409");
+    assert_eq!(
+        err.status_code(),
+        409,
+        "Conflict error should map to HTTP 409"
+    );
     assert_eq!(err.error_code(), "CONFLICT");
     assert!(err.to_string().contains("already been processed"));
 }
@@ -289,8 +306,14 @@ fn test_ocr_line_items_handle_missing_fields_gracefully() {
 
     assert_eq!(line_items.len(), 1);
     assert_eq!(line_items[0].description, "Partial item");
-    assert_eq!(line_items[0].quantity, None, "Missing quantity should be None");
-    assert_eq!(line_items[0].unit_price, None, "Missing unit_price should be None");
+    assert_eq!(
+        line_items[0].quantity, None,
+        "Missing quantity should be None"
+    );
+    assert_eq!(
+        line_items[0].unit_price, None,
+        "Missing unit_price should be None"
+    );
     assert_eq!(line_items[0].amount, Money::usd(100.0));
 }
 
@@ -319,11 +342,26 @@ fn test_ocr_fields_map_to_create_invoice_input() {
     // Replicate the mapping from the upload handler
     let subtotal = ocr_result.subtotal.value.map(Money::usd);
     let tax_amount = ocr_result.tax_amount.value.map(Money::usd);
-    let currency = ocr_result.currency.value.clone().unwrap_or_else(|| "USD".to_string());
+    let currency = ocr_result
+        .currency
+        .value
+        .clone()
+        .unwrap_or_else(|| "USD".to_string());
 
-    assert_eq!(subtotal, Some(Money::usd(1000.0)), "Subtotal should come from OCR");
-    assert_eq!(tax_amount, Some(Money::usd(80.0)), "Tax amount should come from OCR");
-    assert_eq!(currency, "EUR", "Currency should come from OCR, not hardcoded USD");
+    assert_eq!(
+        subtotal,
+        Some(Money::usd(1000.0)),
+        "Subtotal should come from OCR"
+    );
+    assert_eq!(
+        tax_amount,
+        Some(Money::usd(80.0)),
+        "Tax amount should come from OCR"
+    );
+    assert_eq!(
+        currency, "EUR",
+        "Currency should come from OCR, not hardcoded USD"
+    );
 }
 
 #[test]

@@ -1,7 +1,9 @@
 //! Mobile sync endpoints for offline support
 
 use crate::extractors::{AuthUser, TenantCtx};
-use crate::routes::mobile::{MobileInvoiceSummary, MobileVendorSummary, MobileApprovalRequest, MobileInvoiceStatus};
+use crate::routes::mobile::{
+    MobileApprovalRequest, MobileInvoiceStatus, MobileInvoiceSummary, MobileVendorSummary,
+};
 use crate::state::AppState;
 use crate::ApiResult;
 use axum::{
@@ -101,9 +103,9 @@ pub async fn sync_invoices(
             currency: row.currency,
             due_date: row.due_date,
             status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-            days_until_due: row.due_date.map(|d| {
-                (d - Utc::now().date_naive()).num_days() as i32
-            }),
+            days_until_due: row
+                .due_date
+                .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
             requires_action: row.processing_status == "pending_approval",
             created_at: row.modified_at,
         })
@@ -182,9 +184,9 @@ pub async fn sync_bulk(
                 currency: row.currency,
                 due_date: row.due_date,
                 status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-                days_until_due: row.due_date.map(|d| {
-                    (d - Utc::now().date_naive()).num_days() as i32
-                }),
+                days_until_due: row
+                    .due_date
+                    .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
                 requires_action: row.processing_status == "pending_approval",
                 created_at: row.modified_at,
             })
@@ -213,8 +215,8 @@ pub async fn sync_bulk(
             .map(|row| MobileVendorSummary {
                 id: row.id,
                 name: row.name,
-                total_invoices: 0,  // TODO: Calculate
-                total_amount_cents: 0,  // TODO: Calculate
+                total_invoices: 0,     // TODO: Calculate
+                total_amount_cents: 0, // TODO: Calculate
             })
             .collect()
     } else {
@@ -261,9 +263,9 @@ pub async fn sync_bulk(
                     currency: row.currency,
                     due_date: row.due_date,
                     status: MobileInvoiceStatus::from_processing_status(&row.processing_status),
-                    days_until_due: row.due_date.map(|d| {
-                        (d - Utc::now().date_naive()).num_days() as i32
-                    }),
+                    days_until_due: row
+                        .due_date
+                        .map(|d| (d - Utc::now().date_naive()).num_days() as i32),
                     requires_action: true,
                     created_at: row.created_at,
                 },

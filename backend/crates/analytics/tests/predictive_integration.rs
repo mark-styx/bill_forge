@@ -2,9 +2,11 @@
 //!
 //! Tests for forecasting, anomaly detection, and budget alerts.
 
+#![allow(warnings)]
+
 use billforge_analytics::{
-    forecasting::ArimaForecaster,
     anomaly_detection::{DuplicateDetector, InvoiceRecord, StatisticalAnomalyDetector},
+    forecasting::ArimaForecaster,
     predictive_models::*,
 };
 use chrono::{Duration, Utc};
@@ -33,7 +35,10 @@ async fn test_arima_forecaster_basic() {
 
     // Fit model
     let fit_result = forecaster.fit(&time_series).await;
-    assert!(fit_result.is_ok(), "ARIMA fit should succeed with 60 data points");
+    assert!(
+        fit_result.is_ok(),
+        "ARIMA fit should succeed with 60 data points"
+    );
 
     // Generate forecast
     let forecast_result = forecaster.forecast(ForecastHorizon::Days30).await;
@@ -44,10 +49,16 @@ async fn test_arima_forecaster_basic() {
     println!("Confidence lower: {}", forecast.confidence_lower);
     println!("Confidence upper: {}", forecast.confidence_upper);
     assert_eq!(forecast.entity_id, "vendor_123");
-    assert!(forecast.predicted_value > 0.0, "Predicted value should be positive");
-    assert!(forecast.confidence_lower < forecast.predicted_value,
-            "Confidence lower ({}) should be less than predicted ({})",
-            forecast.confidence_lower, forecast.predicted_value);
+    assert!(
+        forecast.predicted_value > 0.0,
+        "Predicted value should be positive"
+    );
+    assert!(
+        forecast.confidence_lower < forecast.predicted_value,
+        "Confidence lower ({}) should be less than predicted ({})",
+        forecast.confidence_lower,
+        forecast.predicted_value
+    );
     assert!(forecast.confidence_upper > forecast.predicted_value);
 }
 
@@ -74,7 +85,10 @@ async fn test_arima_forecaster_insufficient_data() {
 
     // Fit should fail
     let fit_result = forecaster.fit(&time_series).await;
-    assert!(fit_result.is_err(), "ARIMA fit should fail with insufficient data");
+    assert!(
+        fit_result.is_err(),
+        "ARIMA fit should fail with insufficient data"
+    );
 }
 
 /// Test statistical anomaly detector with outliers
@@ -156,7 +170,7 @@ async fn test_duplicate_detector() {
         InvoiceRecord {
             invoice_id: "inv_2".to_string(),
             vendor_name: "Acme Corp".to_string(),
-            amount: 5000.0, // Same amount
+            amount: 5000.0,    // Same amount
             invoice_date: now, // Same date
         },
         InvoiceRecord {
@@ -198,7 +212,10 @@ async fn test_duplicate_detector_unique() {
     let anomalies = detector.detect_duplicates(&invoices).unwrap();
 
     // Should not detect duplicates
-    assert!(anomalies.is_empty(), "Should not detect duplicates in unique invoices");
+    assert!(
+        anomalies.is_empty(),
+        "Should not detect duplicates in unique invoices"
+    );
 }
 
 /// Test forecast horizon days calculation
@@ -283,7 +300,10 @@ async fn test_seasonality_detection() {
     let forecast = forecaster.forecast(ForecastHorizon::Days30).await.unwrap();
 
     // Should detect seasonality
-    assert!(forecast.seasonality_detected, "Should detect weekly seasonality");
+    assert!(
+        forecast.seasonality_detected,
+        "Should detect weekly seasonality"
+    );
 }
 
 /// Test that all EntityType variants serialize/deserialize correctly,
@@ -306,7 +326,11 @@ fn test_entity_type_serialization_roundtrip() {
         // Also verify the plain string value (without surrounding quotes)
         let plain = json.trim_matches('"');
         let roundtrip: EntityType = serde_json::from_str(&format!("\"{}\"", plain)).unwrap();
-        assert_eq!(variant, roundtrip, "Plain string roundtrip failed for {:?}", variant);
+        assert_eq!(
+            variant, roundtrip,
+            "Plain string roundtrip failed for {:?}",
+            variant
+        );
     }
 }
 
@@ -330,16 +354,46 @@ fn test_entity_type_match_coverage() {
     let approver_json = serde_json::to_string(&EntityType::Approver).unwrap();
 
     // Vendor and Department (both plain and JSON-quoted) are supported
-    assert!(is_supported_entity_type("vendor"), "Vendor should be supported");
-    assert!(is_supported_entity_type(&vendor_json), "Vendor JSON should be supported");
-    assert!(is_supported_entity_type("department"), "Department should be supported");
-    assert!(is_supported_entity_type(&dept_json), "Department JSON should be supported");
+    assert!(
+        is_supported_entity_type("vendor"),
+        "Vendor should be supported"
+    );
+    assert!(
+        is_supported_entity_type(&vendor_json),
+        "Vendor JSON should be supported"
+    );
+    assert!(
+        is_supported_entity_type("department"),
+        "Department should be supported"
+    );
+    assert!(
+        is_supported_entity_type(&dept_json),
+        "Department JSON should be supported"
+    );
 
     // GlCode, Tenant, Approver are not supported for accuracy calculation
-    assert!(!is_supported_entity_type("gl_code"), "GlCode should not be supported");
-    assert!(!is_supported_entity_type(&glcode_json), "GlCode JSON should not be supported");
-    assert!(!is_supported_entity_type("tenant"), "Tenant should not be supported");
-    assert!(!is_supported_entity_type(&tenant_json), "Tenant JSON should not be supported");
-    assert!(!is_supported_entity_type("approver"), "Approver should not be supported");
-    assert!(!is_supported_entity_type(&approver_json), "Approver JSON should not be supported");
+    assert!(
+        !is_supported_entity_type("gl_code"),
+        "GlCode should not be supported"
+    );
+    assert!(
+        !is_supported_entity_type(&glcode_json),
+        "GlCode JSON should not be supported"
+    );
+    assert!(
+        !is_supported_entity_type("tenant"),
+        "Tenant should not be supported"
+    );
+    assert!(
+        !is_supported_entity_type(&tenant_json),
+        "Tenant JSON should not be supported"
+    );
+    assert!(
+        !is_supported_entity_type("approver"),
+        "Approver should not be supported"
+    );
+    assert!(
+        !is_supported_entity_type(&approver_json),
+        "Approver JSON should not be supported"
+    );
 }

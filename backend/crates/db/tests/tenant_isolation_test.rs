@@ -155,15 +155,10 @@ async fn seed_receiving(
 /// run in parallel. The tag is embedded in the tenant UUID namespace.
 async fn setup_two_tenants(
     tag: &str,
-) -> (
-    PgManager,
-    TenantId,
-    TenantId,
-    sqlx::PgPool,
-    sqlx::PgPool,
-) {
-    let metadata_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+) -> (PgManager, TenantId, TenantId, sqlx::PgPool, sqlx::PgPool) {
+    let metadata_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
+    });
     let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
 
@@ -184,15 +179,27 @@ async fn setup_two_tenants(
     // Cleanup previous runs then create fresh
     manager.delete_tenant(&tenant_a).await.ok();
     manager.delete_tenant(&tenant_b).await.ok();
-    manager.create_tenant(&tenant_a, &format!("Tenant A {}", tag)).await.expect("create tenant A");
-    manager.create_tenant(&tenant_b, &format!("Tenant B {}", tag)).await.expect("create tenant B");
+    manager
+        .create_tenant(&tenant_a, &format!("Tenant A {}", tag))
+        .await
+        .expect("create tenant A");
+    manager
+        .create_tenant(&tenant_b, &format!("Tenant B {}", tag))
+        .await
+        .expect("create tenant B");
 
     let pool_a = (*manager.tenant(&tenant_a).await.expect("pool A")).clone();
     let pool_b = (*manager.tenant(&tenant_b).await.expect("pool B")).clone();
 
     // Run migrations so the tables exist
-    manager.run_tenant_migrations(&pool_a).await.expect("migrate A");
-    manager.run_tenant_migrations(&pool_b).await.expect("migrate B");
+    manager
+        .run_tenant_migrations(&pool_a)
+        .await
+        .expect("migrate A");
+    manager
+        .run_tenant_migrations(&pool_b)
+        .await
+        .expect("migrate B");
 
     (manager, tenant_a, tenant_b, pool_a, pool_b)
 }
@@ -211,8 +218,7 @@ async fn teardown_two_tenants(manager: &PgManager, tenant_a: &TenantId, tenant_b
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_update_received_qty_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("po-recv").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-recv").await;
 
     let po_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
@@ -236,7 +242,8 @@ async fn test_update_received_qty_rejects_wrong_tenant() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant update_received_quantities should affect 0 rows"
     );
 
@@ -255,7 +262,8 @@ async fn test_update_received_qty_rejects_wrong_tenant() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 1,
+        result.rows_affected(),
+        1,
         "Same-tenant update_received_quantities should affect 1 row"
     );
 
@@ -266,8 +274,7 @@ async fn test_update_received_qty_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_update_invoiced_qty_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("po-inv").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-inv").await;
 
     let po_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
@@ -290,7 +297,8 @@ async fn test_update_invoiced_qty_rejects_wrong_tenant() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant update_invoiced_quantities should affect 0 rows"
     );
 
@@ -309,7 +317,8 @@ async fn test_update_invoiced_qty_rejects_wrong_tenant() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 1,
+        result.rows_affected(),
+        1,
         "Same-tenant update_invoiced_quantities should affect 1 row"
     );
 
@@ -320,8 +329,7 @@ async fn test_update_invoiced_qty_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_run_match_excludes_cross_tenant_receiving() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("po-recv-match").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-recv-match").await;
 
     let po_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
@@ -361,7 +369,11 @@ async fn test_run_match_excludes_cross_tenant_receiving() {
     .await
     .expect("query executed");
 
-    assert_eq!(rows_b.len(), 0, "Tenant B should not see tenant A's receiving records");
+    assert_eq!(
+        rows_b.len(),
+        0,
+        "Tenant B should not see tenant A's receiving records"
+    );
 
     teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
 }
@@ -374,8 +386,7 @@ async fn test_run_match_excludes_cross_tenant_receiving() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_invoice_get_by_id_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("inv-get").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("inv-get").await;
 
     let vendor_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -387,14 +398,13 @@ async fn test_invoice_get_by_id_rejects_wrong_tenant() {
     seed_invoice(&pool_a, &tenant_a, invoice_id, vendor_id, user_id).await;
 
     // Query with tenant B should see nothing
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_id)
-    .bind(*tenant_b.as_uuid())
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_id)
+            .bind(*tenant_b.as_uuid())
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_none(),
@@ -402,14 +412,13 @@ async fn test_invoice_get_by_id_rejects_wrong_tenant() {
     );
 
     // Query with tenant A should find it
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_id)
-    .bind(*tenant_a.as_uuid())
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_id)
+            .bind(*tenant_a.as_uuid())
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_some(),
@@ -423,8 +432,7 @@ async fn test_invoice_get_by_id_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_invoice_list_excludes_other_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("inv-list").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("inv-list").await;
 
     // Seed vendor + user under both tenants
     let vendor_a = Uuid::new_v4();
@@ -446,24 +454,20 @@ async fn test_invoice_list_excludes_other_tenant() {
     }
 
     // Count for tenant A
-    let count_a: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM invoices WHERE tenant_id = $1",
-    )
-    .bind(*tenant_a.as_uuid())
-    .fetch_one(&pool_a)
-    .await
-    .expect("count A");
+    let count_a: (i64,) = sqlx::query_as("SELECT count(*) FROM invoices WHERE tenant_id = $1")
+        .bind(*tenant_a.as_uuid())
+        .fetch_one(&pool_a)
+        .await
+        .expect("count A");
 
     assert_eq!(count_a.0, 2, "Tenant A should see exactly 2 invoices");
 
     // Count for tenant B
-    let count_b: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM invoices WHERE tenant_id = $1",
-    )
-    .bind(*tenant_b.as_uuid())
-    .fetch_one(&pool_b)
-    .await
-    .expect("count B");
+    let count_b: (i64,) = sqlx::query_as("SELECT count(*) FROM invoices WHERE tenant_id = $1")
+        .bind(*tenant_b.as_uuid())
+        .fetch_one(&pool_b)
+        .await
+        .expect("count B");
 
     assert_eq!(count_b.0, 3, "Tenant B should see exactly 3 invoices");
 
@@ -478,21 +482,19 @@ async fn test_invoice_list_excludes_other_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_vendor_get_by_id_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("vnd-get").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("vnd-get").await;
 
     let vendor_id = Uuid::new_v4();
     seed_vendor(&pool_a, &tenant_a, vendor_id).await;
 
     // Cross-tenant query
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(vendor_id)
-    .bind(*tenant_b.as_uuid())
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_b.as_uuid())
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_none(),
@@ -500,14 +502,13 @@ async fn test_vendor_get_by_id_rejects_wrong_tenant() {
     );
 
     // Same-tenant query
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(vendor_id)
-    .bind(*tenant_a.as_uuid())
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_a.as_uuid())
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_some(),
@@ -521,36 +522,33 @@ async fn test_vendor_get_by_id_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_vendor_delete_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("vnd-del").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("vnd-del").await;
 
     let vendor_id = Uuid::new_v4();
     seed_vendor(&pool_a, &tenant_a, vendor_id).await;
 
     // Cross-tenant delete attempt
-    let result = sqlx::query(
-        "DELETE FROM vendors WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(vendor_id)
-    .bind(*tenant_b.as_uuid())
-    .execute(&pool_a)
-    .await
-    .expect("query executed");
+    let result = sqlx::query("DELETE FROM vendors WHERE id = $1 AND tenant_id = $2")
+        .bind(vendor_id)
+        .bind(*tenant_b.as_uuid())
+        .execute(&pool_a)
+        .await
+        .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant vendor delete should affect 0 rows"
     );
 
     // Verify vendor still exists for tenant A
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(vendor_id)
-    .bind(*tenant_a.as_uuid())
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_a.as_uuid())
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_some(),
@@ -568,36 +566,30 @@ async fn test_vendor_delete_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_user_email_lookup_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("usr-lookup").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("usr-lookup").await;
 
     let user_id = Uuid::new_v4();
     seed_user(&pool_a, &tenant_a, user_id).await;
 
     // Cross-tenant query
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT email FROM users WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(*tenant_b.as_uuid())
-    .bind(user_id)
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT email FROM users WHERE tenant_id = $1 AND id = $2")
+            .bind(*tenant_b.as_uuid())
+            .bind(user_id)
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
-    assert!(
-        row.is_none(),
-        "Cross-tenant user lookup should return None"
-    );
+    assert!(row.is_none(), "Cross-tenant user lookup should return None");
 
     // Same-tenant query
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT email FROM users WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(*tenant_a.as_uuid())
-    .bind(user_id)
-    .fetch_optional(&pool_a)
-    .await
-    .expect("query executed");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT email FROM users WHERE tenant_id = $1 AND id = $2")
+            .bind(*tenant_a.as_uuid())
+            .bind(user_id)
+            .fetch_optional(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         row.is_some(),
@@ -611,8 +603,7 @@ async fn test_user_email_lookup_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_user_list_excludes_other_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("usr-list").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("usr-list").await;
 
     // Seed 2 users under tenant A
     seed_user(&pool_a, &tenant_a, Uuid::new_v4()).await;
@@ -623,23 +614,19 @@ async fn test_user_list_excludes_other_tenant() {
     seed_user(&pool_b, &tenant_b, Uuid::new_v4()).await;
     seed_user(&pool_b, &tenant_b, Uuid::new_v4()).await;
 
-    let count_a: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM users WHERE tenant_id = $1",
-    )
-    .bind(*tenant_a.as_uuid())
-    .fetch_one(&pool_a)
-    .await
-    .expect("count A");
+    let count_a: (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE tenant_id = $1")
+        .bind(*tenant_a.as_uuid())
+        .fetch_one(&pool_a)
+        .await
+        .expect("count A");
 
     assert_eq!(count_a.0, 2, "Tenant A should see exactly 2 users");
 
-    let count_b: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM users WHERE tenant_id = $1",
-    )
-    .bind(*tenant_b.as_uuid())
-    .fetch_one(&pool_b)
-    .await
-    .expect("count B");
+    let count_b: (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE tenant_id = $1")
+        .bind(*tenant_b.as_uuid())
+        .fetch_one(&pool_b)
+        .await
+        .expect("count B");
 
     assert_eq!(count_b.0, 3, "Tenant B should see exactly 3 users");
 
@@ -654,8 +641,7 @@ async fn test_user_list_excludes_other_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_claim_item_cross_tenant_blocked() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("qi-claim").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-claim").await;
 
     let vendor_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -703,18 +689,18 @@ async fn test_claim_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant claim should affect 0 rows"
     );
 
     // Verify the item is still unclaimed
-    let claimed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT claimed_at FROM queue_items WHERE id = $1",
-    )
-    .bind(item_id)
-    .fetch_one(&pool_a)
-    .await
-    .expect("query executed");
+    let claimed_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT claimed_at FROM queue_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_one(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         claimed_at.is_none(),
@@ -734,7 +720,8 @@ async fn test_claim_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 1,
+        result.rows_affected(),
+        1,
         "Same-tenant claim should affect 1 row"
     );
 
@@ -745,8 +732,7 @@ async fn test_claim_item_cross_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_complete_item_cross_tenant_blocked() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("qi-complete").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-complete").await;
 
     let vendor_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -795,18 +781,18 @@ async fn test_complete_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant complete should affect 0 rows"
     );
 
     // Verify the item is still incomplete
-    let completed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT completed_at FROM queue_items WHERE id = $1",
-    )
-    .bind(item_id)
-    .fetch_one(&pool_a)
-    .await
-    .expect("query executed");
+    let completed_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT completed_at FROM queue_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_one(&pool_a)
+            .await
+            .expect("query executed");
 
     assert!(
         completed_at.is_none(),
@@ -826,7 +812,8 @@ async fn test_complete_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 1,
+        result.rows_affected(),
+        1,
         "Same-tenant complete should affect 1 row"
     );
 
@@ -837,8 +824,7 @@ async fn test_complete_item_cross_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn test_reassign_item_cross_tenant_blocked() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("qi-reassign").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-reassign").await;
 
     let vendor_id = Uuid::new_v4();
     let user_id_a = Uuid::new_v4();
@@ -889,21 +875,22 @@ async fn test_reassign_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Cross-tenant reassign should affect 0 rows"
     );
 
     // Verify the item's assigned_to is unchanged
-    let current_assigned: Option<Uuid> = sqlx::query_scalar(
-        "SELECT assigned_to FROM queue_items WHERE id = $1",
-    )
-    .bind(item_id)
-    .fetch_one(&pool_a)
-    .await
-    .expect("query executed");
+    let current_assigned: Option<Uuid> =
+        sqlx::query_scalar("SELECT assigned_to FROM queue_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_one(&pool_a)
+            .await
+            .expect("query executed");
 
     assert_eq!(
-        current_assigned, Some(user_id_a),
+        current_assigned,
+        Some(user_id_a),
         "Item should still be assigned to user_id_a after cross-tenant attempt"
     );
 
@@ -920,7 +907,8 @@ async fn test_reassign_item_cross_tenant_blocked() {
     .expect("query executed");
 
     assert_eq!(
-        result.rows_affected(), 1,
+        result.rows_affected(),
+        1,
         "Same-tenant reassign should affect 1 row"
     );
 
@@ -939,8 +927,7 @@ async fn test_reassign_item_cross_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn payment_request_items_query_is_tenant_scoped() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("pr-items-scope").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("pr-items-scope").await;
 
     let vendor_id_a = Uuid::new_v4();
     let user_id_a = Uuid::new_v4();
@@ -994,7 +981,8 @@ async fn payment_request_items_query_is_tenant_scoped() {
     .expect("insert payment_request_items for tenant A invoice");
 
     // Sanity check: tenant B cannot see the parent request at all
-    let repo_b = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_b.clone()));
+    let repo_b =
+        billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_b.clone()));
     let result = repo_b.get_payment_request(&tenant_b, request_id).await;
     assert!(
         matches!(result, Ok(None)),
@@ -1017,13 +1005,24 @@ async fn payment_request_items_query_is_tenant_scoped() {
     .expect("insert stray cross-tenant payment_request_item");
 
     // Query as tenant A: should only see the tenant A invoice, not the stray B row
-    let repo_a = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    let repo_a =
+        billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
     let result = repo_a.get_payment_request(&tenant_a, request_id).await;
-    assert!(result.is_ok(), "get_payment_request should succeed for tenant A");
+    assert!(
+        result.is_ok(),
+        "get_payment_request should succeed for tenant A"
+    );
 
     let (_request, items) = result.unwrap().expect("should find the request");
-    assert_eq!(items.len(), 1, "Should only return 1 item (tenant A's invoice), not the cross-tenant stray");
-    assert_eq!(items[0].invoice_id, invoice_id_a, "The returned item should be tenant A's invoice");
+    assert_eq!(
+        items.len(),
+        1,
+        "Should only return 1 item (tenant A's invoice), not the cross-tenant stray"
+    );
+    assert_eq!(
+        items[0].invoice_id, invoice_id_a,
+        "The returned item should be tenant A's invoice"
+    );
 
     teardown_two_tenants(&manager, &tenant_a, &tenant_b).await;
 }
@@ -1034,8 +1033,7 @@ async fn payment_request_items_query_is_tenant_scoped() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn add_invoices_to_request_recompute_is_tenant_scoped() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("pr-add-inv-scope").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("pr-add-inv-scope").await;
 
     let vendor_id_a = Uuid::new_v4();
     let user_id_a = Uuid::new_v4();
@@ -1093,7 +1091,8 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
     .expect("seed invoice B");
 
     // Create a draft payment request for tenant A via repo (with invoice A1)
-    let repo_a = billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
+    let repo_a =
+        billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
     let pr = repo_a
         .create_payment_request(&tenant_a, user_id_a, &[invoice_id_a1], None)
         .await
@@ -1155,8 +1154,7 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn submit_payment_request_is_tenant_scoped() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("pr-submit").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("pr-submit").await;
 
     let vendor_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -1222,8 +1220,7 @@ async fn seed_workflow_rule(pool: &sqlx::PgPool, tenant_id: &TenantId, rule_id: 
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn workflow_rules_get_rejects_wrong_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
-        setup_two_tenants("wf-rule-get").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("wf-rule-get").await;
 
     let rule_id = Uuid::new_v4();
     seed_workflow_rule(&pool_a, &tenant_a, rule_id).await;
@@ -1262,8 +1259,7 @@ async fn workflow_rules_get_rejects_wrong_tenant() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn audit_log_list_excludes_other_tenant() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("audit-list").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("audit-list").await;
 
     let now = chrono::Utc::now();
 

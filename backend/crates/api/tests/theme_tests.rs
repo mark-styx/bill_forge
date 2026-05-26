@@ -37,10 +37,16 @@ fn test_organization_branding_round_trip() {
     let branding = OrganizationBranding::default();
     let json = serde_json::to_string(&branding).expect("serialize");
     // Verify camelCase field names match the frontend TypeScript interface
-    assert!(json.contains("brandName"), "expected camelCase field brandName");
+    assert!(
+        json.contains("brandName"),
+        "expected camelCase field brandName"
+    );
     assert!(json.contains("logoUrl"), "expected camelCase field logoUrl");
     // customCSS must use uppercase CSS to match the frontend interface
-    assert!(json.contains("customCSS"), "expected field customCSS (uppercase CSS)");
+    assert!(
+        json.contains("customCSS"),
+        "expected field customCSS (uppercase CSS)"
+    );
     let back: OrganizationBranding = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.brand_name, "BillForge");
     assert!(back.logo_url.is_none());
@@ -116,7 +122,10 @@ fn test_create_organization_theme_input_deserialize() {
     let input: CreateOrganizationThemeInput = serde_json::from_str(json).expect("deserialize");
     assert_eq!(input.preset_id, "midnight");
     assert_eq!(input.branding.brand_name, "Acme");
-    assert_eq!(input.branding.custom_css.as_deref(), Some("body { margin: 0; }"));
+    assert_eq!(
+        input.branding.custom_css.as_deref(),
+        Some("body { margin: 0; }")
+    );
     assert!(input.enabled_for_all_users.unwrap());
     assert!(input.custom_colors.is_none());
 }

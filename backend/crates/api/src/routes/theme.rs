@@ -157,7 +157,13 @@ pub struct EffectiveTheme {
 
 pub fn org_routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(get_org_theme).post(create_org_theme).put(update_org_theme).delete(delete_org_theme))
+        .route(
+            "/",
+            get(get_org_theme)
+                .post(create_org_theme)
+                .put(update_org_theme)
+                .delete(delete_org_theme),
+        )
         .route("/logo", post(upload_logo))
         .route("/logo/{type}", delete(delete_logo))
         .route("/preview", post(preview_theme))
@@ -299,7 +305,13 @@ async fn import_theme(
 
 pub fn user_routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(get_user_theme).post(create_user_theme).put(update_user_theme).delete(delete_user_theme))
+        .route(
+            "/",
+            get(get_user_theme)
+                .post(create_user_theme)
+                .put(update_user_theme)
+                .delete(delete_user_theme),
+        )
         .route("/effective", get(get_effective_theme))
 }
 

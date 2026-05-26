@@ -11,13 +11,11 @@ use uuid::Uuid;
 /// Insert a row into the tenants table so FK constraints on tenant_id are satisfied.
 async fn seed_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<()> {
     let slug = format!("test-{}", tenant_id);
-    sqlx::query(
-        "INSERT INTO tenants (id, name, slug) VALUES ($1, 'Test Tenant', $2)",
-    )
-    .bind(tenant_id)
-    .bind(&slug)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, 'Test Tenant', $2)")
+        .bind(tenant_id)
+        .bind(&slug)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -41,11 +39,10 @@ async fn sync_log_lifecycle(pool: PgPool) -> sqlx::Result<()> {
     .execute(&pool)
     .await?;
 
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM quickbooks_sync_log WHERE id = $1")
-            .bind(sync_id)
-            .fetch_one(&pool)
-            .await?;
+    let status: String = sqlx::query_scalar("SELECT status FROM quickbooks_sync_log WHERE id = $1")
+        .bind(sync_id)
+        .fetch_one(&pool)
+        .await?;
     assert_eq!(status, "running");
 
     // Transition to completed
@@ -98,11 +95,10 @@ async fn sync_log_failed_status(pool: PgPool) -> sqlx::Result<()> {
     .execute(&pool)
     .await?;
 
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM quickbooks_sync_log WHERE id = $1")
-            .bind(sync_id)
-            .fetch_one(&pool)
-            .await?;
+    let status: String = sqlx::query_scalar("SELECT status FROM quickbooks_sync_log WHERE id = $1")
+        .bind(sync_id)
+        .fetch_one(&pool)
+        .await?;
     assert_eq!(status, "failed");
 
     Ok(())
@@ -184,28 +180,24 @@ async fn connection_last_sync_updated(pool: PgPool) -> sqlx::Result<()> {
     .await?;
 
     // Initially NULL
-    let last_sync: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT last_sync_at FROM quickbooks_connections WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await?;
+    let last_sync: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT last_sync_at FROM quickbooks_connections WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await?;
     assert!(last_sync.is_none());
 
     // Update (mimicking end of sync_vendors)
-    sqlx::query(
-        "UPDATE quickbooks_connections SET last_sync_at = NOW() WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .execute(&pool)
-    .await?;
+    sqlx::query("UPDATE quickbooks_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await?;
 
-    let last_sync: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT last_sync_at FROM quickbooks_connections WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await?;
+    let last_sync: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT last_sync_at FROM quickbooks_connections WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await?;
     assert!(last_sync.is_some());
 
     Ok(())
@@ -341,12 +333,11 @@ async fn vendor_update_and_mapping_update(pool: PgPool) -> sqlx::Result<()> {
     .await?;
 
     // Verify
-    let (name, email, phone): (String, String, String) = sqlx::query_as(
-        "SELECT name, email, phone FROM vendors WHERE id = $1",
-    )
-    .bind(vendor_id)
-    .fetch_one(&pool)
-    .await?;
+    let (name, email, phone): (String, String, String) =
+        sqlx::query_as("SELECT name, email, phone FROM vendors WHERE id = $1")
+            .bind(vendor_id)
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(name, "Updated Name");
     assert_eq!(email, "new@example.com");
     assert_eq!(phone, "555-9999");

@@ -40,10 +40,7 @@ async fn test_list_vendors_parses_items() {
     // First: authenticate mock
     Mock::given(method("POST"))
         .and(path("/services/rest/auth/oauth2/v1/token"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"access_token":"tok_123"}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"access_token":"tok_123"}"#))
         .mount(&mock_server)
         .await;
 
@@ -51,18 +48,19 @@ async fn test_list_vendors_parses_items() {
     Mock::given(method("GET"))
         .and(path("/services/rest/record/v1/vendor"))
         .and(header("Authorization", "Bearer tok_123"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(
-                r#"{"items":[{"id":"42","companyName":"Acme","email":"ap@acme.com"}]}"#,
-            ),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"items":[{"id":"42","companyName":"Acme","email":"ap@acme.com"}]}"#,
+        ))
         .mount(&mock_server)
         .await;
 
     let mut client = NetSuiteClient::new(config_with_base(&mock_server.uri()));
     client.authenticate().await.expect("auth should succeed");
 
-    let vendors = client.list_vendors().await.expect("list_vendors should succeed");
+    let vendors = client
+        .list_vendors()
+        .await
+        .expect("list_vendors should succeed");
     assert_eq!(vendors.len(), 1);
     assert_eq!(vendors[0].id, "42");
     assert_eq!(vendors[0].company_name.as_deref(), Some("Acme"));

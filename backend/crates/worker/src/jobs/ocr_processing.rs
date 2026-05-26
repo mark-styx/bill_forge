@@ -18,8 +18,10 @@ use billforge_db::{
     repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl},
     LocalStorageService,
 };
-use billforge_invoice_capture::ocr;
 use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
+use billforge_invoice_capture::{
+    ocr, resolve_ocr_provider_name, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+};
 use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -37,6 +39,7 @@ struct OcrJobPayload {
 
 /// Max retries before marking an OCR job as permanently failed.
 const MAX_RETRIES: u32 = 3;
+const OCR_HARD_FAIL_CONFIDENCE_THRESHOLD: f32 = 0.30;
 
 /// Process an OCR extraction job for an uploaded invoice document.
 pub async fn process_ocr(
@@ -65,6 +68,8 @@ pub async fn process_ocr(
     // Get tenant database pool
     let pool = config.pg_manager.tenant(&tenant_id).await?;
     let repo = InvoiceRepositoryImpl::new(pool.clone());
+    let tenant_settings = load_tenant_settings(config, &tenant_id).await?;
+    let effective_ocr_provider = resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
 
     // Download and run OCR - if anything fails before we can update the
     // invoice, mark it as Failed so it doesn't stay stuck in Processing.
@@ -103,28 +108,34 @@ pub async fn process_ocr(
     };
 
     // Run OCR (with optional fallback provider)
-    let ocr_result = if let Some(ref fallback_name) = config.ocr_fallback_provider {
-        if fallback_name != &config.ocr_provider {
-            let primary = ocr::create_provider(&config.ocr_provider);
+    let ocr_result = if tenant_settings.features.local_ocr_required {
+        let ocr_provider = ocr::create_provider(&effective_ocr_provider);
+        ocr_provider
+            .extract(&doc_bytes, &payload.content_type)
+            .await
+    } else if let Some(ref fallback_name) = config.ocr_fallback_provider {
+        if fallback_name != &effective_ocr_provider {
+            let primary = ocr::create_provider(&effective_ocr_provider);
             let fallback = ocr::create_provider(fallback_name);
             let engine = OcrWithFallback::new(primary, fallback);
             engine
                 .extract_with_fallback(&doc_bytes, &payload.content_type)
                 .await
         } else {
-            let ocr_provider = ocr::create_provider(&config.ocr_provider);
+            let ocr_provider = ocr::create_provider(&effective_ocr_provider);
             ocr_provider
                 .extract(&doc_bytes, &payload.content_type)
                 .await
         }
     } else {
-        let ocr_provider = ocr::create_provider(&config.ocr_provider);
+        let ocr_provider = ocr::create_provider(&effective_ocr_provider);
         ocr_provider
             .extract(&doc_bytes, &payload.content_type)
             .await
     };
 
     // Process OCR result and update the invoice
+    let ocr_confidence;
     let capture_status = match &ocr_result {
         Ok(result) => {
             // Build update payload — rejects missing or zero totals
@@ -157,7 +168,9 @@ pub async fn process_ocr(
                 }
             };
 
-            let status = if confidence < 0.3 {
+            ocr_confidence = Some(confidence);
+
+            let status = if confidence < OCR_HARD_FAIL_CONFIDENCE_THRESHOLD {
                 CaptureStatus::Failed
             } else {
                 CaptureStatus::ReadyForReview
@@ -260,6 +273,11 @@ pub async fn process_ocr(
     // If OCR produced low confidence, route to error queue
     if capture_status == CaptureStatus::Failed {
         route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+    } else if ocr_confidence
+        .map(|confidence| confidence < OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+        .unwrap_or(true)
+    {
+        route_to_ocr_exception_queue(&pool, &tenant_id, &invoice_id).await;
     } else if let Ok(result) = &ocr_result {
         if let Err(e) =
             run_straight_through_processing(&repo, &pool, &tenant_id, &invoice_id, result).await
@@ -280,6 +298,24 @@ pub async fn process_ocr(
     );
 
     Ok(())
+}
+
+async fn load_tenant_settings(
+    config: &WorkerConfig,
+    tenant_id: &billforge_core::TenantId,
+) -> Result<billforge_core::TenantSettings> {
+    let settings: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT settings FROM tenants WHERE id = $1")
+            .bind(tenant_id.as_uuid())
+            .fetch_optional(config.pg_manager.metadata())
+            .await
+            .context("Failed to load tenant OCR settings")?;
+
+    settings
+        .map(serde_json::from_value)
+        .transpose()
+        .context("Failed to parse tenant OCR settings")?
+        .ok_or_else(|| anyhow::anyhow!("Tenant settings not found"))
 }
 
 async fn run_straight_through_processing(
@@ -496,6 +532,46 @@ async fn route_to_processing_queue(
                 error = %e,
                 "Failed to look up workflow queue after OCR"
             );
+        }
+    }
+}
+
+/// Route an invoice to the exception review queue without treating OCR as failed.
+async fn route_to_ocr_exception_queue(
+    pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+) {
+    let queue_repo = WorkflowRepositoryImpl::new(pool.clone());
+    match WorkQueueRepository::get_by_type(&queue_repo, tenant_id, QueueType::Exception).await {
+        Ok(Some(exception_queue)) => {
+            if let Err(e) = WorkQueueRepository::move_item(
+                &queue_repo,
+                tenant_id,
+                invoice_id,
+                &exception_queue.id,
+                None,
+            )
+            .await
+            {
+                warn!(invoice_id = %invoice_id, error = %e, "Failed to create OCR exception queue item");
+            }
+            if let Err(e) = sqlx::query(
+                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
+            )
+            .bind(exception_queue.id.0)
+            .bind(invoice_id.as_uuid())
+            .execute(&**pool)
+            .await
+            {
+                warn!(invoice_id = %invoice_id, error = %e, "Failed to update invoice current_queue_id for OCR exception");
+            }
+        }
+        Ok(None) => {
+            warn!(invoice_id = %invoice_id, "No exception queue found for low-confidence OCR invoice");
+        }
+        Err(e) => {
+            warn!(invoice_id = %invoice_id, error = %e, "Failed to look up exception queue for low-confidence OCR invoice");
         }
     }
 }

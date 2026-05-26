@@ -38,9 +38,18 @@ pub fn create_router(pool: PgPool) -> axum::Router {
         .route("/api/feedback", axum::routing::post(submit_feedback))
         .route("/api/feedback", axum::routing::get(list_feedback))
         .route("/api/feedback/stats", axum::routing::get(get_stats))
-        .route("/api/feedback/aggregation", axum::routing::get(get_aggregation))
-        .route("/api/feedback/trend/weekly", axum::routing::get(get_weekly_trend))
-        .route("/api/feedback/trend/monthly", axum::routing::get(get_monthly_trend))
+        .route(
+            "/api/feedback/aggregation",
+            axum::routing::get(get_aggregation),
+        )
+        .route(
+            "/api/feedback/trend/weekly",
+            axum::routing::get(get_weekly_trend),
+        )
+        .route(
+            "/api/feedback/trend/monthly",
+            axum::routing::get(get_monthly_trend),
+        )
         .with_state(state)
 }
 

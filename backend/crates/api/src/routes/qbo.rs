@@ -121,9 +121,9 @@ async fn qbo_callback(
     if parts.len() != 2 {
         return Err(billforge_core::Error::Validation("Invalid state token".into()).into());
     }
-    let tenant_id: billforge_core::TenantId = parts[0]
-        .parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid tenant ID in state token".into()))?;
+    let tenant_id: billforge_core::TenantId = parts[0].parse().map_err(|_| {
+        billforge_core::Error::Validation("Invalid tenant ID in state token".into())
+    })?;
 
     let pool = state.db.tenant(&tenant_id).await?;
 
@@ -144,14 +144,17 @@ async fn qbo_callback(
         .unwrap_or(false);
 
     if !valid {
-        return Err(billforge_core::Error::Validation("Invalid or expired state token".into()).into());
+        return Err(
+            billforge_core::Error::Validation("Invalid or expired state token".into()).into(),
+        );
     }
 
     // Exchange code for tokens.
     let client_id = std::env::var("QBO_CLIENT_ID")
         .map_err(|_| billforge_core::Error::Validation("QBO_CLIENT_ID not configured".into()))?;
-    let client_secret = std::env::var("QBO_CLIENT_SECRET")
-        .map_err(|_| billforge_core::Error::Validation("QBO_CLIENT_SECRET not configured".into()))?;
+    let client_secret = std::env::var("QBO_CLIENT_SECRET").map_err(|_| {
+        billforge_core::Error::Validation("QBO_CLIENT_SECRET not configured".into())
+    })?;
     let redirect_uri = std::env::var("QBO_REDIRECT_URI")
         .map_err(|_| billforge_core::Error::Validation("QBO_REDIRECT_URI not configured".into()))?;
 
@@ -176,15 +179,13 @@ async fn qbo_callback(
             billforge_core::Error::Internal(format!("Token exchange parse failed: {e}"))
         })?;
 
-    let access_token = token_response["access_token"]
-        .as_str()
-        .ok_or_else(|| billforge_core::Error::Validation("Missing access_token in response".into()))?;
-    let refresh_token = token_response["refresh_token"]
-        .as_str()
-        .ok_or_else(|| billforge_core::Error::Validation("Missing refresh_token in response".into()))?;
-    let expires_in: i64 = token_response["expires_in"]
-        .as_i64()
-        .unwrap_or(3600);
+    let access_token = token_response["access_token"].as_str().ok_or_else(|| {
+        billforge_core::Error::Validation("Missing access_token in response".into())
+    })?;
+    let refresh_token = token_response["refresh_token"].as_str().ok_or_else(|| {
+        billforge_core::Error::Validation("Missing refresh_token in response".into())
+    })?;
+    let expires_in: i64 = token_response["expires_in"].as_i64().unwrap_or(3600);
     let x_refresh_token_expires_in: i64 = token_response["x_refresh_token_expires_in"]
         .as_i64()
         .unwrap_or(8726400); // ~100 days
@@ -265,8 +266,9 @@ async fn qbo_sync_vendors(
         billforge_core::Error::Internal(format!("Database error: {e}"))
     })?;
 
-    let (realm_id, mut access_token, token_expires_at) = conn
-        .ok_or_else(|| billforge_core::Error::Validation("QBO not connected or sync disabled".into()))?;
+    let (realm_id, mut access_token, token_expires_at) = conn.ok_or_else(|| {
+        billforge_core::Error::Validation("QBO not connected or sync disabled".into())
+    })?;
 
     // Refresh token if expired or near-expiry (5-minute buffer).
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
@@ -399,8 +401,9 @@ async fn refresh_access_token(
 ) -> ApiResult<String> {
     let client_id = std::env::var("QBO_CLIENT_ID")
         .map_err(|_| billforge_core::Error::Validation("QBO_CLIENT_ID not configured".into()))?;
-    let client_secret = std::env::var("QBO_CLIENT_SECRET")
-        .map_err(|_| billforge_core::Error::Validation("QBO_CLIENT_SECRET not configured".into()))?;
+    let client_secret = std::env::var("QBO_CLIENT_SECRET").map_err(|_| {
+        billforge_core::Error::Validation("QBO_CLIENT_SECRET not configured".into())
+    })?;
 
     let (refresh_token_val,): (String,) =
         sqlx::query_as("SELECT refresh_token FROM quickbooks_connections WHERE tenant_id = $1")
@@ -432,12 +435,12 @@ async fn refresh_access_token(
             billforge_core::Error::Internal(format!("Token refresh parse failed: {e}"))
         })?;
 
-    let new_access = token_response["access_token"]
-        .as_str()
-        .ok_or_else(|| billforge_core::Error::Validation("Missing access_token in refresh response".into()))?;
-    let new_refresh = token_response["refresh_token"]
-        .as_str()
-        .ok_or_else(|| billforge_core::Error::Validation("Missing refresh_token in refresh response".into()))?;
+    let new_access = token_response["access_token"].as_str().ok_or_else(|| {
+        billforge_core::Error::Validation("Missing access_token in refresh response".into())
+    })?;
+    let new_refresh = token_response["refresh_token"].as_str().ok_or_else(|| {
+        billforge_core::Error::Validation("Missing refresh_token in refresh response".into())
+    })?;
     let expires_in: i64 = token_response["expires_in"].as_i64().unwrap_or(3600);
     let x_refresh_expires_in: i64 = token_response["x_refresh_token_expires_in"]
         .as_i64()

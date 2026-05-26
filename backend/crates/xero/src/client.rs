@@ -9,15 +9,13 @@ use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::RwLock;
-use std::time::Duration;
 use tokio::time::sleep;
 
 /// Re-export shared HTTP retry error type as ClientError for backward compatibility
 pub use billforge_core::http_retry::HttpRetryError as ClientError;
 
-type TokenRefresher = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync,
->;
+type TokenRefresher =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
 use billforge_core::http_retry::{self, RetryConfig};
 
@@ -37,11 +35,7 @@ pub struct XeroClient {
 
 impl XeroClient {
     /// Create a new Xero API client
-    pub fn new(
-        access_token: String,
-        tenant_id: String,
-        environment: XeroEnvironment,
-    ) -> Self {
+    pub fn new(access_token: String, tenant_id: String, environment: XeroEnvironment) -> Self {
         Self {
             http_client: reqwest::Client::new(),
             access_token: RwLock::new(access_token),
@@ -67,11 +61,7 @@ impl XeroClient {
 
     /// Build API URL for a resource
     fn build_url(&self, resource: &str) -> String {
-        format!(
-            "{}/api.xro/2.0/{}",
-            self.environment.base_url(),
-            resource
-        )
+        format!("{}/api.xro/2.0/{}", self.environment.base_url(), resource)
     }
 
     /// Build headers with tenant ID
@@ -80,8 +70,7 @@ impl XeroClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "Xero-Tenant-Id",
-            HeaderValue::from_str(&self.tenant_id)
-                .context("Invalid tenant ID header")?,
+            HeaderValue::from_str(&self.tenant_id).context("Invalid tenant ID header")?,
         );
         Ok(headers)
     }
@@ -103,7 +92,9 @@ impl XeroClient {
                     .expect("access_token lock poisoned")
                     .clone()
             };
-            let headers = self.build_headers().map_err(|e| ClientError::Transport(e.to_string()))?;
+            let headers = self
+                .build_headers()
+                .map_err(|e| ClientError::Transport(e.to_string()))?;
 
             let result = request_fn(token, headers).send().await;
 
@@ -115,7 +106,10 @@ impl XeroClient {
                         attempt += 1;
                         continue;
                     }
-                    return Err(ClientError::Transport(format!("Transport error after retry: {}", err)));
+                    return Err(ClientError::Transport(format!(
+                        "Transport error after retry: {}",
+                        err
+                    )));
                 }
             };
 
@@ -127,7 +121,10 @@ impl XeroClient {
             }
 
             let retry_after_header = http_retry::parse_retry_after(
-                response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok()),
             );
             let body_text = response.text().await.unwrap_or_default();
 
@@ -137,7 +134,10 @@ impl XeroClient {
                         tracing::warn!(attempt, "Received 401, attempting token refresh");
                         match refresher().await {
                             Ok(new_token) => {
-                                let mut guard = self.access_token.write().expect("access_token lock poisoned");
+                                let mut guard = self
+                                    .access_token
+                                    .write()
+                                    .expect("access_token lock poisoned");
                                 *guard = new_token;
                                 refreshed = true;
                                 continue;
@@ -155,17 +155,38 @@ impl XeroClient {
                 attempt += 1;
                 if attempt >= config.max_retries {
                     if status_code == 429 {
-                        return Err(ClientError::RateLimited { retry_after: retry_after_header });
+                        return Err(ClientError::RateLimited {
+                            retry_after: retry_after_header,
+                        });
                     }
-                    return Err(ClientError::ApiError { status: status_code, body: body_text });
+                    return Err(ClientError::ApiError {
+                        status: status_code,
+                        body: body_text,
+                    });
                 }
-                let backoff = http_retry::compute_backoff(&config, attempt, if status_code == 429 { retry_after_header } else { None });
-                tracing::warn!(attempt, status_code, ?backoff, "Retryable error, backing off");
+                let backoff = http_retry::compute_backoff(
+                    &config,
+                    attempt,
+                    if status_code == 429 {
+                        retry_after_header
+                    } else {
+                        None
+                    },
+                );
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
 
-            return Err(ClientError::ApiError { status: status_code, body: body_text });
+            return Err(ClientError::ApiError {
+                status: status_code,
+                body: body_text,
+            });
         }
     }
 
@@ -181,7 +202,7 @@ impl XeroClient {
                     .headers(headers)
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         response
             .json()
@@ -204,7 +225,7 @@ impl XeroClient {
                     .header(CONTENT_TYPE, "application/json")
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         response
             .json()
@@ -227,7 +248,7 @@ impl XeroClient {
                     .header(CONTENT_TYPE, "application/json")
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         response
             .json()
@@ -237,10 +258,7 @@ impl XeroClient {
 
     /// Query contacts (vendors) with pagination
     pub async fn query_contacts(&self, page: i32, page_size: i32) -> Result<Vec<XeroContact>> {
-        let resource = format!(
-            "Contacts?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("Contacts?page={}&pageSize={}", page, page_size);
 
         let response: XeroResponse<XeroContact> = self.get(&resource).await?;
 
@@ -249,7 +267,8 @@ impl XeroClient {
 
     /// Get contact by ID
     pub async fn get_contact(&self, contact_id: &str) -> Result<XeroContact> {
-        let response: XeroResponse<XeroContact> = self.get(&format!("Contacts/{}", contact_id)).await?;
+        let response: XeroResponse<XeroContact> =
+            self.get(&format!("Contacts/{}", contact_id)).await?;
 
         response
             .Items
@@ -279,10 +298,7 @@ impl XeroClient {
 
     /// Query accounts with pagination
     pub async fn query_accounts(&self, page: i32, page_size: i32) -> Result<Vec<XeroAccount>> {
-        let resource = format!(
-            "Accounts?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("Accounts?page={}&pageSize={}", page, page_size);
 
         let response: XeroResponse<XeroAccount> = self.get(&resource).await?;
 
@@ -291,7 +307,8 @@ impl XeroClient {
 
     /// Get account by ID
     pub async fn get_account(&self, account_id: &str) -> Result<XeroAccount> {
-        let response: XeroResponse<XeroAccount> = self.get(&format!("Accounts/{}", account_id)).await?;
+        let response: XeroResponse<XeroAccount> =
+            self.get(&format!("Accounts/{}", account_id)).await?;
 
         response
             .Items
@@ -320,7 +337,11 @@ impl XeroClient {
     }
 
     /// Update an invoice in Xero
-    pub async fn update_invoice(&self, invoice_id: &str, invoice: &XeroInvoice) -> Result<XeroInvoice> {
+    pub async fn update_invoice(
+        &self,
+        invoice_id: &str,
+        invoice: &XeroInvoice,
+    ) -> Result<XeroInvoice> {
         #[derive(Serialize)]
         struct UpdateInvoiceRequest {
             #[serde(rename = "Invoices")]
@@ -331,7 +352,9 @@ impl XeroClient {
             invoices: vec![invoice.clone()],
         };
 
-        let response: XeroResponse<XeroInvoice> = self.post(&format!("Invoices/{}", invoice_id), &request).await?;
+        let response: XeroResponse<XeroInvoice> = self
+            .post(&format!("Invoices/{}", invoice_id), &request)
+            .await?;
 
         response
             .Items
@@ -341,10 +364,7 @@ impl XeroClient {
 
     /// Query invoices with pagination
     pub async fn query_invoices(&self, page: i32, page_size: i32) -> Result<Vec<XeroInvoice>> {
-        let resource = format!(
-            "Invoices?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("Invoices?page={}&pageSize={}", page, page_size);
 
         let response: XeroResponse<XeroInvoice> = self.get(&resource).await?;
 
@@ -353,7 +373,8 @@ impl XeroClient {
 
     /// Get invoice by ID
     pub async fn get_invoice(&self, invoice_id: &str) -> Result<XeroInvoice> {
-        let response: XeroResponse<XeroInvoice> = self.get(&format!("Invoices/{}", invoice_id)).await?;
+        let response: XeroResponse<XeroInvoice> =
+            self.get(&format!("Invoices/{}", invoice_id)).await?;
 
         response
             .Items
@@ -364,7 +385,10 @@ impl XeroClient {
     /// Execute a GET request to an arbitrary URL using the retry logic.
     /// This is exposed for integration testing only.
     #[doc(hidden)]
-    pub async fn execute_get_for_test(&self, url: &str) -> std::result::Result<String, ClientError> {
+    pub async fn execute_get_for_test(
+        &self,
+        url: &str,
+    ) -> std::result::Result<String, ClientError> {
         let response = self
             .execute_with_retry(|token, headers| {
                 self.http_client

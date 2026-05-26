@@ -11,10 +11,7 @@ use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn make_client(server: &MockServer) -> StripeClient {
-    StripeClient::new_with_base_url(
-        "sk_test_abc123".to_string(),
-        server.uri(),
-    )
+    StripeClient::new_with_base_url("sk_test_abc123".to_string(), server.uri())
 }
 
 #[tokio::test]
@@ -91,10 +88,16 @@ async fn create_meter_event_posts_invoice_usage_to_stripe() {
     Mock::given(method("POST"))
         .and(path("/billing/meter_events"))
         .and(header("authorization", "Bearer sk_test_abc123"))
-        .and(body_string_contains("event_name=billforge_invoice_processed"))
-        .and(body_string_contains("payload%5Bstripe_customer_id%5D=cus_ABC123"))
+        .and(body_string_contains(
+            "event_name=billforge_invoice_processed",
+        ))
+        .and(body_string_contains(
+            "payload%5Bstripe_customer_id%5D=cus_ABC123",
+        ))
         .and(body_string_contains("payload%5Bvalue%5D=1"))
-        .and(body_string_contains("identifier=tenant%3At_1%3Ainvoice%3Ainv_1"))
+        .and(body_string_contains(
+            "identifier=tenant%3At_1%3Ainvoice%3Ainv_1",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "id": "mtr_evt_123",
             "event_name": "billforge_invoice_processed",

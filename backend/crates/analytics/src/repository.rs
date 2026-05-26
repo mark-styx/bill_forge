@@ -177,8 +177,12 @@ impl AnalyticsRepository {
         previous_start: DateTime<Utc>,
         previous_end: DateTime<Utc>,
     ) -> Result<TrendData> {
-        let current_value: f64 = self.get_metric_value(tenant_id, metric_name, current_start, current_end).await?;
-        let previous_value: f64 = self.get_metric_value(tenant_id, metric_name, previous_start, previous_end).await?;
+        let current_value: f64 = self
+            .get_metric_value(tenant_id, metric_name, current_start, current_end)
+            .await?;
+        let previous_value: f64 = self
+            .get_metric_value(tenant_id, metric_name, previous_start, previous_end)
+            .await?;
 
         let change_percentage = if previous_value > 0.0 {
             ((current_value - previous_value) / previous_value) * 100.0

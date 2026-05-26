@@ -41,10 +41,11 @@ impl std::str::FromStr for PurchaseOrderId {
 }
 
 /// Purchase order lifecycle status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum POStatus {
     /// PO created, awaiting fulfillment
+    #[default]
     Open,
     /// Some line items received/invoiced
     PartiallyFulfilled,
@@ -67,6 +68,7 @@ impl POStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "open" => Some(Self::Open),
@@ -76,12 +78,6 @@ impl POStatus {
             "cancelled" => Some(Self::Cancelled),
             _ => None,
         }
-    }
-}
-
-impl Default for POStatus {
-    fn default() -> Self {
-        Self::Open
     }
 }
 
@@ -196,6 +192,7 @@ impl MatchType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "full" => Some(Self::Full),

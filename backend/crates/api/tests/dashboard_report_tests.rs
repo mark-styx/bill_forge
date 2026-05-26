@@ -5,6 +5,8 @@
 //! 2. Tenant isolation - two tenants, each sees only own data
 //! 3. Empty tenant returns zero-valued defaults (no 404/500)
 
+#![allow(warnings)]
+
 use billforge_core::TenantId;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -111,10 +113,21 @@ struct KpiRow {
 
 async fn read_kpis(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Option<KpiRow> {
     let row: Option<(
-        i64, i64, i64, i64,
-        i64, i64, i64, i64, i64, i64, i64, i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
         serde_json::Value,
-        i64, f64,
+        i64,
+        f64,
     )> = sqlx::query_as(
         r#"SELECT
             queue_count, approved_count, paid_count, rejected_count,
@@ -173,22 +186,78 @@ async fn happy_path_kpi_counts_and_aging(pool: sqlx::PgPool) {
     insert_user(&pool, &tenant_id, user_id).await;
 
     // Queued invoices at different ages
-    insert_invoice(&pool, &tenant_id, user_id, "Acme Corp", "received", 100_00, "-3 days").await;
-    insert_invoice(&pool, &tenant_id, user_id, "Acme Corp", "in_review", 200_00, "-10 days").await;
-    insert_invoice(&pool, &tenant_id, user_id, "Beta LLC", "pending_approval", 300_00, "-20 days").await;
-    insert_invoice(&pool, &tenant_id, user_id, "Beta LLC", "received", 400_00, "-45 days").await;
+    insert_invoice(
+        &pool,
+        &tenant_id,
+        user_id,
+        "Acme Corp",
+        "received",
+        100_00,
+        "-3 days",
+    )
+    .await;
+    insert_invoice(
+        &pool,
+        &tenant_id,
+        user_id,
+        "Acme Corp",
+        "in_review",
+        200_00,
+        "-10 days",
+    )
+    .await;
+    insert_invoice(
+        &pool,
+        &tenant_id,
+        user_id,
+        "Beta LLC",
+        "pending_approval",
+        300_00,
+        "-20 days",
+    )
+    .await;
+    insert_invoice(
+        &pool, &tenant_id, user_id, "Beta LLC", "received", 400_00, "-45 days",
+    )
+    .await;
 
     // Non-queued invoices
-    insert_invoice(&pool, &tenant_id, user_id, "Acme Corp", "approved", 500_00, "-5 days").await;
-    insert_invoice(&pool, &tenant_id, user_id, "Acme Corp", "paid", 600_00, "-5 days").await;
-    insert_invoice(&pool, &tenant_id, user_id, "Beta LLC", "rejected", 700_00, "-5 days").await;
+    insert_invoice(
+        &pool,
+        &tenant_id,
+        user_id,
+        "Acme Corp",
+        "approved",
+        500_00,
+        "-5 days",
+    )
+    .await;
+    insert_invoice(
+        &pool,
+        &tenant_id,
+        user_id,
+        "Acme Corp",
+        "paid",
+        600_00,
+        "-5 days",
+    )
+    .await;
+    insert_invoice(
+        &pool, &tenant_id, user_id, "Beta LLC", "rejected", 700_00, "-5 days",
+    )
+    .await;
 
     refresh_mv(&pool).await;
 
-    let kpis = read_kpis(&pool, &tenant_id).await.expect("KPI row must exist");
+    let kpis = read_kpis(&pool, &tenant_id)
+        .await
+        .expect("KPI row must exist");
 
     // Status counts
-    assert_eq!(kpis.queue_count, 4, "queue should have 4 invoices (received + in_review + pending_approval)");
+    assert_eq!(
+        kpis.queue_count, 4,
+        "queue should have 4 invoices (received + in_review + pending_approval)"
+    );
     assert_eq!(kpis.approved_count, 1);
     assert_eq!(kpis.paid_count, 1);
     assert_eq!(kpis.rejected_count, 1);
@@ -214,8 +283,14 @@ async fn happy_path_kpi_counts_and_aging(pool: sqlx::PgPool) {
     assert_eq!(kpis.total_spend_30d, 600_00);
 
     // Top vendors - should have Acme Corp (60000 from paid) and Beta LLC (none paid)
-    let vendors = kpis.spend_by_vendor.as_array().expect("spend_by_vendor should be array");
-    assert!(!vendors.is_empty(), "should have at least one vendor in spend list");
+    let vendors = kpis
+        .spend_by_vendor
+        .as_array()
+        .expect("spend_by_vendor should be array");
+    assert!(
+        !vendors.is_empty(),
+        "should have at least one vendor in spend list"
+    );
 
     // First vendor should be Acme Corp (highest paid spend)
     let first = &vendors[0];
@@ -236,13 +311,25 @@ async fn tenant_isolation_kpis_scoped(pool: sqlx::PgPool) {
 
     setup_schema(&pool, &tenant_a).await;
     insert_user(&pool, &tenant_a, user_a).await;
-    insert_invoice(&pool, &tenant_a, user_a, "Vendor A", "received", 100_00, "-1 days").await;
-    insert_invoice(&pool, &tenant_a, user_a, "Vendor A", "paid", 500_00, "-5 days").await;
+    insert_invoice(
+        &pool, &tenant_a, user_a, "Vendor A", "received", 100_00, "-1 days",
+    )
+    .await;
+    insert_invoice(
+        &pool, &tenant_a, user_a, "Vendor A", "paid", 500_00, "-5 days",
+    )
+    .await;
 
     setup_schema(&pool, &tenant_b).await;
     insert_user(&pool, &tenant_b, user_b).await;
-    insert_invoice(&pool, &tenant_b, user_b, "Vendor B", "received", 200_00, "-2 days").await;
-    insert_invoice(&pool, &tenant_b, user_b, "Vendor B", "rejected", 300_00, "-3 days").await;
+    insert_invoice(
+        &pool, &tenant_b, user_b, "Vendor B", "received", 200_00, "-2 days",
+    )
+    .await;
+    insert_invoice(
+        &pool, &tenant_b, user_b, "Vendor B", "rejected", 300_00, "-3 days",
+    )
+    .await;
 
     refresh_mv(&pool).await;
 
@@ -266,8 +353,12 @@ async fn tenant_isolation_kpis_scoped(pool: sqlx::PgPool) {
     let vendors_b = kpis_b.spend_by_vendor.as_array().unwrap();
 
     // Tenant A has one paid vendor
-    assert!(vendors_a.iter().any(|v| v["vendor_name"].as_str() == Some("Vendor A")));
-    assert!(!vendors_a.iter().any(|v| v["vendor_name"].as_str() == Some("Vendor B")));
+    assert!(vendors_a
+        .iter()
+        .any(|v| v["vendor_name"].as_str() == Some("Vendor A")));
+    assert!(!vendors_a
+        .iter()
+        .any(|v| v["vendor_name"].as_str() == Some("Vendor B")));
 
     // Tenant B has no paid vendors
     assert!(vendors_b.is_empty());
@@ -293,13 +384,11 @@ async fn empty_tenant_returns_zero_defaults(pool: sqlx::PgPool) {
     assert!(kpis.is_none(), "new tenant should have no MV row");
 
     // Verify the SQL query itself works without error
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM dashboard_kpis_mv WHERE tenant_id = $1"
-    )
-    .bind(*tenant_id.as_uuid())
-    .fetch_one(&*pool)
-    .await
-    .expect("count query");
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dashboard_kpis_mv WHERE tenant_id = $1")
+        .bind(*tenant_id.as_uuid())
+        .fetch_one(&*pool)
+        .await
+        .expect("count query");
 
     assert_eq!(row.0, 0, "no rows for new tenant in MV");
 }

@@ -1,7 +1,7 @@
 //! Dashboard metrics repository implementation
 
 use billforge_core::types::TenantId;
-use chrono::{Utc, Duration, Datelike};
+use chrono::{Datelike, Duration, Utc};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -15,13 +15,17 @@ impl MetricsRepositoryImpl {
     }
 
     /// Get invoice processing metrics for a tenant
-    pub async fn get_invoice_metrics(&self, tenant_id: &TenantId) -> Result<InvoiceMetrics, sqlx::Error> {
+    pub async fn get_invoice_metrics(
+        &self,
+        tenant_id: &TenantId,
+    ) -> Result<InvoiceMetrics, sqlx::Error> {
         let now = Utc::now();
         let start_of_month = now.date_naive().with_day(1).unwrap();
         let start_of_last_month = (start_of_month - Duration::days(30)).with_day(1).unwrap();
 
         // Total invoices and counts by status
-        let stats: InvoiceStats = sqlx::query_as(r#"
+        let stats: InvoiceStats = sqlx::query_as(
+            r#"
             SELECT
                 COUNT(*) as total_invoices,
                 COUNT(*) FILTER (WHERE capture_status = 'pending') as pending_ocr,
@@ -35,7 +39,8 @@ impl MetricsRepositoryImpl {
                 COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $2) as last_month
             FROM invoices
             WHERE tenant_id = $1
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .bind(start_of_month)
         .bind(start_of_last_month)
@@ -43,13 +48,15 @@ impl MetricsRepositoryImpl {
         .await?;
 
         // Calculate average processing time
-        let avg_time: Option<f64> = sqlx::query_scalar(r#"
+        let avg_time: Option<f64> = sqlx::query_scalar(
+            r#"
             SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) / 3600)
             FROM invoices
             WHERE tenant_id = $1
             AND processing_status IN ('approved', 'paid')
             AND updated_at IS NOT NULL
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
@@ -77,7 +84,10 @@ impl MetricsRepositoryImpl {
     }
 
     /// Get approval workflow metrics for a tenant
-    pub async fn get_approval_metrics(&self, tenant_id: &TenantId) -> Result<ApprovalMetrics, sqlx::Error> {
+    pub async fn get_approval_metrics(
+        &self,
+        tenant_id: &TenantId,
+    ) -> Result<ApprovalMetrics, sqlx::Error> {
         let now = Utc::now();
         let start_of_today = now.date_naive();
 
@@ -98,13 +108,15 @@ impl MetricsRepositoryImpl {
         .await?;
 
         // Average approval time in hours
-        let avg_time: Option<f64> = sqlx::query_scalar(r#"
+        let avg_time: Option<f64> = sqlx::query_scalar(
+            r#"
             SELECT AVG(EXTRACT(EPOCH FROM (responded_at - created_at)) / 3600)
             FROM approval_requests
             WHERE tenant_id = $1
             AND status IN ('approved', 'rejected')
             AND responded_at IS NOT NULL
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
@@ -118,24 +130,28 @@ impl MetricsRepositoryImpl {
         };
 
         // Escalated and overdue counts
-        let escalated: i64 = sqlx::query_scalar(r#"
+        let escalated: i64 = sqlx::query_scalar(
+            r#"
             SELECT COUNT(*)
             FROM approval_requests
             WHERE tenant_id = $1
             AND status = 'pending'
             AND created_at < NOW() - INTERVAL '48 hours'
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
 
-        let overdue: i64 = sqlx::query_scalar(r#"
+        let overdue: i64 = sqlx::query_scalar(
+            r#"
             SELECT COUNT(*)
             FROM approval_requests
             WHERE tenant_id = $1
             AND status = 'pending'
             AND expires_at < NOW()
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
@@ -152,25 +168,31 @@ impl MetricsRepositoryImpl {
     }
 
     /// Get vendor analytics for a tenant
-    pub async fn get_vendor_metrics(&self, tenant_id: &TenantId) -> Result<VendorMetrics, sqlx::Error> {
+    pub async fn get_vendor_metrics(
+        &self,
+        tenant_id: &TenantId,
+    ) -> Result<VendorMetrics, sqlx::Error> {
         let start_of_month = Utc::now().date_naive().with_day(1).unwrap();
 
         // Total vendors and new this month
-        let vendor_stats: VendorStats = sqlx::query_as(r#"
+        let vendor_stats: VendorStats = sqlx::query_as(
+            r#"
             SELECT
                 COUNT(*) as total_vendors,
                 COUNT(*) FILTER (WHERE created_at >= $2) as new_this_month
             FROM vendors
             WHERE tenant_id = $1
             AND is_active = true
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .bind(start_of_month)
         .fetch_one(&*self.pool)
         .await?;
 
         // Top vendors by invoice count
-        let top_vendors: Vec<TopVendorData> = sqlx::query_as(r#"
+        let top_vendors: Vec<TopVendorData> = sqlx::query_as(
+            r#"
             SELECT
                 v.id as vendor_id,
                 v.name as vendor_name,
@@ -183,13 +205,15 @@ impl MetricsRepositoryImpl {
             GROUP BY v.id, v.name
             ORDER BY invoice_count DESC
             LIMIT 5
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await?;
 
         // Vendor concentration (top 10% by spend)
-        let concentration: Option<f64> = sqlx::query_scalar(r#"
+        let concentration: Option<f64> = sqlx::query_scalar(
+            r#"
             WITH vendor_spend AS (
                 SELECT v.id, SUM(i.total_amount_cents) as total_spend
                 FROM vendors v
@@ -215,7 +239,8 @@ impl MetricsRepositoryImpl {
                     WHEN (SELECT total FROM total) = 0 OR (SELECT total FROM total) IS NULL THEN 0
                     ELSE (SELECT top_spend FROM top_vendors) / (SELECT total FROM total) * 100
                 END
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;
@@ -225,12 +250,15 @@ impl MetricsRepositoryImpl {
         Ok(VendorMetrics {
             total_vendors: vendor_stats.total_vendors,
             new_this_month: vendor_stats.new_this_month,
-            top_vendors: top_vendors.into_iter().map(|v| TopVendor {
-                vendor_id: v.vendor_id.to_string(),
-                vendor_name: v.vendor_name,
-                invoice_count: v.invoice_count,
-                total_amount: v.total_amount,
-            }).collect(),
+            top_vendors: top_vendors
+                .into_iter()
+                .map(|v| TopVendor {
+                    vendor_id: v.vendor_id.to_string(),
+                    vendor_name: v.vendor_name,
+                    invoice_count: v.invoice_count,
+                    total_amount: v.total_amount,
+                })
+                .collect(),
             concentration_percentage: concentration,
         })
     }
@@ -260,14 +288,16 @@ impl MetricsRepositoryImpl {
         // Calculate average response time per user
         let mut members = Vec::new();
         for mut member in member_stats {
-            let avg_time: Option<f64> = sqlx::query_scalar(r#"
+            let avg_time: Option<f64> = sqlx::query_scalar(
+                r#"
                 SELECT AVG(EXTRACT(EPOCH FROM (responded_at - created_at)) / 3600)
                 FROM approval_requests
                 WHERE tenant_id = $1
                 AND responded_by = $2
                 AND status IN ('approved', 'rejected')
                 AND responded_at IS NOT NULL
-            "#)
+            "#,
+            )
             .bind(*tenant_id.as_uuid())
             .bind(member.user_id)
             .fetch_one(&*self.pool)
@@ -292,12 +322,14 @@ impl MetricsRepositoryImpl {
         };
 
         // Total pending actions
-        let total_pending: i64 = sqlx::query_scalar(r#"
+        let total_pending: i64 = sqlx::query_scalar(
+            r#"
             SELECT COUNT(*)
             FROM approval_requests
             WHERE tenant_id = $1
             AND status = 'pending'
-        "#)
+        "#,
+        )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await?;

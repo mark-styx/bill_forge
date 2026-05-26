@@ -54,9 +54,12 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    let tenant_id: TenantId = req.tenant_id.parse()
-        .map_err(|_| ApiError(billforge_core::Error::Validation("Invalid tenant ID".to_string())))?;
-    
+    let tenant_id: TenantId = req.tenant_id.parse().map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid tenant ID".to_string(),
+        ))
+    })?;
+
     let response = state
         .auth
         .login(LoginInput {
@@ -127,11 +130,19 @@ async fn provision(
     match state.db.tenant(&tenant_id).await {
         Ok(pool) => {
             if let Err(e) = state.db.run_tenant_migrations(&pool).await {
-                tracing::warn!("Failed to run tenant migrations for {}: {}", tenant_id.as_str(), e);
+                tracing::warn!(
+                    "Failed to run tenant migrations for {}: {}",
+                    tenant_id.as_str(),
+                    e
+                );
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to pre-create tenant database for {}: {}", tenant_id.as_str(), e);
+            tracing::warn!(
+                "Failed to pre-create tenant database for {}: {}",
+                tenant_id.as_str(),
+                e
+            );
         }
     }
 
@@ -152,9 +163,12 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    let tenant_id: TenantId = req.tenant_id.parse()
-        .map_err(|_| ApiError(billforge_core::Error::Validation("Invalid tenant ID".to_string())))?;
-    
+    let tenant_id: TenantId = req.tenant_id.parse().map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid tenant ID".to_string(),
+        ))
+    })?;
+
     let response = state
         .auth
         .register(RegisterInput {

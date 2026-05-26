@@ -31,7 +31,9 @@ pub fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -
     }
 
     // Fall back to base64 (QuickBooks, Xero)
-    if let Ok(sig_bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature) {
+    if let Ok(sig_bytes) =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, signature)
+    {
         return mac.verify_slice(&sig_bytes).is_ok();
     }
 
@@ -169,7 +171,11 @@ mod tests {
         mac.update(payload);
         let signature = hex::encode(mac.finalize().into_bytes());
 
-        assert!(!verify_webhook_signature(payload, &signature, "wrong-secret"));
+        assert!(!verify_webhook_signature(
+            payload,
+            &signature,
+            "wrong-secret"
+        ));
     }
 
     #[test]

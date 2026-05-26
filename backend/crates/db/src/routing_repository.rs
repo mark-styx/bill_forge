@@ -104,7 +104,11 @@ impl RoutingRepository {
     }
 
     /// Set approver availability
-    pub async fn set_availability(&self, tenant_id: &TenantId, input: &SetAvailabilityInput) -> Result<()> {
+    pub async fn set_availability(
+        &self,
+        tenant_id: &TenantId,
+        input: &SetAvailabilityInput,
+    ) -> Result<()> {
         // Delete any existing availability for this user in overlapping time windows
         sqlx::query(
             r#"DELETE FROM approver_availability
@@ -229,8 +233,10 @@ impl RoutingDataProvider for RoutingRepository {
         .await
         .map_err(|e| Error::Database(format!("Failed to fetch availability: {}", e)))?;
 
-        let availabilities: Vec<ApproverAvailability> =
-            availability_rows.into_iter().map(|r| r.into_availability()).collect();
+        let availabilities: Vec<ApproverAvailability> = availability_rows
+            .into_iter()
+            .map(|r| r.into_availability())
+            .collect();
 
         // Fetch expertise records
         let expertise_rows = sqlx::query_as::<_, ExpertiseRow>(
@@ -246,8 +252,10 @@ impl RoutingDataProvider for RoutingRepository {
         .await
         .map_err(|e| Error::Database(format!("Failed to fetch expertise: {}", e)))?;
 
-        let expertise: Vec<ApproverExpertise> =
-            expertise_rows.into_iter().map(|r| r.into_expertise()).collect();
+        let expertise: Vec<ApproverExpertise> = expertise_rows
+            .into_iter()
+            .map(|r| r.into_expertise())
+            .collect();
 
         Ok(RoutingContext {
             eligible_approvers,
@@ -279,7 +287,8 @@ struct RoutingConfigRow {
 
 impl RoutingConfigRow {
     fn into_config(self, tenant_id: &TenantId) -> RoutingConfig {
-        let working_days: Vec<i32> = serde_json::from_value(self.working_days).unwrap_or_else(|_| vec![1, 2, 3, 4, 5]);
+        let working_days: Vec<i32> =
+            serde_json::from_value(self.working_days).unwrap_or_else(|_| vec![1, 2, 3, 4, 5]);
         RoutingConfig {
             tenant_id: tenant_id.clone(),
             workload_weight: self.workload_weight.to_f64().unwrap_or(0.4),
@@ -419,7 +428,10 @@ mod tests {
     fn availability_status_input_as_str() {
         assert_eq!(AvailabilityStatusInput::Available.as_str(), "available");
         assert_eq!(AvailabilityStatusInput::Busy.as_str(), "busy");
-        assert_eq!(AvailabilityStatusInput::OutOfOffice.as_str(), "out_of_office");
+        assert_eq!(
+            AvailabilityStatusInput::OutOfOffice.as_str(),
+            "out_of_office"
+        );
         assert_eq!(AvailabilityStatusInput::Vacation.as_str(), "vacation");
     }
 

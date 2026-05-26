@@ -31,9 +31,11 @@ impl VendorStatementRepositoryImpl {
         let currency = input.currency.unwrap_or_else(|| "USD".to_string());
         let status = StatementStatus::Pending.as_str();
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            Error::Database(format!("Failed to begin transaction: {}", e))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
         sqlx::query(
             r#"INSERT INTO vendor_statements
@@ -218,11 +220,18 @@ impl VendorStatementRepositoryImpl {
             (rows, count)
         };
 
-        Ok((rows.into_iter().map(|r| r.into_domain()).collect(), count.0 as u64))
+        Ok((
+            rows.into_iter().map(|r| r.into_domain()).collect(),
+            count.0 as u64,
+        ))
     }
 
     /// Get a single line by ID, scoped to tenant.
-    pub async fn get_line(&self, tenant_id: &TenantId, line_id: Uuid) -> Result<Option<StatementLineItem>> {
+    pub async fn get_line(
+        &self,
+        tenant_id: &TenantId,
+        line_id: Uuid,
+    ) -> Result<Option<StatementLineItem>> {
         let row = sqlx::query_as::<_, LineRow>(
             r#"SELECT
                 id, statement_id, tenant_id, line_date, description,
@@ -264,7 +273,11 @@ impl VendorStatementRepositoryImpl {
     }
 
     /// Get all line items for a statement, filtered by tenant.
-    pub async fn get_lines(&self, tenant_id: &TenantId, statement_id: Uuid) -> Result<Vec<StatementLineItem>> {
+    pub async fn get_lines(
+        &self,
+        tenant_id: &TenantId,
+        statement_id: Uuid,
+    ) -> Result<Vec<StatementLineItem>> {
         let rows = sqlx::query_as::<_, LineRow>(
             r#"SELECT
                 id, statement_id, tenant_id, line_date, description,
@@ -336,7 +349,11 @@ impl VendorStatementRepositoryImpl {
         reconciled_by: Option<Uuid>,
     ) -> Result<()> {
         let now = Utc::now();
-        let reconciled_at = if *status == StatementStatus::Reconciled { Some(now) } else { None };
+        let reconciled_at = if *status == StatementStatus::Reconciled {
+            Some(now)
+        } else {
+            None
+        };
 
         let result = sqlx::query(
             r#"UPDATE vendor_statements
@@ -389,20 +406,26 @@ impl VendorStatementRepositoryImpl {
 
         Ok(rows
             .into_iter()
-            .map(|(id, invoice_number, total_amount_cents, invoice_date, vendor_id)| {
-                InvoiceSummary {
-                    id,
-                    invoice_number,
-                    total_amount_cents,
-                    invoice_date,
-                    vendor_id,
-                }
-            })
+            .map(
+                |(id, invoice_number, total_amount_cents, invoice_date, vendor_id)| {
+                    InvoiceSummary {
+                        id,
+                        invoice_number,
+                        total_amount_cents,
+                        invoice_date,
+                        vendor_id,
+                    }
+                },
+            )
             .collect())
     }
 
     /// Apply match results to the database, scoped to tenant.
-    pub async fn apply_match_results(&self, tenant_id: &TenantId, results: &[MatchResult]) -> Result<()> {
+    pub async fn apply_match_results(
+        &self,
+        tenant_id: &TenantId,
+        results: &[MatchResult],
+    ) -> Result<()> {
         for result in results {
             if result.confidence != MatchConfidence::NoMatch {
                 self.update_line_match(

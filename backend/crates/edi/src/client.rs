@@ -29,14 +29,18 @@ impl EdiClient {
 
     /// Build API URL
     fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.config.api_base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            self.config.api_base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// Make an authenticated GET request
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let response = self
             .http_client
-            .get(&self.url(path))
+            .get(self.url(path))
             .header("Authorization", format!("Key {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .send()
@@ -57,7 +61,7 @@ impl EdiClient {
     async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
         let response = self
             .http_client
-            .post(&self.url(path))
+            .post(self.url(path))
             .header("Authorization", format!("Key {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .json(body)
@@ -87,7 +91,10 @@ impl EdiClient {
     }
 
     /// Get document status from the middleware
-    pub async fn get_document_status(&self, middleware_id: &str) -> Result<EdiDocumentStatusResponse> {
+    pub async fn get_document_status(
+        &self,
+        middleware_id: &str,
+    ) -> Result<EdiDocumentStatusResponse> {
         self.get(&format!("/documents/{}", middleware_id)).await
     }
 }

@@ -20,8 +20,8 @@ impl StatisticalAnomalyDetector {
     pub fn new(tenant_id: Uuid) -> Self {
         Self {
             tenant_id,
-            zscore_threshold: 3.0,  // 3 standard deviations
-            iqr_multiplier: 1.5,    // Standard IQR outlier threshold
+            zscore_threshold: 3.0, // 3 standard deviations
+            iqr_multiplier: 1.5,   // Standard IQR outlier threshold
         }
     }
 
@@ -140,7 +140,10 @@ impl StatisticalAnomalyDetector {
         let recent_count = 7;
         let historical_count = data.points.len() - recent_count;
 
-        let recent_avg: f64 = data.points[recent_count..].iter().map(|p| p.value).sum::<f64>()
+        let recent_avg: f64 = data.points[recent_count..]
+            .iter()
+            .map(|p| p.value)
+            .sum::<f64>()
             / recent_count as f64;
         let historical_avg: f64 = data.points[..recent_count]
             .iter()
@@ -192,7 +195,10 @@ impl StatisticalAnomalyDetector {
     }
 
     /// Detect approval time anomalies
-    pub fn detect_approval_time_anomalies(&self, data: &TimeSeries) -> PredictiveResult<Vec<Anomaly>> {
+    pub fn detect_approval_time_anomalies(
+        &self,
+        data: &TimeSeries,
+    ) -> PredictiveResult<Vec<Anomaly>> {
         if data.points.len() < 10 {
             return Err(PredictiveError::InsufficientData {
                 required: 10,
@@ -272,7 +278,7 @@ impl StatisticalAnomalyDetector {
 /// Detects potential duplicate invoices using fuzzy matching.
 pub struct DuplicateDetector {
     tenant_id: Uuid,
-    amount_tolerance: f64,   // Percentage tolerance for amount matching
+    amount_tolerance: f64,    // Percentage tolerance for amount matching
     date_tolerance_days: i64, // Days tolerance for date matching
 }
 
@@ -286,10 +292,7 @@ impl DuplicateDetector {
     }
 
     /// Check for potential duplicates in invoice data
-    pub fn detect_duplicates(
-        &self,
-        invoices: &[InvoiceRecord],
-    ) -> PredictiveResult<Vec<Anomaly>> {
+    pub fn detect_duplicates(&self, invoices: &[InvoiceRecord]) -> PredictiveResult<Vec<Anomaly>> {
         let mut anomalies = Vec::new();
         let mut checked_pairs = std::collections::HashSet::new();
 
@@ -442,7 +445,11 @@ mod tests {
         let points: Vec<TimeSeriesPoint> = (0..30)
             .map(|i| TimeSeriesPoint {
                 timestamp: now - Duration::days(30 - i),
-                value: if i == 15 { 5000.0 } else { 1000.0 + (i as f64 * 10.0) }, // Outlier at index 15
+                value: if i == 15 {
+                    5000.0
+                } else {
+                    1000.0 + (i as f64 * 10.0)
+                }, // Outlier at index 15
             })
             .collect();
 
@@ -531,7 +538,7 @@ mod tests {
             InvoiceRecord {
                 invoice_id: "INV-002".to_string(),
                 vendor_name: "Acme Corp".to_string(), // Identical name
-                amount: 1500.00,                       // Same amount
+                amount: 1500.00,                      // Same amount
                 invoice_date: now - Duration::days(8), // Close date
             },
             InvoiceRecord {
@@ -543,11 +550,19 @@ mod tests {
         ];
 
         let anomalies = detector.detect_duplicates(&invoices).unwrap();
-        assert!(!anomalies.is_empty(), "Should detect at least one duplicate");
+        assert!(
+            !anomalies.is_empty(),
+            "Should detect at least one duplicate"
+        );
 
         // Should detect INV-001 and INV-002 as duplicates
-        let duplicate = anomalies.iter().find(|a| a.anomaly_type == AnomalyType::DuplicateInvoice);
-        assert!(duplicate.is_some(), "Should find a DuplicateInvoice anomaly");
+        let duplicate = anomalies
+            .iter()
+            .find(|a| a.anomaly_type == AnomalyType::DuplicateInvoice);
+        assert!(
+            duplicate.is_some(),
+            "Should find a DuplicateInvoice anomaly"
+        );
     }
 
     #[test]
@@ -555,7 +570,7 @@ mod tests {
         let detector = DuplicateDetector::new(Uuid::new_v4());
 
         let sim1 = detector.string_similarity("Acme Corp", "Acme Corporation");
-        assert!(sim1 > 0.3);  // Jaccard similarity: "acme" in both = 1/3 ≈ 0.33
+        assert!(sim1 > 0.3); // Jaccard similarity: "acme" in both = 1/3 ≈ 0.33
 
         let sim2 = detector.string_similarity("Acme Corp", "Different Vendor");
         assert!(sim2 < 0.3);

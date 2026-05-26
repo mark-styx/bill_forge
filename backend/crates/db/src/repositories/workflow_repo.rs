@@ -3,18 +3,20 @@
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
-        WorkflowRule, WorkflowRuleId, CreateWorkflowRuleInput, WorkflowRuleType, RuleCondition, RuleAction,
-        WorkQueue, WorkQueueId, CreateWorkQueueInput, QueueType, QueueItem, QueueSettings,
-        AssignmentRule, AssignmentRuleId, CreateAssignmentRuleInput, AssignmentCondition, AssignmentTarget,
-        ApprovalRequest, ApprovalStatus,
-        WorkflowTemplate, WorkflowTemplateId, CreateWorkflowTemplateInput, WorkflowTemplateStage,
-        ApprovalDelegation, CreateApprovalDelegationInput,
-        ApprovalLimit, CreateApprovalLimitInput,
-        InvoiceId,
+        ApprovalDelegation, ApprovalLimit, ApprovalRequest, ApprovalStatus, AssignmentCondition,
+        AssignmentRule, AssignmentRuleId, AssignmentTarget, CreateApprovalDelegationInput,
+        CreateApprovalLimitInput, CreateAssignmentRuleInput, CreateWorkQueueInput,
+        CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InvoiceId, QueueItem, QueueSettings,
+        QueueType, RuleAction, RuleCondition, WorkQueue, WorkQueueId, WorkflowRule, WorkflowRuleId,
+        WorkflowRuleType, WorkflowTemplate, WorkflowTemplateId, WorkflowTemplateStage,
     },
-    traits::{WorkflowRuleRepository, WorkQueueRepository, ApprovalRepository, AssignmentRuleRepository, WorkflowTemplateRepository, ApprovalDelegationRepository, ApprovalLimitRepository},
-    types::{Pagination, PaginatedResponse, PaginationMeta, Money},
-    UserId, TenantId, Error, Result,
+    traits::{
+        ApprovalDelegationRepository, ApprovalLimitRepository, ApprovalRepository,
+        AssignmentRuleRepository, WorkQueueRepository, WorkflowRuleRepository,
+        WorkflowTemplateRepository,
+    },
+    types::{Money, PaginatedResponse, Pagination, PaginationMeta},
+    Error, Result, TenantId, UserId,
 };
 use chrono::Utc;
 use sqlx::PgPool;
@@ -45,7 +47,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             r#"INSERT INTO workflow_rules (
                 id, tenant_id, name, description, priority, is_active, rule_type,
                 conditions, actions, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -77,9 +79,13 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkflowRuleId) -> Result<Option<WorkflowRule>> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowRuleId,
+    ) -> Result<Option<WorkflowRule>> {
         let result = sqlx::query_as::<_, WorkflowRuleRow>(
-            "SELECT * FROM workflow_rules WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM workflow_rules WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -90,7 +96,11 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         Ok(result.map(|row| row.into_rule(tenant_id)))
     }
 
-    async fn list(&self, tenant_id: &TenantId, rule_type: Option<WorkflowRuleType>) -> Result<Vec<WorkflowRule>> {
+    async fn list(
+        &self,
+        tenant_id: &TenantId,
+        rule_type: Option<WorkflowRuleType>,
+    ) -> Result<Vec<WorkflowRule>> {
         let rows = if let Some(rt) = rule_type {
             sqlx::query_as::<_, WorkflowRuleRow>(
                 "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 ORDER BY priority DESC"
@@ -102,7 +112,7 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             .map_err(|e| Error::Database(format!("Failed to list workflow rules: {}", e)))?
         } else {
             sqlx::query_as::<_, WorkflowRuleRow>(
-                "SELECT * FROM workflow_rules WHERE tenant_id = $1 ORDER BY priority DESC"
+                "SELECT * FROM workflow_rules WHERE tenant_id = $1 ORDER BY priority DESC",
             )
             .bind(*tenant_id.as_uuid())
             .fetch_all(&*self.pool)
@@ -110,17 +120,25 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
             .map_err(|e| Error::Database(format!("Failed to list workflow rules: {}", e)))?
         };
 
-        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_rule(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: &WorkflowRuleId, input: CreateWorkflowRuleInput) -> Result<WorkflowRule> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowRuleId,
+        input: CreateWorkflowRuleInput,
+    ) -> Result<WorkflowRule> {
         let now = Utc::now();
 
         sqlx::query(
             r#"UPDATE workflow_rules SET
                 name = $1, description = $2, priority = $3, rule_type = $4,
                 conditions = $5, actions = $6, updated_at = $7
-            WHERE id = $8 AND tenant_id = $9"#
+            WHERE id = $8 AND tenant_id = $9"#,
         )
         .bind(&input.name)
         .bind(&input.description)
@@ -154,7 +172,12 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         Ok(())
     }
 
-    async fn set_active(&self, tenant_id: &TenantId, id: &WorkflowRuleId, is_active: bool) -> Result<()> {
+    async fn set_active(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowRuleId,
+        is_active: bool,
+    ) -> Result<()> {
         sqlx::query("UPDATE workflow_rules SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(is_active)
             .bind(Utc::now())
@@ -167,7 +190,11 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         Ok(())
     }
 
-    async fn get_active_rules(&self, tenant_id: &TenantId, rule_type: WorkflowRuleType) -> Result<Vec<WorkflowRule>> {
+    async fn get_active_rules(
+        &self,
+        tenant_id: &TenantId,
+        rule_type: WorkflowRuleType,
+    ) -> Result<Vec<WorkflowRule>> {
         let rows = sqlx::query_as::<_, WorkflowRuleRow>(
             "SELECT * FROM workflow_rules WHERE tenant_id = $1 AND rule_type = $2 AND is_active = true ORDER BY priority DESC"
         )
@@ -177,7 +204,10 @@ impl WorkflowRuleRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to get active workflow rules: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_rule(tenant_id))
+            .collect())
     }
 }
 
@@ -229,7 +259,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkQueueId) -> Result<Option<WorkQueue>> {
         let result = sqlx::query_as::<_, WorkQueueRow>(
-            "SELECT * FROM work_queues WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM work_queues WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -242,23 +272,31 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<WorkQueue>> {
         let rows = sqlx::query_as::<_, WorkQueueRow>(
-            "SELECT * FROM work_queues WHERE tenant_id = $1 ORDER BY created_at"
+            "SELECT * FROM work_queues WHERE tenant_id = $1 ORDER BY created_at",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list work queues: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_queue(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_queue(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: &WorkQueueId, input: CreateWorkQueueInput) -> Result<WorkQueue> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkQueueId,
+        input: CreateWorkQueueInput,
+    ) -> Result<WorkQueue> {
         let now = Utc::now();
 
         sqlx::query(
             r#"UPDATE work_queues SET
                 name = $1, description = $2, queue_type = $3, is_default = $4, updated_at = $5
-            WHERE id = $6 AND tenant_id = $7"#
+            WHERE id = $6 AND tenant_id = $7"#,
         )
         .bind(&input.name)
         .bind(&input.description)
@@ -292,7 +330,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
     async fn get_default(&self, tenant_id: &TenantId) -> Result<Option<WorkQueue>> {
         let result = sqlx::query_as::<_, WorkQueueRow>(
-            "SELECT * FROM work_queues WHERE tenant_id = $1 AND is_default = true LIMIT 1"
+            "SELECT * FROM work_queues WHERE tenant_id = $1 AND is_default = true LIMIT 1",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_optional(&*self.pool)
@@ -302,9 +340,13 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(result.map(|row| row.into_queue(tenant_id)))
     }
 
-    async fn get_by_type(&self, tenant_id: &TenantId, queue_type: QueueType) -> Result<Option<WorkQueue>> {
+    async fn get_by_type(
+        &self,
+        tenant_id: &TenantId,
+        queue_type: QueueType,
+    ) -> Result<Option<WorkQueue>> {
         let result = sqlx::query_as::<_, WorkQueueRow>(
-            "SELECT * FROM work_queues WHERE tenant_id = $1 AND queue_type = $2 LIMIT 1"
+            "SELECT * FROM work_queues WHERE tenant_id = $1 AND queue_type = $2 LIMIT 1",
         )
         .bind(*tenant_id.as_uuid())
         .bind(match queue_type {
@@ -322,7 +364,13 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(result.map(|row| row.into_queue(tenant_id)))
     }
 
-    async fn add_item(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, invoice_id: &InvoiceId, assigned_to: Option<&UserId>) -> Result<QueueItem> {
+    async fn add_item(
+        &self,
+        tenant_id: &TenantId,
+        queue_id: &WorkQueueId,
+        invoice_id: &InvoiceId,
+        assigned_to: Option<&UserId>,
+    ) -> Result<QueueItem> {
         let id = Uuid::new_v4();
         let now = Utc::now();
 
@@ -354,7 +402,12 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, pagination: &Pagination) -> Result<PaginatedResponse<QueueItem>> {
+    async fn get_items(
+        &self,
+        tenant_id: &TenantId,
+        queue_id: &WorkQueueId,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResponse<QueueItem>> {
         let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
         let rows = sqlx::query_as::<_, QueueItemRow>(
@@ -368,17 +421,16 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to get queue items: {}", e)))?;
 
-        let items: Vec<QueueItem> = rows
-            .into_iter()
-            .map(|row| row.into_item())
-            .collect();
+        let items: Vec<QueueItem> = rows.into_iter().map(|row| row.into_item()).collect();
 
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2")
-            .bind(*tenant_id.as_uuid())
-            .bind(queue_id.0)
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2",
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(queue_id.0)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
 
         Ok(PaginatedResponse {
             data: items,
@@ -391,7 +443,13 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId, pagination: &Pagination) -> Result<PaginatedResponse<QueueItem>> {
+    async fn get_items_for_user(
+        &self,
+        tenant_id: &TenantId,
+        queue_id: &WorkQueueId,
+        user_id: &UserId,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResponse<QueueItem>> {
         let offset = ((pagination.page - 1) * pagination.per_page) as i32;
 
         let rows = sqlx::query_as::<_, QueueItemRow>(
@@ -406,10 +464,7 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to get queue items for user: {}", e)))?;
 
-        let items: Vec<QueueItem> = rows
-            .into_iter()
-            .map(|row| row.into_item())
-            .collect();
+        let items: Vec<QueueItem> = rows.into_iter().map(|row| row.into_item()).collect();
 
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 AND assigned_to = $3")
             .bind(*tenant_id.as_uuid())
@@ -431,17 +486,24 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
     }
 
     async fn count_items(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<i64> {
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2")
-            .bind(*tenant_id.as_uuid())
-            .bind(queue_id.0)
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2",
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(queue_id.0)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to count queue items: {}", e)))?;
 
         Ok(total)
     }
 
-    async fn count_items_for_user(&self, tenant_id: &TenantId, queue_id: &WorkQueueId, user_id: &UserId) -> Result<i64> {
+    async fn count_items_for_user(
+        &self,
+        tenant_id: &TenantId,
+        queue_id: &WorkQueueId,
+        user_id: &UserId,
+    ) -> Result<i64> {
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queue_items WHERE tenant_id = $1 AND queue_id = $2 AND assigned_to = $3")
             .bind(*tenant_id.as_uuid())
             .bind(queue_id.0)
@@ -453,7 +515,13 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(total)
     }
 
-    async fn move_item(&self, tenant_id: &TenantId, invoice_id: &InvoiceId, queue_id: &WorkQueueId, assigned_to: Option<&UserId>) -> Result<QueueItem> {
+    async fn move_item(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: &InvoiceId,
+        queue_id: &WorkQueueId,
+        assigned_to: Option<&UserId>,
+    ) -> Result<QueueItem> {
         let id = Uuid::new_v4();
         let now = Utc::now();
 
@@ -486,7 +554,12 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn claim_item(&self, tenant_id: &TenantId, item_id: Uuid, user_id: &UserId) -> Result<QueueItem> {
+    async fn claim_item(
+        &self,
+        tenant_id: &TenantId,
+        item_id: Uuid,
+        user_id: &UserId,
+    ) -> Result<QueueItem> {
         let now = Utc::now();
 
         sqlx::query("UPDATE queue_items SET assigned_to = $1, claimed_at = $2 WHERE id = $3 AND tenant_id = $4")
@@ -498,12 +571,14 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             .await
             .map_err(|e| Error::Database(format!("Failed to claim item: {}", e)))?;
 
-        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2")
-            .bind(item_id)
-            .bind(*tenant_id.as_uuid())
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to get claimed item: {}", e)))?;
+        let result = sqlx::query_as::<_, QueueItemRow>(
+            "SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(item_id)
+        .bind(*tenant_id.as_uuid())
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get claimed item: {}", e)))?;
 
         Ok(result.into_item())
     }
@@ -530,12 +605,16 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(())
     }
 
-    async fn get_current_item_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Option<QueueItem>> {
+    async fn get_current_item_for_invoice(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: &InvoiceId,
+    ) -> Result<Option<QueueItem>> {
         let result = sqlx::query_as::<_, QueueItemRow>(
             r#"SELECT * FROM queue_items
                WHERE tenant_id = $1 AND invoice_id = $2 AND completed_at IS NULL
                ORDER BY entered_at DESC
-               LIMIT 1"#
+               LIMIT 1"#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(invoice_id.0)
@@ -546,7 +625,12 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
         Ok(result.map(|row| row.into_item()))
     }
 
-    async fn reassign_item(&self, tenant_id: &TenantId, item_id: Uuid, assigned_to: &UserId) -> Result<QueueItem> {
+    async fn reassign_item(
+        &self,
+        tenant_id: &TenantId,
+        item_id: Uuid,
+        assigned_to: &UserId,
+    ) -> Result<QueueItem> {
         let now = Utc::now();
 
         let update_result = sqlx::query("UPDATE queue_items SET assigned_to = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
@@ -565,12 +649,14 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
             });
         }
 
-        let result = sqlx::query_as::<_, QueueItemRow>("SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2")
-            .bind(item_id)
-            .bind(*tenant_id.as_uuid())
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| Error::Database(format!("Failed to get reassigned item: {}", e)))?;
+        let result = sqlx::query_as::<_, QueueItemRow>(
+            "SELECT * FROM queue_items WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(item_id)
+        .bind(*tenant_id.as_uuid())
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get reassigned item: {}", e)))?;
 
         Ok(result.into_item())
     }
@@ -578,7 +664,11 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
 #[async_trait]
 impl AssignmentRuleRepository for WorkflowRepositoryImpl {
-    async fn create(&self, tenant_id: &TenantId, input: CreateAssignmentRuleInput) -> Result<AssignmentRule> {
+    async fn create(
+        &self,
+        tenant_id: &TenantId,
+        input: CreateAssignmentRuleInput,
+    ) -> Result<AssignmentRule> {
         let id = AssignmentRuleId::new();
         let now = Utc::now();
 
@@ -617,9 +707,13 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_by_id(&self, tenant_id: &TenantId, id: &AssignmentRuleId) -> Result<Option<AssignmentRule>> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        id: &AssignmentRuleId,
+    ) -> Result<Option<AssignmentRule>> {
         let result = sqlx::query_as::<_, AssignmentRuleRow>(
-            "SELECT * FROM assignment_rules WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM assignment_rules WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -632,24 +726,32 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<AssignmentRule>> {
         let rows = sqlx::query_as::<_, AssignmentRuleRow>(
-            "SELECT * FROM assignment_rules WHERE tenant_id = $1 ORDER BY priority DESC"
+            "SELECT * FROM assignment_rules WHERE tenant_id = $1 ORDER BY priority DESC",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list assignment rules: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_rule(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: &AssignmentRuleId, input: CreateAssignmentRuleInput) -> Result<AssignmentRule> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: &AssignmentRuleId,
+        input: CreateAssignmentRuleInput,
+    ) -> Result<AssignmentRule> {
         let now = Utc::now();
 
         sqlx::query(
             r#"UPDATE assignment_rules SET
                 queue_id = $1, name = $2, description = $3, priority = $4,
                 conditions = $5, assign_to = $6, updated_at = $7
-            WHERE id = $8 AND tenant_id = $9"#
+            WHERE id = $8 AND tenant_id = $9"#,
         )
         .bind(input.queue_id.0)
         .bind(&input.name)
@@ -683,7 +785,11 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         Ok(())
     }
 
-    async fn list_for_queue(&self, tenant_id: &TenantId, queue_id: &WorkQueueId) -> Result<Vec<AssignmentRule>> {
+    async fn list_for_queue(
+        &self,
+        tenant_id: &TenantId,
+        queue_id: &WorkQueueId,
+    ) -> Result<Vec<AssignmentRule>> {
         let rows = sqlx::query_as::<_, AssignmentRuleRow>(
             "SELECT * FROM assignment_rules WHERE tenant_id = $1 AND queue_id = $2 ORDER BY priority DESC"
         )
@@ -693,10 +799,18 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to list assignment rules for queue: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_rule(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_rule(tenant_id))
+            .collect())
     }
 
-    async fn set_active(&self, tenant_id: &TenantId, id: &AssignmentRuleId, is_active: bool) -> Result<()> {
+    async fn set_active(
+        &self,
+        tenant_id: &TenantId,
+        id: &AssignmentRuleId,
+        is_active: bool,
+    ) -> Result<()> {
         sqlx::query("UPDATE assignment_rules SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(is_active)
             .bind(Utc::now())
@@ -712,14 +826,18 @@ impl AssignmentRuleRepository for WorkflowRepositoryImpl {
 
 #[async_trait]
 impl ApprovalRepository for WorkflowRepositoryImpl {
-    async fn create(&self, tenant_id: &TenantId, request: ApprovalRequest) -> Result<ApprovalRequest> {
+    async fn create(
+        &self,
+        tenant_id: &TenantId,
+        request: ApprovalRequest,
+    ) -> Result<ApprovalRequest> {
         let now = Utc::now();
 
         sqlx::query(
             r#"INSERT INTO approval_requests (
                 id, tenant_id, invoice_id, rule_id, requested_from, status,
                 expires_at, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
         .bind(request.id)
         .bind(*tenant_id.as_uuid())
@@ -745,7 +863,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalRequest>> {
         let result = sqlx::query_as::<_, ApprovalRequestRow>(
-            "SELECT * FROM approval_requests WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM approval_requests WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id)
         .bind(*tenant_id.as_uuid())
@@ -756,7 +874,11 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         Ok(result.map(|row| row.into_approval_request(tenant_id)))
     }
 
-    async fn list_for_invoice(&self, tenant_id: &TenantId, invoice_id: &InvoiceId) -> Result<Vec<ApprovalRequest>> {
+    async fn list_for_invoice(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: &InvoiceId,
+    ) -> Result<Vec<ApprovalRequest>> {
         let rows = sqlx::query_as::<_, ApprovalRequestRow>(
             "SELECT * FROM approval_requests WHERE tenant_id = $1 AND invoice_id = $2 ORDER BY created_at DESC"
         )
@@ -766,16 +888,23 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to list approval requests: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_approval_request(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_approval_request(tenant_id))
+            .collect())
     }
 
-    async fn list_pending_for_user(&self, tenant_id: &TenantId, user_id: &UserId) -> Result<Vec<ApprovalRequest>> {
+    async fn list_pending_for_user(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+    ) -> Result<Vec<ApprovalRequest>> {
         let rows = sqlx::query_as::<_, ApprovalRequestRow>(
             r#"SELECT * FROM approval_requests
                WHERE tenant_id = $1
                AND requested_from->>'User' = $2
                AND status = 'pending'
-               ORDER BY created_at DESC"#
+               ORDER BY created_at DESC"#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(user_id.0)
@@ -783,7 +912,10 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to get pending approvals: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_approval_request(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_approval_request(tenant_id))
+            .collect())
     }
 
     async fn respond(
@@ -799,7 +931,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         sqlx::query(
             r#"UPDATE approval_requests
                SET status = $1, comments = $2, responded_by = $3, responded_at = $4, updated_at = $5
-               WHERE id = $6 AND tenant_id = $7"#
+               WHERE id = $6 AND tenant_id = $7"#,
         )
         .bind(match status {
             ApprovalStatus::Pending => "pending",
@@ -842,7 +974,11 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
 
 #[async_trait]
 impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
-    async fn create(&self, tenant_id: &TenantId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate> {
+    async fn create(
+        &self,
+        tenant_id: &TenantId,
+        input: CreateWorkflowTemplateInput,
+    ) -> Result<WorkflowTemplate> {
         let id = WorkflowTemplateId::new();
         let now = Utc::now();
 
@@ -886,9 +1022,13 @@ impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_by_id(&self, tenant_id: &TenantId, id: &WorkflowTemplateId) -> Result<Option<WorkflowTemplate>> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowTemplateId,
+    ) -> Result<Option<WorkflowTemplate>> {
         let result = sqlx::query_as::<_, WorkflowTemplateRow>(
-            "SELECT * FROM workflow_templates WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM workflow_templates WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id.0)
         .bind(*tenant_id.as_uuid())
@@ -901,17 +1041,25 @@ impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<WorkflowTemplate>> {
         let rows = sqlx::query_as::<_, WorkflowTemplateRow>(
-            "SELECT * FROM workflow_templates WHERE tenant_id = $1 ORDER BY is_default DESC, name"
+            "SELECT * FROM workflow_templates WHERE tenant_id = $1 ORDER BY is_default DESC, name",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list workflow templates: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_template(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_template(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, input: CreateWorkflowTemplateInput) -> Result<WorkflowTemplate> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowTemplateId,
+        input: CreateWorkflowTemplateInput,
+    ) -> Result<WorkflowTemplate> {
         let now = Utc::now();
 
         // If this template is set as default, unset any existing default
@@ -927,7 +1075,7 @@ impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
         sqlx::query(
             r#"UPDATE workflow_templates SET
                 name = $1, description = $2, is_default = $3, stages = $4, updated_at = $5
-            WHERE id = $6 AND tenant_id = $7"#
+            WHERE id = $6 AND tenant_id = $7"#,
         )
         .bind(&input.name)
         .bind(&input.description)
@@ -959,7 +1107,12 @@ impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
         Ok(())
     }
 
-    async fn set_active(&self, tenant_id: &TenantId, id: &WorkflowTemplateId, is_active: bool) -> Result<()> {
+    async fn set_active(
+        &self,
+        tenant_id: &TenantId,
+        id: &WorkflowTemplateId,
+        is_active: bool,
+    ) -> Result<()> {
         sqlx::query("UPDATE workflow_templates SET is_active = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
             .bind(is_active)
             .bind(Utc::now())
@@ -1156,7 +1309,9 @@ impl ApprovalRequestRow {
             tenant_id: TenantId(self.tenant_id),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
-            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
+            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(
+                self.requested_from,
+            )),
             status: match self.status.as_str() {
                 "approved" => ApprovalStatus::Approved,
                 "rejected" => ApprovalStatus::Rejected,
@@ -1176,7 +1331,9 @@ impl ApprovalRequestRow {
             tenant_id: TenantId(self.tenant_id),
             invoice_id: InvoiceId(self.invoice_id),
             rule_id: WorkflowRuleId(Uuid::nil()),
-            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(self.requested_from)),
+            requested_from: billforge_core::domain::ApprovalTarget::User(UserId(
+                self.requested_from,
+            )),
             status: match self.status.as_str() {
                 "approved" => ApprovalStatus::Approved,
                 "rejected" => ApprovalStatus::Rejected,
@@ -1255,7 +1412,11 @@ impl DelegationRow {
 
 #[async_trait]
 impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
-    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation> {
+    async fn create(
+        &self,
+        tenant_id: &TenantId,
+        input: CreateApprovalDelegationInput,
+    ) -> Result<ApprovalDelegation> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let delegator_id = Uuid::parse_str(&input.delegator_id)
@@ -1275,7 +1436,7 @@ impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
         .bind(input.start_date)
         .bind(input.end_date)
         .bind(true)
-        .bind(input.conditions.as_ref().map(|c| sqlx::types::Json(c)))
+        .bind(input.conditions.as_ref().map(sqlx::types::Json))
         .bind(now)
         .execute(&*self.pool)
         .await
@@ -1294,9 +1455,13 @@ impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
         })
     }
 
-    async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalDelegation>> {
+    async fn get_by_id(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+    ) -> Result<Option<ApprovalDelegation>> {
         let result = sqlx::query_as::<_, DelegationRow>(
-            "SELECT * FROM approval_delegations WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM approval_delegations WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id)
         .bind(*tenant_id.as_uuid())
@@ -1309,17 +1474,25 @@ impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalDelegation>> {
         let rows = sqlx::query_as::<_, DelegationRow>(
-            "SELECT * FROM approval_delegations WHERE tenant_id = $1 ORDER BY created_at DESC"
+            "SELECT * FROM approval_delegations WHERE tenant_id = $1 ORDER BY created_at DESC",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list delegations: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_delegation(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_delegation(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalDelegationInput) -> Result<ApprovalDelegation> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        input: CreateApprovalDelegationInput,
+    ) -> Result<ApprovalDelegation> {
         let delegator_id = Uuid::parse_str(&input.delegator_id)
             .map_err(|_| Error::Validation("Invalid delegator ID".to_string()))?;
         let delegate_id = Uuid::parse_str(&input.delegate_id)
@@ -1328,13 +1501,13 @@ impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
         sqlx::query(
             r#"UPDATE approval_delegations SET
                 delegator_id = $1, delegate_id = $2, start_date = $3, end_date = $4, conditions = $5
-            WHERE id = $6 AND tenant_id = $7"#
+            WHERE id = $6 AND tenant_id = $7"#,
         )
         .bind(delegator_id)
         .bind(delegate_id)
         .bind(input.start_date)
         .bind(input.end_date)
-        .bind(input.conditions.as_ref().map(|c| sqlx::types::Json(c)))
+        .bind(input.conditions.as_ref().map(sqlx::types::Json))
         .bind(id)
         .bind(*tenant_id.as_uuid())
         .execute(&*self.pool)
@@ -1395,7 +1568,11 @@ impl ApprovalLimitRow {
 
 #[async_trait]
 impl ApprovalLimitRepository for WorkflowRepositoryImpl {
-    async fn create(&self, tenant_id: &TenantId, input: CreateApprovalLimitInput) -> Result<ApprovalLimit> {
+    async fn create(
+        &self,
+        tenant_id: &TenantId,
+        input: CreateApprovalLimitInput,
+    ) -> Result<ApprovalLimit> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let user_id = Uuid::parse_str(&input.user_id)
@@ -1411,8 +1588,8 @@ impl ApprovalLimitRepository for WorkflowRepositoryImpl {
         .bind(user_id)
         .bind(input.max_amount.amount)
         .bind(&input.max_amount.currency)
-        .bind(input.vendor_restrictions.as_ref().map(|v| sqlx::types::Json(v)))
-        .bind(input.department_restrictions.as_ref().map(|d| sqlx::types::Json(d)))
+        .bind(input.vendor_restrictions.as_ref().map(sqlx::types::Json))
+        .bind(input.department_restrictions.as_ref().map(sqlx::types::Json))
         .bind(now)
         .bind(now)
         .execute(&*self.pool)
@@ -1433,7 +1610,7 @@ impl ApprovalLimitRepository for WorkflowRepositoryImpl {
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalLimit>> {
         let result = sqlx::query_as::<_, ApprovalLimitRow>(
-            "SELECT * FROM approval_limits WHERE id = $1 AND tenant_id = $2"
+            "SELECT * FROM approval_limits WHERE id = $1 AND tenant_id = $2",
         )
         .bind(id)
         .bind(*tenant_id.as_uuid())
@@ -1446,17 +1623,25 @@ impl ApprovalLimitRepository for WorkflowRepositoryImpl {
 
     async fn list(&self, tenant_id: &TenantId) -> Result<Vec<ApprovalLimit>> {
         let rows = sqlx::query_as::<_, ApprovalLimitRow>(
-            "SELECT * FROM approval_limits WHERE tenant_id = $1 ORDER BY created_at DESC"
+            "SELECT * FROM approval_limits WHERE tenant_id = $1 ORDER BY created_at DESC",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_all(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to list approval limits: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.into_limit(tenant_id)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_limit(tenant_id))
+            .collect())
     }
 
-    async fn update(&self, tenant_id: &TenantId, id: Uuid, input: CreateApprovalLimitInput) -> Result<ApprovalLimit> {
+    async fn update(
+        &self,
+        tenant_id: &TenantId,
+        id: Uuid,
+        input: CreateApprovalLimitInput,
+    ) -> Result<ApprovalLimit> {
         let now = Utc::now();
         let user_id = Uuid::parse_str(&input.user_id)
             .map_err(|_| Error::Validation("Invalid user ID".to_string()))?;
@@ -1465,13 +1650,18 @@ impl ApprovalLimitRepository for WorkflowRepositoryImpl {
             r#"UPDATE approval_limits SET
                 user_id = $1, max_amount_cents = $2, currency = $3,
                 vendor_restrictions = $4, department_restrictions = $5, updated_at = $6
-            WHERE id = $7 AND tenant_id = $8"#
+            WHERE id = $7 AND tenant_id = $8"#,
         )
         .bind(user_id)
         .bind(input.max_amount.amount)
         .bind(&input.max_amount.currency)
-        .bind(input.vendor_restrictions.as_ref().map(|v| sqlx::types::Json(v)))
-        .bind(input.department_restrictions.as_ref().map(|d| sqlx::types::Json(d)))
+        .bind(input.vendor_restrictions.as_ref().map(sqlx::types::Json))
+        .bind(
+            input
+                .department_restrictions
+                .as_ref()
+                .map(sqlx::types::Json),
+        )
         .bind(now)
         .bind(id)
         .bind(*tenant_id.as_uuid())

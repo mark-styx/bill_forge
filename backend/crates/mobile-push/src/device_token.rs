@@ -130,14 +130,20 @@ mod tests {
     fn test_validate_fcm_token_too_long() {
         let token = "a".repeat(153);
         let result = validate_token(&token, DevicePlatform::Android);
-        assert!(matches!(result, Err(TokenValidationError::InvalidLength { .. })));
+        assert!(matches!(
+            result,
+            Err(TokenValidationError::InvalidLength { .. })
+        ));
     }
 
     #[test]
     fn test_validate_fcm_token_invalid_chars() {
         let token = "abc@123!";
         let result = validate_token(token, DevicePlatform::Android);
-        assert!(matches!(result, Err(TokenValidationError::InvalidFormat(_))));
+        assert!(matches!(
+            result,
+            Err(TokenValidationError::InvalidFormat(_))
+        ));
     }
 
     #[test]
@@ -151,14 +157,20 @@ mod tests {
     fn test_validate_apns_token_wrong_length() {
         let token = "a".repeat(63);
         let result = validate_token(&token, DevicePlatform::Ios);
-        assert!(matches!(result, Err(TokenValidationError::InvalidLength { .. })));
+        assert!(matches!(
+            result,
+            Err(TokenValidationError::InvalidLength { .. })
+        ));
     }
 
     #[test]
     fn test_validate_apns_token_not_hex() {
         let token = "g".repeat(64); // 'g' is not hex
         let result = validate_token(&token, DevicePlatform::Ios);
-        assert!(matches!(result, Err(TokenValidationError::InvalidFormat(_))));
+        assert!(matches!(
+            result,
+            Err(TokenValidationError::InvalidFormat(_))
+        ));
     }
 
     #[test]

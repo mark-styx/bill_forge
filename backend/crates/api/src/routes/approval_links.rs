@@ -204,14 +204,13 @@ pub async fn resolve_approval_for_link(
     new_status: &str,
 ) -> billforge_core::Result<()> {
     // 1. Resolve email -> user_id within the tenant
-    let user_id: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM users WHERE tenant_id = $1 AND email = $2",
-    )
-    .bind(*tenant_id.as_uuid())
-    .bind(approver_email)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let user_id: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM users WHERE tenant_id = $1 AND email = $2")
+            .bind(*tenant_id.as_uuid())
+            .bind(approver_email)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     let Some((user_id,)) = user_id else {
         tracing::warn!(
@@ -291,9 +290,15 @@ async fn approve_via_link(
     .map_err(ApprovalError::Core)?;
 
     // Resolve the matching approval_request row so multi-approver logic works.
-    resolve_approval_for_link(&pool, &tenant_id, claims.invoice_id, &claims.approver_email, "approved")
-        .await
-        .map_err(ApprovalError::Core)?;
+    resolve_approval_for_link(
+        &pool,
+        &tenant_id,
+        claims.invoice_id,
+        &claims.approver_email,
+        "approved",
+    )
+    .await
+    .map_err(ApprovalError::Core)?;
 
     mark_token_used(claims.jti).await;
 
@@ -339,9 +344,15 @@ async fn reject_via_link(
     .map_err(ApprovalError::Core)?;
 
     // Resolve the matching approval_request row so multi-approver logic works.
-    resolve_approval_for_link(&pool, &tenant_id, claims.invoice_id, &claims.approver_email, "rejected")
-        .await
-        .map_err(ApprovalError::Core)?;
+    resolve_approval_for_link(
+        &pool,
+        &tenant_id,
+        claims.invoice_id,
+        &claims.approver_email,
+        "rejected",
+    )
+    .await
+    .map_err(ApprovalError::Core)?;
 
     mark_token_used(claims.jti).await;
 
@@ -405,8 +416,7 @@ async fn comment_via_link(
 // ---------------------------------------------------------------------------
 
 fn success_page_html(action_text: &str, invoice_id: &str, color: &str, icon: &str) -> String {
-    let app_url =
-        std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     format!(
         r#"<!DOCTYPE html>

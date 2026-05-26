@@ -5,12 +5,15 @@
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
 use anyhow::{Context, Result};
-use async_openai::{Client, types::{CreateEmbeddingRequest, EmbeddingInput}};
+use async_openai::{
+    types::{CreateEmbeddingRequest, EmbeddingInput},
+    Client,
+};
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
-use super::categorization::{CategorySuggestion, CategoryType, SuggestionSource, LineItemInput};
+use super::categorization::{CategorySuggestion, CategoryType, LineItemInput, SuggestionSource};
 use super::feedback_loop::{CorrectionRule, FeedbackLearning};
 
 /// Internal confidence ceiling. Must be strictly greater than the STP
@@ -45,7 +48,10 @@ impl MLCategorizer {
         let config = async_openai::config::OpenAIConfig::new().with_api_key(openai_api_key);
         let openai_client = Client::with_config(config);
 
-        Self { pool, openai_client }
+        Self {
+            pool,
+            openai_client,
+        }
     }
 
     /// Generate embedding for text using OpenAI text-embedding-3-small
@@ -56,7 +62,8 @@ impl MLCategorizer {
             ..Default::default()
         };
 
-        let response = self.openai_client
+        let response = self
+            .openai_client
             .embeddings()
             .create(request)
             .await
@@ -153,7 +160,11 @@ impl MLCategorizer {
             })
             .collect();
 
-        matches.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         matches.truncate(limit);
 
         Ok(matches)
@@ -315,7 +326,8 @@ impl MLCategorizer {
         let cost_center = self.apply_calibration(cost_center, calibration_offset);
 
         // 7. Calculate overall confidence
-        let overall_confidence = self.calculate_overall_confidence(&gl_code, &department, &cost_center);
+        let overall_confidence =
+            self.calculate_overall_confidence(&gl_code, &department, &cost_center);
 
         Ok(InvoiceCategorization {
             invoice_id: Uuid::nil(), // Will be set by caller
@@ -363,7 +375,11 @@ impl MLCategorizer {
     }
 
     /// Get cached vendor embedding
-    async fn get_vendor_embedding(&self, tenant_id: &str, vendor_id: Uuid) -> Result<Option<Vec<f32>>> {
+    async fn get_vendor_embedding(
+        &self,
+        tenant_id: &str,
+        vendor_id: Uuid,
+    ) -> Result<Option<Vec<f32>>> {
         let row = sqlx::query(
             r#"
             SELECT embedding_vector
@@ -420,9 +436,9 @@ impl MLCategorizer {
         rules: &[CorrectionRule],
     ) -> Option<CategorySuggestion> {
         let s = suggestion.as_ref()?;
-        let matching_rule = rules.iter().find(|r| {
-            r.category_type == s.category_type && r.suggested_value == s.value
-        });
+        let matching_rule = rules
+            .iter()
+            .find(|r| r.category_type == s.category_type && r.suggested_value == s.value);
 
         match matching_rule {
             Some(rule) => Some(CategorySuggestion {
@@ -511,7 +527,8 @@ mod tests {
         );
 
         // High similarity with description
-        let conf1 = categorizer.calculate_embedding_confidence(0.92, Some("Software subscriptions"));
+        let conf1 =
+            categorizer.calculate_embedding_confidence(0.92, Some("Software subscriptions"));
         assert!(conf1 > 0.85 && conf1 <= CONFIDENCE_CEILING);
 
         // Medium similarity without description
@@ -628,10 +645,7 @@ mod tests {
         );
 
         let overall = categorizer.calculate_overall_confidence(&None, &None, &None);
-        assert!(
-            overall == 0.0,
-            "No fields should yield 0.0, got {overall}"
-        );
+        assert!(overall == 0.0, "No fields should yield 0.0, got {overall}");
     }
 
     // ========================================================================
@@ -677,8 +691,16 @@ mod tests {
         let result = c.apply_correction(&suggestion, &rules);
         let r = result.unwrap();
         assert_eq!(r.value, "6000-Software");
-        assert!(r.confidence > 0.80, "Confidence should be boosted, got {}", r.confidence);
-        assert!(r.confidence <= 0.99, "Confidence should not exceed internal ceiling, got {}", r.confidence);
+        assert!(
+            r.confidence > 0.80,
+            "Confidence should be boosted, got {}",
+            r.confidence
+        );
+        assert!(
+            r.confidence <= 0.99,
+            "Confidence should not exceed internal ceiling, got {}",
+            r.confidence
+        );
         assert!(r.reasoning.unwrap().contains("user corrections"));
     }
 

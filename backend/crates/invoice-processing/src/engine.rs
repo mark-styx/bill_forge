@@ -2,8 +2,8 @@
 
 use billforge_core::{
     domain::{
-        ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus,
-        RuleCondition, WorkflowRule, WorkflowRuleType,
+        ActionType, ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus,
+        RuleAction, RuleCondition, WorkflowRule, WorkflowRuleType,
     },
     traits::{ApprovalRepository, InvoiceRepository, WorkflowRuleRepository},
     types::{TenantId, UserId},
@@ -85,6 +85,31 @@ impl WorkflowEngine {
             }
         }
 
+        for rule in &routing_rules {
+            if !self.evaluate_conditions(invoice, &rule.conditions) {
+                continue;
+            }
+            if self.rule_has_action(rule, ActionType::AutoApprove) {
+                return Ok(ProcessingStatus::Approved);
+            }
+            let approval_actions = self.approval_actions(rule);
+            if !approval_actions.is_empty() {
+                for action in approval_actions {
+                    self.create_approval_request_for_action(tenant_id, invoice, rule, action)
+                        .await?;
+                }
+                return Ok(ProcessingStatus::PendingApproval);
+            }
+            if self.rule_has_action(rule, ActionType::RouteToQueue) {
+                tracing::info!(
+                    invoice_id = %invoice.id.as_uuid(),
+                    rule_id = %rule.id,
+                    "Routing rule requested queue routing; invoice remains submitted for queue assignment"
+                );
+                return Ok(ProcessingStatus::Submitted);
+            }
+        }
+
         // Check if approval is required
         let mut approvals_needed = Vec::new();
         for rule in &approval_rules {
@@ -96,7 +121,8 @@ impl WorkflowEngine {
         if !approvals_needed.is_empty() {
             // Create approval requests
             for rule in approvals_needed {
-                self.create_approval_request(tenant_id, invoice, &rule).await?;
+                self.create_approval_request(tenant_id, invoice, &rule)
+                    .await?;
             }
             return Ok(ProcessingStatus::PendingApproval);
         }
@@ -115,6 +141,24 @@ impl WorkflowEngine {
         billforge_core::workflow_evaluator::evaluate_single_condition(invoice, condition)
     }
 
+    fn rule_has_action(&self, rule: &WorkflowRule, action_type: ActionType) -> bool {
+        rule.actions
+            .iter()
+            .any(|action| action.action_type == action_type)
+    }
+
+    fn approval_actions<'a>(&self, rule: &'a WorkflowRule) -> Vec<&'a RuleAction> {
+        rule.actions
+            .iter()
+            .filter(|action| {
+                matches!(
+                    action.action_type,
+                    ActionType::RequireApproval | ActionType::RequireRoleApproval
+                )
+            })
+            .collect()
+    }
+
     /// Create an approval request
     async fn create_approval_request(
         &self,
@@ -122,14 +166,64 @@ impl WorkflowEngine {
         invoice: &Invoice,
         rule: &WorkflowRule,
     ) -> Result<()> {
-        // Extract approval target from rule actions
-        // This is a simplified implementation
+        if !self.approval_actions(rule).is_empty() {
+            for action in self.approval_actions(rule) {
+                self.create_approval_request_for_action(tenant_id, invoice, rule, action)
+                    .await?;
+            }
+            return Ok(());
+        }
+
+        self.create_approval_request_with_target(
+            tenant_id,
+            invoice,
+            rule,
+            ApprovalTarget::Role("approver".to_string()),
+        )
+        .await
+    }
+
+    async fn create_approval_request_for_action(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        rule: &WorkflowRule,
+        action: &RuleAction,
+    ) -> Result<()> {
+        let target = match action.action_type {
+            ActionType::RequireApproval => action
+                .params
+                .get("user_id")
+                .and_then(|value| value.as_str())
+                .and_then(|user_id| uuid::Uuid::parse_str(user_id).ok())
+                .map(|user_id| ApprovalTarget::User(UserId::from_uuid(user_id)))
+                .unwrap_or_else(|| ApprovalTarget::Role("approver".to_string())),
+            ActionType::RequireRoleApproval => action
+                .params
+                .get("role")
+                .and_then(|value| value.as_str())
+                .map(|role| ApprovalTarget::Role(role.to_string()))
+                .unwrap_or_else(|| ApprovalTarget::Role("approver".to_string())),
+            _ => ApprovalTarget::Role("approver".to_string()),
+        };
+
+        self.create_approval_request_with_target(tenant_id, invoice, rule, target)
+            .await
+    }
+
+    async fn create_approval_request_with_target(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        rule: &WorkflowRule,
+        target: ApprovalTarget,
+    ) -> Result<()> {
         let request = ApprovalRequest {
             id: uuid::Uuid::new_v4(),
             invoice_id: invoice.id.clone(),
             tenant_id: tenant_id.clone(),
             rule_id: rule.id.clone(),
-            requested_from: ApprovalTarget::Role("approver".to_string()),
+            requested_from: target,
             status: ApprovalStatus::Pending,
             comments: None,
             responded_by: None,
@@ -169,12 +263,18 @@ impl WorkflowEngine {
             .await?;
 
         // Check if any are rejected
-        if all_approvals.iter().any(|a| a.status == ApprovalStatus::Rejected) {
+        if all_approvals
+            .iter()
+            .any(|a| a.status == ApprovalStatus::Rejected)
+        {
             return Ok(ProcessingStatus::Rejected);
         }
 
         // Check if all are approved
-        if all_approvals.iter().all(|a| a.status == ApprovalStatus::Approved) {
+        if all_approvals
+            .iter()
+            .all(|a| a.status == ApprovalStatus::Approved)
+        {
             return Ok(ProcessingStatus::Approved);
         }
 

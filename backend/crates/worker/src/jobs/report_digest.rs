@@ -2,19 +2,23 @@
 
 use crate::config::WorkerConfig;
 use anyhow::Result;
-use billforge_reporting::{ReportingService, DigestType};
 use billforge_email::EmailService;
-use chrono::{Utc, NaiveDate, Duration, Datelike};
-use tracing::{info, warn, error};
+use billforge_reporting::{DigestType, ReportingService};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 pub async fn send_digests(tenant_id_str: &str, config: &WorkerConfig) -> Result<()> {
     info!("Processing report digests for tenant: {}", tenant_id_str);
 
-    let tenant_id = tenant_id_str.parse()
+    let tenant_id = tenant_id_str
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid tenant ID: {}", e))?;
 
-    let pool = config.pg_manager.tenant(&tenant_id).await
+    let pool = config
+        .pg_manager
+        .tenant(&tenant_id)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to get tenant database: {}", e))?;
 
     let reporting_service = ReportingService::new();
@@ -41,13 +45,25 @@ pub async fn send_digests(tenant_id_str: &str, config: &WorkerConfig) -> Result<
         return Ok(());
     }
 
-    info!("Processing {} due digests for tenant: {}", due_digests.len(), tenant_id_str);
+    info!(
+        "Processing {} due digests for tenant: {}",
+        due_digests.len(),
+        tenant_id_str
+    );
 
     let mut sent_count = 0;
     let mut failed_count = 0;
 
     for digest in due_digests {
-        match process_digest(&reporting_service, &email_service, &pool, &digest, tenant_id_str).await {
+        match process_digest(
+            &reporting_service,
+            &email_service,
+            &pool,
+            &digest,
+            tenant_id_str,
+        )
+        .await
+        {
             Ok(_) => {
                 mark_digest_sent(&pool, digest.id).await?;
                 sent_count += 1;
@@ -101,9 +117,14 @@ async fn process_digest(
     };
 
     use billforge_email::EmailService;
-    email_service.send(&user_email, &subject, &html_body, &text_body).await?;
+    email_service
+        .send(&user_email, &subject, &html_body, &text_body)
+        .await?;
 
-    info!("Sent {:?} digest to {} for user {}", digest.digest_type, user_email, digest.user_id);
+    info!(
+        "Sent {:?} digest to {} for user {}",
+        digest.digest_type, user_email, digest.user_id
+    );
 
     Ok(())
 }
@@ -112,9 +133,7 @@ fn calculate_period(digest_type: &DigestType) -> (NaiveDate, NaiveDate) {
     let today = Utc::now().naive_utc().date();
 
     match digest_type {
-        DigestType::DailySummary => {
-            (today - Duration::days(1), today - Duration::days(1))
-        }
+        DigestType::DailySummary => (today - Duration::days(1), today - Duration::days(1)),
         DigestType::WeeklySummary => {
             let end = today - Duration::days(1);
             let start = end - Duration::days(6);
@@ -125,9 +144,7 @@ fn calculate_period(digest_type: &DigestType) -> (NaiveDate, NaiveDate) {
             let start = NaiveDate::from_ymd_opt(end.year(), end.month(), 1).unwrap_or(end);
             (start, end)
         }
-        DigestType::ApprovalReminder => {
-            (today - Duration::days(7), today)
-        }
+        DigestType::ApprovalReminder => (today - Duration::days(7), today),
     }
 }
 
@@ -137,12 +154,10 @@ async fn get_user_email(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String> {
         email: String,
     }
 
-    let row = sqlx::query_as::<_, UserRow>(
-        r#"SELECT email FROM users WHERE id = $1"#
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await?;
+    let row = sqlx::query_as::<_, UserRow>(r#"SELECT email FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
 
     Ok(row.email)
 }
@@ -161,7 +176,7 @@ async fn mark_digest_sent(pool: &sqlx::PgPool, digest_id: Uuid) -> Result<()> {
             END,
             updated_at = $1
         WHERE id = $2
-        "#
+        "#,
     )
     .bind(now)
     .bind(digest_id)
@@ -177,21 +192,32 @@ fn generate_digest_email(
 ) -> (String, String) {
     let period_str = match content.digest_type {
         DigestType::DailySummary => format!("Daily Report for {}", content.period_end),
-        DigestType::WeeklySummary => format!("Weekly Report ({} to {})", content.period_start, content.period_end),
-        DigestType::MonthlySummary => format!("Monthly Report for {}", content.period_end.format("%B %Y")),
+        DigestType::WeeklySummary => format!(
+            "Weekly Report ({} to {})",
+            content.period_start, content.period_end
+        ),
+        DigestType::MonthlySummary => {
+            format!("Monthly Report for {}", content.period_end.format("%B %Y"))
+        }
         DigestType::ApprovalReminder => "Pending Approvals".to_string(),
     };
 
     let mut highlights_html = String::new();
     for highlight in &content.highlights {
-        let value_str = highlight.value.map(|v| format!("${:.2}", v)).unwrap_or_default();
-        let change_str = highlight.change_percentage.map(|p| {
-            if p > 0.0 {
-                format!("<span style=\"color: green;\">↑ {:.1}%</span>", p.abs())
-            } else {
-                format!("<span style=\"color: red;\">↓ {:.1}%</span>", p.abs())
-            }
-        }).unwrap_or_default();
+        let value_str = highlight
+            .value
+            .map(|v| format!("${:.2}", v))
+            .unwrap_or_default();
+        let change_str = highlight
+            .change_percentage
+            .map(|p| {
+                if p > 0.0 {
+                    format!("<span style=\"color: green;\">↑ {:.1}%</span>", p.abs())
+                } else {
+                    format!("<span style=\"color: red;\">↓ {:.1}%</span>", p.abs())
+                }
+            })
+            .unwrap_or_default();
 
         highlights_html.push_str(&format!(
             r#"<div class="info-row">
@@ -218,7 +244,10 @@ fn generate_digest_email(
                 </div>
                 <p style="margin: 0; color: #6b7280;">{}</p>
             </div>"#,
-            priority_color, item.priority.to_uppercase(), item.title, item.description
+            priority_color,
+            item.priority.to_uppercase(),
+            item.title,
+            item.description
         ));
     }
 
@@ -326,12 +355,19 @@ fn generate_digest_email(
         content.summary.pending_approvals,
         content.summary.avg_processing_time_hours,
         if !content.highlights.is_empty() {
-            format!("<div class=\"info-box\"><h3 style=\"margin-top: 0;\">Highlights</h3>{}</div>", highlights_html)
+            format!(
+                "<div class=\"info-box\"><h3 style=\"margin-top: 0;\">Highlights</h3>{}</div>",
+                highlights_html
+            )
         } else {
             String::new()
         },
         if !content.actionable_items.is_empty() {
-            format!("<h3>Action Required</h3><p>You have {} items pending your review:</p>{}", content.actionable_items.len(), items_html)
+            format!(
+                "<h3>Action Required</h3><p>You have {} items pending your review:</p>{}",
+                content.actionable_items.len(),
+                items_html
+            )
         } else {
             String::new()
         },
@@ -362,14 +398,23 @@ This email was sent by BillForge."#,
         content.summary.rejected_count,
         content.summary.avg_processing_time_hours,
         if !content.highlights.is_empty() {
-            format!("Highlights:\n{}", content.highlights.iter().map(|h| {
-                format!("- {}: {}", h.title, h.description)
-            }).collect::<Vec<_>>().join("\n"))
+            format!(
+                "Highlights:\n{}",
+                content
+                    .highlights
+                    .iter()
+                    .map(|h| { format!("- {}: {}", h.title, h.description) })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         } else {
             String::new()
         },
         if !content.actionable_items.is_empty() {
-            format!("Action Required:\nYou have {} items pending your review", content.actionable_items.len())
+            format!(
+                "Action Required:\nYou have {} items pending your review",
+                content.actionable_items.len()
+            )
         } else {
             String::new()
         },

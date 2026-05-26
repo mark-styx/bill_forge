@@ -62,11 +62,15 @@ async fn export_invoices_csv(
     // Build filters from query parameters
     let filters = billforge_core::domain::InvoiceFilters {
         vendor_id: query.vendor_id.and_then(|v| uuid::Uuid::parse_str(&v).ok()),
-        processing_status: query.status.and_then(|s| {
-            billforge_core::domain::ProcessingStatus::from_str(&s)
-        }),
-        date_from: query.start_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
-        date_to: query.end_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+        processing_status: query
+            .status
+            .and_then(|s| billforge_core::domain::ProcessingStatus::from_str(&s)),
+        date_from: query
+            .start_date
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+        date_to: query
+            .end_date
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
         ..Default::default()
     };
 
@@ -76,7 +80,9 @@ async fn export_invoices_csv(
     };
 
     let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    let result = invoice_repo.list(&tenant.tenant_id, &filters, &pagination).await?;
+    let result = invoice_repo
+        .list(&tenant.tenant_id, &filters, &pagination)
+        .await?;
 
     // Build CSV content
     let mut csv_rows = vec![
@@ -90,7 +96,10 @@ async fn export_invoices_csv(
             invoice.id.0,
             csv_escape(&invoice.vendor_name),
             csv_escape(&invoice.invoice_number),
-            invoice.invoice_date.map(|d| d.to_string()).unwrap_or_default(),
+            invoice
+                .invoice_date
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
             invoice.due_date.map(|d| d.to_string()).unwrap_or_default(),
             invoice.total_amount.amount as f64 / 100.0,
             invoice.currency,
@@ -134,11 +143,15 @@ async fn export_invoices_json(
     // Build filters from query parameters
     let filters = billforge_core::domain::InvoiceFilters {
         vendor_id: query.vendor_id.and_then(|v| uuid::Uuid::parse_str(&v).ok()),
-        processing_status: query.status.and_then(|s| {
-            billforge_core::domain::ProcessingStatus::from_str(&s)
-        }),
-        date_from: query.start_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
-        date_to: query.end_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+        processing_status: query
+            .status
+            .and_then(|s| billforge_core::domain::ProcessingStatus::from_str(&s)),
+        date_from: query
+            .start_date
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+        date_to: query
+            .end_date
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
         ..Default::default()
     };
 
@@ -148,7 +161,9 @@ async fn export_invoices_json(
     };
 
     let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool);
-    let result = invoice_repo.list(&tenant.tenant_id, &filters, &pagination).await?;
+    let result = invoice_repo
+        .list(&tenant.tenant_id, &filters, &pagination)
+        .await?;
 
     // Build JSON structure
     let json_content = serde_json::json!({
@@ -219,17 +234,24 @@ async fn export_vendors_csv(
     };
 
     let vendor_repo = billforge_db::repositories::VendorRepositoryImpl::new(pool);
-    let result = vendor_repo.list(&tenant.tenant_id, &filters, &pagination).await?;
+    let result = vendor_repo
+        .list(&tenant.tenant_id, &filters, &pagination)
+        .await?;
 
     // Build CSV content
     let mut csv_rows = vec![
-        "vendor_id,name,legal_name,email,phone,status,vendor_type,tax_id,payment_terms"
-            .to_string(),
+        "vendor_id,name,legal_name,email,phone,status,vendor_type,tax_id,payment_terms".to_string(),
     ];
 
     for vendor in result.data {
-        let status_str = serde_json::to_string(&vendor.status).unwrap_or_default().trim_matches('"').to_string();
-        let type_str = serde_json::to_string(&vendor.vendor_type).unwrap_or_default().trim_matches('"').to_string();
+        let status_str = serde_json::to_string(&vendor.status)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        let type_str = serde_json::to_string(&vendor.vendor_type)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
 
         let row = format!(
             "{},{},{},{},{},{},{},{},{}",

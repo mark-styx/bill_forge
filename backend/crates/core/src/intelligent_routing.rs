@@ -9,11 +9,7 @@
 //!
 //! The system learns from outcomes to improve routing decisions over time.
 
-use crate::{
-    domain::Invoice,
-    types::TenantId,
-    Error, Result, UserId,
-};
+use crate::{domain::Invoice, types::TenantId, Error, Result, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -195,10 +191,7 @@ impl std::str::FromStr for ExpertiseType {
             "department" => Ok(Self::Department),
             "gl_code" => Ok(Self::GlCode),
             "amount_range" => Ok(Self::AmountRange),
-            _ => Err(Error::Validation(format!(
-                "Invalid expertise type: {}",
-                s
-            ))),
+            _ => Err(Error::Validation(format!("Invalid expertise type: {}", s))),
         }
     }
 }
@@ -300,10 +293,7 @@ impl IntelligentRoutingEngine {
         // Pick best from available pool; fall back to full pool only if all are unavailable
         let (pool, strategy_override): (Vec<&CandidateScore>, Option<RoutingStrategy>) =
             if available.is_empty() {
-                (
-                    candidates.iter().collect(),
-                    Some(RoutingStrategy::Fallback),
-                )
+                (candidates.iter().collect(), Some(RoutingStrategy::Fallback))
             } else {
                 (available, None)
             };
@@ -319,14 +309,13 @@ impl IntelligentRoutingEngine {
             .expect("At least one candidate exists");
 
         // Check if delegation applies
-        let (final_approver, delegated_from) = self.apply_delegation(
-            best.user_id.clone(),
-            availabilities,
-        );
+        let (final_approver, delegated_from) =
+            self.apply_delegation(best.user_id.clone(), availabilities);
 
         // Determine strategy used (respect override when all unavailable)
-        let strategy = strategy_override
-            .unwrap_or_else(|| self.determine_strategy(&pool.iter().map(|cs| (*cs).clone()).collect::<Vec<_>>()));
+        let strategy = strategy_override.unwrap_or_else(|| {
+            self.determine_strategy(&pool.iter().map(|cs| (*cs).clone()).collect::<Vec<_>>())
+        });
 
         RoutingDecision {
             approver_id: Some(final_approver),
@@ -440,19 +429,17 @@ impl IntelligentRoutingEngine {
         let now = Utc::now();
 
         // Find active availability record
-        let active_availability = availabilities.iter().find(|a| {
-            a.user_id == *user_id && a.start_at <= now && a.end_at > now
-        });
+        let active_availability = availabilities
+            .iter()
+            .find(|a| a.user_id == *user_id && a.start_at <= now && a.end_at > now);
 
         match active_availability {
-            Some(availability) => {
-                match availability.status {
-                    AvailabilityStatus::Available => 1.0,
-                    AvailabilityStatus::Busy => 0.3,
-                    AvailabilityStatus::OutOfOffice => 0.0,
-                    AvailabilityStatus::Vacation => 0.0,
-                }
-            }
+            Some(availability) => match availability.status {
+                AvailabilityStatus::Available => 1.0,
+                AvailabilityStatus::Busy => 0.3,
+                AvailabilityStatus::OutOfOffice => 0.0,
+                AvailabilityStatus::Vacation => 0.0,
+            },
             None => {
                 // No explicit availability record - check working hours
                 if self.is_within_working_hours(now) {
@@ -520,20 +507,24 @@ impl IntelligentRoutingEngine {
         }
 
         // Check if expertise was a major differentiator
-        let expertise_range = candidates.iter().map(|c| c.expertise_score).fold(
-            (f64::MAX, f64::MIN),
-            |(min, max), score| (min.min(score), max.max(score)),
-        );
+        let expertise_range = candidates
+            .iter()
+            .map(|c| c.expertise_score)
+            .fold((f64::MAX, f64::MIN), |(min, max), score| {
+                (min.min(score), max.max(score))
+            });
 
         if expertise_range.1 - expertise_range.0 > 0.3 {
             return RoutingStrategy::ExpertBased;
         }
 
         // Check if workload was a major differentiator
-        let workload_range = candidates.iter().map(|c| c.workload_score).fold(
-            (f64::MAX, f64::MIN),
-            |(min, max), score| (min.min(score), max.max(score)),
-        );
+        let workload_range = candidates
+            .iter()
+            .map(|c| c.workload_score)
+            .fold((f64::MAX, f64::MIN), |(min, max), score| {
+                (min.min(score), max.max(score))
+            });
 
         if workload_range.1 - workload_range.0 > 0.3 {
             return RoutingStrategy::LeastLoaded;
@@ -625,7 +616,7 @@ mod tests {
             custom_fields: serde_json::json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            created_by: UserId(Uuid::new_v4()),
+            created_by: Some(UserId(Uuid::new_v4())),
         }
     }
 
@@ -697,7 +688,7 @@ mod tests {
 
         let decision = engine.route_invoice(
             &invoice,
-            &[approver1.clone()],
+            std::slice::from_ref(&approver1),
             &HashMap::new(),
             &[ApproverAvailability {
                 user_id: approver1.clone(),

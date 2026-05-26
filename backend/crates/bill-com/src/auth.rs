@@ -4,6 +4,7 @@
 //! 1. POST /v3/login with devKey + orgId + userName + password
 //! 2. Receive sessionId in JSON response
 //! 3. Include devKey + sessionId headers in all subsequent requests
+//!
 //! Sessions are long-lived but can be explicitly logged out.
 
 use crate::types::BillComSession;
@@ -99,10 +100,7 @@ impl BillComAuth {
             .unwrap_or(&self.config.org_id)
             .to_string();
 
-        let user_id = parsed["userId"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let user_id = parsed["userId"].as_str().unwrap_or_default().to_string();
 
         tracing::info!(
             org_id = %org_id,

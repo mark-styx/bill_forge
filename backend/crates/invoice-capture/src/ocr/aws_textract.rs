@@ -36,8 +36,7 @@ impl AwsTextractOcr {
     /// - AWS_REGION (optional, defaults to us-east-1)
     pub fn new() -> Self {
         Self {
-            region: std::env::var("AWS_REGION")
-                .unwrap_or_else(|_| "us-east-1".to_string()),
+            region: std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
             enable_tables: true,
@@ -58,12 +57,15 @@ impl AwsTextractOcr {
 
     /// Check if AWS credentials are configured
     pub fn is_configured() -> bool {
-        std::env::var("AWS_ACCESS_KEY_ID").is_ok()
-            && std::env::var("AWS_SECRET_ACCESS_KEY").is_ok()
+        std::env::var("AWS_ACCESS_KEY_ID").is_ok() && std::env::var("AWS_SECRET_ACCESS_KEY").is_ok()
     }
 
     /// Call AWS Textract API to extract document text and structure
-    async fn call_textract_api(&self, document_bytes: &[u8], mime_type: &str) -> Result<TextractResponse> {
+    async fn call_textract_api(
+        &self,
+        document_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<TextractResponse> {
         // Check if credentials are available
         if !Self::is_configured() {
             return Err(Error::Ocr(
@@ -117,15 +119,28 @@ impl AwsTextractOcr {
                 },
             ],
             tables: if self.enable_tables {
-                vec![
-                    TableBlock {
-                        rows: vec![
-                            vec!["Description".to_string(), "Qty".to_string(), "Unit Price".to_string(), "Amount".to_string()],
-                            vec!["Consulting Services".to_string(), "10".to_string(), "$100.00".to_string(), "$1,000.00".to_string()],
-                            vec!["Support".to_string(), "5".to_string(), "$50.00".to_string(), "$250.00".to_string()],
+                vec![TableBlock {
+                    rows: vec![
+                        vec![
+                            "Description".to_string(),
+                            "Qty".to_string(),
+                            "Unit Price".to_string(),
+                            "Amount".to_string(),
                         ],
-                    },
-                ]
+                        vec![
+                            "Consulting Services".to_string(),
+                            "10".to_string(),
+                            "$100.00".to_string(),
+                            "$1,000.00".to_string(),
+                        ],
+                        vec![
+                            "Support".to_string(),
+                            "5".to_string(),
+                            "$50.00".to_string(),
+                            "$250.00".to_string(),
+                        ],
+                    ],
+                }]
             } else {
                 vec![]
             },
@@ -150,25 +165,30 @@ impl AwsTextractOcr {
 
     /// Parse Textract response into OcrExtractionResult
     fn parse_textract_response(&self, response: &TextractResponse) -> OcrExtractionResult {
-        let raw_text: String = response.blocks
+        let raw_text: String = response
+            .blocks
             .iter()
             .map(|b| b.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
 
         // Extract fields from forms (higher confidence)
-        let invoice_number = response.forms
+        let invoice_number = response
+            .forms
             .iter()
             .find(|f| f.key.to_lowercase().contains("invoice"))
             .map(|f| ExtractedField::with_value(f.value.clone(), f.confidence / 100.0))
             .unwrap_or_else(|| self.extract_invoice_number_from_text(&raw_text));
 
-        let total_amount = response.forms
+        let total_amount = response
+            .forms
             .iter()
             .find(|f| f.key.to_lowercase().contains("total"))
             .and_then(|f| self.parse_amount(&f.value))
             .map(|(amt, conf)| ExtractedField::with_value(amt, conf))
-            .unwrap_or_else(|| self.extract_amount_from_text(&raw_text, &["total", "amount due", "grand total"]));
+            .unwrap_or_else(|| {
+                self.extract_amount_from_text(&raw_text, &["total", "amount due", "grand total"])
+            });
 
         // Extract line items from tables
         let line_items = if self.enable_tables && !response.tables.is_empty() {
@@ -179,11 +199,13 @@ impl AwsTextractOcr {
 
         OcrExtractionResult {
             invoice_number,
-            invoice_date: self.extract_date_from_text(&raw_text, &["invoice date", "date:", "inv date"]),
+            invoice_date: self
+                .extract_date_from_text(&raw_text, &["invoice date", "date:", "inv date"]),
             due_date: self.extract_date_from_text(&raw_text, &["due date", "payment due", "due:"]),
             vendor_name: self.extract_vendor_name(&raw_text),
             vendor_address: ExtractedField::empty(),
-            subtotal: self.extract_amount_from_text(&raw_text, &["subtotal", "sub total", "sub-total"]),
+            subtotal: self
+                .extract_amount_from_text(&raw_text, &["subtotal", "sub total", "sub-total"]),
             tax_amount: self.extract_amount_from_text(&raw_text, &["tax", "vat", "gst"]),
             total_amount,
             currency: self.extract_currency(&raw_text),
@@ -265,9 +287,15 @@ impl AwsTextractOcr {
 
         for line in lines.iter().take(10) {
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
-            if trimmed.to_lowercase().contains("invoice") { continue; }
-            if trimmed.starts_with('$') { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.to_lowercase().contains("invoice") {
+                continue;
+            }
+            if trimmed.starts_with('$') {
+                continue;
+            }
 
             if trimmed.len() > 3 && trimmed.len() < 60 {
                 let has_alpha = trimmed.chars().any(|c| c.is_alphabetic());
@@ -377,9 +405,15 @@ impl AwsTextractOcr {
                     if !description.is_empty() {
                         items.push(ExtractedLineItem {
                             description: ExtractedField::with_value(description, 0.85),
-                            quantity: quantity.map(|q| ExtractedField::with_value(q, 0.8)).unwrap_or_else(ExtractedField::empty),
-                            unit_price: unit_price.map(|p| ExtractedField::with_value(p, 0.8)).unwrap_or_else(ExtractedField::empty),
-                            amount: amount.map(|a| ExtractedField::with_value(a, 0.85)).unwrap_or_else(ExtractedField::empty),
+                            quantity: quantity
+                                .map(|q| ExtractedField::with_value(q, 0.8))
+                                .unwrap_or_else(ExtractedField::empty),
+                            unit_price: unit_price
+                                .map(|p| ExtractedField::with_value(p, 0.8))
+                                .unwrap_or_else(ExtractedField::empty),
+                            amount: amount
+                                .map(|a| ExtractedField::with_value(a, 0.85))
+                                .unwrap_or_else(ExtractedField::empty),
                         });
                     }
                 }
@@ -523,14 +557,22 @@ mod tests {
     fn test_extract_line_items_from_tables() {
         let ocr = AwsTextractOcr::new();
 
-        let tables = vec![
-            TableBlock {
-                rows: vec![
-                    vec!["Description".to_string(), "Qty".to_string(), "Unit Price".to_string(), "Amount".to_string()],
-                    vec!["Consulting".to_string(), "10".to_string(), "$100.00".to_string(), "$1,000.00".to_string()],
+        let tables = vec![TableBlock {
+            rows: vec![
+                vec![
+                    "Description".to_string(),
+                    "Qty".to_string(),
+                    "Unit Price".to_string(),
+                    "Amount".to_string(),
                 ],
-            },
-        ];
+                vec![
+                    "Consulting".to_string(),
+                    "10".to_string(),
+                    "$100.00".to_string(),
+                    "$1,000.00".to_string(),
+                ],
+            ],
+        }];
 
         let items = ocr.extract_line_items_from_tables(&tables);
         assert_eq!(items.len(), 1);

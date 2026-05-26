@@ -3,14 +3,14 @@
 //! Provides analytics and reporting capabilities for BillForge platform.
 
 use crate::models::*;
-use billforge_core::{types::TenantId, Result, Error};
-use sqlx::{PgPool, Row, Column};
+use billforge_core::{types::TenantId, Error, Result};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use sqlx::{Column, PgPool, Row};
 use std::sync::Arc;
-use chrono::{NaiveDate, DateTime, Utc, Duration, Datelike, Timelike};
 
 // Re-export models used in public API
 pub use crate::models::{
-    SpendTrendPoint, CategoryBreakdown, VendorPerformanceMetrics, ApprovalAnalytics,
+    ApprovalAnalytics, CategoryBreakdown, SpendTrendPoint, VendorPerformanceMetrics,
 };
 
 /// Service for generating reports from tenant data
@@ -76,7 +76,7 @@ impl ReportingService {
 
         // Count active vendors
         let vendors_active: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM vendors WHERE tenant_id = $1 AND status = 'active'"
+            "SELECT COUNT(*) FROM vendors WHERE tenant_id = $1 AND status = 'active'",
         )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
@@ -95,7 +95,7 @@ impl ReportingService {
             WHERE tenant_id = $1
             AND processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
@@ -203,7 +203,7 @@ impl ReportingService {
             FROM invoices i
             LEFT JOIN vendors v ON i.vendor_id = v.id
             WHERE i.vendor_id IS NOT NULL AND i.tenant_id = $1
-            "#
+            "#,
         );
 
         let mut param_count = 2;
@@ -239,18 +239,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (Some(start), None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -261,18 +264,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (None, Some(end)) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -283,18 +289,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
             (None, None) => {
                 let rows = sqlx::query_as::<_, VendorSpendRow>(&query_str)
@@ -304,18 +313,21 @@ impl ReportingService {
                     .await
                     .map_err(|e| Error::Database(format!("Failed to query vendor spend: {}", e)))?;
 
-                Ok(rows.into_iter().map(|row| VendorSpend {
-                    vendor_id: row.vendor_id.unwrap_or_default(),
-                    vendor_name: row.vendor_name,
-                    invoice_count: row.invoice_count as u64,
-                    total_spend: (row.total_spend as f64) / 100.0,
-                    avg_invoice_amount: if row.invoice_count > 0 {
-                        (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
-                    } else {
-                        0.0
-                    },
-                    last_invoice_date: row.last_invoice_date,
-                }).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| VendorSpend {
+                        vendor_id: row.vendor_id.unwrap_or_default(),
+                        vendor_name: row.vendor_name,
+                        invoice_count: row.invoice_count as u64,
+                        total_spend: (row.total_spend as f64) / 100.0,
+                        avg_invoice_amount: if row.invoice_count > 0 {
+                            (row.total_spend as f64) / (row.invoice_count as f64) / 100.0
+                        } else {
+                            0.0
+                        },
+                        last_invoice_date: row.last_invoice_date,
+                    })
+                    .collect())
             }
         }
     }
@@ -331,7 +343,8 @@ impl ReportingService {
         let year_start = NaiveDate::from_ymd_opt(now.year(), 1, 1)
             .ok_or_else(|| Error::Validation("Invalid year start date".to_string()))?;
 
-        self.get_vendor_spend(tenant_id, pool, Some(year_start), Some(now), limit).await
+        self.get_vendor_spend(tenant_id, pool, Some(year_start), Some(now), limit)
+            .await
     }
 
     /// Get MTD spend by vendor
@@ -345,7 +358,8 @@ impl ReportingService {
         let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
             .ok_or_else(|| Error::Validation("Invalid month start date".to_string()))?;
 
-        self.get_vendor_spend(tenant_id, pool, Some(month_start), Some(now), limit).await
+        self.get_vendor_spend(tenant_id, pool, Some(month_start), Some(now), limit)
+            .await
     }
 
     /// Get count of invoices processed this week (Monday to current day)
@@ -366,7 +380,7 @@ impl ReportingService {
             WHERE tenant_id = $1
             AND capture_status = 'reviewed'
             AND DATE(created_at) >= $2
-            "#
+            "#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(week_start)
@@ -503,7 +517,7 @@ impl ReportingService {
             FROM invoices
             WHERE tenant_id = $1 AND capture_status = 'reviewed'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
@@ -520,7 +534,7 @@ impl ReportingService {
             FROM invoices
             WHERE tenant_id = $1 AND processing_status IN ('approved', 'ready_for_payment', 'paid')
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
@@ -537,7 +551,7 @@ impl ReportingService {
             FROM invoices
             WHERE tenant_id = $1 AND processing_status = 'paid'
             AND created_at >= NOW() - INTERVAL '30 days'
-            "#
+            "#,
         )
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
@@ -628,11 +642,12 @@ impl ReportingService {
             ORDER BY count DESC
         "#;
 
-        let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices WHERE tenant_id = $1")
-            .bind(*tenant_id.as_uuid())
-            .fetch_one(&**pool)
-            .await
-            .unwrap_or(1);
+        let total_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM invoices WHERE tenant_id = $1")
+                .bind(*tenant_id.as_uuid())
+                .fetch_one(&**pool)
+                .await
+                .unwrap_or(1);
 
         let rows = sqlx::query_as::<_, StatusRow>(sql)
             .bind(*tenant_id.as_uuid())
@@ -666,8 +681,7 @@ impl ReportingService {
     ) -> Result<CustomReportResult> {
         // Build query based on report type
         let sql = match query.report_type.as_str() {
-            "invoices_by_department" => {
-                r#"
+            "invoices_by_department" => r#"
                 SELECT
                     COALESCE(department, 'Unassigned') as department,
                     COUNT(*) as invoice_count,
@@ -676,10 +690,9 @@ impl ReportingService {
                 WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
                 GROUP BY department
                 ORDER BY total_amount DESC
-                "#.to_string()
-            }
-            "invoices_by_gl_code" => {
-                r#"
+                "#
+            .to_string(),
+            "invoices_by_gl_code" => r#"
                 SELECT
                     COALESCE(gl_code, 'Unassigned') as gl_code,
                     COUNT(*) as invoice_count,
@@ -688,10 +701,9 @@ impl ReportingService {
                 WHERE tenant_id = $1 AND invoice_date >= $2 AND invoice_date <= $3
                 GROUP BY gl_code
                 ORDER BY total_amount DESC
-                "#.to_string()
-            }
-            "approval_summary" => {
-                r#"
+                "#
+            .to_string(),
+            "approval_summary" => r#"
                 SELECT
                     status,
                     COUNT(*) as count,
@@ -699,10 +711,13 @@ impl ReportingService {
                 FROM approval_requests
                 WHERE tenant_id = $1 AND created_at >= $2 AND created_at <= $3
                 GROUP BY status
-                "#.to_string()
-            }
+                "#
+            .to_string(),
             _ => {
-                return Err(Error::Validation(format!("Unknown report type: {}", query.report_type)));
+                return Err(Error::Validation(format!(
+                    "Unknown report type: {}",
+                    query.report_type
+                )));
             }
         };
 
@@ -869,7 +884,12 @@ impl ReportingService {
             "gl_code" => "gl_code",
             "department" => "department",
             "cost_center" => "cost_center",
-            _ => return Err(Error::Validation(format!("Invalid category type: {}", category_type))),
+            _ => {
+                return Err(Error::Validation(format!(
+                    "Invalid category type: {}",
+                    category_type
+                )))
+            }
         };
 
         let mut sql = format!(
@@ -893,10 +913,7 @@ impl ReportingService {
             sql.push_str(&format!(" AND invoice_date <= ${}", param_count));
         }
 
-        sql.push_str(&format!(
-            " GROUP BY {} ORDER BY total_amount DESC",
-            column
-        ));
+        sql.push_str(&format!(" GROUP BY {} ORDER BY total_amount DESC", column));
 
         #[derive(sqlx::FromRow)]
         struct CategoryRow {
@@ -1245,11 +1262,11 @@ impl ReportingService {
                 stage_name: row.stage_name,
                 avg_time_hours: row.avg_time_hours.unwrap_or(0.0),
                 invoice_count: row.invoice_count as u64,
-                percentage_of_total_time: if total_time > 0.0 && row.avg_time_hours.is_some() {
-                    (row.avg_time_hours.unwrap() / total_time) * 100.0
-                } else {
-                    0.0
-                },
+                percentage_of_total_time: row
+                    .avg_time_hours
+                    .filter(|_| total_time > 0.0)
+                    .map(|avg_time_hours| (avg_time_hours / total_time) * 100.0)
+                    .unwrap_or(0.0),
             })
             .collect();
 
@@ -1399,10 +1416,14 @@ impl ReportingService {
         period_end: NaiveDate,
     ) -> Result<DigestContent> {
         // Get summary metrics
-        let summary = self.get_digest_summary(tenant_id, pool, period_start, period_end).await?;
+        let summary = self
+            .get_digest_summary(tenant_id, pool, period_start, period_end)
+            .await?;
 
         // Get highlights based on digest type
-        let highlights = self.get_digest_highlights(tenant_id, pool, period_start, period_end, &digest_type).await?;
+        let highlights = self
+            .get_digest_highlights(tenant_id, pool, period_start, period_end, &digest_type)
+            .await?;
 
         // Get actionable items (pending approvals for this user)
         let actionable_items = self.get_actionable_items(tenant_id, pool, user_id).await?;
@@ -1502,15 +1523,19 @@ impl ReportingService {
         if let Some(vendor) = top_vendor {
             highlights.push(DigestHighlight {
                 title: "Top Vendor by Spend".to_string(),
-                description: format!("{}", vendor.vendor_name),
+                description: vendor.vendor_name.to_string(),
                 value: Some(vendor.total_spend as f64 / 100.0),
                 change_percentage: None,
             });
         }
 
         // For weekly/monthly, add trend comparison
-        if matches!(digest_type, DigestType::WeeklySummary | DigestType::MonthlySummary) {
-            let prior_start = start_date - chrono::Duration::days((end_date - start_date).num_days() + 1);
+        if matches!(
+            digest_type,
+            DigestType::WeeklySummary | DigestType::MonthlySummary
+        ) {
+            let prior_start =
+                start_date - chrono::Duration::days((end_date - start_date).num_days() + 1);
             let prior_end = start_date - chrono::Duration::days(1);
 
             #[derive(sqlx::FromRow)]
@@ -1537,14 +1562,18 @@ impl ReportingService {
 
             if let Some(trend) = trend {
                 let change_pct = if trend.prior_spend > 0 {
-                    Some(((trend.current_spend - trend.prior_spend) as f64 / trend.prior_spend as f64) * 100.0)
+                    Some(
+                        ((trend.current_spend - trend.prior_spend) as f64
+                            / trend.prior_spend as f64)
+                            * 100.0,
+                    )
                 } else {
                     None
                 };
 
                 highlights.push(DigestHighlight {
                     title: "Spend vs Prior Period".to_string(),
-                    description: if change_pct.map_or(false, |p| p > 0.0) {
+                    description: if change_pct.is_some_and(|p| p > 0.0) {
                         "Increased"
                     } else {
                         "Decreased"
@@ -1605,7 +1634,11 @@ impl ReportingService {
                 item_type: "pending_approval".to_string(),
                 item_id: row.invoice_id.to_string(),
                 title: format!("Invoice {} from {}", row.invoice_number, row.vendor_name),
-                description: format!("Amount: ${:.2}, Age: {} days", row.amount_cents as f64 / 100.0, row.age_days),
+                description: format!(
+                    "Amount: ${:.2}, Age: {} days",
+                    row.amount_cents as f64 / 100.0,
+                    row.age_days
+                ),
                 url: format!("/invoices/{}", row.invoice_id),
                 priority: if row.age_days > 7 { "high" } else { "normal" }.to_string(),
             })
@@ -1711,14 +1744,10 @@ impl ReportingService {
             DigestFrequency::Weekly => now + chrono::Duration::weeks(1),
             DigestFrequency::Monthly => {
                 // Next month same day
-                chrono::NaiveDate::from_ymd_opt(
-                    now.year(),
-                    now.month() + 1,
-                    now.day(),
-                )
-                .and_then(|d| d.and_hms_opt(now.hour(), now.minute(), 0))
-                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
-                .unwrap_or_else(|| now + chrono::Duration::days(30))
+                chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + 1, now.day())
+                    .and_then(|d| d.and_hms_opt(now.hour(), now.minute(), 0))
+                    .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+                    .unwrap_or_else(|| now + chrono::Duration::days(30))
             }
         };
 
@@ -1985,28 +2014,24 @@ mod tests {
     }
 
     async fn seed_user(pool: &sqlx::PgPool, id: Uuid, tenant_id: Uuid) {
-        sqlx::query(
-            "INSERT INTO users (id, tenant_id, email, name) VALUES ($1, $2, $3, $4)",
-        )
-        .bind(id)
-        .bind(tenant_id)
-        .bind(format!("user-{}@test.com", id))
-        .bind(format!("Test User {}", id))
-        .execute(pool)
-        .await
-        .expect("Failed to insert user");
+        sqlx::query("INSERT INTO users (id, tenant_id, email, name) VALUES ($1, $2, $3, $4)")
+            .bind(id)
+            .bind(tenant_id)
+            .bind(format!("user-{}@test.com", id))
+            .bind(format!("Test User {}", id))
+            .execute(pool)
+            .await
+            .expect("Failed to insert user");
     }
 
     async fn seed_vendor(pool: &sqlx::PgPool, id: Uuid, tenant_id: Uuid, name: &str) {
-        sqlx::query(
-            "INSERT INTO vendors (id, tenant_id, name) VALUES ($1, $2, $3)",
-        )
-        .bind(id)
-        .bind(tenant_id)
-        .bind(name)
-        .execute(pool)
-        .await
-        .expect("Failed to insert vendor");
+        sqlx::query("INSERT INTO vendors (id, tenant_id, name) VALUES ($1, $2, $3)")
+            .bind(id)
+            .bind(tenant_id)
+            .bind(name)
+            .execute(pool)
+            .await
+            .expect("Failed to insert vendor");
     }
 
     async fn seed_invoice(
@@ -2085,9 +2110,39 @@ mod tests {
         let invoice_1 = Uuid::new_v4();
         let invoice_2 = Uuid::new_v4();
         let invoice_3 = Uuid::new_v4();
-        seed_invoice(&pool, invoice_1, tid, vendor_1, "Vendor Alpha", "INV-001", 10_000, creator).await;
-        seed_invoice(&pool, invoice_2, tid, vendor_2, "Vendor Beta",  "INV-002", 20_000, creator).await;
-        seed_invoice(&pool, invoice_3, tid, vendor_3, "Vendor Gamma", "INV-003", 30_000, creator).await;
+        seed_invoice(
+            &pool,
+            invoice_1,
+            tid,
+            vendor_1,
+            "Vendor Alpha",
+            "INV-001",
+            10_000,
+            creator,
+        )
+        .await;
+        seed_invoice(
+            &pool,
+            invoice_2,
+            tid,
+            vendor_2,
+            "Vendor Beta",
+            "INV-002",
+            20_000,
+            creator,
+        )
+        .await;
+        seed_invoice(
+            &pool,
+            invoice_3,
+            tid,
+            vendor_3,
+            "Vendor Gamma",
+            "INV-003",
+            30_000,
+            creator,
+        )
+        .await;
 
         // Approval requests: 2 assigned to user_a, 1 assigned to user_b
         seed_approval_request(&pool, invoice_1, user_a, "pending").await;
@@ -2102,7 +2157,11 @@ mod tests {
             .await
             .expect("get_actionable_items should succeed");
 
-        assert_eq!(items.len(), 2, "user_a should see exactly 2 actionable items");
+        assert_eq!(
+            items.len(),
+            2,
+            "user_a should see exactly 2 actionable items"
+        );
 
         let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
         assert!(
@@ -2140,11 +2199,31 @@ mod tests {
         // Two invoices both in pending_approval status
         let invoice_pending = Uuid::new_v4();
         let invoice_approved = Uuid::new_v4();
-        seed_invoice(&pool, invoice_pending,  tid, vendor, "Test Vendor", "INV-PENDING",   10_000, creator).await;
-        seed_invoice(&pool, invoice_approved, tid, vendor, "Test Vendor", "INV-APPROVED",  20_000, creator).await;
+        seed_invoice(
+            &pool,
+            invoice_pending,
+            tid,
+            vendor,
+            "Test Vendor",
+            "INV-PENDING",
+            10_000,
+            creator,
+        )
+        .await;
+        seed_invoice(
+            &pool,
+            invoice_approved,
+            tid,
+            vendor,
+            "Test Vendor",
+            "INV-APPROVED",
+            20_000,
+            creator,
+        )
+        .await;
 
         // One approval request still pending, one already approved
-        seed_approval_request(&pool, invoice_pending,  approver, "pending").await;
+        seed_approval_request(&pool, invoice_pending, approver, "pending").await;
         seed_approval_request(&pool, invoice_approved, approver, "approved").await;
 
         let service = ReportingService::new();
@@ -2191,7 +2270,10 @@ mod tests {
         // Tenant A: 2 invoices (pending_approval + approved)
         let inv_a1 = Uuid::new_v4();
         let inv_a2 = Uuid::new_v4();
-        seed_invoice(&pool, inv_a1, tid_a, vendor_a, "Vendor A", "INV-A1", 10_000, user_a).await;
+        seed_invoice(
+            &pool, inv_a1, tid_a, vendor_a, "Vendor A", "INV-A1", 10_000, user_a,
+        )
+        .await;
         // Update inv_a1 to pending_approval processing_status
         sqlx::query("UPDATE invoices SET processing_status = 'pending_approval' WHERE id = $1")
             .bind(inv_a1)
@@ -2199,7 +2281,10 @@ mod tests {
             .await
             .expect("Failed to update invoice status");
 
-        seed_invoice(&pool, inv_a2, tid_a, vendor_a, "Vendor A", "INV-A2", 20_000, user_a).await;
+        seed_invoice(
+            &pool, inv_a2, tid_a, vendor_a, "Vendor A", "INV-A2", 20_000, user_a,
+        )
+        .await;
         // Update inv_a2 to paid processing_status
         sqlx::query("UPDATE invoices SET processing_status = 'paid', capture_status = 'reviewed' WHERE id = $1")
             .bind(inv_a2)
@@ -2210,7 +2295,17 @@ mod tests {
         // Tenant B: 5 invoices
         for i in 0..5u32 {
             let inv_id = Uuid::new_v4();
-            seed_invoice(&pool, inv_id, tid_b, vendor_b, "Vendor B", &format!("INV-B{}", i), 5_000, user_b).await;
+            seed_invoice(
+                &pool,
+                inv_id,
+                tid_b,
+                vendor_b,
+                "Vendor B",
+                &format!("INV-B{}", i),
+                5_000,
+                user_b,
+            )
+            .await;
             sqlx::query("UPDATE invoices SET processing_status = 'pending_approval' WHERE id = $1")
                 .bind(inv_id)
                 .execute(&pool)

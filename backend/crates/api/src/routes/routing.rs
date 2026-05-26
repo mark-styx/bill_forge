@@ -28,7 +28,10 @@ pub fn routes() -> Router<AppState> {
         .route("/invoices/:invoice_id/route", post(route_invoice))
         .route("/workload", get(get_workload_stats))
         .route("/availability", post(set_availability))
-        .route("/config", get(get_routing_config).put(update_routing_config))
+        .route(
+            "/config",
+            get(get_routing_config).put(update_routing_config),
+        )
 }
 
 /// Request body for routing an invoice
@@ -64,16 +67,22 @@ async fn route_invoice(
     let routing_repo = billforge_db::RoutingRepository::new((*tenant_pool).clone());
 
     // Load routing config
-    let config = routing_repo.get_routing_config(tenant_id).await.map_err(|e| {
-        tracing::error!("Failed to get routing config: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let config = routing_repo
+        .get_routing_config(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get routing config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Load routing context (workloads, availability, expertise)
-    let context = routing_repo.get_routing_context(tenant_id).await.map_err(|e| {
-        tracing::error!("Failed to get routing context: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let context = routing_repo
+        .get_routing_context(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get routing context: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Fetch the invoice
     let invoice_repo = state.db.tenant(tenant_id).await.map_err(|e| {
@@ -208,10 +217,13 @@ async fn set_availability(
         reason: body.reason,
     };
 
-    routing_repo.set_availability(tenant_id, &input).await.map_err(|e| {
-        tracing::error!("Failed to set availability: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    routing_repo
+        .set_availability(tenant_id, &input)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to set availability: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -248,10 +260,13 @@ async fn get_routing_config(
     })?;
 
     let routing_repo = billforge_db::RoutingRepository::new((*tenant_pool).clone());
-    let config = routing_repo.get_routing_config(tenant_id).await.map_err(|e| {
-        tracing::error!("Failed to get routing config: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let config = routing_repo
+        .get_routing_config(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get routing config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(RoutingConfigResponse {
         workload_weight: config.workload_weight,
@@ -308,34 +323,60 @@ async fn update_routing_config(
     let routing_repo = billforge_db::RoutingRepository::new((*tenant_pool).clone());
 
     // Load existing config as base
-    let mut config = routing_repo.get_routing_config(tenant_id).await.map_err(|e| {
-        tracing::error!("Failed to get routing config: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let mut config = routing_repo
+        .get_routing_config(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get routing config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Apply updates
-    if let Some(w) = body.workload_weight { config.workload_weight = w; }
-    if let Some(w) = body.expertise_weight { config.expertise_weight = w; }
-    if let Some(w) = body.availability_weight { config.availability_weight = w; }
-    if let Some(w) = body.max_workload_score { config.max_workload_score = w; }
-    if let Some(w) = body.min_expertise_score { config.min_expertise_score = w; }
-    if let Some(v) = body.enable_auto_delegation { config.enable_auto_delegation = v; }
-    if let Some(v) = body.enable_pattern_learning { config.enable_pattern_learning = v; }
-    if let Some(v) = body.enable_calendar_sync { config.enable_calendar_sync = v; }
+    if let Some(w) = body.workload_weight {
+        config.workload_weight = w;
+    }
+    if let Some(w) = body.expertise_weight {
+        config.expertise_weight = w;
+    }
+    if let Some(w) = body.availability_weight {
+        config.availability_weight = w;
+    }
+    if let Some(w) = body.max_workload_score {
+        config.max_workload_score = w;
+    }
+    if let Some(w) = body.min_expertise_score {
+        config.min_expertise_score = w;
+    }
+    if let Some(v) = body.enable_auto_delegation {
+        config.enable_auto_delegation = v;
+    }
+    if let Some(v) = body.enable_pattern_learning {
+        config.enable_pattern_learning = v;
+    }
+    if let Some(v) = body.enable_calendar_sync {
+        config.enable_calendar_sync = v;
+    }
     if let Some(ref t) = body.working_hours_start {
         config.working_hours_start = t.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     }
     if let Some(ref t) = body.working_hours_end {
         config.working_hours_end = t.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     }
-    if let Some(ref tz) = body.working_timezone { config.working_timezone = tz.clone(); }
-    if let Some(ref days) = body.working_days { config.working_days = days.clone(); }
+    if let Some(ref tz) = body.working_timezone {
+        config.working_timezone = tz.clone();
+    }
+    if let Some(ref days) = body.working_days {
+        config.working_days = days.clone();
+    }
 
     // Save
-    routing_repo.upsert_routing_config(&config).await.map_err(|e| {
-        tracing::error!("Failed to update routing config: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    routing_repo
+        .upsert_routing_config(&config)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update routing config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(Json(RoutingConfigResponse {
         workload_weight: config.workload_weight,
@@ -379,7 +420,10 @@ impl InvoiceMinRow {
             po_number: None,
             subtotal: None,
             tax_amount: None,
-            total_amount: Money { amount: self.total_amount_cents, currency: "USD".to_string() },
+            total_amount: Money {
+                amount: self.total_amount_cents,
+                currency: "USD".to_string(),
+            },
             currency: "USD".to_string(),
             line_items: vec![],
             capture_status: CaptureStatus::Reviewed,

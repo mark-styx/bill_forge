@@ -28,7 +28,9 @@ use axum::{
     Router,
 };
 use billforge_core::webhook::{self, WebhookEnvelope};
-use billforge_salesforce::{SalesforceClient, SalesforceOAuth, SalesforceOAuthConfig, SalesforceEnvironment};
+use billforge_salesforce::{
+    SalesforceClient, SalesforceEnvironment, SalesforceOAuth, SalesforceOAuthConfig,
+};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -120,8 +122,9 @@ async fn salesforce_connect(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let sf_config = state.config.salesforce.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("Salesforce integration not configured".to_string()))?;
+    let sf_config = state.config.salesforce.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce integration not configured".to_string())
+    })?;
 
     let oauth = SalesforceOAuth::new(SalesforceOAuthConfig {
         client_id: sf_config.client_id.clone(),
@@ -186,14 +189,15 @@ async fn salesforce_callback(
         return Err(billforge_core::Error::Validation("Invalid state token".to_string()).into());
     }
 
-    let tenant_id: billforge_core::TenantId = parts[0].parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid tenant ID in state token".to_string()))?;
+    let tenant_id: billforge_core::TenantId = parts[0].parse().map_err(|_| {
+        billforge_core::Error::Validation("Invalid tenant ID in state token".to_string())
+    })?;
 
     let pool = state.db.tenant(&tenant_id).await?;
 
     // Verify state token
     let stored_state: Option<(String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT state_token, expires_at FROM salesforce_oauth_states WHERE tenant_id = $1"
+        "SELECT state_token, expires_at FROM salesforce_oauth_states WHERE tenant_id = $1",
     )
     .bind(tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -206,12 +210,16 @@ async fn salesforce_callback(
         .unwrap_or(false);
 
     if !is_valid {
-        return Err(billforge_core::Error::Validation("Invalid or expired state token".to_string()).into());
+        return Err(billforge_core::Error::Validation(
+            "Invalid or expired state token".to_string(),
+        )
+        .into());
     }
 
     // Get Salesforce configuration
-    let sf_config = state.config.salesforce.as_ref()
-        .ok_or_else(|| billforge_core::Error::Validation("Salesforce integration not configured".to_string()))?;
+    let sf_config = state.config.salesforce.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce integration not configured".to_string())
+    })?;
 
     let oauth = SalesforceOAuth::new(SalesforceOAuthConfig {
         client_id: sf_config.client_id.clone(),
@@ -224,22 +232,23 @@ async fn salesforce_callback(
     });
 
     // Exchange authorization code for tokens
-    let tokens = oauth.exchange_code(&params.code).await
-        .map_err(|e| billforge_core::Error::Validation(format!("OAuth token exchange failed: {}", e)))?;
+    let tokens = oauth.exchange_code(&params.code).await.map_err(|e| {
+        billforge_core::Error::Validation(format!("OAuth token exchange failed: {}", e))
+    })?;
 
     // Salesforce access tokens last ~2 hours
     let now = Utc::now();
     let access_token_expires_at = now + Duration::hours(2);
 
     // Get user info from Salesforce
-    let client = SalesforceClient::new(
-        tokens.access_token.clone(),
-        tokens.instance_url.clone(),
-    );
+    let client = SalesforceClient::new(tokens.access_token.clone(), tokens.instance_url.clone());
 
     let user_info = client.get_user_info().await.ok();
-    let org_name = user_info
-        .and_then(|info| info.get("organization_id").and_then(|v| v.as_str()).map(|s| s.to_string()));
+    let org_name = user_info.and_then(|info| {
+        info.get("organization_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
 
     // Store tokens in database
     sqlx::query(
@@ -255,7 +264,7 @@ async fn salesforce_callback(
             refresh_token = COALESCE($4, salesforce_connections.refresh_token),
             access_token_expires_at = $5,
             org_id = COALESCE($6, salesforce_connections.org_id),
-            updated_at = NOW()"
+            updated_at = NOW()",
     )
     .bind(tenant_id.as_uuid())
     .bind(&tokens.instance_url)
@@ -265,7 +274,9 @@ async fn salesforce_callback(
     .bind(&org_name)
     .execute(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to store Salesforce tokens: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to store Salesforce tokens: {}", e))
+    })?;
 
     // Clean up state token
     sqlx::query("DELETE FROM salesforce_oauth_states WHERE tenant_id = $1")
@@ -274,7 +285,10 @@ async fn salesforce_callback(
         .await
         .ok();
 
-    Ok(Redirect::temporary(&format!("{}/dashboard?salesforce=connected", state.config.frontend_url)))
+    Ok(Redirect::temporary(&format!(
+        "{}/dashboard?salesforce=connected",
+        state.config.frontend_url
+    )))
 }
 
 /// Disconnect Salesforce
@@ -296,7 +310,7 @@ async fn salesforce_disconnect(
 
     // Get current connection
     let connection: Option<(String, String)> = sqlx::query_as(
-        "SELECT access_token, instance_url FROM salesforce_connections WHERE tenant_id = $1"
+        "SELECT access_token, instance_url FROM salesforce_connections WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -313,7 +327,9 @@ async fn salesforce_disconnect(
                 redirect_uri: sf_config.redirect_uri.clone(),
                 environment: match sf_config.environment {
                     crate::config::SalesforceEnvironment::Sandbox => SalesforceEnvironment::Sandbox,
-                    crate::config::SalesforceEnvironment::Production => SalesforceEnvironment::Production,
+                    crate::config::SalesforceEnvironment::Production => {
+                        SalesforceEnvironment::Production
+                    }
                 },
             });
 
@@ -348,16 +364,17 @@ async fn salesforce_status(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let connection: Option<(String, Option<String>, bool, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT instance_url, org_id, sync_enabled, last_sync_at
+    let connection: Option<(String, Option<String>, bool, Option<chrono::DateTime<Utc>>)> =
+        sqlx::query_as(
+            "SELECT instance_url, org_id, sync_enabled, last_sync_at
          FROM salesforce_connections
-         WHERE tenant_id = $1"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
+         WHERE tenant_id = $1",
+        )
+        .bind(tenant.tenant_id.as_uuid())
+        .fetch_optional(&*pool)
+        .await
+        .ok()
+        .flatten();
 
     let status = if let Some((instance_url, org_id, sync_enabled, last_sync_at)) = connection {
         SalesforceStatus {
@@ -403,7 +420,7 @@ async fn sync_accounts(
     let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
         "SELECT instance_url, access_token, access_token_expires_at
          FROM salesforce_connections
-         WHERE tenant_id = $1 AND sync_enabled = true"
+         WHERE tenant_id = $1 AND sync_enabled = true",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -411,20 +428,20 @@ async fn sync_accounts(
     .ok()
     .flatten();
 
-    let (instance_url, access_token, token_expires_at) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string()))?;
+    let (instance_url, access_token, token_expires_at) = connection.ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string())
+    })?;
 
     // Check if token needs refresh
     if token_expires_at <= Utc::now() {
         // Attempt token refresh
-        let refresh_result: Option<(String,)> = sqlx::query_as(
-            "SELECT refresh_token FROM salesforce_connections WHERE tenant_id = $1"
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
+        let refresh_result: Option<(String,)> =
+            sqlx::query_as("SELECT refresh_token FROM salesforce_connections WHERE tenant_id = $1")
+                .bind(tenant.tenant_id.as_uuid())
+                .fetch_optional(&*pool)
+                .await
+                .ok()
+                .flatten();
 
         if let Some((refresh_token,)) = refresh_result {
             if let Some(sf_config) = &state.config.salesforce {
@@ -433,8 +450,12 @@ async fn sync_accounts(
                     client_secret: sf_config.client_secret.clone(),
                     redirect_uri: sf_config.redirect_uri.clone(),
                     environment: match sf_config.environment {
-                        crate::config::SalesforceEnvironment::Sandbox => SalesforceEnvironment::Sandbox,
-                        crate::config::SalesforceEnvironment::Production => SalesforceEnvironment::Production,
+                        crate::config::SalesforceEnvironment::Sandbox => {
+                            SalesforceEnvironment::Sandbox
+                        }
+                        crate::config::SalesforceEnvironment::Production => {
+                            SalesforceEnvironment::Production
+                        }
                     },
                 });
 
@@ -452,12 +473,18 @@ async fn sync_accounts(
                         .ok();
                     }
                     Err(_) => {
-                        return Err(billforge_core::Error::Validation("Salesforce token expired. Please reconnect.".to_string()).into());
+                        return Err(billforge_core::Error::Validation(
+                            "Salesforce token expired. Please reconnect.".to_string(),
+                        )
+                        .into());
                     }
                 }
             }
         } else {
-            return Err(billforge_core::Error::Validation("Salesforce token expired. Please reconnect.".to_string()).into());
+            return Err(billforge_core::Error::Validation(
+                "Salesforce token expired. Please reconnect.".to_string(),
+            )
+            .into());
         }
     }
 
@@ -467,7 +494,7 @@ async fn sync_accounts(
     let sync_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO salesforce_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'accounts', 'running', NOW())"
+         VALUES ($1, $2, 'accounts', 'running', NOW())",
     )
     .bind(sync_id)
     .bind(tenant.tenant_id.as_uuid())
@@ -476,7 +503,9 @@ async fn sync_accounts(
     .ok();
 
     // Fetch accounts from Salesforce
-    let accounts = client.query_vendor_accounts(request.custom_filter.as_deref()).await
+    let accounts = client
+        .query_vendor_accounts(request.custom_filter.as_deref())
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Salesforce API error: {}", e)))?;
 
     let mut imported = 0u64;
@@ -489,7 +518,7 @@ async fn sync_accounts(
         let existing: Option<(Uuid,)> = sqlx::query_as(
             "SELECT v.id FROM vendors v
              INNER JOIN salesforce_account_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.salesforce_account_id = $2"
+             WHERE m.tenant_id = $1 AND m.salesforce_account_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(&sf_account.id)
@@ -503,7 +532,7 @@ async fn sync_accounts(
         if let Some((vendor_id,)) = existing {
             // Update existing vendor
             sqlx::query(
-                "UPDATE vendors SET name = $2, phone = $3, updated_at = NOW() WHERE id = $1"
+                "UPDATE vendors SET name = $2, phone = $3, updated_at = NOW() WHERE id = $1",
             )
             .bind(vendor_id)
             .bind(&sf_account.name)
@@ -520,7 +549,7 @@ async fn sync_accounts(
 
             sqlx::query(
                 "INSERT INTO vendors (id, name, vendor_type, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())"
+                 VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())",
             )
             .bind(vendor_id)
             .bind(&sf_account.name)
@@ -570,7 +599,11 @@ async fn sync_accounts(
         .await
         .ok();
 
-    Ok(Json(SyncAccountsResponse { imported, updated, skipped }))
+    Ok(Json(SyncAccountsResponse {
+        imported,
+        updated,
+        skipped,
+    }))
 }
 
 /// Sync vendor contacts from Salesforce
@@ -594,7 +627,7 @@ async fn sync_contacts(
     let connection: Option<(String, String)> = sqlx::query_as(
         "SELECT instance_url, access_token
          FROM salesforce_connections
-         WHERE tenant_id = $1 AND sync_enabled = true"
+         WHERE tenant_id = $1 AND sync_enabled = true",
     )
     .bind(tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
@@ -602,13 +635,16 @@ async fn sync_contacts(
     .ok()
     .flatten();
 
-    let (instance_url, access_token) = connection
-        .ok_or_else(|| billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string()))?;
+    let (instance_url, access_token) = connection.ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string())
+    })?;
 
     let client = SalesforceClient::new(access_token, instance_url);
 
     // Fetch vendor contacts
-    let contacts = client.query_vendor_contacts().await
+    let contacts = client
+        .query_vendor_contacts()
+        .await
         .map_err(|e| billforge_core::Error::Validation(format!("Salesforce API error: {}", e)))?;
 
     let mut synced = 0u64;
@@ -618,7 +654,7 @@ async fn sync_contacts(
             // Find vendor mapping
             let vendor_mapping: Option<(Uuid,)> = sqlx::query_as(
                 "SELECT billforge_vendor_id FROM salesforce_account_mappings
-                 WHERE tenant_id = $1 AND salesforce_account_id = $2"
+                 WHERE tenant_id = $1 AND salesforce_account_id = $2",
             )
             .bind(tenant.tenant_id.as_uuid())
             .bind(account_id)
@@ -632,7 +668,9 @@ async fn sync_contacts(
                     "{} {}",
                     contact.first_name.as_deref().unwrap_or(""),
                     contact.last_name
-                ).trim().to_string();
+                )
+                .trim()
+                .to_string();
 
                 // Upsert contact info on vendor
                 if let Some(email) = &contact.email {
@@ -652,7 +690,9 @@ async fn sync_contacts(
         }
     }
 
-    Ok(Json(serde_json::json!({ "status": "synced", "contacts_processed": synced })))
+    Ok(Json(
+        serde_json::json!({ "status": "synced", "contacts_processed": synced }),
+    ))
 }
 
 /// Get account-to-vendor mappings
@@ -717,7 +757,7 @@ async fn update_account_mappings(
         sqlx::query(
             "UPDATE salesforce_account_mappings
              SET billforge_vendor_id = $3::uuid, updated_at = NOW()
-             WHERE tenant_id = $1 AND salesforce_account_id = $2"
+             WHERE tenant_id = $1 AND salesforce_account_id = $2",
         )
         .bind(tenant.tenant_id.as_uuid())
         .bind(&mapping.salesforce_account_id)
@@ -744,14 +784,14 @@ async fn configure_salesforce_webhook(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    sqlx::query(
-        "UPDATE salesforce_connections SET webhook_secret = $2 WHERE tenant_id = $1",
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(&body.webhook_secret)
-    .execute(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to update webhook secret: {}", e)))?;
+    sqlx::query("UPDATE salesforce_connections SET webhook_secret = $2 WHERE tenant_id = $1")
+        .bind(tenant.tenant_id.as_uuid())
+        .bind(&body.webhook_secret)
+        .execute(&*pool)
+        .await
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to update webhook secret: {}", e))
+        })?;
 
     Ok(Json(serde_json::json!({ "status": "configured" })))
 }
@@ -793,12 +833,10 @@ async fn salesforce_webhook(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let secret = webhook_secret
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            tracing::warn!("Salesforce webhook rejected: no webhook secret configured");
-            StatusCode::UNAUTHORIZED
-        })?;
+    let secret = webhook_secret.filter(|s| !s.is_empty()).ok_or_else(|| {
+        tracing::warn!("Salesforce webhook rejected: no webhook secret configured");
+        StatusCode::UNAUTHORIZED
+    })?;
 
     if !webhook::verify_webhook_signature(&body, signature, &secret) {
         tracing::warn!("Salesforce webhook signature verification failed");
@@ -811,10 +849,15 @@ async fn salesforce_webhook(
                 tracing::warn!(timestamp = %envelope.timestamp, "Salesforce webhook timestamp too old or in future");
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            let nonce = envelope.nonce.unwrap_or_else(|| webhook::compute_payload_nonce(&body));
+            let nonce = envelope
+                .nonce
+                .unwrap_or_else(|| webhook::compute_payload_nonce(&body));
             (envelope.event_type, nonce)
         }
-        Err(_) => ("provider_native".to_string(), webhook::compute_payload_nonce(&body)),
+        Err(_) => (
+            "provider_native".to_string(),
+            webhook::compute_payload_nonce(&body),
+        ),
     };
 
     if !webhook::check_replay_nonce(&*tenant_pool, "salesforce", *tenant_id.as_uuid(), &nonce)

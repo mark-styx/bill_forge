@@ -517,13 +517,55 @@ export const reportsApi = {
   dashboardSummary: () =>
     api.get<DashboardSummary>('/api/v1/reports/dashboard/summary'),
 
+  dashboardKpis: () =>
+    api.get<DashboardKpis>('/api/v1/reports/dashboard/kpis'),
+
   invoicesByVendor: () =>
     api.get<InvoicesByVendor[]>('/api/v1/reports/invoices/by-vendor'),
 
+  invoicesByStatus: () =>
+    api.get<InvoicesByStatus[]>('/api/v1/reports/invoices/by-status'),
+
   invoiceAging: () => api.get<AgingBucket[]>('/api/v1/reports/invoices/aging'),
+
+  vendorSpend: () =>
+    api.get<VendorSpend[]>('/api/v1/reports/vendors/spend'),
 
   workflowMetrics: () =>
     api.get<WorkflowMetrics>('/api/v1/reports/workflows/metrics'),
+
+  spendTrends: (params?: { start_date?: string; end_date?: string; group_by?: string }) => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setMonth(start.getMonth() - 12);
+    const qs = new URLSearchParams({
+      start_date: params?.start_date ?? start.toISOString().slice(0, 10),
+      end_date: params?.end_date ?? end.toISOString().slice(0, 10),
+      group_by: params?.group_by ?? 'month',
+    });
+    return api.get<SpendTrend[]>(`/api/v1/reports/spend/trends?${qs}`);
+  },
+
+  categoryBreakdown: (params?: { category_type?: string; start_date?: string; end_date?: string }) => {
+    const qs = new URLSearchParams({
+      category_type: params?.category_type ?? 'gl_code',
+    });
+    if (params?.start_date) qs.set('start_date', params.start_date);
+    if (params?.end_date) qs.set('end_date', params.end_date);
+    return api.get<CategoryBreakdown[]>(`/api/v1/reports/categories/breakdown?${qs}`);
+  },
+
+  vendorPerformance: () =>
+    api.get<VendorPerformance[]>('/api/v1/reports/vendors/performance'),
+
+  approvalAnalytics: () =>
+    api.get<ApprovalAnalytics>('/api/v1/reports/approvals/analytics'),
+
+  approvalSla: () =>
+    api.get<ApprovalSlaSummary>('/api/v1/reports/approvals/sla'),
+
+  cashFlowObligations: () =>
+    api.get<CashFlowObligation[]>('/api/v1/reports/cash-flow/obligations'),
 };
 
 // Documents API
@@ -809,10 +851,24 @@ export interface InvoicesByVendor {
   total_amount: number;
 }
 
+export interface InvoicesByStatus {
+  status: string;
+  count: number;
+  total_amount: number;
+}
+
 export interface AgingBucket {
   bucket: string;
   count: number;
   total_amount: number;
+}
+
+export interface VendorSpend {
+  vendor_id: string;
+  vendor_name: string;
+  invoice_count: number;
+  ytd_spend: number;
+  mtd_spend: number;
 }
 
 export interface WorkflowMetrics {
@@ -820,6 +876,89 @@ export interface WorkflowMetrics {
   avg_approval_time_hours: number;
   auto_approval_rate: number;
   rejection_rate: number;
+}
+
+export interface SpendTrend {
+  period: string;
+  total_spend: number;
+  invoice_count: number;
+  avg_invoice_amount: number;
+  change_from_prior_period?: number | null;
+  change_percentage?: number | null;
+}
+
+export interface CategoryBreakdown {
+  category_type: string;
+  category_value: string;
+  total_amount: number;
+  invoice_count: number;
+  percentage_of_total: number;
+  avg_amount: number;
+}
+
+export interface VendorPerformance {
+  vendor_id: string;
+  vendor_name: string;
+  total_invoices: number;
+  total_spend: number;
+  avg_payment_days: number;
+  on_time_payment_rate: number;
+  dispute_rate: number;
+  credit_utilization: number;
+  reliability_score: number;
+}
+
+export interface ApprovalAnalytics {
+  total_approvals: number;
+  avg_approval_time_hours: number;
+  approval_rate: number;
+  rejection_rate: number;
+  bottleneck_stages: Array<{
+    stage_name: string;
+    avg_time_hours: number;
+    invoice_count: number;
+    percentage_of_total_time: number;
+  }>;
+  approver_workloads: Array<{
+    approver_id: string;
+    approver_name: string;
+    approvals_completed: number;
+    avg_time_to_approve_hours: number;
+    pending_approvals: number;
+    approval_rate: number;
+  }>;
+}
+
+export interface ApprovalSlaItem {
+  invoice_id: string;
+  invoice_number: string;
+  vendor_name: string;
+  amount_cents: number;
+  currency: string;
+  approval_id: string;
+  hours_waiting: number;
+  sla_hours: number;
+  sla_state: 'within_sla' | 'near_breach' | 'breached';
+  approver_name?: string | null;
+}
+
+export interface ApprovalSlaSummary {
+  pending_count: number;
+  near_breach_count: number;
+  breached_count: number;
+  items: ApprovalSlaItem[];
+}
+
+export interface CashFlowObligation {
+  invoice_id: string;
+  invoice_number: string;
+  vendor_name: string;
+  due_date?: string | null;
+  projected_payment_date?: string | null;
+  amount_cents: number;
+  currency: string;
+  processing_status: string;
+  late_risk: boolean;
 }
 
 // Workflow Template types
@@ -1861,12 +2000,21 @@ export interface TenantSettings {
   default_currency: string;
   logo_url: string | null;
   primary_color: string | null;
+  features: {
+    advanced_ocr: boolean;
+    api_access: boolean;
+    custom_workflows: boolean;
+    audit_logs: boolean;
+    sso_enabled: boolean;
+    local_ocr_required: boolean;
+  };
 }
 
 export interface UpdateTenantSettingsInput {
   company_name?: string;
   timezone?: string;
   default_currency?: string;
+  features?: TenantSettings['features'];
 }
 
 // Settings API
@@ -2139,6 +2287,10 @@ export interface AiPendingActionProposal {
   updated_at: string;
 }
 
+export interface AiActionProposalDecisionRequest {
+  reason?: string;
+}
+
 // Bug Report Draft Types
 export type BugReportPriority = 'low' | 'medium' | 'high' | 'critical';
 
@@ -2206,6 +2358,26 @@ export const aiAssistantApi = {
   listPendingActionProposals: (conversationId: string) =>
     api.get<AiPendingActionProposal[]>(
       `/api/v1/ai/conversations/${conversationId}/action-proposals/pending`,
+    ),
+
+  approveActionProposal: (
+    conversationId: string,
+    proposalId: string,
+    body: AiActionProposalDecisionRequest = {},
+  ) =>
+    api.post<AiPendingActionProposal>(
+      `/api/v1/ai/conversations/${conversationId}/action-proposals/${proposalId}/approve`,
+      body,
+    ),
+
+  rejectActionProposal: (
+    conversationId: string,
+    proposalId: string,
+    body: AiActionProposalDecisionRequest = {},
+  ) =>
+    api.post<AiPendingActionProposal>(
+      `/api/v1/ai/conversations/${conversationId}/action-proposals/${proposalId}/reject`,
+      body,
     ),
 
   generateBugReportDraft: (body: BugReportDraftRequest) =>

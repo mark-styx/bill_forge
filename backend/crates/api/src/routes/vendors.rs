@@ -9,7 +9,10 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters, VendorId, VendorType},
+    domain::{
+        AuditAction, AuditEntry, CreateVendorInput, ResourceType, UpdateVendorInput, Vendor,
+        VendorContact, VendorFilters, VendorId, VendorType,
+    },
     traits::{AuditService, TaxDocumentRepository, VendorRepository},
     types::{PaginatedResponse, Pagination, TenantId},
     Error, Result as CoreResult,
@@ -112,12 +115,15 @@ async fn get_vendor(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vendor>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
-    let vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?
+    let vendor = repo
+        .get_by_id(&tenant.tenant_id, &vendor_id)
+        .await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Vendor".to_string(),
             id: id.clone(),
@@ -138,12 +144,15 @@ async fn create_vendor(
     let vendor = repo.create(&tenant.tenant_id, input).await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Vendor,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Vendor,
         vendor.id.to_string(),
         format!("Created vendor {}", vendor.name),
-    ).with_user_email(&user.email)
-     .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -161,7 +170,8 @@ async fn update_vendor(
     Path(id): Path<String>,
     Json(input): Json<UpdateVendorInput>,
 ) -> ApiResult<Json<Vendor>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -171,12 +181,15 @@ async fn update_vendor(
     let vendor = repo.update(&tenant.tenant_id, &vendor_id, input).await?;
 
     let mut audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Update, ResourceType::Vendor,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Vendor,
         vendor.id.to_string(),
         format!("Updated vendor {}", vendor.name),
-    ).with_user_email(&user.email)
-     .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
     if let Some(old) = old_vendor {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
     }
@@ -196,7 +209,8 @@ async fn delete_vendor(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -213,10 +227,14 @@ async fn delete_vendor(
         .map_err(|e| billforge_core::Error::Database(format!("Failed to soft-delete vendor: {}", e)))?;
 
     let mut audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Delete, ResourceType::Vendor,
-        id.clone(), "Soft-deleted vendor (set inactive)",
-    ).with_user_email(&user.email);
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Delete,
+        ResourceType::Vendor,
+        id.clone(),
+        "Soft-deleted vendor (set inactive)",
+    )
+    .with_user_email(&user.email);
     if let Some(old) = old_vendor {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
     }
@@ -243,7 +261,8 @@ async fn patch_vendor(
     Path(id): Path<String>,
     Json(req): Json<UpdateVendorRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id: VendorId = id.parse()
+    let vendor_id: VendorId = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -263,7 +282,9 @@ async fn patch_vendor(
 
     if let Some(ref name) = req.name {
         if name.trim().is_empty() {
-            return Err(billforge_core::Error::Validation("name must not be empty".to_string()).into());
+            return Err(
+                billforge_core::Error::Validation("name must not be empty".to_string()).into(),
+            );
         }
         set_clauses.push(format!("name = ${}", param_idx));
         bind_name = Some(name.clone());
@@ -272,9 +293,12 @@ async fn patch_vendor(
     if let Some(ref status) = req.status {
         match status.as_str() {
             "active" | "inactive" | "on_hold" => {}
-            _ => return Err(billforge_core::Error::Validation(
-                "status must be one of: active, inactive, on_hold".to_string(),
-            ).into()),
+            _ => {
+                return Err(billforge_core::Error::Validation(
+                    "status must be one of: active, inactive, on_hold".to_string(),
+                )
+                .into())
+            }
         }
         set_clauses.push(format!("status = ${}", param_idx));
         bind_status = Some(status.clone());
@@ -297,8 +321,9 @@ async fn patch_vendor(
     }
     if let Some(ref rules) = req.routing_rules {
         set_clauses.push(format!("routing_rules = ${}::jsonb", param_idx));
-        bind_routing_rules = Some(serde_json::to_value(rules)
-            .map_err(|e| billforge_core::Error::Validation(format!("Invalid routing_rules JSON: {}", e)))?);
+        bind_routing_rules = Some(serde_json::to_value(rules).map_err(|e| {
+            billforge_core::Error::Validation(format!("Invalid routing_rules JSON: {}", e))
+        })?);
         param_idx += 1;
     }
 
@@ -318,29 +343,48 @@ async fn patch_vendor(
         .bind(vendor_id.0)
         .bind(*tenant.tenant_id.as_uuid());
 
-    if let Some(v) = bind_name { query = query.bind(v); }
-    if let Some(v) = bind_status { query = query.bind(v); }
-    if let Some(v) = bind_email { query = query.bind(v); }
-    if let Some(v) = bind_tax_id { query = query.bind(v); }
-    if let Some(v) = bind_payment_days { query = query.bind(v); }
-    if let Some(v) = bind_routing_rules { query = query.bind(v); }
+    if let Some(v) = bind_name {
+        query = query.bind(v);
+    }
+    if let Some(v) = bind_status {
+        query = query.bind(v);
+    }
+    if let Some(v) = bind_email {
+        query = query.bind(v);
+    }
+    if let Some(v) = bind_tax_id {
+        query = query.bind(v);
+    }
+    if let Some(v) = bind_payment_days {
+        query = query.bind(v);
+    }
+    if let Some(v) = bind_routing_rules {
+        query = query.bind(v);
+    }
 
-    let result = query.execute(&*pool).await
+    let result = query
+        .execute(&*pool)
+        .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to patch vendor: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(billforge_core::Error::NotFound {
             resource_type: "Vendor".to_string(),
             id: id.clone(),
-        }.into());
+        }
+        .into());
     }
 
     // Audit
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Update, ResourceType::Vendor,
-        id.clone(), format!("Patched vendor {}", id),
-    ).with_user_email(&user.email);
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Vendor,
+        id.clone(),
+        format!("Patched vendor {}", id),
+    )
+    .with_user_email(&user.email);
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -361,22 +405,23 @@ pub async fn get_routing_rules(
     tenant_id: &TenantId,
     vendor_id: &VendorId,
 ) -> CoreResult<RoutingRules> {
-    let row: Option<(Option<serde_json::Value>,)> = sqlx::query_as(
-        "SELECT routing_rules FROM vendors WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(vendor_id.0)
-    .bind(*tenant_id.as_uuid())
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| Error::Database(format!("Failed to fetch routing rules: {}", e)))?;
+    let row: Option<(Option<serde_json::Value>,)> =
+        sqlx::query_as("SELECT routing_rules FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id.0)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to fetch routing rules: {}", e)))?;
 
     let rules_json = match row {
         Some((Some(v),)) => v,
         Some((None,)) => serde_json::Value::Object(serde_json::Map::new()),
-        None => return Err(Error::NotFound {
-            resource_type: "Vendor".to_string(),
-            id: vendor_id.to_string(),
-        }),
+        None => {
+            return Err(Error::NotFound {
+                resource_type: "Vendor".to_string(),
+                id: vendor_id.to_string(),
+            })
+        }
     };
 
     serde_json::from_value(rules_json)
@@ -392,19 +437,25 @@ async fn add_contact(
     Path(id): Path<String>,
     Json(contact): Json<VendorContact>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
-    repo.add_contact(&tenant.tenant_id, &vendor_id, contact).await?;
+    repo.add_contact(&tenant.tenant_id, &vendor_id, contact)
+        .await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Vendor,
-        id.clone(), "Added vendor contact",
-    ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "sub_resource": "contact" }));
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Vendor,
+        id.clone(),
+        "Added vendor contact",
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({ "sub_resource": "contact" }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -421,21 +472,27 @@ async fn remove_contact(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path((id, contact_id)): Path<(String, String)>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
     let contact_uuid = Uuid::parse_str(&contact_id)
         .map_err(|_| billforge_core::Error::Validation("Invalid contact ID".to_string()))?;
-    
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
-    repo.remove_contact(&tenant.tenant_id, &vendor_id, contact_uuid).await?;
+    repo.remove_contact(&tenant.tenant_id, &vendor_id, contact_uuid)
+        .await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Delete, ResourceType::Vendor,
-        id.clone(), "Removed vendor contact",
-    ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "sub_resource": "contact", "contact_id": contact_id }));
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Delete,
+        ResourceType::Vendor,
+        id.clone(),
+        "Removed vendor contact",
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({ "sub_resource": "contact", "contact_id": contact_id }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -452,24 +509,28 @@ async fn list_tax_documents(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::TaxDocumentRepositoryImpl::new(pool);
     let documents = repo.list_for_vendor(&tenant.tenant_id, &vendor_id).await?;
 
-    let result: Vec<serde_json::Value> = documents.into_iter().map(|doc| {
-        serde_json::json!({
-            "id": doc.id,
-            "document_type": doc.document_type,
-            "tax_year": doc.tax_year,
-            "file_name": doc.file_name,
-            "received_date": doc.received_date,
-            "expires_date": doc.expires_date,
-            "created_at": doc.created_at,
+    let result: Vec<serde_json::Value> = documents
+        .into_iter()
+        .map(|doc| {
+            serde_json::json!({
+                "id": doc.id,
+                "document_type": doc.document_type,
+                "tax_year": doc.tax_year,
+                "file_name": doc.file_name,
+                "received_date": doc.received_date,
+                "expires_date": doc.expires_date,
+                "created_at": doc.created_at,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(result))
 }
@@ -484,7 +545,8 @@ async fn upload_tax_document(
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -495,7 +557,10 @@ async fn upload_tax_document(
         billforge_core::Error::Validation(format!("Failed to read multipart data: {}", e))
     })? {
         let file_name = field.file_name().unwrap_or("document.pdf").to_string();
-        let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
+        let content_type = field
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
 
         if let Ok(data) = field.bytes().await {
             let file_size = data.len() as i64;
@@ -504,24 +569,29 @@ async fn upload_tax_document(
             let file_path = format!("vendor_documents/{}/{}", vendor_id, uuid::Uuid::new_v4());
 
             // Store metadata in database
-            let doc_id = repo.create(
-                &tenant.tenant_id,
-                &vendor_id,
-                "w9".to_string(), // Default to W9, could be configurable
-                file_name.clone(),
-                file_path,
-                file_size,
-                content_type,
-                Some(user.user_id.0),
-            ).await?;
+            let doc_id = repo
+                .create(
+                    &tenant.tenant_id,
+                    &vendor_id,
+                    "w9".to_string(), // Default to W9, could be configurable
+                    file_name.clone(),
+                    file_path,
+                    file_size,
+                    content_type,
+                    Some(user.user_id.0),
+                )
+                .await?;
 
             let audit_entry = AuditEntry::new(
-                tenant.tenant_id.clone(), Some(user.user_id.clone()),
-                AuditAction::Create, ResourceType::Document,
+                tenant.tenant_id.clone(),
+                Some(user.user_id.clone()),
+                AuditAction::Create,
+                ResourceType::Document,
                 doc_id.to_string(),
                 format!("Uploaded tax document '{}'", file_name),
-            ).with_user_email(&user.email)
-             .with_metadata(serde_json::json!({ "vendor_id": id, "file_name": file_name }));
+            )
+            .with_user_email(&user.email)
+            .with_metadata(serde_json::json!({ "vendor_id": id, "file_name": file_name }));
             let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
             if let Err(e) = audit_repo.log(audit_entry).await {
                 tracing::warn!(error = %e, "Failed to log audit entry");
@@ -546,23 +616,29 @@ async fn list_messages(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
-    let messages = repo.list_messages(&tenant.tenant_id, &vendor_id, 50).await?;
+    let messages = repo
+        .list_messages(&tenant.tenant_id, &vendor_id, 50)
+        .await?;
 
-    let result: Vec<serde_json::Value> = messages.into_iter().map(|msg| {
-        serde_json::json!({
-            "id": msg.id,
-            "subject": msg.subject,
-            "body": msg.body,
-            "sender_type": msg.sender_type,
-            "sender_name": msg.sender_name,
-            "created_at": msg.created_at,
+    let result: Vec<serde_json::Value> = messages
+        .into_iter()
+        .map(|msg| {
+            serde_json::json!({
+                "id": msg.id,
+                "subject": msg.subject,
+                "body": msg.body,
+                "sender_type": msg.sender_type,
+                "sender_name": msg.sender_name,
+                "created_at": msg.created_at,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(result))
 }
@@ -582,26 +658,35 @@ async fn send_message(
     Path(id): Path<String>,
     Json(input): Json<SendMessageInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id = id.parse()
+    let vendor_id = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
 
-    let message = repo.send_message(
-        &tenant.tenant_id,
-        &vendor_id,
-        input.subject,
-        input.body,
-        Some(user.user_id.0),
-    ).await?;
+    let message = repo
+        .send_message(
+            &tenant.tenant_id,
+            &vendor_id,
+            input.subject,
+            input.body,
+            Some(user.user_id.0),
+        )
+        .await?;
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Vendor,
-        id.clone(), "Sent vendor message",
-    ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "sub_resource": "message", "message_id": message.id.to_string() }));
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Vendor,
+        id.clone(),
+        "Sent vendor message",
+    )
+    .with_user_email(&user.email)
+    .with_metadata(
+        serde_json::json!({ "sub_resource": "message", "message_id": message.id.to_string() }),
+    );
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -624,33 +709,44 @@ async fn create_portal_link(
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let vendor_id: VendorId = id.parse()
+    let vendor_id: VendorId = id
+        .parse()
         .map_err(|_| billforge_core::Error::Validation("Invalid vendor ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
 
     // Verify vendor exists
-    let vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?
+    let vendor = repo
+        .get_by_id(&tenant.tenant_id, &vendor_id)
+        .await?
         .ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "Vendor".to_string(),
             id: id.clone(),
         })?;
 
     // Create vendor-portal token
-    let token = state.auth.jwt_service()
+    let token = state
+        .auth
+        .jwt_service()
         .create_vendor_portal_token(&tenant.tenant_id, &vendor_id)
-        .map_err(|e| billforge_core::Error::Internal(format!("Failed to create portal token: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Internal(format!("Failed to create portal token: {}", e))
+        })?;
 
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let portal_url = format!("{}/vendor-portal?token={}", app_url, token);
 
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Vendor,
-        id.clone(), format!("Generated portal link for vendor {}", vendor.name),
-    ).with_user_email(&user.email)
-     .with_metadata(serde_json::json!({ "vendor_id": id }));
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Vendor,
+        id.clone(),
+        format!("Generated portal link for vendor {}", vendor.name),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({ "vendor_id": id }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -681,8 +777,7 @@ pub struct ImportVendorsResponse {
 /// Returns a tuple of (parsed inputs, row-level error strings).
 /// The first non-empty line is treated as the header.
 fn parse_vendor_csv(bytes: &[u8]) -> Result<(Vec<CreateVendorInput>, Vec<String>), String> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+    let text = std::str::from_utf8(bytes).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
     let mut lines = text.lines().enumerate().peekable();
     let mut header_cols: Vec<String> = Vec::new();
@@ -702,7 +797,9 @@ fn parse_vendor_csv(bytes: &[u8]) -> Result<(Vec<CreateVendorInput>, Vec<String>
     }
 
     let header_cols = header_cols;
-    let name_idx = header_cols.iter().position(|c| c == "name")
+    let name_idx = header_cols
+        .iter()
+        .position(|c| c == "name")
         .ok_or_else(|| "Missing required column header: name".to_string())?;
     let email_idx = header_cols.iter().position(|c| c == "email");
     let vendor_type_idx = header_cols.iter().position(|c| c == "vendor_type");
@@ -723,7 +820,9 @@ fn parse_vendor_csv(bytes: &[u8]) -> Result<(Vec<CreateVendorInput>, Vec<String>
         let fields = parse_csv_line(trimmed);
 
         let get_field = |idx: Option<usize>| -> Option<String> {
-            idx.and_then(|i| fields.get(i)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+            idx.and_then(|i| fields.get(i))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
         };
 
         let name = match get_field(Some(name_idx)) {
@@ -816,9 +915,18 @@ async fn import_vendors_csv(
     })? {
         let field_name = field.name().unwrap_or("").to_string();
         if field_name == "file" {
-            file_bytes = Some(field.bytes().await.map_err(|e| {
-                billforge_core::Error::Validation(format!("Failed to read file bytes: {}", e))
-            })?.to_vec());
+            file_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| {
+                        billforge_core::Error::Validation(format!(
+                            "Failed to read file bytes: {}",
+                            e
+                        ))
+                    })?
+                    .to_vec(),
+            );
             break;
         }
     }
@@ -826,8 +934,8 @@ async fn import_vendors_csv(
     let file_bytes = file_bytes
         .ok_or_else(|| billforge_core::Error::Validation("No file uploaded".to_string()))?;
 
-    let (inputs, parse_errors) = parse_vendor_csv(&file_bytes)
-        .map_err(|e| billforge_core::Error::Validation(e))?;
+    let (inputs, parse_errors) =
+        parse_vendor_csv(&file_bytes).map_err(|e| billforge_core::Error::Validation(e))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
@@ -836,7 +944,10 @@ async fn import_vendors_csv(
     let mut skipped: u64 = 0;
     let mut error_count: u64 = 0;
     let mut error_details: Vec<String> = parse_errors.clone();
-    let pagination = Pagination { page: 1, per_page: 10000 };
+    let pagination = Pagination {
+        page: 1,
+        per_page: 10000,
+    };
 
     for input in &inputs {
         // Idempotency: skip if vendor with same name already exists
@@ -846,7 +957,11 @@ async fn import_vendors_csv(
         };
         match repo.list(&tenant.tenant_id, &filters, &pagination).await {
             Ok(existing) => {
-                if existing.data.iter().any(|v| v.name.eq_ignore_ascii_case(&input.name)) {
+                if existing
+                    .data
+                    .iter()
+                    .any(|v| v.name.eq_ignore_ascii_case(&input.name))
+                {
                     skipped += 1;
                     continue;
                 }
@@ -872,11 +987,17 @@ async fn import_vendors_csv(
 
     // Audit
     let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(), Some(user.user_id.clone()),
-        AuditAction::Create, ResourceType::Vendor,
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Vendor,
         "bulk-import".to_string(),
-        format!("Imported {} vendors via spreadsheet ({} skipped, {} errors)", imported, skipped, error_count),
-    ).with_user_email(&user.email);
+        format!(
+            "Imported {} vendors via spreadsheet ({} skipped, {} errors)",
+            imported, skipped, error_count
+        ),
+    )
+    .with_user_email(&user.email);
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -915,7 +1036,9 @@ mod tests {
         let csv = "email,vendor_type\ntest@test.com,Business\n";
         let result = parse_vendor_csv(csv.as_bytes());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing required column header: name"));
+        assert!(result
+            .unwrap_err()
+            .contains("Missing required column header: name"));
     }
 
     #[test]

@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { reportsApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
-import { useThemeStore } from '@/stores/theme';
 import {
   ChartContainer,
   BillForgeAreaChart,
@@ -32,78 +31,121 @@ import {
   Target,
   Zap,
   RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 
-const monthlyData = [
-  { name: 'Jan', invoices: 145, amount: 42500 },
-  { name: 'Feb', invoices: 162, amount: 48200 },
-  { name: 'Mar', invoices: 189, amount: 52800 },
-  { name: 'Apr', invoices: 175, amount: 49100 },
-  { name: 'May', invoices: 198, amount: 58300 },
-  { name: 'Jun', invoices: 215, amount: 64200 },
-  { name: 'Jul', invoices: 228, amount: 68500 },
-  { name: 'Aug', invoices: 242, amount: 72100 },
-  { name: 'Sep', invoices: 235, amount: 69800 },
-  { name: 'Oct', invoices: 258, amount: 76400 },
-  { name: 'Nov', invoices: 272, amount: 81200 },
-  { name: 'Dec', invoices: 285, amount: 85600 },
-];
+const emptySparkline = [0, 0, 0, 0, 0, 0, 0];
 
-const processingTimeData = [
-  { name: 'Mon', time: 2.4 },
-  { name: 'Tue', time: 2.1 },
-  { name: 'Wed', time: 2.8 },
-  { name: 'Thu', time: 1.9 },
-  { name: 'Fri', time: 2.2 },
-  { name: 'Sat', time: 1.5 },
-  { name: 'Sun', time: 1.2 },
-];
+function ReportNotice({ title, description, tone = 'muted' }: {
+  title: string;
+  description: string;
+  tone?: 'muted' | 'error';
+}) {
+  const iconClass = tone === 'error' ? 'text-error' : 'text-muted-foreground';
+  const borderClass = tone === 'error' ? 'border-error/30 bg-error/5' : 'border-border bg-secondary/30';
 
-const statusDistribution = [
-  { name: 'Approved', value: 45 },
-  { name: 'Pending Review', value: 25 },
-  { name: 'Processing', value: 18 },
-  { name: 'Rejected', value: 7 },
-  { name: 'On Hold', value: 5 },
-];
-
-const vendorSpendData = [
-  { name: 'Acme Corp', spend: 125000 },
-  { name: 'TechSupply Inc', spend: 98500 },
-  { name: 'Global Parts', spend: 87200 },
-  { name: 'Office Depot', spend: 65400 },
-  { name: 'CloudServe', spend: 52800 },
-];
-
-const weeklyTrend = [12, 15, 18, 14, 22, 19, 25];
+  return (
+    <div className={`flex items-start gap-3 rounded-lg border p-4 ${borderClass}`}>
+      <AlertCircle className={`mt-0.5 h-4 w-4 ${iconClass}`} />
+      <div>
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function ReportsPage() {
   const { hasModule } = useAuthStore();
-  const { getCurrentColors } = useThemeStore();
-  const colors = getCurrentColors();
-
-  const { data: metrics } = useQuery({
-    queryKey: ['workflow-metrics'],
-    queryFn: () => reportsApi.workflowMetrics(),
-    enabled: hasModule('invoice_processing'),
-  });
-
-  const { data: aging } = useQuery({
-    queryKey: ['invoice-aging'],
-    queryFn: () => reportsApi.invoiceAging(),
-    enabled: hasModule('invoice_processing'),
-  });
-
-  const { data: summary } = useQuery({
-    queryKey: ['dashboard-summary'],
-    queryFn: () => reportsApi.dashboardSummary(),
-  });
 
   const showOcrMetrics = hasModule('invoice_capture');
   const showProcessingMetrics = hasModule('invoice_processing');
   const showVendorMetrics = hasModule('vendor_management');
 
+  const metricsQuery = useQuery({
+    queryKey: ['workflow-metrics'],
+    queryFn: () => reportsApi.workflowMetrics(),
+    enabled: showProcessingMetrics,
+  });
+
+  const agingQuery = useQuery({
+    queryKey: ['invoice-aging'],
+    queryFn: () => reportsApi.invoiceAging(),
+    enabled: showProcessingMetrics,
+  });
+
+  const statusQuery = useQuery({
+    queryKey: ['invoice-status-distribution'],
+    queryFn: () => reportsApi.invoicesByStatus(),
+    enabled: showProcessingMetrics,
+  });
+
+  const spendTrendQuery = useQuery({
+    queryKey: ['spend-trends'],
+    queryFn: () => reportsApi.spendTrends(),
+    enabled: showProcessingMetrics,
+  });
+
+  const vendorSpendQuery = useQuery({
+    queryKey: ['vendor-spend'],
+    queryFn: () => reportsApi.invoicesByVendor(),
+    enabled: showVendorMetrics,
+  });
+
+  const summaryQuery = useQuery({
+    queryKey: ['dashboard-summary'],
+    queryFn: () => reportsApi.dashboardSummary(),
+  });
+
+  const metrics = metricsQuery.data;
+  const summary = summaryQuery.data;
+  const reportError = [
+    summaryQuery,
+    metricsQuery,
+    agingQuery,
+    statusQuery,
+    spendTrendQuery,
+    vendorSpendQuery,
+  ].some((query) => query.isError);
+  const anyLoading = [
+    summaryQuery,
+    metricsQuery,
+    agingQuery,
+    statusQuery,
+    spendTrendQuery,
+    vendorSpendQuery,
+  ].some((query) => query.isLoading || query.isFetching);
+
+  const monthlyData = (spendTrendQuery.data ?? []).map((point) => ({
+    name: point.period,
+    invoices: point.invoice_count,
+    amount: point.total_spend,
+  }));
+
+  const processingTimeData = metrics
+    ? [{ name: 'Average', time: metrics.avg_processing_time_hours }]
+    : [];
+
+  const statusDistribution = (statusQuery.data ?? []).map((item) => ({
+    name: item.status.replace(/_/g, ' '),
+    value: item.count,
+    amount: item.total_amount,
+  }));
+
+  const vendorSpendData = (vendorSpendQuery.data ?? []).map((vendor) => ({
+    name: vendor.vendor_name,
+    spend: vendor.total_amount,
+  }));
+
   const formatCurrency = (value: number) => `$${(value / 1000).toFixed(0)}k`;
+  const refreshReports = () => {
+    void summaryQuery.refetch();
+    void metricsQuery.refetch();
+    void agingQuery.refetch();
+    void statusQuery.refetch();
+    void spendTrendQuery.refetch();
+    void vendorSpendQuery.refetch();
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -119,8 +161,8 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn btn-secondary btn-sm">
-            <RefreshCw className="w-4 h-4 mr-1.5" />
+          <button className="btn btn-secondary btn-sm" onClick={refreshReports} disabled={anyLoading}>
+            <RefreshCw className={`w-4 h-4 mr-1.5 ${anyLoading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
           <button className="btn btn-secondary btn-sm">
@@ -134,6 +176,14 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {reportError && (
+        <ReportNotice
+          tone="error"
+          title="Some report data could not be loaded"
+          description="The affected reports are marked below. Retry refresh after the API is available."
+        />
+      )}
+
       {/* Key Metrics - Modern Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {showVendorMetrics && (
@@ -143,7 +193,11 @@ export default function ReportsPage() {
               <div className="p-2.5 rounded-xl bg-vendor/10">
                 <Users className="w-5 h-5 text-vendor" />
               </div>
-              <BillForgeSparkline data={weeklyTrend} color="vendor" showArea />
+              <BillForgeSparkline
+                data={vendorSpendData.length > 0 ? vendorSpendData.map((vendor) => vendor.spend).slice(0, 7) : emptySparkline}
+                color="vendor"
+                showArea
+              />
             </div>
             <p className="text-2xl font-bold text-foreground">{summary?.vendors_active ?? '—'}</p>
             <p className="text-sm text-muted-foreground">Active Vendors</p>
@@ -173,7 +227,11 @@ export default function ReportsPage() {
                 <div className="p-2.5 rounded-xl bg-accent/10">
                   <DollarSign className="w-5 h-5 text-accent" />
                 </div>
-                <BillForgeSparkline data={[28, 32, 45, 38, 52, 48, 65]} color="accent" showArea />
+                <BillForgeSparkline
+                  data={monthlyData.length > 0 ? monthlyData.map((point) => point.amount).slice(-7) : emptySparkline}
+                  color="accent"
+                  showArea
+                />
               </div>
               <p className="text-2xl font-bold text-foreground">${(summary?.total_pending_amount ?? 0).toLocaleString()}</p>
               <p className="text-sm text-muted-foreground">Total Pending</p>
@@ -214,12 +272,25 @@ export default function ReportsPage() {
               </select>
             }
           >
-            <BillForgeAreaChart
-              data={monthlyData}
-              dataKey="invoices"
-              color="primary"
-              formatter={(v) => v.toString()}
-            />
+            {spendTrendQuery.isError ? (
+              <ReportNotice
+                tone="error"
+                title="Invoice trend unavailable"
+                description="The spend trend endpoint failed, so this chart is not using fallback sample data."
+              />
+            ) : monthlyData.length === 0 && !spendTrendQuery.isLoading ? (
+              <ReportNotice
+                title="No invoice trend data"
+                description="No tenant invoice volume was returned for the selected date range."
+              />
+            ) : (
+              <BillForgeAreaChart
+                data={monthlyData}
+                dataKey="invoices"
+                color="primary"
+                formatter={(v) => v.toString()}
+              />
+            )}
           </ChartContainer>
         </div>
 
@@ -228,28 +299,43 @@ export default function ReportsPage() {
           title="Invoice Status"
           description="Current status distribution"
         >
-          <BillForgeDonutChart
-            data={statusDistribution}
-            centerValue={statusDistribution.reduce((a, b) => a + b.value, 0)}
-            centerText="Total"
-            innerRadius={55}
-            outerRadius={85}
-            height={250}
-          />
-          <div className="mt-4 space-y-2">
-            {statusDistribution.slice(0, 3).map((item, index) => {
-              const colorClasses = ['bg-primary', 'bg-capture', 'bg-processing', 'bg-vendor', 'bg-reporting'];
-              return (
-                <div key={item.name} className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2.5 h-2.5 rounded-full ${colorClasses[index]}`} />
-                    <span className="text-muted-foreground">{item.name}</span>
-                  </div>
-                  <span className="font-medium text-foreground">{item.value}%</span>
-                </div>
-              );
-            })}
-          </div>
+          {statusQuery.isError ? (
+            <ReportNotice
+              tone="error"
+              title="Invoice status unavailable"
+              description="The status distribution endpoint failed."
+            />
+          ) : statusDistribution.length === 0 && !statusQuery.isLoading ? (
+            <ReportNotice
+              title="No status data"
+              description="No invoice statuses were returned for this tenant."
+            />
+          ) : (
+            <>
+              <BillForgeDonutChart
+                data={statusDistribution}
+                centerValue={statusDistribution.reduce((a, b) => a + b.value, 0)}
+                centerText="Total"
+                innerRadius={55}
+                outerRadius={85}
+                height={250}
+              />
+              <div className="mt-4 space-y-2">
+                {statusDistribution.slice(0, 3).map((item, index) => {
+                  const colorClasses = ['bg-primary', 'bg-capture', 'bg-processing', 'bg-vendor', 'bg-reporting'];
+                  return (
+                    <div key={item.name} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2.5 h-2.5 rounded-full ${colorClasses[index]}`} />
+                        <span className="text-muted-foreground capitalize">{item.name}</span>
+                      </div>
+                      <span className="font-medium text-foreground">{item.value}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </ChartContainer>
       </div>
 
@@ -309,21 +395,29 @@ export default function ReportsPage() {
             title="Invoice Aging"
             description="Distribution by days outstanding"
           >
-            <BillForgeBarChart
-              data={aging?.map((bucket: any) => ({
-                name: bucket.bucket,
-                invoices: bucket.count,
-                amount: bucket.total_amount,
-              })) || [
-                { name: '0-30 days', invoices: 45, amount: 125000 },
-                { name: '31-60 days', invoices: 28, amount: 78500 },
-                { name: '61-90 days', invoices: 15, amount: 42000 },
-                { name: '90+ days', invoices: 8, amount: 22500 },
-              ]}
-              dataKey="invoices"
-              horizontal
-              height={220}
-            />
+            {agingQuery.isError ? (
+              <ReportNotice
+                tone="error"
+                title="Invoice aging unavailable"
+                description="The invoice aging endpoint failed."
+              />
+            ) : (agingQuery.data ?? []).length === 0 && !agingQuery.isLoading ? (
+              <ReportNotice
+                title="No aging data"
+                description="No outstanding invoice aging buckets were returned."
+              />
+            ) : (
+              <BillForgeBarChart
+                data={(agingQuery.data ?? []).map((bucket) => ({
+                  name: bucket.bucket,
+                  invoices: bucket.count,
+                  amount: bucket.total_amount,
+                }))}
+                dataKey="invoices"
+                horizontal
+                height={220}
+              />
+            )}
           </ChartContainer>
 
           {/* Processing Time Trend */}
@@ -331,13 +425,26 @@ export default function ReportsPage() {
             title="Processing Time Trend"
             description="Average hours to process invoices"
           >
-            <BillForgeLineChart
-              data={processingTimeData}
-              dataKey="time"
-              showDots
-              height={220}
-              formatter={(v) => `${v}h`}
-            />
+            {metricsQuery.isError ? (
+              <ReportNotice
+                tone="error"
+                title="Processing metrics unavailable"
+                description="The workflow metrics endpoint failed."
+              />
+            ) : processingTimeData.length === 0 && !metricsQuery.isLoading ? (
+              <ReportNotice
+                title="No processing metrics"
+                description="No workflow metrics were returned for this tenant."
+              />
+            ) : (
+              <BillForgeLineChart
+                data={processingTimeData}
+                dataKey="time"
+                showDots
+                height={220}
+                formatter={(v) => `${v}h`}
+              />
+            )}
           </ChartContainer>
         </div>
       )}
@@ -384,13 +491,26 @@ export default function ReportsPage() {
               {/* Top Vendors by Spend */}
               <div className="lg:col-span-2">
                 <h3 className="text-sm font-medium text-foreground mb-3">Top Vendors by Spend</h3>
-                <BillForgeBarChart
-                  data={vendorSpendData}
-                  dataKey="spend"
-                  horizontal
-                  height={180}
-                  formatter={formatCurrency}
-                />
+                {vendorSpendQuery.isError ? (
+                  <ReportNotice
+                    tone="error"
+                    title="Vendor spend unavailable"
+                    description="The vendor spend endpoint failed."
+                  />
+                ) : vendorSpendData.length === 0 && !vendorSpendQuery.isLoading ? (
+                  <ReportNotice
+                    title="No vendor spend"
+                    description="No vendor spend records were returned for this tenant."
+                  />
+                ) : (
+                  <BillForgeBarChart
+                    data={vendorSpendData}
+                    dataKey="spend"
+                    horizontal
+                    height={180}
+                    formatter={formatCurrency}
+                  />
+                )}
               </div>
             </div>
           </div>

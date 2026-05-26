@@ -27,7 +27,10 @@ pub enum EmailProvider {
     /// Mailgun API
     Mailgun { api_key: String, domain: String },
     /// Custom webhook endpoint
-    Webhook { url: String, auth_header: Option<String> },
+    Webhook {
+        url: String,
+        auth_header: Option<String>,
+    },
     /// Log only (for development/testing)
     Log,
 }
@@ -59,8 +62,7 @@ impl EmailConfig {
             provider,
             from_email: std::env::var("EMAIL_FROM")
                 .unwrap_or_else(|_| "noreply@billforge.app".to_string()),
-            from_name: std::env::var("EMAIL_FROM_NAME")
-                .unwrap_or_else(|_| "BillForge".to_string()),
+            from_name: std::env::var("EMAIL_FROM_NAME").unwrap_or_else(|_| "BillForge".to_string()),
             enabled: std::env::var("EMAIL_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(true),
@@ -203,7 +205,10 @@ impl EmailService for EmailServiceImpl {
                     .post(&url)
                     .basic_auth("api", Some(api_key))
                     .form(&[
-                        ("from", format!("{} <{}>", self.config.from_name, self.config.from_email)),
+                        (
+                            "from",
+                            format!("{} <{}>", self.config.from_name, self.config.from_email),
+                        ),
                         ("to", to.to_string()),
                         ("subject", subject.to_string()),
                         ("text", text_body.to_string()),
@@ -300,7 +305,13 @@ impl Default for MockEmailService {
 
 #[async_trait]
 impl EmailService for MockEmailService {
-    async fn send(&self, to: &str, subject: &str, _html_body: &str, _text_body: &str) -> Result<()> {
+    async fn send(
+        &self,
+        to: &str,
+        subject: &str,
+        _html_body: &str,
+        _text_body: &str,
+    ) -> Result<()> {
         tracing::info!(
             to = %to,
             subject = %subject,

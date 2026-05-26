@@ -203,8 +203,8 @@ impl NetSuiteClient {
             self.config.base_url()
         );
 
-        let body = serde_json::to_string(&req)
-            .map_err(|e| ClientError::Deserialization(e.to_string()))?;
+        let body =
+            serde_json::to_string(&req).map_err(|e| ClientError::Deserialization(e.to_string()))?;
 
         let resp = self
             .http

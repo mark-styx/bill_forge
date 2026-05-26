@@ -8,6 +8,8 @@
 //! - Tenant isolation for update operations
 //! - Reconciliation summary computation
 
+#![allow(warnings)]
+
 use billforge_core::domain::vendor_statement::*;
 use chrono::NaiveDate;
 use uuid::Uuid;
@@ -49,8 +51,16 @@ fn make_invoice(id: &str, number: &str, amount: i64) -> InvoiceSummary {
 
 #[test]
 fn exact_match_number_and_amount() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("INV-001"), 10000)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("INV-001"),
+        10000,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 1);
@@ -62,8 +72,16 @@ fn exact_match_number_and_amount() {
 
 #[test]
 fn exact_match_case_insensitive() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("inv-001"), 5000)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 5000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("inv-001"),
+        5000,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        5000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 1);
@@ -76,8 +94,16 @@ fn exact_match_case_insensitive() {
 
 #[test]
 fn discrepancy_number_matches_amount_differs() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("INV-001"), 12000)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("INV-001"),
+        12000,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 1);
@@ -88,8 +114,16 @@ fn discrepancy_number_matches_amount_differs() {
 
 #[test]
 fn discrepancy_negative_variance() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("INV-002"), 8000)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-002", 10000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("INV-002"),
+        8000,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-002",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results[0].variance_cents, -2000);
@@ -101,8 +135,16 @@ fn discrepancy_negative_variance() {
 
 #[test]
 fn amount_only_match() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("UNKNOWN-REF"), 10000)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("UNKNOWN-REF"),
+        10000,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 1);
@@ -116,8 +158,16 @@ fn amount_only_match() {
 
 #[test]
 fn no_match() {
-    let lines = vec![make_line("00000000-0000-0000-0000-000000000001", Some("NOPE-001"), 99999)];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let lines = vec![make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("NOPE-001"),
+        99999,
+    )];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 1);
@@ -132,10 +182,18 @@ fn no_match() {
 
 #[test]
 fn skips_already_matched_lines() {
-    let mut line = make_line("00000000-0000-0000-0000-000000000001", Some("INV-001"), 10000);
+    let mut line = make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("INV-001"),
+        10000,
+    );
     line.match_status = LineMatchStatus::Matched;
     let lines = vec![line];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert!(results.is_empty());
@@ -143,7 +201,11 @@ fn skips_already_matched_lines() {
 
 #[test]
 fn skips_ignored_lines() {
-    let mut line = make_line("00000000-0000-0000-0000-000000000001", Some("INV-001"), 10000);
+    let mut line = make_line(
+        "00000000-0000-0000-0000-000000000001",
+        Some("INV-001"),
+        10000,
+    );
     line.match_status = LineMatchStatus::Ignored;
     let lines = vec![line];
 
@@ -177,7 +239,11 @@ fn no_duplicate_invoice_matching() {
         .iter()
         .filter_map(|r| r.matched_invoice_id)
         .collect();
-    assert_eq!(matched_ids.len(), 3, "Each line should match a different invoice");
+    assert_eq!(
+        matched_ids.len(),
+        3,
+        "Each line should match a different invoice"
+    );
 }
 
 #[test]
@@ -185,10 +251,22 @@ fn consumed_invoices_prevent_reuse() {
     // Two lines with same reference, one invoice. First gets exact match,
     // second should not re-match the consumed invoice.
     let lines = vec![
-        make_line("00000000-0000-0000-0000-000000000001", Some("INV-001"), 10000),
-        make_line("00000000-0000-0000-0000-000000000002", Some("INV-001"), 10000),
+        make_line(
+            "00000000-0000-0000-0000-000000000001",
+            Some("INV-001"),
+            10000,
+        ),
+        make_line(
+            "00000000-0000-0000-0000-000000000002",
+            Some("INV-001"),
+            10000,
+        ),
     ];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 10000)];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        10000,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results.len(), 2);
@@ -204,7 +282,11 @@ fn amount_only_consumes_invoice() {
         make_line("00000000-0000-0000-0000-000000000001", None, 7500),
         make_line("00000000-0000-0000-0000-000000000002", None, 7500),
     ];
-    let invoices = vec![make_invoice("11111111-1111-1111-1111-111111111111", "INV-001", 7500)];
+    let invoices = vec![make_invoice(
+        "11111111-1111-1111-1111-111111111111",
+        "INV-001",
+        7500,
+    )];
 
     let results = auto_match_lines(&lines, &invoices);
     assert_eq!(results[0].confidence, MatchConfidence::AmountOnly);
@@ -282,7 +364,10 @@ fn reconcile_rejects_unmatched_lines() {
             && l.match_status != LineMatchStatus::Ignored
             && l.match_status != LineMatchStatus::Discrepancy
     });
-    assert!(has_unresolved, "Should reject reconciliation with unmatched lines");
+    assert!(
+        has_unresolved,
+        "Should reject reconciliation with unmatched lines"
+    );
 }
 
 #[test]
@@ -305,7 +390,10 @@ fn reconcile_succeeds_all_matched() {
             && l.match_status != LineMatchStatus::Ignored
             && l.match_status != LineMatchStatus::Discrepancy
     });
-    assert!(!has_unresolved, "Should allow reconciliation when all matched");
+    assert!(
+        !has_unresolved,
+        "Should allow reconciliation when all matched"
+    );
 }
 
 #[test]
@@ -333,7 +421,10 @@ fn reconcile_succeeds_with_mixed_matched_and_ignored() {
             && l.match_status != LineMatchStatus::Ignored
             && l.match_status != LineMatchStatus::Discrepancy
     });
-    assert!(!has_unresolved, "Should allow reconciliation with matched, ignored, and discrepancy lines");
+    assert!(
+        !has_unresolved,
+        "Should allow reconciliation with matched, ignored, and discrepancy lines"
+    );
 }
 
 // ============================================================================
@@ -356,7 +447,10 @@ fn tenant_id_in_update_prevents_cross_tenant_access() {
 
     let tenant_a = billforge_core::types::TenantId::new();
     let tenant_b = billforge_core::types::TenantId::new();
-    assert_ne!(tenant_a, tenant_b, "Different tenants should have different IDs");
+    assert_ne!(
+        tenant_a, tenant_b,
+        "Different tenants should have different IDs"
+    );
 }
 
 // ============================================================================
@@ -365,7 +459,12 @@ fn tenant_id_in_update_prevents_cross_tenant_access() {
 
 #[test]
 fn statement_status_roundtrip() {
-    for status in [StatementStatus::Pending, StatementStatus::InReview, StatementStatus::Reconciled, StatementStatus::Disputed] {
+    for status in [
+        StatementStatus::Pending,
+        StatementStatus::InReview,
+        StatementStatus::Reconciled,
+        StatementStatus::Disputed,
+    ] {
         let s = status.as_str();
         assert_eq!(StatementStatus::from_str(s), Some(status));
     }
@@ -373,7 +472,12 @@ fn statement_status_roundtrip() {
 
 #[test]
 fn line_match_status_roundtrip() {
-    for status in [LineMatchStatus::Unmatched, LineMatchStatus::Matched, LineMatchStatus::Discrepancy, LineMatchStatus::Ignored] {
+    for status in [
+        LineMatchStatus::Unmatched,
+        LineMatchStatus::Matched,
+        LineMatchStatus::Discrepancy,
+        LineMatchStatus::Ignored,
+    ] {
         let s = status.as_str();
         assert_eq!(LineMatchStatus::from_str(s), Some(status));
     }
@@ -381,7 +485,12 @@ fn line_match_status_roundtrip() {
 
 #[test]
 fn line_type_roundtrip() {
-    for lt in [LineType::Invoice, LineType::Credit, LineType::Payment, LineType::Adjustment] {
+    for lt in [
+        LineType::Invoice,
+        LineType::Credit,
+        LineType::Payment,
+        LineType::Adjustment,
+    ] {
         let s = lt.as_str();
         assert_eq!(LineType::from_str(s), Some(lt));
     }

@@ -87,6 +87,7 @@ salesforce = ["dep:billforge-salesforce"]
 workday = ["dep:billforge-workday"]
 bill-com = ["dep:billforge-bill-com"]
 edi = ["dep:billforge-edi"]
+payment-requests = []
 
 [dev-dependencies]
 tokio-test = "0.4"

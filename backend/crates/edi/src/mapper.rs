@@ -1,9 +1,8 @@
 //! Maps EDI document types to BillForge domain models
 
 use crate::types::{
-    EdiInvoice, EdiPurchaseOrder, EdiShipNotice,
-    EdiRemittanceAdvice, EdiRemittanceDetail, EdiFunctionalAck, EdiParty,
-    AckStatus,
+    AckStatus, EdiFunctionalAck, EdiInvoice, EdiParty, EdiPurchaseOrder, EdiRemittanceAdvice,
+    EdiRemittanceDetail, EdiShipNotice,
 };
 use anyhow::Result;
 use billforge_core::domain::{
@@ -134,9 +133,7 @@ impl EdiMapper {
     }
 
     /// Map an EDI 856 Ship Notice to receiving line items for PO matching
-    pub fn receiving_lines_from_asn(
-        edi: &EdiShipNotice,
-    ) -> Vec<ReceivingLineItem> {
+    pub fn receiving_lines_from_asn(edi: &EdiShipNotice) -> Vec<ReceivingLineItem> {
         edi.line_items
             .iter()
             .map(|item| ReceivingLineItem {
@@ -364,18 +361,16 @@ mod tests {
                 postal_code: None,
                 country: None,
             }),
-            line_items: vec![
-                EdiPOLineItem {
-                    line_number: 1,
-                    quantity: 200.0,
-                    unit_of_measure: "EA".to_string(),
-                    unit_price_cents: 1500,
-                    product_id_qualifier: Some("VP".to_string()),
-                    product_id: Some("WIDGET-A".to_string()),
-                    description: "Widget Type A".to_string(),
-                    total_cents: 300000,
-                },
-            ],
+            line_items: vec![EdiPOLineItem {
+                line_number: 1,
+                quantity: 200.0,
+                unit_of_measure: "EA".to_string(),
+                unit_price_cents: 1500,
+                product_id_qualifier: Some("VP".to_string()),
+                product_id: Some("WIDGET-A".to_string()),
+                description: "Widget Type A".to_string(),
+                total_cents: 300000,
+            }],
             total_amount_cents: 300000,
             currency: "USD".to_string(),
             terms: None,
@@ -442,9 +437,7 @@ mod tests {
 
     #[test]
     fn test_remittance_from_invoice() {
-        use billforge_core::domain::{
-            CaptureStatus, Invoice, InvoiceId, ProcessingStatus,
-        };
+        use billforge_core::domain::{CaptureStatus, Invoice, InvoiceId, ProcessingStatus};
         use billforge_core::types::{TenantId, UserId};
         use billforge_core::Money;
 
@@ -476,7 +469,7 @@ mod tests {
             tags: vec![],
             custom_fields: serde_json::json!({}),
             document_id: Uuid::new_v4(),
-            created_by: UserId::from_uuid(Uuid::new_v4()),
+            created_by: Some(UserId::from_uuid(Uuid::new_v4())),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -511,9 +504,8 @@ mod tests {
 
     #[test]
     fn test_ack_for_document_accepted() {
-        let ack = EdiMapper::ack_for_document(
-            "12345", Some("0001"), "BILLFORGE-001", "ACME-001", true,
-        );
+        let ack =
+            EdiMapper::ack_for_document("12345", Some("0001"), "BILLFORGE-001", "ACME-001", true);
         assert_eq!(ack.group_control, "12345");
         assert_eq!(ack.transaction_control, Some("0001".to_string()));
         assert_eq!(ack.sender_id, "BILLFORGE-001");
@@ -524,9 +516,7 @@ mod tests {
 
     #[test]
     fn test_ack_for_document_rejected() {
-        let ack = EdiMapper::ack_for_document(
-            "99999", None, "BILLFORGE-001", "ACME-001", false,
-        );
+        let ack = EdiMapper::ack_for_document("99999", None, "BILLFORGE-001", "ACME-001", false);
         assert_eq!(ack.group_control, "99999");
         assert_eq!(ack.transaction_control, None);
         assert_eq!(ack.status, AckStatus::Rejected);

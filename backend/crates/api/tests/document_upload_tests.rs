@@ -6,6 +6,8 @@
 //!
 //! These tests run against the real PostgreSQL database (DATABASE_URL).
 
+#![allow(warnings)]
+
 use uuid::Uuid;
 
 const SANDBOX_TENANT_ID: &str = "11111111-1111-1111-1111-111111111111";
@@ -14,8 +16,7 @@ const SANDBOX_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 /// Helper to get a database pool from DATABASE_URL
 async fn get_pool() -> sqlx::PgPool {
     dotenvy::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     sqlx::PgPool::connect(&database_url)
         .await
         .expect("Failed to connect to database")
@@ -29,13 +30,12 @@ async fn ensure_fixture_invoice(pool: &sqlx::PgPool) -> Uuid {
     let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
 
     // Check if an invoice already exists for this tenant
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap()
+    if let Some(id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM invoices WHERE tenant_id = $1 LIMIT 1")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
     {
         return id;
     }
@@ -104,18 +104,24 @@ async fn test_document_insert_with_tenant_id_succeeds() {
     .execute(&pool)
     .await;
 
-    assert!(result.is_ok(), "Document insert with tenant_id should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Document insert with tenant_id should succeed: {:?}",
+        result.err()
+    );
 
     // Verify the row was stored with correct tenant_id
-    let stored_tenant_id: Uuid = sqlx::query_scalar(
-        "SELECT tenant_id FROM documents WHERE id = $1"
-    )
-    .bind(document_id)
-    .fetch_one(&pool)
-    .await
-    .expect("Should find the inserted document");
+    let stored_tenant_id: Uuid =
+        sqlx::query_scalar("SELECT tenant_id FROM documents WHERE id = $1")
+            .bind(document_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Should find the inserted document");
 
-    assert_eq!(stored_tenant_id, tenant_id, "Stored tenant_id should match input");
+    assert_eq!(
+        stored_tenant_id, tenant_id,
+        "Stored tenant_id should match input"
+    );
 
     // Cleanup
     sqlx::query("DELETE FROM documents WHERE id = $1")
@@ -150,7 +156,10 @@ async fn test_document_insert_without_tenant_id_fails() {
     .execute(&pool)
     .await;
 
-    assert!(result.is_err(), "Insert without tenant_id MUST fail with NOT NULL violation");
+    assert!(
+        result.is_err(),
+        "Insert without tenant_id MUST fail with NOT NULL violation"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("tenant_id"),
@@ -188,16 +197,19 @@ async fn test_storage_document_insert_with_tenant_id() {
     .execute(&pool)
     .await;
 
-    assert!(result.is_ok(), "Storage insert should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Storage insert should succeed: {:?}",
+        result.err()
+    );
 
     // Verify
-    let (stored_tenant, stored_filename): (Uuid, String) = sqlx::query_as(
-        "SELECT tenant_id, filename FROM documents WHERE id = $1"
-    )
-    .bind(document_id)
-    .fetch_one(&pool)
-    .await
-    .expect("Should find stored document");
+    let (stored_tenant, stored_filename): (Uuid, String) =
+        sqlx::query_as("SELECT tenant_id, filename FROM documents WHERE id = $1")
+            .bind(document_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Should find stored document");
 
     assert_eq!(stored_tenant, tenant_id);
     assert_eq!(stored_filename, "storage-test.jpg");

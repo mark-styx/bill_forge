@@ -3,6 +3,8 @@
 //! Validates that approval requests target specific users when routing data
 //! is available, and fall back to the generic "approver" role otherwise.
 
+#![allow(warnings)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +19,9 @@ use billforge_core::{
         ApproverAvailability, ApproverWorkload, AvailabilityStatus, IntelligentRoutingEngine,
         RoutingConfig, RoutingContext, RoutingDataProvider,
     },
-    traits::{ApprovalRepository, InvoiceRepository, WorkflowRuleRepository, WorkflowTemplateRepository},
+    traits::{
+        ApprovalRepository, InvoiceRepository, WorkflowRuleRepository, WorkflowTemplateRepository,
+    },
     types::{Money, TenantId, UserId},
     Result,
 };
@@ -162,7 +166,7 @@ impl InvoiceRepository for MockInvoiceRepo {
         &self,
         _tid: &TenantId,
         _input: billforge_core::domain::CreateInvoiceInput,
-        _uid: &UserId,
+        _uid: Option<&UserId>,
     ) -> Result<Invoice> {
         unimplemented!()
     }
@@ -334,7 +338,7 @@ fn test_invoice() -> Invoice {
         custom_fields: serde_json::json!({}),
         created_at: Utc::now(),
         updated_at: Utc::now(),
-        created_by: UserId::new(),
+        created_by: Some(UserId::new()),
     }
 }
 
@@ -374,7 +378,10 @@ async fn test_routing_engine_present_returns_approver() {
     );
 
     let invoice = test_invoice();
-    let status = engine.process_invoice(&invoice.tenant_id, &invoice).await.unwrap();
+    let status = engine
+        .process_invoice(&invoice.tenant_id, &invoice)
+        .await
+        .unwrap();
 
     assert_eq!(status, ProcessingStatus::PendingApproval);
 

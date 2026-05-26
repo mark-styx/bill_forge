@@ -1,13 +1,16 @@
 //! Billing API routes - exposes plan definitions, subscription status, and usage metering
 
-use axum::{extract::State, response::Json, routing::{get, post}, Router};
+use axum::{
+    extract::State,
+    response::Json,
+    routing::{get, post},
+    Router,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use billforge_billing::{
-    BillingConfig, BillingService, BillingServiceTrait, Plan,
-};
+use billforge_billing::{BillingConfig, BillingService, BillingServiceTrait, Plan};
 
 use crate::error::{ApiError, ApiResult};
 use crate::extractors::AuthUser;
@@ -61,9 +64,10 @@ async fn get_subscription(
     let tenant_id = user.tenant_id;
     let pool = state.db.metadata();
     let service = BillingService::new(BillingConfig::default(), pool);
-    let sub = service.get_subscription(&tenant_id).await.unwrap_or_else(|_| {
-        billforge_billing::Subscription::new_free(tenant_id)
-    });
+    let sub = service
+        .get_subscription(&tenant_id)
+        .await
+        .unwrap_or_else(|_| billforge_billing::Subscription::new_free(tenant_id));
     Ok(Json(json!({
         "subscription": sub,
     })))
@@ -87,9 +91,10 @@ async fn get_usage(
     let pool = state.db.tenant(&tenant_id).await?;
 
     let service = BillingService::new(BillingConfig::default(), state.db.metadata());
-    let sub = service.get_subscription(&tenant_id).await.unwrap_or_else(|_| {
-        billforge_billing::Subscription::new_free(tenant_id.clone())
-    });
+    let sub = service
+        .get_subscription(&tenant_id)
+        .await
+        .unwrap_or_else(|_| billforge_billing::Subscription::new_free(tenant_id.clone()));
 
     let usage = billforge_billing::get_tenant_usage(
         &pool,
@@ -145,4 +150,3 @@ async fn create_checkout(
         "url": outcome.url,
     })))
 }
-

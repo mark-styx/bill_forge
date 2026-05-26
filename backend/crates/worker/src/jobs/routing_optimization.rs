@@ -9,18 +9,20 @@
 use anyhow::{Context, Result};
 use billforge_core::{
     intelligent_routing::ExpertiseType,
-    workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig},
     types::TenantId,
+    workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig},
     UserId,
 };
 use num_traits::{cast::ToPrimitive, FromPrimitive};
-use sqlx::{PgPool, types::BigDecimal};
+use sqlx::{types::BigDecimal, PgPool};
 use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 /// Run routing optimization for all tenants
-pub async fn run_routing_optimization(pg_manager: std::sync::Arc<billforge_db::PgManager>) -> Result<()> {
+pub async fn run_routing_optimization(
+    pg_manager: std::sync::Arc<billforge_db::PgManager>,
+) -> Result<()> {
     info!("Starting routing optimization job");
 
     // Get metadata pool for listing tenants
@@ -29,7 +31,10 @@ pub async fn run_routing_optimization(pg_manager: std::sync::Arc<billforge_db::P
     // Get all active tenants
     let tenants = get_active_tenants(metadata_pool).await?;
 
-    info!("Processing {} tenants for routing optimization", tenants.len());
+    info!(
+        "Processing {} tenants for routing optimization",
+        tenants.len()
+    );
 
     for tenant_id in tenants {
         let tenant_pool = match pg_manager.tenant(&tenant_id).await {
@@ -40,10 +45,7 @@ pub async fn run_routing_optimization(pg_manager: std::sync::Arc<billforge_db::P
             }
         };
         if let Err(e) = optimize_tenant_routing(&tenant_pool, &tenant_id).await {
-            warn!(
-                "Failed to optimize routing for tenant {}: {}",
-                tenant_id, e
-            );
+            warn!("Failed to optimize routing for tenant {}: {}", tenant_id, e);
         }
     }
 
@@ -210,7 +212,9 @@ async fn update_expertise_scores(pool: &PgPool, tenant_id: &TenantId) -> Result<
             expertise_key,
             stats.approved_count as i32,
             stats.rejected_count as i32,
-            stats.avg_time_hours.map(|h| BigDecimal::from_f64(h).unwrap()),
+            stats
+                .avg_time_hours
+                .map(|h| BigDecimal::from_f64(h).unwrap()),
             BigDecimal::from_f64(expertise_score).unwrap_or_else(|| BigDecimal::from(0)),
         )
         .execute(pool)
@@ -246,15 +250,17 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
 
     let workloads: Vec<billforge_core::intelligent_routing::ApproverWorkload> = rows
         .into_iter()
-        .map(|row| billforge_core::intelligent_routing::ApproverWorkload {
-            user_id: UserId(row.user_id),
-            active_approvals: row.active_approvals,
-            pending_approvals: row.pending_approvals,
-            completed_this_week: row.completed_this_week,
-            avg_approval_time_hours: row.avg_approval_time_hours.and_then(|h| h.to_f64()),
-            workload_score: row.workload_score.to_f64().unwrap_or(0.0),
-            last_assignment_at: None,
-        })
+        .map(
+            |row| billforge_core::intelligent_routing::ApproverWorkload {
+                user_id: UserId(row.user_id),
+                active_approvals: row.active_approvals,
+                pending_approvals: row.pending_approvals,
+                completed_this_week: row.completed_this_week,
+                avg_approval_time_hours: row.avg_approval_time_hours.and_then(|h| h.to_f64()),
+                workload_score: row.workload_score.to_f64().unwrap_or(0.0),
+                last_assignment_at: None,
+            },
+        )
         .collect();
 
     // Calculate distribution stats

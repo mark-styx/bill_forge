@@ -9,7 +9,9 @@ use axum::{
     Json, Router,
 };
 use billforge_core::types::PaginationMeta;
-use billforge_db::repositories::{PaymentRequestRepositoryImpl, PaymentRequest, PaymentRequestItem};
+use billforge_db::repositories::{
+    PaymentRequest, PaymentRequestItem, PaymentRequestRepositoryImpl,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -238,10 +240,7 @@ async fn submit_request(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn to_response(
-    request: PaymentRequest,
-    items: Vec<PaymentRequestItem>,
-) -> PaymentRequestResponse {
+fn to_response(request: PaymentRequest, items: Vec<PaymentRequestItem>) -> PaymentRequestResponse {
     PaymentRequestResponse {
         id: request.id,
         request_number: request.request_number,
@@ -272,9 +271,7 @@ fn to_response(
     }
 }
 
-fn to_summary(
-    request: PaymentRequest,
-) -> PaymentRequestSummaryResponse {
+fn to_summary(request: PaymentRequest) -> PaymentRequestSummaryResponse {
     PaymentRequestSummaryResponse {
         id: request.id,
         request_number: request.request_number,

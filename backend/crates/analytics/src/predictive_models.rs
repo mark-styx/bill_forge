@@ -12,7 +12,9 @@ pub type PredictiveResult<T> = Result<T, PredictiveError>;
 /// Errors from predictive analytics operations
 #[derive(Debug, thiserror::Error)]
 pub enum PredictiveError {
-    #[error("Insufficient data for prediction: need at least {required} data points, got {actual}")]
+    #[error(
+        "Insufficient data for prediction: need at least {required} data points, got {actual}"
+    )]
     InsufficientData { required: usize, actual: usize },
 
     #[error("Model training failed: {0}")]

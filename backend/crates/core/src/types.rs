@@ -191,11 +191,19 @@ impl Default for TenantSettings {
 /// Feature flags per tenant
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TenantFeatures {
+    #[serde(default)]
     pub advanced_ocr: bool,
+    #[serde(default)]
     pub api_access: bool,
+    #[serde(default)]
     pub custom_workflows: bool,
+    #[serde(default)]
     pub audit_logs: bool,
+    #[serde(default)]
     pub sso_enabled: bool,
+    /// Require local OCR only; cloud OCR providers must not be selected.
+    #[serde(default)]
+    pub local_ocr_required: bool,
 }
 
 /// Authenticated user context

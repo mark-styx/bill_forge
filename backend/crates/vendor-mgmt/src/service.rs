@@ -35,7 +35,11 @@ impl VendorService {
         input: CreateVendorInput,
     ) -> Result<Vendor> {
         // Check for duplicate
-        if let Some(existing) = self.vendor_repo.find_by_name(tenant_id, &input.name).await? {
+        if let Some(existing) = self
+            .vendor_repo
+            .find_by_name(tenant_id, &input.name)
+            .await?
+        {
             return Err(billforge_core::Error::AlreadyExists {
                 resource_type: "Vendor".to_string(),
             });
@@ -89,19 +93,24 @@ impl VendorService {
             .await?;
 
         // Create document record with the file ID
-        let doc_id = self.tax_doc_repo.create(
-            tenant_id,
-            vendor_id,
-            format!("{:?}", doc.document_type).to_lowercase(),
-            doc.file_name.clone(),
-            file_id.to_string(),
-            file_bytes.len() as i64,
-            mime_type.to_string(),
-            None,
-        ).await?;
+        let doc_id = self
+            .tax_doc_repo
+            .create(
+                tenant_id,
+                vendor_id,
+                format!("{:?}", doc.document_type).to_lowercase(),
+                doc.file_name.clone(),
+                file_id.to_string(),
+                file_bytes.len() as i64,
+                mime_type.to_string(),
+                None,
+            )
+            .await?;
 
         // Fetch and return the created document
-        self.tax_doc_repo.get_by_id(tenant_id, doc_id).await?
+        self.tax_doc_repo
+            .get_by_id(tenant_id, doc_id)
+            .await?
             .ok_or_else(|| billforge_core::Error::NotFound {
                 resource_type: "TaxDocument".to_string(),
                 id: doc_id.to_string(),
@@ -114,6 +123,8 @@ impl VendorService {
         tenant_id: &TenantId,
         vendor_id: &VendorId,
     ) -> Result<Vec<TaxDocument>> {
-        self.tax_doc_repo.list_for_vendor(tenant_id, vendor_id).await
+        self.tax_doc_repo
+            .list_for_vendor(tenant_id, vendor_id)
+            .await
     }
 }

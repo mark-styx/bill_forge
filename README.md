@@ -224,10 +224,10 @@ flowchart LR
 <td width="50%">
 
 ### Mobile
-- Delta sync protocol for offline-first mobile
-- Push notifications (FCM + APNS)
-- Mobile approval workflows
-- Device management
+- Expo mobile approval app
+- Offline approval queue with retry
+- Mobile API client for approvals
+- Device-ready app shell
 
 </td>
 </tr>
@@ -240,13 +240,13 @@ flowchart LR
 | **Frontend** | Next.js 14 (App Router), TypeScript, Tailwind CSS, shadcn/ui |
 | **State** | React Query (server), Zustand (client) |
 | **Backend** | Rust, Axum 0.7, Tokio async runtime |
-| **Database** | PostgreSQL 15+ via sqlx (59 migrations) |
+| **Database** | PostgreSQL 15+ via sqlx (53 backend migrations) |
 | **Auth** | Custom JWT with per-request tenant validation |
 | **OCR** | Tesseract (default), AWS Textract, Google Vision |
 | **Storage** | Local filesystem or S3-compatible |
 | **Cache** | Redis |
 | **Testing** | Vitest, React Testing Library, MSW |
-| **Infra** | Docker, Terraform |
+| **Infra** | Docker, Compose, Kubernetes manifests |
 
 ## Project Structure
 
@@ -288,11 +288,12 @@ bill_forge/
 │   │   ├── notifications/         # Slack / Teams
 │   │   ├── mobile-push/           # FCM + APNS
 │   │   └── feedback/              # User feedback
-│   ├── migrations/                # 59 PostgreSQL migrations
+│   ├── migrations/                # 53 PostgreSQL migrations
 │   └── Cargo.toml                 # Workspace manifest
 │
+├── apps/mobile/                   # Expo mobile approval app
 ├── sandbox/                       # Demo environment & seed data
-├── terraform/                     # Infrastructure as code
+├── k8s/                           # Kubernetes manifests
 └── docker/                        # Dockerfiles & compose configs
 ```
 

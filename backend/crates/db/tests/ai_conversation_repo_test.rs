@@ -9,9 +9,9 @@
 
 use billforge_core::{TenantId, UserId};
 use billforge_db::repositories::{
-    AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage, AppendAiMessageInput,
-    PersistAiToolCallInput, PersistAiToolResultInput,
-    AiAnswerFeedbackRating, PersistAiAnswerFeedbackInput,
+    AiAnswerFeedbackRating, AiConversationRepositoryImpl, AiMessageRole, AiMessageUsage,
+    AppendAiMessageInput, PersistAiAnswerFeedbackInput, PersistAiToolCallInput,
+    PersistAiToolResultInput,
 };
 use billforge_db::PgManager;
 use std::sync::Arc;
@@ -44,11 +44,10 @@ async fn seed_user(pool: &sqlx::PgPool, tenant_id: &TenantId, user_id: Uuid) {
 
 /// Create a fresh tenant database with migrations applied and return
 /// `(manager, tenant_id, pool)`. The tag ensures test isolation.
-async fn setup_single_tenant(
-    tag: &str,
-) -> (PgManager, TenantId, sqlx::PgPool) {
-    let metadata_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+async fn setup_single_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
+    let metadata_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
+    });
     let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
 
@@ -190,7 +189,10 @@ async fn append_message_inserts_rows_and_updates_timestamp() {
     assert_eq!(assistant_msg.provider.as_deref(), Some("fake"));
     assert_eq!(assistant_msg.model.as_deref(), Some("test-model"));
     assert_eq!(assistant_msg.finish_reason.as_deref(), Some("stop"));
-    assert_eq!(assistant_msg.provider_request_id.as_deref(), Some("req-123"));
+    assert_eq!(
+        assistant_msg.provider_request_id.as_deref(),
+        Some("req-123")
+    );
     assert_eq!(assistant_msg.latency_ms, Some(150));
     assert_eq!(assistant_msg.prompt_tokens, Some(10));
     assert_eq!(assistant_msg.completion_tokens, Some(20));
@@ -200,13 +202,12 @@ async fn append_message_inserts_rows_and_updates_timestamp() {
     assert!(user_msg.created_at <= assistant_msg.created_at);
 
     // Verify conversation updated_at was bumped
-    let refreshed: (chrono::DateTime<chrono::Utc>,) = sqlx::query_as(
-        "SELECT updated_at FROM ai_conversations WHERE id = $1",
-    )
-    .bind(conv.id)
-    .fetch_one(pool_ref.as_ref())
-    .await
-    .expect("fetch conversation");
+    let refreshed: (chrono::DateTime<chrono::Utc>,) =
+        sqlx::query_as("SELECT updated_at FROM ai_conversations WHERE id = $1")
+            .bind(conv.id)
+            .fetch_one(pool_ref.as_ref())
+            .await
+            .expect("fetch conversation");
 
     assert!(refreshed.0 > original_updated_at);
 
@@ -360,7 +361,10 @@ async fn persist_tool_call_and_result_round_trip() {
     assert_eq!(tool_call.user_id, user_id);
     assert_eq!(tool_call.conversation_id, conv.id);
     assert_eq!(tool_call.message_id, assistant_msg.id);
-    assert_eq!(tool_call.provider_tool_call_id.as_deref(), Some("call_abc123"));
+    assert_eq!(
+        tool_call.provider_tool_call_id.as_deref(),
+        Some("call_abc123")
+    );
     assert_eq!(tool_call.tool_name, "get_invoice");
     assert_eq!(tool_call.arguments["invoice_id"], "inv-001");
     assert_eq!(tool_call.status, "requested");
@@ -579,18 +583,23 @@ async fn answer_feedback_upsert_and_rejection() {
     assert_eq!(fb2.id, fb1.id, "upsert should return same row id");
     assert_eq!(fb2.rating, "negative");
     assert_eq!(fb2.comment.as_deref(), Some("Not detailed enough."));
-    assert!(fb2.updated_at >= fb1.created_at, "updated_at should be bumped");
+    assert!(
+        fb2.updated_at >= fb1.created_at,
+        "updated_at should be bumped"
+    );
 
     // Verify single-row upsert: count should be exactly 1
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM ai_message_feedback WHERE message_id = $1",
-    )
-    .bind(assistant_msg.id)
-    .fetch_one(pool.as_ref())
-    .await
-    .expect("count feedback rows");
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM ai_message_feedback WHERE message_id = $1")
+            .bind(assistant_msg.id)
+            .fetch_one(pool.as_ref())
+            .await
+            .expect("count feedback rows");
 
-    assert_eq!(count.0, 1, "should have exactly one feedback row after upsert");
+    assert_eq!(
+        count.0, 1,
+        "should have exactly one feedback row after upsert"
+    );
 
     // 3. Feedback on a user message should be NotFound (role != assistant)
     let err = repo

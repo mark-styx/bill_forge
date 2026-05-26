@@ -4,19 +4,19 @@ use crate::config::WorkerConfig;
 use anyhow::Result;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
-pub mod quickbooks_sync;
-pub mod metrics_aggregation;
-pub mod email_batch;
-pub mod report_digest;
-pub mod embedding_refresh;
-pub mod categorization_training;
-pub mod routing_optimization;
-pub mod forecast_refresh;
 pub mod anomaly_detection;
-pub mod ocr_processing;
 pub mod approval_expiry;
+pub mod categorization_training;
+pub mod email_batch;
+pub mod embedding_refresh;
+pub mod forecast_refresh;
+pub mod metrics_aggregation;
+pub mod ocr_processing;
+pub mod quickbooks_sync;
+pub mod report_digest;
+pub mod routing_optimization;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -89,7 +89,10 @@ pub async fn start_worker(config: WorkerConfig) -> Result<()> {
             Ok(processed) => {
                 if !processed {
                     // No job available, wait before polling again
-                    tokio::time::sleep(tokio::time::Duration::from_secs(config.job_poll_interval_secs)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                        config.job_poll_interval_secs,
+                    ))
+                    .await;
                 }
             }
             Err(e) => {
@@ -100,22 +103,31 @@ pub async fn start_worker(config: WorkerConfig) -> Result<()> {
     }
 }
 
-async fn poll_and_process_job(conn: &mut redis::aio::Connection, config: &WorkerConfig) -> Result<bool> {
+async fn poll_and_process_job(
+    conn: &mut redis::aio::Connection,
+    config: &WorkerConfig,
+) -> Result<bool> {
     // Try to pop a job from the queue (BRPOP with timeout)
-    let result: Option<(String, String)> = conn
-        .brpop("billforge:jobs:queue", 1.0)
-        .await?;
+    let result: Option<(String, String)> = conn.brpop("billforge:jobs:queue", 1.0).await?;
 
     if let Some((_queue, job_json)) = result {
         let job: Job = serde_json::from_str(&job_json)?;
 
-        info!("Processing job: {} for tenant: {}", job.job_type.clone() as JobType, job.tenant_id);
+        info!(
+            "Processing job: {} for tenant: {}",
+            job.job_type.clone() as JobType,
+            job.tenant_id
+        );
 
         match process_job(&job, config).await {
             Ok(_) => {
                 info!("Job completed successfully: {}", job.id);
                 // Mark job as completed
-                conn.lpush::<_, _, ()>(format!("billforge:jobs:completed:{}", job.tenant_id), &job.id).await?;
+                conn.lpush::<_, _, ()>(
+                    format!("billforge:jobs:completed:{}", job.tenant_id),
+                    &job.id,
+                )
+                .await?;
             }
             Err(e) => {
                 error!("Job failed: {} - Error: {}", job.id, e);
@@ -129,13 +141,24 @@ async fn poll_and_process_job(conn: &mut redis::aio::Connection, config: &Worker
                     // Exponential backoff: requeue with delay
                     let delay_secs = 10 * 2_u64.pow(job.retry_count);
                     tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-                    conn.lpush::<_, _, ()>("billforge:jobs:queue", retry_json).await?;
+                    conn.lpush::<_, _, ()>("billforge:jobs:queue", retry_json)
+                        .await?;
 
-                    warn!("Requeued job {} for retry (attempt {})", job.id, retry_job.retry_count);
+                    warn!(
+                        "Requeued job {} for retry (attempt {})",
+                        job.id, retry_job.retry_count
+                    );
                 } else {
                     // Move to dead letter queue
-                    conn.lpush::<_, _, ()>(format!("billforge:jobs:failed:{}", job.tenant_id), &job.id).await?;
-                    error!("Job {} moved to dead letter queue after {} retries", job.id, job.retry_count);
+                    conn.lpush::<_, _, ()>(
+                        format!("billforge:jobs:failed:{}", job.tenant_id),
+                        &job.id,
+                    )
+                    .await?;
+                    error!(
+                        "Job {} moved to dead letter queue after {} retries",
+                        job.id, job.retry_count
+                    );
                 }
             }
         }
@@ -160,12 +183,8 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         JobType::MetricsAggregation => {
             metrics_aggregation::aggregate_metrics(&job.tenant_id, config).await
         }
-        JobType::EmailBatch => {
-            email_batch::send_batch(&job.tenant_id, &job.payload, config).await
-        }
-        JobType::ReportDigest => {
-            report_digest::send_digests(&job.tenant_id, config).await
-        }
+        JobType::EmailBatch => email_batch::send_batch(&job.tenant_id, &job.payload, config).await,
+        JobType::ReportDigest => report_digest::send_digests(&job.tenant_id, config).await,
         JobType::EmbeddingRefresh => {
             embedding_refresh::refresh_all_embeddings(config.pg_manager.clone()).await
         }
@@ -209,12 +228,7 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             Ok(())
         }
         JobType::OcrProcess => {
-            ocr_processing::process_ocr(
-                &job.tenant_id,
-                &job.payload,
-                config,
-                job.retry_count,
-            ).await
+            ocr_processing::process_ocr(&job.tenant_id, &job.payload, config, job.retry_count).await
         }
         JobType::ApprovalExpiry => {
             approval_expiry::process_approval_expiry(&job.tenant_id, config).await

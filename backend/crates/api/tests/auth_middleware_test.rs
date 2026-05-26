@@ -6,6 +6,8 @@
 //! - Rejects requests with invalid/expired JWT tokens (401)
 //! - Passes requests with valid JWT tokens and stores UserContext in extensions
 
+#![allow(warnings)]
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -190,6 +192,7 @@ async fn expired_jwt_returns_401_with_token_expired() {
         iat: now - 3600,
         exp: now - 120, // expired 2 minutes ago
         token_type: TokenType::Access,
+        vendor_id: None,
     };
     let token = encode(
         &Header::default(),

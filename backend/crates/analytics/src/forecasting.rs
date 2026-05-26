@@ -3,7 +3,7 @@
 //! Provides forecasting models for spend prediction, invoice volume, and approval times.
 
 use crate::predictive_models::*;
-use chrono::{Utc, Datelike};
+use chrono::{Datelike, Utc};
 use tracing::{debug, info};
 
 /// Naive Forecasting Model (baseline)
@@ -76,7 +76,13 @@ impl NaiveForecaster {
         let day_averages: Vec<f64> = day_totals
             .iter()
             .zip(day_counts.iter())
-            .map(|(total, count)| if *count > 0 { *total / *count as f64 } else { 0.0 })
+            .map(|(total, count)| {
+                if *count > 0 {
+                    *total / *count as f64
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         // Check if variance between days is significant
@@ -119,7 +125,10 @@ impl Default for NaiveForecaster {
 #[async_trait::async_trait]
 impl ForecastingModel for NaiveForecaster {
     async fn fit(&mut self, data: &TimeSeries) -> PredictiveResult<()> {
-        info!("Fitting naive forecasting model for entity: {}", data.entity_id);
+        info!(
+            "Fitting naive forecasting model for entity: {}",
+            data.entity_id
+        );
         self.calculate_statistics(data)?;
         Ok(())
     }
@@ -224,7 +233,10 @@ impl ArimaForecaster {
                 residuals.iter().map(|x| x.powi(2)).sum::<f64>() / residuals.len() as f64;
             (indices, residual_variance.sqrt())
         } else {
-            (vec![], (detrended.iter().map(|x| x.powi(2)).sum::<f64>() / n).sqrt())
+            (
+                vec![],
+                (detrended.iter().map(|x| x.powi(2)).sum::<f64>() / n).sqrt(),
+            )
         };
 
         debug!(
@@ -286,7 +298,6 @@ impl ArimaForecaster {
 
         sum / (variance * (n - lag) as f64)
     }
-
 }
 
 impl Default for ArimaForecaster {
@@ -321,7 +332,8 @@ impl ForecastingModel for ArimaForecaster {
         let last_index = data.points.len() as f64;
         let forecast_index = last_index + forecast_days as f64;
 
-        let trend_forecast = stats.mean + stats.trend_slope * (forecast_index - data.points.len() as f64 / 2.0);
+        let trend_forecast =
+            stats.mean + stats.trend_slope * (forecast_index - data.points.len() as f64 / 2.0);
 
         // Add seasonal component if detected
         let seasonal_adjustment = if stats.seasonality_detected {
@@ -492,7 +504,10 @@ mod tests {
         // Check that seasonal indices were computed and are non-trivial
         let stats = forecaster.statistics.as_ref().unwrap();
         assert!(stats.seasonality_detected, "seasonality should be detected");
-        assert!(!stats.seasonal_indices.is_empty(), "seasonal indices should be stored");
+        assert!(
+            !stats.seasonal_indices.is_empty(),
+            "seasonal indices should be stored"
+        );
 
         // Forecast and verify seasonal adjustment is nonzero for at least one horizon
         let f30 = forecaster.forecast(ForecastHorizon::Days30).await.unwrap();
@@ -521,12 +536,14 @@ mod tests {
         assert!(
             width60 > width30,
             "60-day interval ({}) should be wider than 30-day ({})",
-            width60, width30
+            width60,
+            width30
         );
         assert!(
             width90 > width60,
             "90-day interval ({}) should be wider than 60-day ({})",
-            width90, width60
+            width90,
+            width60
         );
     }
 

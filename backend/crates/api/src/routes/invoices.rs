@@ -14,9 +14,9 @@ use billforge_core::{
         ExtractedLineItem, Invoice, InvoiceFilters, ProcessingStatus, QueueType, ResourceType,
     },
     traits::{AuditService, InvoiceRepository},
-    types::{Money, PaginatedResponse, Pagination},
+    types::{Money, PaginatedResponse, Pagination, TenantSettings},
 };
-use billforge_invoice_capture::ocr;
+use billforge_invoice_capture::{ocr, resolve_ocr_provider_name};
 use billforge_invoice_processing::feedback_loop::{
     CategorizationFeedback, FeedbackLearning, FeedbackType,
 };
@@ -148,7 +148,9 @@ async fn create_invoice(
 ) -> ApiResult<Json<Invoice>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-    let invoice = repo.create(&tenant.tenant_id, input, Some(&user.user_id)).await?;
+    let invoice = repo
+        .create(&tenant.tenant_id, input, Some(&user.user_id))
+        .await?;
     record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
     let audit_entry = AuditEntry::new(
@@ -515,6 +517,7 @@ async fn upload_invoice(
                             &content_type,
                             &repo,
                             &pool,
+                            &tenant.settings,
                         )
                         .await;
                         sync_ocr_message(&file_name_for_msg, status)
@@ -530,6 +533,7 @@ async fn upload_invoice(
                     &content_type,
                     &repo,
                     &pool,
+                    &tenant.settings,
                 )
                 .await;
                 sync_ocr_message(&file_name_for_msg, status)
@@ -596,8 +600,10 @@ async fn run_sync_ocr(
     content_type: &str,
     repo: &billforge_db::repositories::InvoiceRepositoryImpl,
     pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_settings: &TenantSettings,
 ) -> CaptureStatus {
-    let ocr_provider = ocr::create_provider(&state.config.ocr_provider);
+    let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, tenant_settings);
+    let ocr_provider = ocr::create_provider(&provider_name);
     let ocr_result = ocr_provider.extract(data, content_type).await;
 
     let capture_status = match &ocr_result {
@@ -840,8 +846,9 @@ async fn rerun_ocr(
 
     // Synchronous fallback
     let invoice_repo = std::sync::Arc::new(repo);
+    let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
     let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
-        &state.config.ocr_provider,
+        &provider_name,
         invoice_repo,
         state.storage.clone(),
     );

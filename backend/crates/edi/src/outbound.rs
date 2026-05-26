@@ -32,6 +32,7 @@ impl OutboundEdiService {
     /// 2. Stores outbound edi_document record (ack_status = pending)
     /// 3. Submits to middleware via EdiClient
     /// 4. Records middleware_id and sets ack timeout
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_remittance(
         &self,
         pool: &PgPool,
@@ -53,8 +54,8 @@ impl OutboundEdiService {
             payer_name,
         );
 
-        let payload = serde_json::to_value(&remittance)
-            .context("Failed to serialize remittance advice")?;
+        let payload =
+            serde_json::to_value(&remittance).context("Failed to serialize remittance advice")?;
 
         let doc_id = Uuid::new_v4();
         let ack_timeout_at = Utc::now() + Duration::hours(ack_timeout_hours as i64);
@@ -132,6 +133,7 @@ impl OutboundEdiService {
     /// 1. Generates the 997 JSON
     /// 2. Stores outbound edi_document record linked to the original
     /// 3. Submits to middleware
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_ack(
         &self,
         pool: &PgPool,
@@ -143,9 +145,9 @@ impl OutboundEdiService {
         accepted: bool,
         ack_timeout_hours: i32,
     ) -> Result<Uuid> {
-        let ack = EdiMapper::ack_for_document(group_control, None, sender_id, receiver_id, accepted);
-        let payload =
-            serde_json::to_value(&ack).context("Failed to serialize functional ack")?;
+        let ack =
+            EdiMapper::ack_for_document(group_control, None, sender_id, receiver_id, accepted);
+        let payload = serde_json::to_value(&ack).context("Failed to serialize functional ack")?;
 
         let doc_id = Uuid::new_v4();
         let ack_timeout_at = Utc::now() + Duration::hours(ack_timeout_hours as i64);
@@ -409,19 +411,18 @@ mod tests {
             group_control: "5678".to_string(),
             transaction_control: None,
             status: AckStatus::Rejected,
-            errors: vec![
-                EdiAckError {
-                    code: "AK501".to_string(),
-                    segment_position: Some(3),
-                    description: "Transaction set not supported".to_string(),
-                },
-            ],
+            errors: vec![EdiAckError {
+                code: "AK501".to_string(),
+                segment_position: Some(3),
+                description: "Transaction set not supported".to_string(),
+            }],
         };
         assert_eq!(ack.status, AckStatus::Rejected);
         assert_eq!(ack.errors.len(), 1);
 
         // Verify error formatting
-        let msg: String = ack.errors
+        let msg: String = ack
+            .errors
             .iter()
             .map(|e| format!("{}: {}", e.code, e.description))
             .collect::<Vec<_>>()

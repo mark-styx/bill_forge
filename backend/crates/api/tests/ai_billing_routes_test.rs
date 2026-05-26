@@ -354,10 +354,8 @@ fn test_ai_action_proposal_routes_use_ai_assistant_access_and_shared_models() {
     let approve_handler = &source[approve_handler_start..reject_handler_start];
 
     assert!(approve_handler.contains("AiAssistantAccess(user, tenant): AiAssistantAccess"));
-    assert!(
-        approve_handler
-            .contains("approve_action_proposal(&state, &tenant, &user, proposal_id).await")
-    );
+    assert!(approve_handler
+        .contains("approve_action_proposal(&state, &tenant, &user, proposal_id).await"));
     assert!(!approve_handler.contains("AiActionProposalStatus::Approved"));
 
     let approve_helper_start = source
@@ -370,10 +368,8 @@ fn test_ai_action_proposal_routes_use_ai_assistant_access_and_shared_models() {
 
     assert!(approve_helper.contains(".get_proposal(&user.tenant_id, &user.user_id, proposal_id)"));
     assert!(approve_helper.contains("validate_action_proposal_decision(tenant, user, &proposal)"));
-    assert!(
-        approve_helper
-            .contains(".approve_pending_proposal(&user.tenant_id, &user.user_id, proposal_id)")
-    );
+    assert!(approve_helper
+        .contains(".approve_pending_proposal(&user.tenant_id, &user.user_id, proposal_id)"));
 
     let reject_handler = &source[reject_handler_start..];
 

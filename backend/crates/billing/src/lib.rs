@@ -8,13 +8,13 @@
 
 pub mod addons;
 pub mod plans;
-pub mod subscription;
 pub mod service;
 pub mod stripe;
+pub mod subscription;
 pub mod usage;
 
-pub use addons::{ModuleAddOn, SubscriptionQuote, effective_features, quote_subscription};
+pub use addons::{effective_features, quote_subscription, ModuleAddOn, SubscriptionQuote};
 pub use plans::{Plan, PlanFeatures, PlanId, PlanTier};
-pub use subscription::{Subscription, SubscriptionStatus, BillingCycle};
-pub use service::{BillingService, BillingConfig, BillingServiceTrait, CheckoutOutcome};
+pub use service::{BillingConfig, BillingService, BillingServiceTrait, CheckoutOutcome};
+pub use subscription::{BillingCycle, Subscription, SubscriptionStatus};
 pub use usage::{get_tenant_usage, record_invoice_meter_event};

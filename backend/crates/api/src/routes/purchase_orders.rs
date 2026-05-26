@@ -29,7 +29,10 @@ use uuid::Uuid;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_purchase_orders).post(create_purchase_order))
-        .route("/:id", get(get_purchase_order).delete(delete_purchase_order))
+        .route(
+            "/:id",
+            get(get_purchase_order).delete(delete_purchase_order),
+        )
         .route("/:id/match", post(run_match))
 }
 
@@ -182,12 +185,10 @@ async fn delete_purchase_order(
 
     let repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&pool));
     let po_id = PurchaseOrderId(id);
-    repo.delete(&tenant.tenant_id, &po_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete purchase order: {}", e);
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    repo.delete(&tenant.tenant_id, &po_id).await.map_err(|e| {
+        tracing::error!("Failed to delete purchase order: {}", e);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -283,7 +284,12 @@ async fn run_match(
     };
 
     // 6. Run match engine
-    let match_output = MatchEngine::run(&po.line_items, &receiving_lines, &invoice_lines, &tolerances);
+    let match_output = MatchEngine::run(
+        &po.line_items,
+        &receiving_lines,
+        &invoice_lines,
+        &tolerances,
+    );
     let details = serde_json::to_value(&match_output).unwrap_or_default();
 
     // 7. Store match result
@@ -310,13 +316,17 @@ async fn run_match(
     // 8. If full match and under auto-approve threshold, auto-approve
     //    (unless pending approval_requests exist - must not bypass workflow)
     let pending_approvals: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM approval_requests WHERE invoice_id = $1 AND status = 'pending'"
+        "SELECT COUNT(*) FROM approval_requests WHERE invoice_id = $1 AND status = 'pending'",
     )
     .bind(req.invoice_id)
     .fetch_one(&*pool)
     .await
     .map_err(|e| {
-        tracing::error!("Failed to check pending approval_requests for invoice {}: {}", req.invoice_id, e);
+        tracing::error!(
+            "Failed to check pending approval_requests for invoice {}: {}",
+            req.invoice_id,
+            e
+        );
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
     })?;
 

@@ -36,6 +36,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_dashboard_kpis_migrations(pool).await?;
     run_rls_migrations(pool).await?;
     run_ai_conversation_migrations(pool).await?;
+    run_ai_rls_migrations(pool).await?;
 
     Ok(())
 }
@@ -452,6 +453,18 @@ pub async fn run_ai_conversation_migrations(pool: &PgPool) -> Result<()> {
         pool,
         "087_ai_action_proposal_status_failed_errors.sql",
         include_str!("../../../migrations/087_ai_action_proposal_status_failed_errors.sql"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Re-apply RLS policies for AI tables after all AI migrations have run.
+pub async fn run_ai_rls_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "089_enable_rls_ai_tables.sql",
+        include_str!("../../../migrations/089_enable_rls_ai_tables.sql"),
     )
     .await?;
 

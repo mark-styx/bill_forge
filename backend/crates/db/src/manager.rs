@@ -22,8 +22,8 @@ impl DatabaseManager {
         let database_url = std::env::var("DATABASE_URL")
             .map_err(|e| Error::Database(format!("DATABASE_URL not set: {}", e)))?;
 
-        let tenant_template = std::env::var("TENANT_DB_TEMPLATE")
-            .unwrap_or_else(|_| database_url.clone());
+        let tenant_template =
+            std::env::var("TENANT_DB_TEMPLATE").unwrap_or_else(|_| database_url.clone());
 
         let pg_manager = PgManager::new(&database_url, tenant_template).await?;
 

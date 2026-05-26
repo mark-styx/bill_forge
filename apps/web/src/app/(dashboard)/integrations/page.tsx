@@ -14,11 +14,18 @@ import {
   Database,
   BarChart3,
   Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { api, getIntegrationStatus, IntegrationStatusResponse } from '@/lib/api';
 
-type IntegrationStatus = 'connected' | 'disconnected' | 'available';
+type IntegrationStatus = 'connected' | 'disconnected' | 'available' | 'loading' | 'error';
 type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'all';
+
+interface IntegrationStatusState {
+  status: IntegrationStatus;
+  liveStatus?: IntegrationStatusResponse;
+  error?: string;
+}
 
 interface Integration {
   id: string;
@@ -218,6 +225,22 @@ function StatusBadge({ status }: { status: IntegrationStatus }) {
       </span>
     );
   }
+  if (status === 'loading') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Checking
+      </span>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Status unavailable
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
       <XCircle className="h-3.5 w-3.5" />
@@ -226,16 +249,17 @@ function StatusBadge({ status }: { status: IntegrationStatus }) {
   );
 }
 
-function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect }: {
+function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onRefresh }: {
   integration: Integration;
-  liveStatus?: IntegrationStatusResponse;
+  liveStatus?: IntegrationStatusState;
   onConnect: (id: string) => void;
   onDisconnect: (id: string) => void;
+  onRefresh: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const displayStatus = liveStatus?.connected ? 'connected' as IntegrationStatus : 'disconnected' as IntegrationStatus;
-  const lastSync = liveStatus?.last_sync_at;
+  const displayStatus = liveStatus?.status ?? 'loading';
+  const lastSync = liveStatus?.liveStatus?.last_sync_at;
 
   return (
     <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
@@ -255,6 +279,11 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect }: {
             {lastSync && (
               <p className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">
                 Last synced: {new Date(lastSync).toLocaleString()}
+              </p>
+            )}
+            {displayStatus === 'error' && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                {liveStatus?.error ?? 'Status could not be refreshed.'} Last known state is preserved when available.
               </p>
             )}
           </div>
@@ -333,6 +362,21 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect }: {
             >
               Disconnect
             </button>
+          ) : displayStatus === 'error' ? (
+            <button
+              onClick={() => onRefresh(integration.id)}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
+            >
+              Retry status
+            </button>
+          ) : displayStatus === 'loading' ? (
+            <button
+              disabled
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-zinc-500 bg-zinc-100 dark:bg-zinc-800 rounded-lg cursor-not-allowed"
+            >
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Checking
+            </button>
           ) : (
             <button
               onClick={() => onConnect(integration.id)}
@@ -351,19 +395,36 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect }: {
 export default function IntegrationsPage() {
   const [filter, setFilter] = useState<IntegrationCategory>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [statuses, setStatuses] = useState<Record<string, IntegrationStatusResponse>>({});
+  const [statuses, setStatuses] = useState<Record<string, IntegrationStatusState>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchStatuses() {
+      setStatuses(Object.fromEntries(
+        integrations.map((integration) => [integration.id, { status: 'loading' as IntegrationStatus }]),
+      ));
       const results = await Promise.allSettled(
         integrations.map(i =>
           getIntegrationStatus(i.endpoints.status).then(r => [i.id, r] as const)
         )
       );
-      const map: Record<string, IntegrationStatusResponse> = {};
+      const map: Record<string, IntegrationStatusState> = {};
       for (const r of results) {
-        if (r.status === 'fulfilled') map[r.value[0]] = r.value[1];
+        if (r.status === 'fulfilled') {
+          const [id, result] = r.value;
+          map[id] = {
+            status: result.connected ? 'connected' : 'disconnected',
+            liveStatus: result,
+          };
+        }
+      }
+      for (const integration of integrations) {
+        if (!map[integration.id]) {
+          map[integration.id] = {
+            status: 'error',
+            error: 'Status request failed',
+          };
+        }
       }
       setStatuses(map);
       setLoading(false);
@@ -374,11 +435,31 @@ export default function IntegrationsPage() {
   const fetchSingleStatus = async (integrationId: string) => {
     const integration = integrations.find(i => i.id === integrationId);
     if (!integration) return;
+    setStatuses(prev => ({
+      ...prev,
+      [integrationId]: {
+        ...prev[integrationId],
+        status: 'loading',
+      },
+    }));
     try {
       const result = await getIntegrationStatus(integration.endpoints.status);
-      setStatuses(prev => ({ ...prev, [integrationId]: result }));
-    } catch {
-      // keep existing status on error
+      setStatuses(prev => ({
+        ...prev,
+        [integrationId]: {
+          status: result.connected ? 'connected' : 'disconnected',
+          liveStatus: result,
+        },
+      }));
+    } catch (error) {
+      setStatuses(prev => ({
+        ...prev,
+        [integrationId]: {
+          ...prev[integrationId],
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Status request failed',
+        },
+      }));
     }
   };
 
@@ -390,7 +471,7 @@ export default function IntegrationsPage() {
     return matchesCategory && matchesSearch;
   });
 
-  const connectedCount = integrations.filter((i) => statuses[i.id]?.connected).length;
+  const connectedCount = integrations.filter((i) => statuses[i.id]?.status === 'connected').length;
 
   const handleConnect = (integrationId: string) => {
     const integration = integrations.find((i) => i.id === integrationId);
@@ -485,6 +566,7 @@ export default function IntegrationsPage() {
             liveStatus={statuses[integration.id]}
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
+            onRefresh={fetchSingleStatus}
           />
         ))}
       </div>

@@ -8,7 +8,10 @@ use billforge_salesforce::{escape_soql_literal, validate_sf_id, SalesforceClient
 // ──────────────────────────── Helpers ────────────────────────────
 
 fn make_client() -> SalesforceClient {
-    SalesforceClient::new("test-token".to_string(), "https://test.salesforce.com".to_string())
+    SalesforceClient::new(
+        "test-token".to_string(),
+        "https://test.salesforce.com".to_string(),
+    )
 }
 
 // ──────────────────────────── validate_sf_id ────────────────────────────
@@ -24,11 +27,11 @@ fn test_validate_sf_id_rejects_injection() {
     let bad_inputs = [
         "001' OR Id != null--",
         "'; DROP",
-        "abc",                     // too short
-        "001ABCDEFGHIJKL; x",      // semicolon
-        "",                        // empty
-        "001ABC DEF123456",        // whitespace
-        "001ABCDEFGHIJKL\x00",     // null byte (not alphanumeric)
+        "abc",                 // too short
+        "001ABCDEFGHIJKL; x",  // semicolon
+        "",                    // empty
+        "001ABC DEF123456",    // whitespace
+        "001ABCDEFGHIJKL\x00", // null byte (not alphanumeric)
     ];
     for bad in &bad_inputs {
         assert!(

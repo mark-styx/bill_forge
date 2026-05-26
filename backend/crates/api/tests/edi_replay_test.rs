@@ -7,7 +7,9 @@
 //! a running PostgreSQL instance and are run in CI. The tests below
 //! verify the pure timestamp freshness logic and data structures.
 
-use billforge_edi::{validate_timestamp_freshness, check_replay_nonce};
+#![allow(warnings)]
+
+use billforge_edi::{check_replay_nonce, validate_timestamp_freshness};
 use chrono::{TimeDelta, Utc};
 
 #[test]

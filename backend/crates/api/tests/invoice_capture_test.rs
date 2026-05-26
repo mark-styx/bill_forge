@@ -19,13 +19,18 @@ use tower::util::ServiceExt;
 async fn create_test_state() -> AppState {
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
-    std::env::set_var("DATABASE_URL", "postgres://postgres@localhost:5432/billforge_test");
+    std::env::set_var(
+        "DATABASE_URL",
+        "postgres://postgres@localhost:5432/billforge_test",
+    );
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants_ic");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files_ic");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
 
     let config = Config::from_env().expect("Failed to load test config");
-    AppState::new(&config).await.expect("Failed to create test state")
+    AppState::new(&config)
+        .await
+        .expect("Failed to create test state")
 }
 
 async fn create_test_router() -> axum::Router {
@@ -105,10 +110,7 @@ fn tiny_png() -> Vec<u8> {
     // IDAT chunk: single row with filter byte 0 + white pixel (255, 255, 255), deflate-wrapped
     let raw_data = [0u8, 255, 255, 255]; // filter=none + RGB
     let deflated = deflate_minimal(&raw_data);
-    let idat_crc = crc32(&[
-        b"IDAT",
-        &deflated,
-    ]);
+    let idat_crc = crc32(&[b"IDAT", &deflated]);
     let mut idat_chunk = Vec::new();
     idat_chunk.extend_from_slice(&(deflated.len() as u32).to_be_bytes());
     idat_chunk.extend_from_slice(b"IDAT");
@@ -136,7 +138,7 @@ fn deflate_minimal(data: &[u8]) -> Vec<u8> {
     // zlib header
     out.push(0x78); // CMF
     out.push(0x01); // FLG (no dict, level 0)
-    // Stored block
+                    // Stored block
     out.push(0x01); // BFINAL=1, BTYPE=00 (stored)
     let len = data.len() as u16;
     out.extend_from_slice(&len.to_le_bytes());
@@ -233,7 +235,10 @@ async fn test_upload_image_returns_line_items_with_confidence() {
     );
 
     // Verify response structure
-    assert!(json["capture_id"].is_string(), "capture_id should be a string");
+    assert!(
+        json["capture_id"].is_string(),
+        "capture_id should be a string"
+    );
     assert!(json["provider"].is_string(), "provider should be a string");
     assert!(
         json["overall_confidence"].is_number(),
@@ -249,7 +254,10 @@ async fn test_upload_image_returns_line_items_with_confidence() {
     );
 
     // line_items is an array (may be empty for a 1x1 pixel)
-    assert!(json["line_items"].is_array(), "line_items should be an array");
+    assert!(
+        json["line_items"].is_array(),
+        "line_items should be an array"
+    );
 }
 
 #[tokio::test]
@@ -290,12 +298,7 @@ async fn test_upload_rejects_wrong_mime_and_oversize() {
     // --- Test oversize (> 10 MB) ---
     let boundary2 = "----TestBoundaryOversize";
     let oversize_data = vec![0u8; 10 * 1024 * 1024 + 1]; // 10 MB + 1 byte
-    let body2 = build_multipart_body(
-        boundary2,
-        "big.png",
-        "image/png",
-        &oversize_data,
-    );
+    let body2 = build_multipart_body(boundary2, "big.png", "image/png", &oversize_data);
 
     let response2 = app
         .oneshot(

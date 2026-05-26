@@ -7,6 +7,8 @@
 //!
 //! Run: `cargo test -p billforge-api --test cross_tenant_isolation_tests`
 
+#![allow(warnings)]
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -68,6 +70,7 @@ fn make_token_nil_tenant(user_id: &UserId) -> String {
         iat: now - 60,
         exp: now + 3600,
         token_type: TokenType::Access,
+        vendor_id: None,
     };
     jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),
@@ -88,7 +91,9 @@ fn build_test_router() -> Router {
 }
 
 async fn tenant_echo_handler(
-    axum::extract::Extension(guard): axum::extract::Extension<billforge_api::middleware::TenantGuard>,
+    axum::extract::Extension(guard): axum::extract::Extension<
+        billforge_api::middleware::TenantGuard,
+    >,
 ) -> String {
     guard.0.to_string()
 }
@@ -119,7 +124,12 @@ async fn insert_vendor(pool: &sqlx::PgPool, tenant_id: Uuid, name: &str) -> Uuid
 }
 
 /// Insert a test invoice and return its ID.
-async fn insert_invoice(pool: &sqlx::PgPool, tenant_id: Uuid, vendor_id: Uuid, invoice_number: &str) -> Uuid {
+async fn insert_invoice(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    vendor_id: Uuid,
+    invoice_number: &str,
+) -> Uuid {
     let id = Uuid::new_v4();
     let doc_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
@@ -262,14 +272,13 @@ async fn vendor_get_cross_tenant_returns_404() {
     let vendor_a_id = insert_vendor(&pool, tenant_a, "CT-VENDOR Tenant A").await;
 
     // Query with tenant B's ID should return no rows
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT name FROM vendors WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(vendor_a_id)
-    .bind(tenant_b)
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_a_id)
+            .bind(tenant_b)
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     assert!(
         row.is_none(),
@@ -299,13 +308,12 @@ async fn vendor_list_excludes_other_tenant() {
     let vendor_b = insert_vendor(&pool, tenant_b, "CT-LIST Vendor B").await;
 
     // List tenant A vendors
-    let tenant_a_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM vendors WHERE tenant_id = $1 AND name LIKE 'CT-LIST%'",
-    )
-    .bind(tenant_a)
-    .fetch_all(&pool)
-    .await
-    .expect("Query should succeed");
+    let tenant_a_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM vendors WHERE tenant_id = $1 AND name LIKE 'CT-LIST%'")
+            .bind(tenant_a)
+            .fetch_all(&pool)
+            .await
+            .expect("Query should succeed");
 
     assert!(
         tenant_a_ids.contains(&vendor_a),
@@ -349,14 +357,13 @@ async fn invoice_get_cross_tenant_returns_404() {
     let invoice_a = insert_invoice(&pool, tenant_a, vendor_a, "CT-INV-001").await;
 
     // Query with tenant B's ID should return no rows
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT invoice_number FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_a)
-    .bind(tenant_b)
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT invoice_number FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_a)
+            .bind(tenant_b)
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     assert!(
         row.is_none(),
@@ -401,14 +408,13 @@ async fn invoice_update_cross_tenant_returns_404_or_403() {
     );
 
     // Verify original row is untouched
-    let amount: Option<(i64,)> = sqlx::query_as(
-        "SELECT total_amount_cents FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_a)
-    .bind(tenant_a)
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let amount: Option<(i64,)> =
+        sqlx::query_as("SELECT total_amount_cents FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_a)
+            .bind(tenant_a)
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     let (original_amount,) = amount.expect("Original invoice should still exist");
     assert_eq!(
@@ -461,14 +467,13 @@ async fn approval_link_cross_tenant_blocked() {
     );
 
     // Verify the invoice processing_status is still 'pending_approval' (not modified)
-    let status: Option<(String,)> = sqlx::query_as(
-        "SELECT processing_status FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_a)
-    .bind(tenant_a)
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let status: Option<(String,)> =
+        sqlx::query_as("SELECT processing_status FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_a)
+            .bind(tenant_a)
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     let (current_status,) = status.expect("Invoice should still exist");
     assert_eq!(

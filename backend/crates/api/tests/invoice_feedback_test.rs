@@ -4,8 +4,12 @@
 //! cost_center) records a CategorizationFeedback row via FeedbackLearning::record_feedback().
 //! Non-categorization updates (e.g. notes) must NOT produce feedback rows.
 
+#![allow(warnings)]
+
 use billforge_core::TenantId;
-use billforge_invoice_processing::feedback_loop::{CategorizationFeedback, FeedbackLearning, FeedbackType};
+use billforge_invoice_processing::feedback_loop::{
+    CategorizationFeedback, FeedbackLearning, FeedbackType,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -73,13 +77,12 @@ async fn insert_invoice(
 
 /// Count feedback rows for a given invoice_id.
 async fn count_feedback(pool: &sqlx::PgPool, invoice_id: Uuid) -> i64 {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM categorization_feedback WHERE invoice_id = $1",
-    )
-    .bind(invoice_id)
-    .fetch_one(pool)
-    .await
-    .expect("count feedback");
+    let row: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM categorization_feedback WHERE invoice_id = $1")
+            .bind(invoice_id)
+            .fetch_one(pool)
+            .await
+            .expect("count feedback");
     row.0
 }
 
@@ -87,17 +90,28 @@ async fn count_feedback(pool: &sqlx::PgPool, invoice_id: Uuid) -> i64 {
 async fn read_feedback(
     pool: &sqlx::PgPool,
     invoice_id: Uuid,
-) -> Option<(String, Option<String>, Option<String>, Option<String>, Option<String>)> {
-    let row: Option<(String, Option<String>, Option<String>, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            r#"SELECT feedback_type, suggested_gl_code, accepted_gl_code,
+) -> Option<(
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    let row: Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        r#"SELECT feedback_type, suggested_gl_code, accepted_gl_code,
                       suggested_department, accepted_department
                FROM categorization_feedback WHERE invoice_id = $1"#,
-        )
-        .bind(invoice_id)
-        .fetch_optional(pool)
-        .await
-        .expect("read feedback");
+    )
+    .bind(invoice_id)
+    .fetch_optional(pool)
+    .await
+    .expect("read feedback");
     row
 }
 

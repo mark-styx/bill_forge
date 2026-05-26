@@ -210,16 +210,19 @@ async fn test_sync_vendors_upserts_and_updates_status() {
     .expect("Should upsert vendor on conflict");
 
     // Verify the name was updated and there's still only one row.
-    let vendors: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM vendors WHERE tenant_id = $1 AND external_id = $2",
-    )
-    .bind(*tenant_id.as_uuid())
-    .bind(external_id)
-    .fetch_all(&pool)
-    .await
-    .expect("Query should succeed");
+    let vendors: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM vendors WHERE tenant_id = $1 AND external_id = $2")
+            .bind(*tenant_id.as_uuid())
+            .bind(external_id)
+            .fetch_all(&pool)
+            .await
+            .expect("Query should succeed");
 
-    assert_eq!(vendors.len(), 1, "Should be exactly one vendor for this external_id");
+    assert_eq!(
+        vendors.len(),
+        1,
+        "Should be exactly one vendor for this external_id"
+    );
     assert_eq!(vendors[0].0, "TEST-QBO-SYNC Acme Corp Updated");
 
     // Clean up.

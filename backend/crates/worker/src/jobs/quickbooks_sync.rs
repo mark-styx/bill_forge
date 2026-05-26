@@ -2,11 +2,17 @@
 
 use crate::config::WorkerConfig;
 use anyhow::{Context, Result};
-use billforge_core::sync::{ConflictResolver, LastWriteWinsResolver, SyncState, detect_change, log_conflict};
+use billforge_core::sync::{
+    detect_change, log_conflict, ConflictResolver, LastWriteWinsResolver, SyncState,
+};
 use billforge_core::TenantId;
-use billforge_quickbooks::{QuickBooksClient, QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig};
+use billforge_quickbooks::{
+    QuickBooksClient, QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig,
+};
 use chrono::{Duration, Utc};
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -28,7 +34,7 @@ pub async fn sync_vendors(tenant_id: &str, _payload: &Value, config: &WorkerConf
     .await
     .context("Failed to fetch QuickBooks connection")?;
 
-    let (company_id, mut access_token, refresh_token_val, token_expires_at) = match connection {
+    let (company_id, mut access_token, mut refresh_token_val, token_expires_at) = match connection {
         Some(conn) => conn,
         None => {
             info!(
@@ -58,7 +64,7 @@ pub async fn sync_vendors(tenant_id: &str, _payload: &Value, config: &WorkerConf
         &tenant_id,
         company_id,
         &mut access_token,
-        &refresh_token_val,
+        &mut refresh_token_val,
         token_expires_at,
         sync_id,
     )
@@ -86,26 +92,27 @@ async fn run_vendor_sync(
     tenant_id: &TenantId,
     company_id: String,
     access_token: &mut String,
-    refresh_token_val: &str,
+    refresh_token_val: &mut String,
     token_expires_at: chrono::DateTime<Utc>,
     sync_id: Uuid,
 ) -> Result<()> {
+    let qb_client_id = config.qb_client_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "QuickBooks OAuth config missing (QUICKBOOKS_CLIENT_ID) — cannot refresh token"
+        )
+    })?;
+    let qb_client_secret = config.qb_client_secret.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "QuickBooks OAuth config missing (QUICKBOOKS_CLIENT_SECRET) — cannot refresh token"
+        )
+    })?;
+    let env = match config.qb_environment.as_str() {
+        "sandbox" => QuickBooksEnvironment::Sandbox,
+        _ => QuickBooksEnvironment::Production,
+    };
+
     // Refresh access token if expired or expiring within 5 minutes
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
-        let qb_client_id = config
-            .qb_client_id
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("QuickBooks OAuth config missing (QUICKBOOKS_CLIENT_ID) — cannot refresh token"))?;
-        let qb_client_secret = config
-            .qb_client_secret
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("QuickBooks OAuth config missing (QUICKBOOKS_CLIENT_SECRET) — cannot refresh token"))?;
-
-        let env = match config.qb_environment.as_str() {
-            "sandbox" => QuickBooksEnvironment::Sandbox,
-            _ => QuickBooksEnvironment::Production,
-        };
-
         let oauth = QuickBooksOAuth::new(QuickBooksOAuthConfig {
             client_id: qb_client_id.to_string(),
             client_secret: qb_client_secret.to_string(),
@@ -132,17 +139,66 @@ async fn run_vendor_sync(
         .context("Failed to persist refreshed QuickBooks tokens")?;
 
         *access_token = new_tokens.access_token;
+        *refresh_token_val = new_tokens.refresh_token;
     }
 
     // Build QuickBooks client
-    let env = match config.qb_environment.as_str() {
-        "sandbox" => QuickBooksEnvironment::Sandbox,
-        _ => QuickBooksEnvironment::Production,
-    };
-    let client = QuickBooksClient::new(access_token.clone(), company_id, env);
+    let refresh_token_state = Arc::new(Mutex::new(refresh_token_val.clone()));
+    let pool_for_refresh = pool.clone();
+    let tenant_for_refresh = tenant_id.clone();
+    let client_id_for_refresh = qb_client_id.to_string();
+    let client_secret_for_refresh = qb_client_secret.to_string();
+    let env_for_refresh = env;
+    let client = QuickBooksClient::new(access_token.clone(), company_id, env)
+        .with_token_refresher(move || {
+            let refresh_token_state = Arc::clone(&refresh_token_state);
+            let pool = pool_for_refresh.clone();
+            let tenant_id = tenant_for_refresh.clone();
+            let client_id = client_id_for_refresh.clone();
+            let client_secret = client_secret_for_refresh.clone();
+
+            async move {
+                let current_refresh_token = {
+                    let guard = refresh_token_state.lock().await;
+                    guard.clone()
+                };
+
+                let oauth = QuickBooksOAuth::new(QuickBooksOAuthConfig {
+                    client_id,
+                    client_secret,
+                    redirect_uri: String::new(),
+                    environment: env_for_refresh,
+                });
+                let new_tokens = oauth.refresh_token(&current_refresh_token).await?;
+                let now = Utc::now();
+
+                sqlx::query(
+                    "UPDATE quickbooks_connections \
+                     SET access_token = $2, refresh_token = $3, \
+                         access_token_expires_at = $4, refresh_token_expires_at = $5, updated_at = NOW() \
+                     WHERE tenant_id = $1",
+                )
+                .bind(tenant_id.as_uuid())
+                .bind(&new_tokens.access_token)
+                .bind(&new_tokens.refresh_token)
+                .bind(now + Duration::seconds(new_tokens.expires_in))
+                .bind(now + Duration::seconds(new_tokens.x_refresh_token_expires_in))
+                .execute(&pool)
+                .await
+                .context("Failed to persist mid-run refreshed QuickBooks tokens")?;
+
+                {
+                    let mut guard = refresh_token_state.lock().await;
+                    *guard = new_tokens.refresh_token;
+                }
+
+                Ok(new_tokens.access_token)
+            }
+        });
 
     // Load sync state for delta tracking
-    let mut sync_state = SyncState::load(pool, tenant_id.as_uuid(), "quickbooks", "vendors").await?;
+    let mut sync_state =
+        SyncState::load(pool, tenant_id.as_uuid(), "quickbooks", "vendors").await?;
     let updated_after = sync_state.cursor.updated_after;
     let resolver = LastWriteWinsResolver;
 
@@ -186,7 +242,13 @@ async fn run_vendor_sync(
     // Sync each vendor
     for qb_vendor in &delta_vendors {
         // Check if vendor already exists (with local updated_at for conflict detection)
-        let existing: Option<(Uuid, String, Option<String>, Option<String>, chrono::DateTime<Utc>)> = sqlx::query_as(
+        let existing: Option<(
+            Uuid,
+            String,
+            Option<String>,
+            Option<String>,
+            chrono::DateTime<Utc>,
+        )> = sqlx::query_as(
             "SELECT v.id, v.name, v.email, v.phone, v.updated_at \
              FROM vendors v \
              INNER JOIN quickbooks_vendor_mappings m ON m.billforge_vendor_id = v.id \
@@ -201,15 +263,20 @@ async fn run_vendor_sync(
             e
         })?;
 
-        if let Some((vendor_id, local_name, local_email, local_phone, local_updated_at)) = existing {
+        if let Some((vendor_id, local_name, local_email, local_phone, local_updated_at)) = existing
+        {
             // Build local snapshot for change detection
-            let local_snapshot = (
-                local_name.clone(),
-                local_email.clone(),
-                local_phone.clone(),
-            );
-            let remote_email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
-            let remote_phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
+            let local_snapshot = (local_name.clone(), local_email.clone(), local_phone.clone());
+            let remote_email = qb_vendor
+                .PrimaryEmailAddr
+                .as_ref()
+                .map(|e| e.Address.as_str())
+                .unwrap_or("");
+            let remote_phone = qb_vendor
+                .PrimaryPhone
+                .as_ref()
+                .map(|p| p.FreeFormNumber.as_str())
+                .unwrap_or("");
             let remote_snapshot = (
                 qb_vendor.DisplayName.clone(),
                 Some(remote_email.to_string()),
@@ -217,7 +284,8 @@ async fn run_vendor_sync(
             );
 
             // Detect if both sides changed since last sync (conflict)
-            let remote_updated_at = qb_vendor.MetaData
+            let remote_updated_at = qb_vendor
+                .MetaData
                 .as_ref()
                 .map(|md| md.LastUpdatedTime)
                 .unwrap_or(Utc::now());
@@ -233,24 +301,42 @@ async fn run_vendor_sync(
                 if side == billforge_core::sync::ResolvedSide::Local {
                     // Local wins — skip remote update but log conflict
                     let _ = log_conflict(
-                        pool, tenant_id.as_uuid(), "quickbooks", "vendors",
-                        &vendor_id.to_string(), &qb_vendor.Id,
+                        pool,
+                        tenant_id.as_uuid(),
+                        "quickbooks",
+                        "vendors",
+                        &vendor_id.to_string(),
+                        &qb_vendor.Id,
                         "both_modified_local_wins",
-                    ).await;
+                    )
+                    .await;
                     continue;
                 }
 
                 // Remote wins — fall through to update below
                 let _ = log_conflict(
-                    pool, tenant_id.as_uuid(), "quickbooks", "vendors",
-                    &vendor_id.to_string(), &qb_vendor.Id,
+                    pool,
+                    tenant_id.as_uuid(),
+                    "quickbooks",
+                    "vendors",
+                    &vendor_id.to_string(),
+                    &qb_vendor.Id,
                     "both_modified_remote_wins",
-                ).await;
+                )
+                .await;
             }
 
             // Update existing vendor with remote data
-            let email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
-            let phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
+            let email = qb_vendor
+                .PrimaryEmailAddr
+                .as_ref()
+                .map(|e| e.Address.as_str())
+                .unwrap_or("");
+            let phone = qb_vendor
+                .PrimaryPhone
+                .as_ref()
+                .map(|p| p.FreeFormNumber.as_str())
+                .unwrap_or("");
 
             if let Err(e) = sqlx::query(
                 "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW() \
@@ -290,9 +376,21 @@ async fn run_vendor_sync(
         } else {
             // Create new vendor
             let new_vendor_id = Uuid::new_v4();
-            let email = qb_vendor.PrimaryEmailAddr.as_ref().map(|e| e.Address.as_str()).unwrap_or("");
-            let phone = qb_vendor.PrimaryPhone.as_ref().map(|p| p.FreeFormNumber.as_str()).unwrap_or("");
-            let vendor_type = if qb_vendor.CompanyName.is_some() { "business" } else { "contractor" };
+            let email = qb_vendor
+                .PrimaryEmailAddr
+                .as_ref()
+                .map(|e| e.Address.as_str())
+                .unwrap_or("");
+            let phone = qb_vendor
+                .PrimaryPhone
+                .as_ref()
+                .map(|p| p.FreeFormNumber.as_str())
+                .unwrap_or("");
+            let vendor_type = if qb_vendor.CompanyName.is_some() {
+                "business"
+            } else {
+                "contractor"
+            };
 
             if let Err(e) = sqlx::query(
                 "INSERT INTO vendors (id, tenant_id, name, vendor_type, email, phone, status, created_at, updated_at) \
@@ -360,13 +458,11 @@ async fn run_vendor_sync(
     .context("Failed to update vendor sync log to completed")?;
 
     // Update last sync time on connection
-    sqlx::query(
-        "UPDATE quickbooks_connections SET last_sync_at = NOW() WHERE tenant_id = $1",
-    )
-    .bind(tenant_id.as_uuid())
-    .execute(pool)
-    .await
-    .context("Failed to update last sync time on QuickBooks connection")?;
+    sqlx::query("UPDATE quickbooks_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
+        .bind(tenant_id.as_uuid())
+        .execute(pool)
+        .await
+        .context("Failed to update last sync time on QuickBooks connection")?;
 
     info!(
         "QuickBooks vendor sync completed for tenant {}: imported={}, updated={}, conflicts={}, errors={}",
@@ -380,7 +476,11 @@ async fn run_vendor_sync(
     Ok(())
 }
 
-pub async fn sync_accounts(tenant_id: &str, _payload: &Value, _config: &WorkerConfig) -> Result<()> {
+pub async fn sync_accounts(
+    tenant_id: &str,
+    _payload: &Value,
+    _config: &WorkerConfig,
+) -> Result<()> {
     // TODO(#138 follow-up): Implement real QuickBooks account sync background job.
     // The sync logic lives in backend/crates/api/src/routes/quickbooks.rs sync_accounts handler.
     // This stub returns Ok(()) so queued jobs don't accumulate in the DLQ.
@@ -391,7 +491,11 @@ pub async fn sync_accounts(tenant_id: &str, _payload: &Value, _config: &WorkerCo
     Ok(())
 }
 
-pub async fn export_invoice(tenant_id: &str, _payload: &Value, _config: &WorkerConfig) -> Result<()> {
+pub async fn export_invoice(
+    tenant_id: &str,
+    _payload: &Value,
+    _config: &WorkerConfig,
+) -> Result<()> {
     // TODO(#138 follow-up): Implement real QuickBooks invoice export background job.
     // The export logic lives in backend/crates/api/src/routes/quickbooks.rs export_invoice_to_quickbooks handler.
     // This stub returns Ok(()) so queued jobs don't accumulate in the DLQ.

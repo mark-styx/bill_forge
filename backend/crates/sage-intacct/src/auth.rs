@@ -4,6 +4,7 @@
 //! 1. Send `getAPISession` request with sender credentials + company login
 //! 2. Receive `sessionid` in response
 //! 3. Use `sessionid` for all subsequent API calls
+//!
 //! Sessions typically last ~15 minutes.
 
 use anyhow::{Context, Result};
@@ -64,7 +65,10 @@ impl SageIntacctAuth {
 
     /// Establish a new API session
     pub async fn get_session(&self) -> Result<SageIntacctSession> {
-        let entity_login = self.config.entity_id.as_ref()
+        let entity_login = self
+            .config
+            .entity_id
+            .as_ref()
             .map(|id| format!("<locationid>{}</locationid>", id))
             .unwrap_or_default();
 

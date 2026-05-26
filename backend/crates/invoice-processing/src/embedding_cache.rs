@@ -5,12 +5,12 @@
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
 use anyhow::{Context, Result};
+use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
-use chrono::{Duration, Utc};
 
-use super::categorization_ml::MLCategorizer;
 use super::categorization::CategoryType;
+use super::categorization_ml::MLCategorizer;
 
 /// Embedding cache manager
 pub struct EmbeddingCache {
@@ -61,7 +61,9 @@ impl EmbeddingCache {
         // Generate and cache embeddings for each GL code
         for (gl_code, usage_count) in gl_codes {
             let description = self.infer_gl_code_description(&gl_code);
-            let embedding = categorizer.generate_embedding(&format!("{} {}", gl_code, description)).await?;
+            let embedding = categorizer
+                .generate_embedding(&format!("{} {}", gl_code, description))
+                .await?;
 
             self.upsert_category_embedding(
                 tenant_id,
@@ -206,7 +208,13 @@ impl EmbeddingCache {
 
             // Cache it
             categorizer
-                .cache_vendor_embedding(tenant_id, vendor_id, &vendor_name, embedding, &invoice_summary)
+                .cache_vendor_embedding(
+                    tenant_id,
+                    vendor_id,
+                    &vendor_name,
+                    embedding,
+                    &invoice_summary,
+                )
                 .await?;
 
             count += 1;
@@ -304,21 +312,19 @@ impl EmbeddingCache {
 
     /// Get embedding statistics for a tenant
     pub async fn get_cache_stats(&self, tenant_id: &str) -> Result<CacheStats> {
-        let vendor_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM vendor_embeddings WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let vendor_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM vendor_embeddings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
-        let category_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM category_embeddings WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let category_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM category_embeddings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
         let gl_code_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM category_embeddings WHERE tenant_id = $1 AND category_type = 'gl_code'",
@@ -370,12 +376,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_infer_gl_code_description() {
-        let cache = EmbeddingCache::new(
-            PgPool::connect_lazy("postgres://localhost/test").unwrap(),
-        );
+        let cache = EmbeddingCache::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
 
         assert!(cache.infer_gl_code_description("6000").contains("Software"));
-        assert!(cache.infer_gl_code_description("7000").contains("Marketing"));
+        assert!(cache
+            .infer_gl_code_description("7000")
+            .contains("Marketing"));
         assert!(cache.infer_gl_code_description("8000").contains("Travel"));
     }
 }

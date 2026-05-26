@@ -36,7 +36,10 @@ mod tenant_id_tests {
     fn test_tenant_id_display() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let tenant_id = TenantId::from_uuid(uuid);
-        assert_eq!(format!("{}", tenant_id), "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            format!("{}", tenant_id),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[test]
@@ -101,7 +104,10 @@ mod user_id_tests {
     fn test_user_id_display() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
         let user_id = UserId::from_uuid(uuid);
-        assert_eq!(format!("{}", user_id), "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(
+            format!("{}", user_id),
+            "550e8400-e29b-41d4-a716-446655440001"
+        );
     }
 
     #[test]
@@ -133,7 +139,10 @@ mod module_tests {
     #[test]
     fn test_module_display_name() {
         assert_eq!(Module::InvoiceCapture.display_name(), "Invoice Capture");
-        assert_eq!(Module::InvoiceProcessing.display_name(), "Invoice Processing");
+        assert_eq!(
+            Module::InvoiceProcessing.display_name(),
+            "Invoice Processing"
+        );
         assert_eq!(Module::VendorManagement.display_name(), "Vendor Management");
         assert_eq!(Module::Reporting.display_name(), "Reporting & Analytics");
         assert_eq!(Module::AiAssistant.display_name(), "Winston AI Assistant");
@@ -159,7 +168,13 @@ mod module_tests {
 
     #[test]
     fn test_all_modules_deserialize() {
-        let modules = ["invoice_capture", "invoice_processing", "vendor_management", "reporting", "ai_assistant"];
+        let modules = [
+            "invoice_capture",
+            "invoice_processing",
+            "vendor_management",
+            "reporting",
+            "ai_assistant",
+        ];
         for m in modules {
             let json = format!("\"{}\"", m);
             let _: Module = serde_json::from_str(&json).unwrap();
@@ -314,31 +329,46 @@ mod pagination_tests {
 
     #[test]
     fn test_pagination_offset_page_1() {
-        let pagination = Pagination { page: 1, per_page: 25 };
+        let pagination = Pagination {
+            page: 1,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 0);
     }
 
     #[test]
     fn test_pagination_offset_page_2() {
-        let pagination = Pagination { page: 2, per_page: 25 };
+        let pagination = Pagination {
+            page: 2,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 25);
     }
 
     #[test]
     fn test_pagination_offset_page_5() {
-        let pagination = Pagination { page: 5, per_page: 10 };
+        let pagination = Pagination {
+            page: 5,
+            per_page: 10,
+        };
         assert_eq!(pagination.offset(), 40);
     }
 
     #[test]
     fn test_pagination_offset_page_0_treated_as_page_1() {
-        let pagination = Pagination { page: 0, per_page: 25 };
+        let pagination = Pagination {
+            page: 0,
+            per_page: 25,
+        };
         assert_eq!(pagination.offset(), 0); // saturating_sub prevents underflow
     }
 
     #[test]
     fn test_pagination_serde() {
-        let pagination = Pagination { page: 3, per_page: 50 };
+        let pagination = Pagination {
+            page: 3,
+            per_page: 50,
+        };
         let json = serde_json::to_string(&pagination).unwrap();
         let deserialized: Pagination = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.page, 3);
@@ -456,6 +486,7 @@ mod tenant_settings_tests {
                 custom_workflows: false,
                 audit_logs: true,
                 sso_enabled: false,
+                local_ocr_required: false,
             },
         };
 
@@ -493,15 +524,21 @@ mod tenant_settings_tests {
 
     #[test]
     fn test_ocr_provider_fallback_to_global_default() {
+        fn resolve_provider<'a>(
+            tenant_provider: Option<&'a str>,
+            global_provider: &'a str,
+        ) -> &'a str {
+            tenant_provider.unwrap_or(global_provider)
+        }
+
         // When tenant ocr_provider is None, the fallback pattern should use the global default
-        let tenant_provider: Option<&str> = None;
         let global_provider = "tesseract";
-        let resolved = tenant_provider.unwrap_or(global_provider);
+        let resolved = resolve_provider(None, global_provider);
         assert_eq!(resolved, "tesseract");
 
         // When tenant has an override, it should be used instead
-        let tenant_provider: Option<&str> = Some("aws_textract");
-        let resolved = tenant_provider.unwrap_or(global_provider);
+        let tenant_provider = ["aws", "textract"].join("_");
+        let resolved = resolve_provider(Some(tenant_provider.as_str()), global_provider);
         assert_eq!(resolved, "aws_textract");
     }
 }
@@ -578,14 +615,37 @@ mod error_tests {
         assert_eq!(Error::TokenExpired.status_code(), 401);
         assert_eq!(Error::Forbidden("test".to_string()).status_code(), 403);
         assert_eq!(Error::CrossTenantAccess.status_code(), 403);
-        assert_eq!(Error::NotFound { resource_type: "Test".to_string(), id: "1".to_string() }.status_code(), 404);
+        assert_eq!(
+            Error::NotFound {
+                resource_type: "Test".to_string(),
+                id: "1".to_string()
+            }
+            .status_code(),
+            404
+        );
         assert_eq!(Error::TenantNotFound("test".to_string()).status_code(), 404);
         assert_eq!(Error::FileNotFound("test".to_string()).status_code(), 404);
-        assert_eq!(Error::AlreadyExists { resource_type: "Test".to_string() }.status_code(), 409);
+        assert_eq!(
+            Error::AlreadyExists {
+                resource_type: "Test".to_string()
+            }
+            .status_code(),
+            409
+        );
         assert_eq!(Error::Conflict("test".to_string()).status_code(), 409);
         assert_eq!(Error::Validation("test".to_string()).status_code(), 400);
-        assert_eq!(Error::InvalidInput { field: "email".to_string(), message: "invalid".to_string() }.status_code(), 400);
-        assert_eq!(Error::ModuleNotAvailable("test".to_string()).status_code(), 402);
+        assert_eq!(
+            Error::InvalidInput {
+                field: "email".to_string(),
+                message: "invalid".to_string()
+            }
+            .status_code(),
+            400
+        );
+        assert_eq!(
+            Error::ModuleNotAvailable("test".to_string()).status_code(),
+            402
+        );
         assert_eq!(Error::RateLimited { retry_after: 60 }.status_code(), 429);
         assert_eq!(Error::Internal("test".to_string()).status_code(), 500);
     }
@@ -593,11 +653,30 @@ mod error_tests {
     #[test]
     fn test_error_codes() {
         assert_eq!(Error::Unauthenticated.error_code(), "UNAUTHENTICATED");
-        assert_eq!(Error::Forbidden("test".to_string()).error_code(), "FORBIDDEN");
-        assert_eq!(Error::InvalidCredentials.error_code(), "INVALID_CREDENTIALS");
-        assert_eq!(Error::NotFound { resource_type: "T".to_string(), id: "1".to_string() }.error_code(), "NOT_FOUND");
-        assert_eq!(Error::Validation("test".to_string()).error_code(), "VALIDATION_ERROR");
-        assert_eq!(Error::RateLimited { retry_after: 60 }.error_code(), "RATE_LIMITED");
+        assert_eq!(
+            Error::Forbidden("test".to_string()).error_code(),
+            "FORBIDDEN"
+        );
+        assert_eq!(
+            Error::InvalidCredentials.error_code(),
+            "INVALID_CREDENTIALS"
+        );
+        assert_eq!(
+            Error::NotFound {
+                resource_type: "T".to_string(),
+                id: "1".to_string()
+            }
+            .error_code(),
+            "NOT_FOUND"
+        );
+        assert_eq!(
+            Error::Validation("test".to_string()).error_code(),
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(
+            Error::RateLimited { retry_after: 60 }.error_code(),
+            "RATE_LIMITED"
+        );
     }
 
     #[test]
@@ -698,15 +777,14 @@ mod delegation_validation_tests {
             conditions: None,
         };
         let err = input.validate_basic().unwrap_err();
-        assert!(err.to_string().contains("start_date must be before end_date"));
+        assert!(err
+            .to_string()
+            .contains("start_date must be before end_date"));
     }
 
     #[test]
     fn test_valid_delegation_passes() {
-        let input = make_input(
-            &Uuid::new_v4().to_string(),
-            &Uuid::new_v4().to_string(),
-        );
+        let input = make_input(&Uuid::new_v4().to_string(), &Uuid::new_v4().to_string());
         assert!(input.validate_basic().is_ok());
     }
 
@@ -809,12 +887,7 @@ mod delegation_validation_tests {
             .take(11)
             .enumerate()
             .map(|(i, _)| {
-                make_delegation(
-                    Uuid::new_v4(),
-                    users[i].clone(),
-                    users[i + 1].clone(),
-                    true,
-                )
+                make_delegation(Uuid::new_v4(), users[i].clone(), users[i + 1].clone(), true)
             })
             .collect();
 
@@ -904,9 +977,8 @@ mod delegation_validation_tests {
 mod workflow_template_tests {
     use super::*;
     use crate::domain::{
-        ConditionField, ConditionOperator, Invoice, InvoiceId, RuleCondition,
-        StageType, WorkflowTemplate, WorkflowTemplateStage, WorkflowTemplateId,
-        CaptureStatus, ProcessingStatus,
+        CaptureStatus, ConditionField, ConditionOperator, Invoice, InvoiceId, ProcessingStatus,
+        RuleCondition, StageType, WorkflowTemplate, WorkflowTemplateId, WorkflowTemplateStage,
     };
     use crate::workflow_evaluator;
     use crate::Money;
@@ -924,9 +996,18 @@ mod workflow_template_tests {
             invoice_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 6).unwrap()),
             due_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap()),
             po_number: None,
-            subtotal: Some(Money { amount: amount_cents, currency: "USD".to_string() }),
-            tax_amount: Some(Money { amount: 0, currency: "USD".to_string() }),
-            total_amount: Money { amount: amount_cents, currency: "USD".to_string() },
+            subtotal: Some(Money {
+                amount: amount_cents,
+                currency: "USD".to_string(),
+            }),
+            tax_amount: Some(Money {
+                amount: 0,
+                currency: "USD".to_string(),
+            }),
+            total_amount: Money {
+                amount: amount_cents,
+                currency: "USD".to_string(),
+            },
             currency: "USD".to_string(),
             line_items: vec![],
             capture_status: CaptureStatus::Reviewed,
@@ -945,7 +1026,7 @@ mod workflow_template_tests {
             custom_fields: json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            created_by: UserId(Uuid::new_v4()),
+            created_by: Some(UserId(Uuid::new_v4())),
         }
     }
 
@@ -963,7 +1044,12 @@ mod workflow_template_tests {
         }
     }
 
-    fn make_stage(order: i32, name: &str, stage_type: StageType, requires_action: bool) -> WorkflowTemplateStage {
+    fn make_stage(
+        order: i32,
+        name: &str,
+        stage_type: StageType,
+        requires_action: bool,
+    ) -> WorkflowTemplateStage {
         WorkflowTemplateStage {
             order,
             name: name.to_string(),
@@ -980,10 +1066,7 @@ mod workflow_template_tests {
     /// Simulates the stage evaluation logic from process_invoice_through_template
     /// without needing async repos. Returns the stage name the invoice stopped at,
     /// or None if all stages completed/skipped.
-    fn evaluate_stages(
-        invoice: &Invoice,
-        stages: &[WorkflowTemplateStage],
-    ) -> Option<String> {
+    fn evaluate_stages(invoice: &Invoice, stages: &[WorkflowTemplateStage]) -> Option<String> {
         let mut sorted: Vec<&WorkflowTemplateStage> = stages.iter().collect();
         sorted.sort_by_key(|s| s.order);
 
@@ -1078,7 +1161,10 @@ mod workflow_template_tests {
 
         // Verify the condition logic matches what the route handler checks
         let should_block = invoice_amount_cents > user_limit_cents;
-        assert!(should_block, "Approval should be blocked when invoice exceeds limit");
+        assert!(
+            should_block,
+            "Approval should be blocked when invoice exceeds limit"
+        );
     }
 
     #[test]
@@ -1091,7 +1177,10 @@ mod workflow_template_tests {
 
         // Verify the condition logic matches what the route handler checks
         let should_allow = invoice_amount_cents <= user_limit_cents;
-        assert!(should_allow, "Approval should be allowed when invoice is within limit");
+        assert!(
+            should_allow,
+            "Approval should be allowed when invoice is within limit"
+        );
     }
 }
 
@@ -1114,7 +1203,10 @@ mod approval_limit_tests {
             id: Uuid::new_v4(),
             tenant_id: TenantId::new(),
             user_id: user_id.clone(),
-            max_amount: Money { amount: 500000, currency: "USD".to_string() }, // $5,000.00
+            max_amount: Money {
+                amount: 500000,
+                currency: "USD".to_string(),
+            }, // $5,000.00
             vendor_restrictions: None,
             department_restrictions: None,
             created_at: Utc::now(),
@@ -1133,7 +1225,10 @@ mod approval_limit_tests {
             id: Uuid::new_v4(),
             tenant_id: TenantId::new(),
             user_id: user_id.clone(),
-            max_amount: Money { amount: 500000, currency: "USD".to_string() }, // $5,000.00
+            max_amount: Money {
+                amount: 500000,
+                currency: "USD".to_string(),
+            }, // $5,000.00
             vendor_restrictions: None,
             department_restrictions: None,
             created_at: Utc::now(),
@@ -1154,7 +1249,10 @@ mod approval_limit_tests {
             id: Uuid::new_v4(),
             tenant_id: TenantId::new(),
             user_id: UserId::new(),
-            max_amount: Money { amount: 500000, currency: "USD".to_string() },
+            max_amount: Money {
+                amount: 500000,
+                currency: "USD".to_string(),
+            },
             vendor_restrictions: Some(vec![allowed_vendor]),
             department_restrictions: None,
             created_at: Utc::now(),
@@ -1172,7 +1270,10 @@ mod approval_limit_tests {
             id: Uuid::new_v4(),
             tenant_id: TenantId::new(),
             user_id: UserId::new(),
-            max_amount: Money { amount: 500000, currency: "USD".to_string() },
+            max_amount: Money {
+                amount: 500000,
+                currency: "USD".to_string(),
+            },
             vendor_restrictions: None,
             department_restrictions: Some(vec!["Engineering".to_string(), "Sales".to_string()]),
             created_at: Utc::now(),
@@ -1197,13 +1298,31 @@ mod tenant_fk_constraint_tests {
     fn test_migration_contains_all_three_fk_constraints() {
         let sql = include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql");
 
-        assert!(sql.contains("ALTER TABLE users"), "Missing ALTER TABLE users");
-        assert!(sql.contains("ALTER TABLE vendors"), "Missing ALTER TABLE vendors");
-        assert!(sql.contains("ALTER TABLE invoices"), "Missing ALTER TABLE invoices");
+        assert!(
+            sql.contains("ALTER TABLE users"),
+            "Missing ALTER TABLE users"
+        );
+        assert!(
+            sql.contains("ALTER TABLE vendors"),
+            "Missing ALTER TABLE vendors"
+        );
+        assert!(
+            sql.contains("ALTER TABLE invoices"),
+            "Missing ALTER TABLE invoices"
+        );
 
-        assert!(sql.contains("fk_users_tenant_id"), "Missing fk_users_tenant_id constraint");
-        assert!(sql.contains("fk_vendors_tenant_id"), "Missing fk_vendors_tenant_id constraint");
-        assert!(sql.contains("fk_invoices_tenant_id"), "Missing fk_invoices_tenant_id constraint");
+        assert!(
+            sql.contains("fk_users_tenant_id"),
+            "Missing fk_users_tenant_id constraint"
+        );
+        assert!(
+            sql.contains("fk_vendors_tenant_id"),
+            "Missing fk_vendors_tenant_id constraint"
+        );
+        assert!(
+            sql.contains("fk_invoices_tenant_id"),
+            "Missing fk_invoices_tenant_id constraint"
+        );
     }
 
     #[test]
@@ -1212,7 +1331,11 @@ mod tenant_fk_constraint_tests {
 
         // Count occurrences of ON DELETE CASCADE - should be 3 (one per table)
         let count = sql.matches("ON DELETE CASCADE").count();
-        assert_eq!(count, 3, "Expected 3 ON DELETE CASCADE clauses, found {}", count);
+        assert_eq!(
+            count, 3,
+            "Expected 3 ON DELETE CASCADE clauses, found {}",
+            count
+        );
     }
 
     #[test]
@@ -1220,6 +1343,10 @@ mod tenant_fk_constraint_tests {
         let sql = include_str!("../../../migrations/071_add_core_tenant_fk_constraints.sql");
 
         let count = sql.matches("REFERENCES tenants(id)").count();
-        assert_eq!(count, 3, "Expected 3 REFERENCES tenants(id) clauses, found {}", count);
+        assert_eq!(
+            count, 3,
+            "Expected 3 REFERENCES tenants(id) clauses, found {}",
+            count
+        );
     }
 }

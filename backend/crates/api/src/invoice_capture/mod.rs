@@ -22,7 +22,7 @@ use axum::{
     Json, Router,
 };
 use billforge_core::domain::OcrExtractionResult;
-use billforge_invoice_capture::ocr;
+use billforge_invoice_capture::{ocr, resolve_ocr_provider_name};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -34,8 +34,7 @@ use uuid::Uuid;
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 /// MIME types accepted for upload.
-const ACCEPTED_MIME_TYPES: &[&str] =
-    &["application/pdf", "image/png", "image/jpeg"];
+const ACCEPTED_MIME_TYPES: &[&str] = &["application/pdf", "image/png", "image/jpeg"];
 
 // ---------------------------------------------------------------------------
 // Route registration
@@ -87,7 +86,10 @@ async fn upload_capture(
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
             let filename = field.file_name().unwrap_or("document").to_string();
-            let mime = field.content_type().unwrap_or("application/octet-stream").to_string();
+            let mime = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
 
             // Validate MIME type
             if !ACCEPTED_MIME_TYPES.contains(&mime.as_str()) {
@@ -99,12 +101,9 @@ async fn upload_capture(
                 .into());
             }
 
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| {
-                    billforge_core::Error::Validation(format!("Failed to read file: {}", e))
-                })?;
+            let bytes = field.bytes().await.map_err(|e| {
+                billforge_core::Error::Validation(format!("Failed to read file: {}", e))
+            })?;
 
             // Validate size
             if bytes.len() > MAX_FILE_SIZE {
@@ -123,8 +122,8 @@ async fn upload_capture(
     let (filename, mime, data) =
         file_data.ok_or_else(|| billforge_core::Error::Validation("No file provided".into()))?;
 
-    // Select OCR provider based on config
-    let provider_name = state.config.ocr_provider.clone();
+    // Select OCR provider based on tenant privacy settings.
+    let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
     let ocr_provider = ocr::create_provider(&provider_name);
     let effective_provider = ocr_provider.provider_name().to_string();
 
@@ -289,8 +288,7 @@ mod tests {
     #[test]
     fn test_overall_confidence_clamps_to_one() {
         let mut result = empty_result();
-        result.invoice_number =
-            billforge_core::domain::ExtractedField::with_value("X".into(), 1.2);
+        result.invoice_number = billforge_core::domain::ExtractedField::with_value("X".into(), 1.2);
         let conf = compute_overall_confidence(&result);
         assert!((conf - 1.0).abs() < 0.001);
     }

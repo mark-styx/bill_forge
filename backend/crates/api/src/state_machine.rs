@@ -78,22 +78,74 @@ pub struct Transition {
 /// Any transition not in this table is invalid and will be rejected.
 const ALLOWED_TRANSITIONS: &[Transition] = &[
     // Normal forward flow
-    Transition { from: InvoiceStatus::Received, to: InvoiceStatus::InReview, event_type: "start_review" },
-    Transition { from: InvoiceStatus::InReview, to: InvoiceStatus::PendingApproval, event_type: "submit_for_approval" },
-    Transition { from: InvoiceStatus::PendingApproval, to: InvoiceStatus::Approved, event_type: "approve" },
-    Transition { from: InvoiceStatus::Approved, to: InvoiceStatus::Paid, event_type: "mark_paid" },
+    Transition {
+        from: InvoiceStatus::Received,
+        to: InvoiceStatus::InReview,
+        event_type: "start_review",
+    },
+    Transition {
+        from: InvoiceStatus::InReview,
+        to: InvoiceStatus::PendingApproval,
+        event_type: "submit_for_approval",
+    },
+    Transition {
+        from: InvoiceStatus::PendingApproval,
+        to: InvoiceStatus::Approved,
+        event_type: "approve",
+    },
+    Transition {
+        from: InvoiceStatus::Approved,
+        to: InvoiceStatus::Paid,
+        event_type: "mark_paid",
+    },
     // Rejection / void (from several states)
-    Transition { from: InvoiceStatus::Received, to: InvoiceStatus::Void, event_type: "void" },
-    Transition { from: InvoiceStatus::InReview, to: InvoiceStatus::Rejected, event_type: "reject" },
-    Transition { from: InvoiceStatus::InReview, to: InvoiceStatus::Void, event_type: "void" },
-    Transition { from: InvoiceStatus::PendingApproval, to: InvoiceStatus::Rejected, event_type: "reject" },
-    Transition { from: InvoiceStatus::PendingApproval, to: InvoiceStatus::Void, event_type: "void" },
-    Transition { from: InvoiceStatus::Approved, to: InvoiceStatus::Void, event_type: "void" },
+    Transition {
+        from: InvoiceStatus::Received,
+        to: InvoiceStatus::Void,
+        event_type: "void",
+    },
+    Transition {
+        from: InvoiceStatus::InReview,
+        to: InvoiceStatus::Rejected,
+        event_type: "reject",
+    },
+    Transition {
+        from: InvoiceStatus::InReview,
+        to: InvoiceStatus::Void,
+        event_type: "void",
+    },
+    Transition {
+        from: InvoiceStatus::PendingApproval,
+        to: InvoiceStatus::Rejected,
+        event_type: "reject",
+    },
+    Transition {
+        from: InvoiceStatus::PendingApproval,
+        to: InvoiceStatus::Void,
+        event_type: "void",
+    },
+    Transition {
+        from: InvoiceStatus::Approved,
+        to: InvoiceStatus::Void,
+        event_type: "void",
+    },
     // Rework: send back to review
-    Transition { from: InvoiceStatus::PendingApproval, to: InvoiceStatus::InReview, event_type: "send_back" },
-    Transition { from: InvoiceStatus::InReview, to: InvoiceStatus::Received, event_type: "send_back" },
+    Transition {
+        from: InvoiceStatus::PendingApproval,
+        to: InvoiceStatus::InReview,
+        event_type: "send_back",
+    },
+    Transition {
+        from: InvoiceStatus::InReview,
+        to: InvoiceStatus::Received,
+        event_type: "send_back",
+    },
     // Reopen rejected
-    Transition { from: InvoiceStatus::Rejected, to: InvoiceStatus::InReview, event_type: "reopen" },
+    Transition {
+        from: InvoiceStatus::Rejected,
+        to: InvoiceStatus::InReview,
+        event_type: "reopen",
+    },
 ];
 
 /// Check whether a transition from `from` to `to` is allowed.
@@ -132,14 +184,15 @@ pub async fn transition(
     })?;
 
     // 1. Load current status with row lock
-    let current: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
-    )
-    .bind(invoice_id)
-    .bind(*tenant_id.as_uuid())
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to query invoice: {}", e)))?;
+    let current: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE")
+            .bind(invoice_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to query invoice: {}", e))
+            })?;
 
     let current_status_str = current
         .ok_or_else(|| billforge_core::Error::NotFound {
@@ -159,9 +212,9 @@ pub async fn transition(
     // 2. Validate transition
     if find_transition(current_status, target_status).is_none() {
         // Roll back by dropping the transaction
-        tx.rollback().await.map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to rollback: {}", e))
-        })?;
+        tx.rollback()
+            .await
+            .map_err(|e| billforge_core::Error::Database(format!("Failed to rollback: {}", e)))?;
         return Err(billforge_core::Error::Validation(format!(
             "Invalid transition from '{}' to '{}'",
             current_status.as_str(),
@@ -181,7 +234,9 @@ pub async fn transition(
     .bind(*tenant_id.as_uuid())
     .execute(&mut *tx)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to update invoice status: {}", e))
+    })?;
 
     // 4. Insert audit log row
     sqlx::query(
@@ -246,23 +301,24 @@ async fn transition_handler(
     Path(id): Path<String>,
     Json(body): Json<TransitionRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let invoice_id: Uuid = id.parse().map_err(|_| {
-        billforge_core::Error::Validation("Invalid invoice ID".to_string())
-    })?;
+    let invoice_id: Uuid = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     let metadata = body.metadata.unwrap_or(serde_json::json!({}));
 
     // Read current status for the response (before transition)
-    let current: (String,) = sqlx::query_as(
-        "SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_id)
-    .bind(*tenant.tenant_id.as_uuid())
-    .fetch_one(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to query invoice: {}", e)))?;
+    let current: (String,) =
+        sqlx::query_as("SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_id)
+            .bind(*tenant.tenant_id.as_uuid())
+            .fetch_one(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to query invoice: {}", e))
+            })?;
 
     let from_status = current.0.clone();
 

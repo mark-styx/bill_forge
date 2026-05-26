@@ -2,6 +2,8 @@
 //!
 //! Run with: cargo run --bin migrate
 
+#![allow(warnings)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sqlx::migrate::Migrator;
@@ -44,9 +46,12 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let database_url = cli.database_url
+    let database_url = cli
+        .database_url
         .or_else(|| std::env::var("DATABASE_URL").ok())
-        .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be provided via --database-url or env var"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("DATABASE_URL must be provided via --database-url or env var")
+        })?;
 
     match cli.command {
         Commands::Up => {
@@ -88,9 +93,15 @@ async fn show_status(database_url: &str) -> Result<()> {
             if rows.is_empty() {
                 println!("No migrations applied yet.");
             } else {
-                println!("{:<10} {:<45} {:<10} {}", "Version", "Description", "Success", "Installed On");
+                println!(
+                    "{:<10} {:<45} {:<10} {}",
+                    "Version", "Description", "Success", "Installed On"
+                );
                 for (version, description, success, installed_on) in rows {
-                    println!("{:<10} {:<45} {:<10} {}", version, description, success, installed_on);
+                    println!(
+                        "{:<10} {:<45} {:<10} {}",
+                        version, description, success, installed_on
+                    );
                 }
             }
         }
@@ -139,7 +150,10 @@ async fn run_baseline(database_url: &str) -> Result<()> {
         .execute(&pool)
         .await?;
 
-        println!("Baselined migration {}: {}", migration.version, migration.description);
+        println!(
+            "Baselined migration {}: {}",
+            migration.version, migration.description
+        );
     }
 
     pool.close().await;

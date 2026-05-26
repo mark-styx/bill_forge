@@ -26,10 +26,7 @@ async fn test_429_retries_with_backoff() {
 
     // Second request: 200 OK
     Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"Items": [], "Page": 1}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"Items": [], "Page": 1}"#))
         .mount(&mock_server)
         .await;
 
@@ -102,10 +99,7 @@ async fn test_401_triggers_token_refresh() {
     // Second request: 200 with refreshed token
     Mock::given(method("GET"))
         .and(header("Authorization", "Bearer refreshed-token"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"Items": [], "Page": 1}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"Items": [], "Page": 1}"#))
         .mount(&mock_server)
         .await;
 
@@ -181,10 +175,7 @@ async fn test_5xx_retries() {
 
     // Second request: 200
     Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"Items": [], "Page": 1}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"Items": [], "Page": 1}"#))
         .mount(&mock_server)
         .await;
 

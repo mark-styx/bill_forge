@@ -84,7 +84,9 @@ impl BillComClient {
         let mut attempt = 0u32;
 
         loop {
-            let headers = self.build_headers().map_err(|e| ClientError::Transport(e.to_string()))?;
+            let headers = self
+                .build_headers()
+                .map_err(|e| ClientError::Transport(e.to_string()))?;
 
             let result = request_fn(headers).send().await;
 
@@ -96,7 +98,10 @@ impl BillComClient {
                         attempt += 1;
                         continue;
                     }
-                    return Err(ClientError::Transport(format!("Transport error after retry: {}", err)));
+                    return Err(ClientError::Transport(format!(
+                        "Transport error after retry: {}",
+                        err
+                    )));
                 }
             };
 
@@ -108,7 +113,10 @@ impl BillComClient {
             }
 
             let retry_after_header = http_retry::parse_retry_after(
-                response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok()),
             );
             let body_text = response.text().await.unwrap_or_default();
 
@@ -120,17 +128,38 @@ impl BillComClient {
                 attempt += 1;
                 if attempt >= config.max_retries {
                     if status_code == 429 {
-                        return Err(ClientError::RateLimited { retry_after: retry_after_header });
+                        return Err(ClientError::RateLimited {
+                            retry_after: retry_after_header,
+                        });
                     }
-                    return Err(ClientError::ApiError { status: status_code, body: body_text });
+                    return Err(ClientError::ApiError {
+                        status: status_code,
+                        body: body_text,
+                    });
                 }
-                let backoff = http_retry::compute_backoff(&config, attempt, if status_code == 429 { retry_after_header } else { None });
-                tracing::warn!(attempt, status_code, ?backoff, "Retryable error, backing off");
+                let backoff = http_retry::compute_backoff(
+                    &config,
+                    attempt,
+                    if status_code == 429 {
+                        retry_after_header
+                    } else {
+                        None
+                    },
+                );
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
 
-            return Err(ClientError::ApiError { status: status_code, body: body_text });
+            return Err(ClientError::ApiError {
+                status: status_code,
+                body: body_text,
+            });
         }
     }
 
@@ -139,27 +168,20 @@ impl BillComClient {
         let url = self.build_url(resource);
 
         let response = self
-            .execute_with_retry(|headers| {
-                self.http_client.get(&url).headers(headers)
-            })
+            .execute_with_retry(|headers| self.http_client.get(&url).headers(headers))
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         let body = response
             .text()
             .await
             .context("Failed to read Bill.com API response")?;
 
-        serde_json::from_str(&body)
-            .context("Failed to parse Bill.com API response")
+        serde_json::from_str(&body).context("Failed to parse Bill.com API response")
     }
 
     /// Make a POST request to Bill.com API
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        resource: &str,
-        body: &B,
-    ) -> Result<T> {
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
         let url = self.build_url(resource);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
@@ -172,15 +194,14 @@ impl BillComClient {
                     .header(CONTENT_TYPE, "application/json")
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         let body_text = response
             .text()
             .await
             .context("Failed to read Bill.com API response")?;
 
-        serde_json::from_str(&body_text)
-            .context("Failed to parse Bill.com API response")
+        serde_json::from_str(&body_text).context("Failed to parse Bill.com API response")
     }
 
     // ──────────────────────────── Vendor Operations ────────────────────────────
@@ -191,10 +212,7 @@ impl BillComClient {
         page: i32,
         page_size: i32,
     ) -> Result<BillComListResponse<BillComVendor>> {
-        let resource = format!(
-            "vendors?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("vendors?page={}&pageSize={}", page, page_size);
 
         self.get(&resource).await
     }
@@ -222,10 +240,7 @@ impl BillComClient {
         page: i32,
         page_size: i32,
     ) -> Result<BillComListResponse<BillComBill>> {
-        let resource = format!(
-            "bills?page={}&pageSize={}",
-            page, page_size
-        );
+        let resource = format!("bills?page={}&pageSize={}", page, page_size);
 
         self.get(&resource).await
     }
@@ -258,18 +273,21 @@ impl BillComClient {
     // ──────────────────────────── Funding Account Operations ────────────────────────────
 
     /// List funding accounts (bank accounts for payment disbursement)
-    pub async fn list_funding_accounts(&self) -> Result<BillComListResponse<BillComFundingAccount>> {
+    pub async fn list_funding_accounts(
+        &self,
+    ) -> Result<BillComListResponse<BillComFundingAccount>> {
         self.get("funding-accounts/banks").await
     }
 
     /// Execute a GET request to an arbitrary URL using the retry logic.
     /// This is exposed for integration testing only.
     #[doc(hidden)]
-    pub async fn execute_get_for_test(&self, url: &str) -> std::result::Result<String, ClientError> {
+    pub async fn execute_get_for_test(
+        &self,
+        url: &str,
+    ) -> std::result::Result<String, ClientError> {
         let response = self
-            .execute_with_retry(|headers| {
-                self.http_client.get(url).headers(headers)
-            })
+            .execute_with_retry(|headers| self.http_client.get(url).headers(headers))
             .await?;
         response
             .text()

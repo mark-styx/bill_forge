@@ -36,9 +36,11 @@ impl PaymentRequestRepositoryImpl {
         let now = Utc::now();
         let request_number = self.generate_request_number(tenant_id).await?;
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            Error::Database(format!("Failed to begin transaction: {}", e))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
         // Validate and fetch invoices
         let invoices: Vec<InvoiceRow> = sqlx::query_as::<_, InvoiceRow>(
@@ -94,14 +96,8 @@ impl PaymentRequestRepositoryImpl {
         let invoice_count = invoices.len() as i32;
         let currency = invoices[0].currency.clone();
 
-        let earliest_due_date = invoices
-            .iter()
-            .filter_map(|i| i.due_date)
-            .min();
-        let latest_due_date = invoices
-            .iter()
-            .filter_map(|i| i.due_date)
-            .max();
+        let earliest_due_date = invoices.iter().filter_map(|i| i.due_date).min();
+        let latest_due_date = invoices.iter().filter_map(|i| i.due_date).max();
 
         // Determine vendor_id: set if all invoices share the same vendor, otherwise NULL
         let vendor_ids: std::collections::HashSet<Option<Uuid>> =
@@ -154,11 +150,16 @@ impl PaymentRequestRepositoryImpl {
             .bind(now)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Error::Database(format!("Failed to create payment request item: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to create payment request item: {}", e))
+            })?;
         }
 
         tx.commit().await.map_err(|e| {
-            Error::Database(format!("Failed to commit payment request transaction: {}", e))
+            Error::Database(format!(
+                "Failed to commit payment request transaction: {}",
+                e
+            ))
         })?;
 
         Ok(PaymentRequest {
@@ -194,9 +195,11 @@ impl PaymentRequestRepositoryImpl {
             ));
         }
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            Error::Database(format!("Failed to begin transaction: {}", e))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
         // Verify request exists and is in draft status
         let request_row = sqlx::query_as::<_, RequestRow>(
@@ -314,7 +317,9 @@ impl PaymentRequestRepositoryImpl {
             .bind(now)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Error::Database(format!("Failed to create payment request item: {}", e)))?;
+            .map_err(|e| {
+                Error::Database(format!("Failed to create payment request item: {}", e))
+            })?;
 
             items.push(PaymentRequestItem {
                 id: item_id,
@@ -371,7 +376,12 @@ impl PaymentRequestRepositoryImpl {
         .bind(request_id)
         .execute(&mut *tx)
         .await
-        .map_err(|e| Error::Database(format!("Failed to update payment request aggregates: {}", e)))?;
+        .map_err(|e| {
+            Error::Database(format!(
+                "Failed to update payment request aggregates: {}",
+                e
+            ))
+        })?;
 
         tx.commit().await.map_err(|e| {
             Error::Database(format!("Failed to commit add invoices transaction: {}", e))
@@ -422,7 +432,10 @@ impl PaymentRequestRepositoryImpl {
         .map_err(|e| Error::Database(format!("Failed to get payment request items: {}", e)))?;
 
         let request = PaymentRequest::from_row(request_row);
-        let items: Vec<PaymentRequestItem> = item_rows.into_iter().map(PaymentRequestItem::from_row).collect();
+        let items: Vec<PaymentRequestItem> = item_rows
+            .into_iter()
+            .map(PaymentRequestItem::from_row)
+            .collect();
 
         Ok(Some((request, items)))
     }
@@ -491,9 +504,11 @@ impl PaymentRequestRepositoryImpl {
     ) -> Result<PaymentRequest> {
         let now = Utc::now();
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            Error::Database(format!("Failed to begin transaction: {}", e))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
 
         let result = sqlx::query(
             r#"UPDATE payment_requests
@@ -573,9 +588,9 @@ impl PaymentRequestRepositoryImpl {
             )));
         }
 
-        tx.commit().await.map_err(|e| {
-            Error::Database(format!("Failed to commit submit transaction: {}", e))
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit submit transaction: {}", e)))?;
 
         // Fetch and return the updated request
         let row = sqlx::query_as::<_, RequestRow>(
@@ -591,7 +606,9 @@ impl PaymentRequestRepositoryImpl {
         .bind(tenant_id.as_uuid())
         .fetch_one(&*self.pool)
         .await
-        .map_err(|e| Error::Database(format!("Failed to fetch submitted payment request: {}", e)))?;
+        .map_err(|e| {
+            Error::Database(format!("Failed to fetch submitted payment request: {}", e))
+        })?;
 
         Ok(PaymentRequest::from_row(row))
     }

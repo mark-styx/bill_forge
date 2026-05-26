@@ -166,6 +166,66 @@ describe('aiAssistantApi', () => {
     expect(result[0].status).toBe('pending');
   });
 
+  it('approveActionProposal() POSTs an approval decision for a proposal', async () => {
+    const proposal = {
+      id: 'proposal-1',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      conversation_id: 'conv-42',
+      tool_name: 'approve_invoice',
+      payload: { invoice_id: 'inv-1' },
+      risk: 'medium' as const,
+      permission: 'invoice.approve',
+      status: 'approved' as const,
+      execution_error_code: null,
+      execution_error_message: null,
+      created_at: '2025-01-01T00:01:00Z',
+      updated_at: '2025-01-01T00:02:00Z',
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(proposal);
+
+    const result = await aiAssistantApi.approveActionProposal('conv-42', 'proposal-1');
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/ai/conversations/conv-42/action-proposals/proposal-1/approve',
+      {},
+    );
+    expect(result.status).toBe('approved');
+  });
+
+  it('rejectActionProposal() POSTs a rejection reason for a proposal', async () => {
+    const proposal = {
+      id: 'proposal-1',
+      tenant_id: 'tenant-1',
+      user_id: 'user-1',
+      conversation_id: 'conv-42',
+      tool_name: 'approve_invoice',
+      payload: { invoice_id: 'inv-1' },
+      risk: 'medium' as const,
+      permission: 'invoice.approve',
+      status: 'rejected' as const,
+      execution_error_code: null,
+      execution_error_message: null,
+      created_at: '2025-01-01T00:01:00Z',
+      updated_at: '2025-01-01T00:02:00Z',
+    };
+
+    vi.spyOn(api, 'post').mockResolvedValueOnce(proposal);
+
+    const result = await aiAssistantApi.rejectActionProposal(
+      'conv-42',
+      'proposal-1',
+      { reason: 'Needs human review' },
+    );
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/ai/conversations/conv-42/action-proposals/proposal-1/reject',
+      { reason: 'Needs human review' },
+    );
+    expect(result.status).toBe('rejected');
+  });
+
   it('generateBugReportDraft() POSTs to /api/v1/ai/bug-report-drafts and returns structured fields', async () => {
     const draftResponse = {
       title: 'Login page crashes on submit',

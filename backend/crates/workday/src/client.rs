@@ -32,11 +32,7 @@ pub struct WorkdayClient {
 
 impl WorkdayClient {
     /// Create a new Workday API client
-    pub fn new(
-        access_token: String,
-        tenant_url: String,
-        tenant_name: String,
-    ) -> Self {
+    pub fn new(access_token: String, tenant_url: String, tenant_name: String) -> Self {
         Self {
             http_client: reqwest::Client::new(),
             access_token,
@@ -47,10 +43,7 @@ impl WorkdayClient {
 
     /// Build API URL for a resource
     fn build_url(&self, resource: &str) -> String {
-        format!(
-            "{}/api/v1/{}",
-            self.tenant_url, resource
-        )
+        format!("{}/api/v1/{}", self.tenant_url, resource)
     }
 
     /// Send an HTTP request with retry logic for 429/5xx errors.
@@ -85,21 +78,38 @@ impl WorkdayClient {
 
             if http_retry::is_retryable_status(status_code) {
                 let retry_after = http_retry::parse_retry_after(
-                    response.headers().get("Retry-After").and_then(|v| v.to_str().ok()),
+                    response
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|v| v.to_str().ok()),
                 );
                 attempt += 1;
                 if attempt >= config.max_retries {
                     let body = response.text().await.unwrap_or_default();
-                    anyhow::bail!("Workday API request failed after {} retries ({}): {}", attempt, status_code, body);
+                    anyhow::bail!(
+                        "Workday API request failed after {} retries ({}): {}",
+                        attempt,
+                        status_code,
+                        body
+                    );
                 }
                 let backoff = http_retry::compute_backoff(&config, attempt, retry_after);
-                tracing::warn!(attempt, status_code, ?backoff, "Workday retryable error, backing off");
+                tracing::warn!(
+                    attempt,
+                    status_code,
+                    ?backoff,
+                    "Workday retryable error, backing off"
+                );
                 sleep(backoff).await;
                 continue;
             }
 
             let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Workday API request failed (HTTP {}): {}", status, error_text);
+            anyhow::bail!(
+                "Workday API request failed (HTTP {}): {}",
+                status,
+                error_text
+            );
         }
     }
 
@@ -121,8 +131,7 @@ impl WorkdayClient {
             .await
             .context("Failed to read Workday API response")?;
 
-        serde_json::from_str(&body)
-            .context("Failed to parse Workday API response")
+        serde_json::from_str(&body).context("Failed to parse Workday API response")
     }
 
     /// Make a POST request to Workday REST API
@@ -145,8 +154,7 @@ impl WorkdayClient {
             .await
             .context("Failed to read Workday API response")?;
 
-        serde_json::from_str(&response_body)
-            .context("Failed to parse Workday API response")
+        serde_json::from_str(&response_body).context("Failed to parse Workday API response")
     }
 
     // ──────────────────────────── Supplier Operations ────────────────────────────
@@ -157,11 +165,7 @@ impl WorkdayClient {
         page: i32,
         page_size: i32,
     ) -> Result<WorkdayQueryResponse<WorkdaySupplier>> {
-        let resource = format!(
-            "suppliers?offset={}&limit={}",
-            page * page_size,
-            page_size
-        );
+        let resource = format!("suppliers?offset={}&limit={}", page * page_size, page_size);
 
         self.get(&resource).await
     }
@@ -216,10 +220,7 @@ impl WorkdayClient {
     }
 
     /// Get a supplier invoice by ID
-    pub async fn get_supplier_invoice(
-        &self,
-        invoice_id: &str,
-    ) -> Result<WorkdaySupplierInvoice> {
+    pub async fn get_supplier_invoice(&self, invoice_id: &str) -> Result<WorkdaySupplierInvoice> {
         self.get(&format!("supplierInvoices/{}", invoice_id)).await
     }
 
@@ -421,7 +422,8 @@ mod tests {
         assert_eq!(parsed.total, 1);
         assert_eq!(parsed.data.len(), 1);
         let serialized = serde_json::to_string(&parsed).unwrap();
-        let re_parsed: WorkdayQueryResponse<WorkdayCompany> = serde_json::from_str(&serialized).unwrap();
+        let re_parsed: WorkdayQueryResponse<WorkdayCompany> =
+            serde_json::from_str(&serialized).unwrap();
         assert_eq!(re_parsed.total, parsed.total);
     }
 

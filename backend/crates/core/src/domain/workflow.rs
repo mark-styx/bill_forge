@@ -6,9 +6,9 @@
 //! - Multi-level approval support
 //! - Automation rules (auto-approve, auto-submit)
 
-use crate::types::{Money, TenantId, UserId};
 use crate::domain::invoice::InvoiceId;
 use crate::domain::vendor::VendorId;
+use crate::types::{Money, TenantId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -350,9 +350,8 @@ impl CreateApprovalDelegationInput {
         let delegator_uuid = Uuid::parse_str(&self.delegator_id).map_err(|_| {
             crate::Error::Validation("delegator_id is not a valid UUID".to_string())
         })?;
-        let delegate_uuid = Uuid::parse_str(&self.delegate_id).map_err(|_| {
-            crate::Error::Validation("delegate_id is not a valid UUID".to_string())
-        })?;
+        let delegate_uuid = Uuid::parse_str(&self.delegate_id)
+            .map_err(|_| crate::Error::Validation("delegate_id is not a valid UUID".to_string()))?;
 
         if delegator_uuid == delegate_uuid {
             return Err(crate::Error::Validation(
@@ -388,7 +387,12 @@ pub fn detect_delegation_cycle(
     overlap_end: DateTime<Utc>,
 ) -> Option<Vec<UserId>> {
     /// Check whether two date ranges overlap: [s1, e1) ∩ [s2, e2) ≠ ∅
-    fn ranges_overlap(s1: DateTime<Utc>, e1: DateTime<Utc>, s2: DateTime<Utc>, e2: DateTime<Utc>) -> bool {
+    fn ranges_overlap(
+        s1: DateTime<Utc>,
+        e1: DateTime<Utc>,
+        s2: DateTime<Utc>,
+        e2: DateTime<Utc>,
+    ) -> bool {
         s1 < e2 && s2 < e1
     }
 

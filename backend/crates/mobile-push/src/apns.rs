@@ -52,9 +52,8 @@ impl ApnsClient {
             ));
         }
 
-        let private_key = fs::read(&config.private_key_path).map_err(|e| {
-            ApnsError::InvalidConfig(format!("Failed to read private key: {}", e))
-        })?;
+        let private_key = fs::read(&config.private_key_path)
+            .map_err(|e| ApnsError::InvalidConfig(format!("Failed to read private key: {}", e)))?;
 
         Ok(Self {
             config,
@@ -120,7 +119,7 @@ impl PushNotificationProvider for ApnsClient {
 
         let response = self
             .client
-            .post(&self.endpoint_url(device_token))
+            .post(self.endpoint_url(device_token))
             .header("authorization", format!("bearer {}", jwt_token))
             .header("apns-topic", &self.config.bundle_id)
             .header("apns-push-type", "alert")

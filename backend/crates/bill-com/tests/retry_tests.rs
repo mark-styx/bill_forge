@@ -1,6 +1,6 @@
 //! Integration tests for Bill.com client retry/backoff logic
 
-use billforge_bill_com::{BillComClient, ClientError, BillComSession, BillComEnvironment};
+use billforge_bill_com::{BillComClient, BillComEnvironment, BillComSession, ClientError};
 use std::time::{Duration, Instant};
 use wiremock::matchers::{header, method};
 use wiremock::{Mock, MockServer, ResponseTemplate};

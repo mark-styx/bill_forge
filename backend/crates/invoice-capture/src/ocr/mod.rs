@@ -5,15 +5,15 @@
 //! - **AWS Textract**: Cloud-based with table/form extraction
 //! - **Google Cloud Vision**: Cloud-based with handwriting detection
 
-mod tesseract;
 mod aws_textract;
 mod google_vision;
 pub mod ocr_comparison;
+mod tesseract;
 
-pub use self::tesseract::TesseractOcr;
 pub use self::aws_textract::AwsTextractOcr;
 pub use self::google_vision::GoogleVisionOcr;
 pub use self::ocr_comparison::{OcrComparison, OcrProvider};
+pub use self::tesseract::TesseractOcr;
 
 use billforge_core::traits::OcrService;
 
@@ -41,7 +41,10 @@ pub fn create_provider(provider_name: &str) -> Box<dyn OcrService> {
             }
         }
         _ => {
-            tracing::warn!("Unknown OCR provider '{}', defaulting to Tesseract", provider_name);
+            tracing::warn!(
+                "Unknown OCR provider '{}', defaulting to Tesseract",
+                provider_name
+            );
             Box::new(TesseractOcr::new())
         }
     }
@@ -51,7 +54,13 @@ pub fn create_provider(provider_name: &str) -> Box<dyn OcrService> {
 pub fn available_providers() -> Vec<(&'static str, bool)> {
     vec![
         ("tesseract", tesseract::TesseractOcr::is_available()),
-        ("aws_textract", aws_textract::AwsTextractOcr::is_configured()),
-        ("google_vision", google_vision::GoogleVisionOcr::is_configured()),
+        (
+            "aws_textract",
+            aws_textract::AwsTextractOcr::is_configured(),
+        ),
+        (
+            "google_vision",
+            google_vision::GoogleVisionOcr::is_configured(),
+        ),
     ]
 }

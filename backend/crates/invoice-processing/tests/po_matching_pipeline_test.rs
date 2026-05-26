@@ -3,16 +3,20 @@
 //! Validates that WorkflowEngine::process_invoice invokes the PO MatchEngine
 //! when an invoice references a purchase order and steers the workflow correctly.
 
+#![allow(warnings)]
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
-        ApprovalRequest, ApprovalStatus, CaptureStatus, Invoice, InvoiceId, POLineItem,
-        POStatus, ProcessingStatus, PurchaseOrder, PurchaseOrderId, WorkflowRule,
-        WorkflowRuleId, WorkflowRuleType,
+        ApprovalRequest, ApprovalStatus, CaptureStatus, Invoice, InvoiceId, POLineItem, POStatus,
+        ProcessingStatus, PurchaseOrder, PurchaseOrderId, WorkflowRule, WorkflowRuleId,
+        WorkflowRuleType,
     },
-    traits::{ApprovalRepository, InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository},
+    traits::{
+        ApprovalRepository, InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository,
+    },
     types::{Money, TenantId, UserId},
     Result,
 };
@@ -120,7 +124,7 @@ impl InvoiceRepository for MockInvoiceRepo {
         &self,
         _tid: &TenantId,
         _input: billforge_core::domain::CreateInvoiceInput,
-        _uid: &UserId,
+        _uid: Option<&UserId>,
     ) -> Result<Invoice> {
         unimplemented!()
     }
@@ -314,7 +318,7 @@ fn test_invoice_with_po(po_number: &str, qty: f64, price_cents: i64) -> Invoice 
         custom_fields: serde_json::json!({}),
         created_at: Utc::now(),
         updated_at: Utc::now(),
-        created_by: UserId::new(),
+        created_by: Some(UserId::new()),
     }
 }
 
@@ -345,9 +349,7 @@ fn make_test_po(po_number: &str, qty: f64, price_cents: i64) -> PurchaseOrder {
     }
 }
 
-fn build_engine(
-    po_repo: MockPoRepo,
-) -> WorkflowEngine {
+fn build_engine(po_repo: MockPoRepo) -> WorkflowEngine {
     let _po_repo = po_repo; // used indirectly via PO matching (not yet wired)
     WorkflowEngine::new(
         Arc::new(MockInvoiceRepo),

@@ -50,16 +50,24 @@ impl FeedbackService {
         tenant_id: &str,
         category: Option<&str>,
     ) -> Result<Vec<FeedbackAggregation>> {
-        self.repo.get_aggregation_by_category(tenant_id, category).await
+        self.repo
+            .get_aggregation_by_category(tenant_id, category)
+            .await
     }
 
     /// Get overall feedback statistics
     pub async fn get_overall_stats(&self, tenant_id: &str) -> Result<FeedbackAggregation> {
-        let aggregations = self.repo.get_aggregation_by_category(tenant_id, None).await?;
+        let aggregations = self
+            .repo
+            .get_aggregation_by_category(tenant_id, None)
+            .await?;
 
         let total_feedback: i64 = aggregations.iter().map(|a| a.total_feedback).sum();
         let avg_rating: f64 = if !aggregations.is_empty() {
-            aggregations.iter().map(|a| a.average_rating * a.total_feedback as f64).sum::<f64>()
+            aggregations
+                .iter()
+                .map(|a| a.average_rating * a.total_feedback as f64)
+                .sum::<f64>()
                 / total_feedback as f64
         } else {
             0.0
@@ -91,7 +99,9 @@ impl FeedbackService {
         start_date: DateTime<Utc>,
         end_date: DateTime<Utc>,
     ) -> Result<FeedbackTrend> {
-        self.repo.get_feedback_trend(tenant_id, start_date, end_date).await
+        self.repo
+            .get_feedback_trend(tenant_id, start_date, end_date)
+            .await
     }
 
     /// Get weekly feedback trend

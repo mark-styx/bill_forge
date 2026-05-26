@@ -7,6 +7,8 @@
 //! - Tenant isolation (different TenantIds)
 //! - Empty invoice list validation
 
+#![allow(warnings)]
+
 use billforge_core::types::TenantId;
 use chrono::NaiveDate;
 use uuid::Uuid;
@@ -42,10 +44,7 @@ fn test_create_request_body_with_notes() {
 
 #[test]
 fn test_create_request_body_without_notes() {
-    let json = format!(
-        r#"{{"invoice_ids": ["{}"]}}"#,
-        Uuid::new_v4()
-    );
+    let json = format!(r#"{{"invoice_ids": ["{}"]}}"#, Uuid::new_v4());
     let body: CreatePaymentRequestBody = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(body.invoice_ids.len(), 1);
     assert!(body.notes.is_none());
@@ -101,7 +100,10 @@ fn test_request_number_sequence_parsing() {
 fn test_tenant_isolation_different_ids() {
     let tenant_a = TenantId::new();
     let tenant_b = TenantId::new();
-    assert_ne!(tenant_a, tenant_b, "Different tenants should have different IDs");
+    assert_ne!(
+        tenant_a, tenant_b,
+        "Different tenants should have different IDs"
+    );
 }
 
 #[test]
@@ -133,7 +135,13 @@ fn test_status_transitions() {
 }
 
 fn can_transition(current: &str, target: &str) -> bool {
-    matches!((current, target), ("draft", "submitted") | ("submitted", "processing") | ("processing", "completed") | (_, "cancelled"))
+    matches!(
+        (current, target),
+        ("draft", "submitted")
+            | ("submitted", "processing")
+            | ("processing", "completed")
+            | (_, "cancelled")
+    )
 }
 
 #[test]
@@ -172,16 +180,18 @@ fn test_due_date_range() {
     let dates: Vec<NaiveDate> = dates.into_iter().flatten().collect();
     let earliest = dates.iter().min();
     let latest = dates.iter().max();
-    assert_eq!(earliest, Some(&NaiveDate::from_ymd_opt(2024, 1, 31).unwrap()));
+    assert_eq!(
+        earliest,
+        Some(&NaiveDate::from_ymd_opt(2024, 1, 31).unwrap())
+    );
     assert_eq!(latest, Some(&NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()));
 }
 
 #[test]
 fn test_vendor_id_single_vendor() {
     let vendor = Uuid::new_v4();
-    let vendor_ids: std::collections::HashSet<Option<Uuid>> = vec![Some(vendor), Some(vendor)]
-        .into_iter()
-        .collect();
+    let vendor_ids: std::collections::HashSet<Option<Uuid>> =
+        vec![Some(vendor), Some(vendor)].into_iter().collect();
     assert_eq!(vendor_ids.len(), 1);
     let resolved = if vendor_ids.len() == 1 {
         vendor_ids.into_iter().next().flatten()
@@ -291,8 +301,7 @@ fn test_submit_rejects_when_invoices_claimed_by_other_request() {
     let expected_count: i32 = 3;
     let rows_affected: u64 = 2;
     assert_ne!(
-        rows_affected,
-        expected_count as u64,
+        rows_affected, expected_count as u64,
         "Mismatch must be detected and cause a validation error"
     );
 }

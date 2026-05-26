@@ -244,7 +244,7 @@ impl QuickBooksClient {
                     .headers(headers)
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         response
             .json()
@@ -267,7 +267,7 @@ impl QuickBooksClient {
                     .header(CONTENT_TYPE, "application/json")
             })
             .await
-            .map_err(|e| anyhow::Error::from(e))?;
+            .map_err(anyhow::Error::from)?;
 
         response
             .json()

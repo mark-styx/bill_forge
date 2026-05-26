@@ -7,7 +7,7 @@
 //! - Opportunity → PO linkage
 //! - Custom objects for payment tracking
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // ──────────────────────────── Auth Tokens ────────────────────────────

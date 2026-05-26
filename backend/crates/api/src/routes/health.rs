@@ -4,8 +4,8 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 use std::time::Instant;
 
-use billforge_invoice_capture::ocr;
 use crate::state::AppState;
+use billforge_invoice_capture::ocr;
 
 /// Basic health check response
 #[derive(Serialize)]
@@ -160,16 +160,23 @@ pub async fn detailed_health(State(state): State<AppState>) -> Json<DetailedHeal
     // Check OCR health
     let providers = ocr::available_providers();
     let configured_provider = state.config.ocr_provider.clone();
-    let ocr_available = providers.iter().any(|(name, available)| {
-        name == &configured_provider && *available
-    });
+    let ocr_available = providers
+        .iter()
+        .any(|(name, available)| name == &configured_provider && *available);
     let ocr = ComponentHealth {
-        status: if ocr_available { ComponentStatus::Up } else { ComponentStatus::Degraded },
+        status: if ocr_available {
+            ComponentStatus::Up
+        } else {
+            ComponentStatus::Degraded
+        },
         latency_ms: None,
         message: if ocr_available {
             None
         } else {
-            Some(format!("Configured provider '{}' not available, falling back to mock OCR", configured_provider))
+            Some(format!(
+                "Configured provider '{}' not available, falling back to mock OCR",
+                configured_provider
+            ))
         },
     };
 
@@ -186,7 +193,11 @@ pub async fn detailed_health(State(state): State<AppState>) -> Json<DetailedHeal
         status: overall_status,
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: start_time,
-        checks: HealthChecks { database, storage, ocr },
+        checks: HealthChecks {
+            database,
+            storage,
+            ocr,
+        },
         environment,
     })
 }
@@ -198,8 +209,12 @@ pub async fn ocr_health(State(state): State<AppState>) -> Json<OcrHealthResponse
 
     Json(OcrHealthResponse {
         configured_provider,
-        providers: providers.into_iter().map(|(name, available)| {
-            OcrProviderStatus { name: name.to_string(), available }
-        }).collect(),
+        providers: providers
+            .into_iter()
+            .map(|(name, available)| OcrProviderStatus {
+                name: name.to_string(),
+                available,
+            })
+            .collect(),
     })
 }

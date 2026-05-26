@@ -19,8 +19,7 @@ const SANDBOX_TENANT_ID: &str = "11111111-1111-1111-1111-111111111111";
 /// Helper to get a database pool from DATABASE_URL
 async fn get_pool() -> sqlx::PgPool {
     dotenvy::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     sqlx::PgPool::connect(&database_url)
         .await
         .expect("Failed to connect to database")
@@ -80,17 +79,17 @@ async fn test_create_vendor_happy_path() {
         Some("12-3456789"),
         "active",
         &serde_json::json!({}),
-    ).await;
+    )
+    .await;
 
     // Verify the row exists and has the expected shape
-    let row: Option<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT name, tax_id, status FROM vendors WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(vendor_id)
-    .bind(*tenant_id.as_uuid())
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let row: Option<(String, Option<String>, String)> =
+        sqlx::query_as("SELECT name, tax_id, status FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     let (name, tax_id, status) = row.expect("Vendor row should exist");
     assert_eq!(name, "TEST-CRUD Happy Vendor");
@@ -118,36 +117,56 @@ async fn test_list_vendors_tenant_isolation() {
 
     // Create vendor for tenant A
     insert_test_vendor(
-        &pool, &tenant_a, "TEST-ISOLATE Tenant A Vendor", None, "active", &serde_json::json!({}),
-    ).await;
+        &pool,
+        &tenant_a,
+        "TEST-ISOLATE Tenant A Vendor",
+        None,
+        "active",
+        &serde_json::json!({}),
+    )
+    .await;
 
     // Create vendor for tenant B
     insert_test_vendor(
-        &pool, &tenant_b, "TEST-ISOLATE Tenant B Vendor", None, "active", &serde_json::json!({}),
-    ).await;
+        &pool,
+        &tenant_b,
+        "TEST-ISOLATE Tenant B Vendor",
+        None,
+        "active",
+        &serde_json::json!({}),
+    )
+    .await;
 
     // Query for tenant A vendors - should only see tenant A's vendor
     let tenant_a_names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM vendors WHERE tenant_id = $1 AND name LIKE 'TEST-ISOLATE%'"
+        "SELECT name FROM vendors WHERE tenant_id = $1 AND name LIKE 'TEST-ISOLATE%'",
     )
     .bind(*tenant_a.as_uuid())
     .fetch_all(&pool)
     .await
     .expect("Query should succeed");
 
-    assert_eq!(tenant_a_names.len(), 1, "Tenant A should see exactly 1 vendor");
+    assert_eq!(
+        tenant_a_names.len(),
+        1,
+        "Tenant A should see exactly 1 vendor"
+    );
     assert_eq!(tenant_a_names[0], "TEST-ISOLATE Tenant A Vendor");
 
     // Query for tenant B vendors - should only see tenant B's vendor
     let tenant_b_names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM vendors WHERE tenant_id = $1 AND name LIKE 'TEST-ISOLATE%'"
+        "SELECT name FROM vendors WHERE tenant_id = $1 AND name LIKE 'TEST-ISOLATE%'",
     )
     .bind(tenant_b_id)
     .fetch_all(&pool)
     .await
     .expect("Query should succeed");
 
-    assert_eq!(tenant_b_names.len(), 1, "Tenant B should see exactly 1 vendor");
+    assert_eq!(
+        tenant_b_names.len(),
+        1,
+        "Tenant B should see exactly 1 vendor"
+    );
     assert_eq!(tenant_b_names[0], "TEST-ISOLATE Tenant B Vendor");
 
     // Cleanup both tenants
@@ -167,8 +186,14 @@ async fn test_update_routing_rules() {
     cleanup_test_vendors(&pool, &tenant_id, "TEST-ROUTING").await;
 
     let vendor_id = insert_test_vendor(
-        &pool, &tenant_id, "TEST-ROUTING Vendor", None, "active", &serde_json::json!({}),
-    ).await;
+        &pool,
+        &tenant_id,
+        "TEST-ROUTING Vendor",
+        None,
+        "active",
+        &serde_json::json!({}),
+    )
+    .await;
 
     // Update routing_rules via direct SQL (simulating what the PATCH handler does)
     let rules = serde_json::json!({
@@ -185,14 +210,13 @@ async fn test_update_routing_rules() {
         .expect("Should update routing_rules");
 
     // Verify roundtrip
-    let stored: serde_json::Value = sqlx::query_scalar(
-        "SELECT routing_rules FROM vendors WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(vendor_id)
-    .bind(*tenant_id.as_uuid())
-    .fetch_one(&pool)
-    .await
-    .expect("Should fetch routing_rules");
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT routing_rules FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .expect("Should fetch routing_rules");
 
     assert_eq!(stored["approver_email"], "cfo@example.com");
     assert_eq!(stored["auto_approve_threshold_cents"], 50000);
@@ -213,8 +237,14 @@ async fn test_delete_sets_inactive() {
     cleanup_test_vendors(&pool, &tenant_id, "TEST-SOFTDEL").await;
 
     let vendor_id = insert_test_vendor(
-        &pool, &tenant_id, "TEST-SOFTDEL Vendor", None, "active", &serde_json::json!({}),
-    ).await;
+        &pool,
+        &tenant_id,
+        "TEST-SOFTDEL Vendor",
+        None,
+        "active",
+        &serde_json::json!({}),
+    )
+    .await;
 
     // Simulate soft delete (as the delete_vendor handler now does)
     sqlx::query("UPDATE vendors SET status = 'inactive', updated_at = NOW() WHERE id = $1 AND tenant_id = $2")
@@ -225,17 +255,19 @@ async fn test_delete_sets_inactive() {
         .expect("Should soft-delete vendor");
 
     // Verify the row still exists but is inactive
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM vendors WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(vendor_id)
-    .bind(*tenant_id.as_uuid())
-    .fetch_optional(&pool)
-    .await
-    .expect("Query should succeed");
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM vendors WHERE id = $1 AND tenant_id = $2")
+            .bind(vendor_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
 
     let (status,) = row.expect("Vendor row should still exist after soft delete");
-    assert_eq!(status, "inactive", "Status should be 'inactive' after soft delete");
+    assert_eq!(
+        status, "inactive",
+        "Status should be 'inactive' after soft delete"
+    );
 
     cleanup_test_vendors(&pool, &tenant_id, "TEST-SOFTDEL").await;
 }
@@ -263,7 +295,8 @@ async fn test_get_routing_rules_helper() {
             "auto_approve_threshold_cents": 25000,
             "requires_dual_approval": false
         }),
-    ).await;
+    )
+    .await;
 
     let vendor_id = VendorId(vendor_id);
 
@@ -272,7 +305,10 @@ async fn test_get_routing_rules_helper() {
         .await
         .expect("get_routing_rules should succeed");
 
-    assert_eq!(rules.approver_email.as_deref(), Some("ap-manager@example.com"));
+    assert_eq!(
+        rules.approver_email.as_deref(),
+        Some("ap-manager@example.com")
+    );
     assert_eq!(rules.auto_approve_threshold_cents, Some(25000));
     assert_eq!(rules.requires_dual_approval, Some(false));
 
@@ -284,7 +320,8 @@ async fn test_get_routing_rules_helper() {
         None,
         "active",
         &serde_json::json!({}),
-    ).await;
+    )
+    .await;
 
     let vendor_id_empty = VendorId(vendor_id_empty);
     let empty_rules = get_routing_rules(&pool, &tenant_id, &vendor_id_empty)
@@ -298,7 +335,10 @@ async fn test_get_routing_rules_helper() {
     // Test that a non-existent vendor returns NotFound
     let bad_vendor_id = VendorId::new();
     let result = get_routing_rules(&pool, &tenant_id, &bad_vendor_id).await;
-    assert!(result.is_err(), "Should return error for non-existent vendor");
+    assert!(
+        result.is_err(),
+        "Should return error for non-existent vendor"
+    );
 
     cleanup_test_vendors(&pool, &tenant_id, "TEST-HELPER").await;
 }

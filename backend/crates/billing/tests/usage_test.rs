@@ -80,8 +80,9 @@ async fn seed_invoice_at(
 // ---------------------------------------------------------------------------
 
 async fn setup_pool() -> PgPool {
-    let db_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+    let db_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
+    });
     let pool = PgPool::connect(&db_url).await.expect("connect to test DB");
 
     // Run migrations so invoices/vendors tables exist
@@ -150,21 +151,16 @@ async fn test_invoice_count_respects_period_window() {
         period_start + Duration::days(1),
     )
     .await;
-    seed_invoice_at(
-        &pool,
-        &tenant_id,
-        Uuid::new_v4(),
-        vendor_id,
-        user_id,
-        now,
-    )
-    .await;
+    seed_invoice_at(&pool, &tenant_id, Uuid::new_v4(), vendor_id, user_id, now).await;
 
     let usage = get_tenant_usage(&pool, &tenant_id, period_start, period_end)
         .await
         .expect("get_tenant_usage");
 
-    assert_eq!(usage.invoices_count, 2, "only invoices within the period should be counted");
+    assert_eq!(
+        usage.invoices_count, 2,
+        "only invoices within the period should be counted"
+    );
     assert_eq!(usage.vendor_count, 1);
 }
 
@@ -191,35 +187,25 @@ async fn test_invoice_count_isolated_by_tenant() {
 
     // 3 invoices for tenant A
     for _ in 0..3 {
-        seed_invoice_at(
-            &pool,
-            &tenant_a,
-            Uuid::new_v4(),
-            vendor_a,
-            user_a,
-            now,
-        )
-        .await;
+        seed_invoice_at(&pool, &tenant_a, Uuid::new_v4(), vendor_a, user_a, now).await;
     }
 
     // 1 invoice for tenant B
-    seed_invoice_at(
-        &pool,
-        &tenant_b,
-        Uuid::new_v4(),
-        vendor_b,
-        user_b,
-        now,
-    )
-    .await;
+    seed_invoice_at(&pool, &tenant_b, Uuid::new_v4(), vendor_b, user_b, now).await;
 
     let usage_a = get_tenant_usage(&pool, &tenant_a, period_start, period_end)
         .await
         .expect("get_tenant_usage A");
-    assert_eq!(usage_a.invoices_count, 3, "tenant A should see only its own invoices");
+    assert_eq!(
+        usage_a.invoices_count, 3,
+        "tenant A should see only its own invoices"
+    );
 
     let usage_b = get_tenant_usage(&pool, &tenant_b, period_start, period_end)
         .await
         .expect("get_tenant_usage B");
-    assert_eq!(usage_b.invoices_count, 1, "tenant B should see only its own invoices");
+    assert_eq!(
+        usage_b.invoices_count, 1,
+        "tenant B should see only its own invoices"
+    );
 }

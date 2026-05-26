@@ -9,9 +9,7 @@
 //! - NoMatch      -> flag for manual PO assignment
 //! - OverBilled   -> block, require manager approval
 
-use billforge_core::domain::{
-    MatchTolerances, MatchType, POLineItem, ReceivingLineItem,
-};
+use billforge_core::domain::{MatchTolerances, MatchType, POLineItem, ReceivingLineItem};
 use serde::{Deserialize, Serialize};
 
 /// Per-line match detail
@@ -85,17 +83,20 @@ impl MatchEngine {
             // When receiving data exists, use received_qty as the quantity
             // baseline instead of the PO ordered quantity. This prevents
             // auto-approving invoices for goods that haven't been received.
-            let qty_baseline = if has_receiving { received_qty } else { po_line.quantity };
+            let qty_baseline = if has_receiving {
+                received_qty
+            } else {
+                po_line.quantity
+            };
 
             match inv_match {
                 Some((idx, il)) => {
                     let qty_var = variance_pct(qty_baseline, il.quantity);
-                    let price_var = variance_pct(
-                        po_line.unit_price.amount as f64,
-                        il.unit_price_cents as f64,
-                    );
+                    let price_var =
+                        variance_pct(po_line.unit_price.amount as f64, il.unit_price_cents as f64);
 
-                    let line_match = classify_line(qty_var, price_var, il.quantity, qty_baseline, tolerances);
+                    let line_match =
+                        classify_line(qty_var, price_var, il.quantity, qty_baseline, tolerances);
 
                     line_details.push(LineMatchDetail {
                         po_line_number: po_line.line_number,
@@ -125,8 +126,12 @@ impl MatchEngine {
             .collect();
 
         // Determine overall match type
-        let (overall_match, overall_price_var, overall_qty_var) =
-            classify_overall(&line_details, &unmatched_po_lines, &unmatched_invoice_lines, tolerances);
+        let (overall_match, overall_price_var, overall_qty_var) = classify_overall(
+            &line_details,
+            &unmatched_po_lines,
+            &unmatched_invoice_lines,
+            tolerances,
+        );
 
         MatchOutput {
             match_type: overall_match,
@@ -150,8 +155,7 @@ fn find_invoice_line<'a>(
     // Try product_id match first
     if let Some(ref po_product) = po_line.product_id {
         if let Some((idx, il)) = invoice_lines.iter().enumerate().find(|(i, il)| {
-            !matched_indices.contains(i)
-                && il.product_id.as_deref() == Some(po_product.as_str())
+            !matched_indices.contains(i) && il.product_id.as_deref() == Some(po_product.as_str())
         }) {
             return Some((idx, il));
         }
@@ -188,9 +192,7 @@ fn classify_line(
         return MatchType::OverBilled;
     }
 
-    if qty_var <= tolerances.quantity_variance_pct
-        && price_var <= tolerances.price_variance_pct
-    {
+    if qty_var <= tolerances.quantity_variance_pct && price_var <= tolerances.price_variance_pct {
         MatchType::Full
     } else {
         MatchType::Partial
@@ -214,19 +216,28 @@ fn classify_overall(
     let avg_price_var = if line_details.is_empty() {
         0.0
     } else {
-        line_details.iter().map(|d| d.price_variance_pct).sum::<f64>()
+        line_details
+            .iter()
+            .map(|d| d.price_variance_pct)
+            .sum::<f64>()
             / line_details.len() as f64
     };
 
     let avg_qty_var = if line_details.is_empty() {
         0.0
     } else {
-        line_details.iter().map(|d| d.quantity_variance_pct).sum::<f64>()
+        line_details
+            .iter()
+            .map(|d| d.quantity_variance_pct)
+            .sum::<f64>()
             / line_details.len() as f64
     };
 
     // Check if any line is over-billed
-    if line_details.iter().any(|d| d.line_match == MatchType::OverBilled) {
+    if line_details
+        .iter()
+        .any(|d| d.line_match == MatchType::OverBilled)
+    {
         return (MatchType::OverBilled, avg_price_var, avg_qty_var);
     }
 
@@ -262,7 +273,12 @@ mod tests {
         }
     }
 
-    fn make_inv_line(num: u32, qty: f64, price_cents: i64, product_id: Option<&str>) -> InvoiceLineForMatch {
+    fn make_inv_line(
+        num: u32,
+        qty: f64,
+        price_cents: i64,
+        product_id: Option<&str>,
+    ) -> InvoiceLineForMatch {
         InvoiceLineForMatch {
             line_number: num,
             quantity: qty,

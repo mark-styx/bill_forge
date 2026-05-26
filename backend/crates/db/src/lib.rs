@@ -32,20 +32,23 @@
 #![allow(dead_code)]
 
 pub mod manager;
-pub mod pg_manager;
-pub mod migrations;
-pub mod tenant_db;
 pub mod metadata_db;
+pub mod migrations;
+pub mod pg_manager;
 pub mod repositories;
 pub mod routing_repository;
-pub mod storage;
 pub mod seed;
+pub mod storage;
+pub mod tenant_db;
 
 pub use manager::DatabaseManager;
-pub use pg_manager::PgManager;
 pub use metadata_db::MetadataDatabase;
-pub use storage::{LocalStorageService, DocumentRepositoryImpl, StorageConfig, create_storage_service, build_storage_key};
-#[cfg(feature = "s3")]
-pub use storage::S3StorageService;
+pub use pg_manager::PgManager;
 pub use repositories::{AuditRepositoryImpl, PaymentRequestRepositoryImpl, WorkflowRepositoryImpl};
 pub use routing_repository::RoutingRepository;
+#[cfg(feature = "s3")]
+pub use storage::S3StorageService;
+pub use storage::{
+    build_storage_key, create_storage_service, DocumentRepositoryImpl, LocalStorageService,
+    StorageConfig,
+};

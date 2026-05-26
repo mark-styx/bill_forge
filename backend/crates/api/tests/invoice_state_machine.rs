@@ -6,6 +6,8 @@
 //! 3. Tenant isolation: audit log query scoped to tenant A does not return tenant B rows
 //! 4. Atomicity: simulated failure after status update rolls back audit insert
 
+#![allow(warnings)]
+
 use billforge_core::TenantId;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -67,22 +69,16 @@ async fn insert_invoice(
 
 /// Read the status column for an invoice.
 async fn read_status(pool: &sqlx::PgPool, invoice_id: Uuid) -> String {
-    let row: (String,) = sqlx::query_as(
-        "SELECT status FROM invoices WHERE id = $1",
-    )
-    .bind(invoice_id)
-    .fetch_one(pool)
-    .await
-    .expect("read invoice status");
+    let row: (String,) = sqlx::query_as("SELECT status FROM invoices WHERE id = $1")
+        .bind(invoice_id)
+        .fetch_one(pool)
+        .await
+        .expect("read invoice status");
     row.0
 }
 
 /// Count audit log rows for a specific invoice + tenant.
-async fn count_audit_rows(
-    pool: &sqlx::PgPool,
-    tenant_id: &TenantId,
-    invoice_id: Uuid,
-) -> i64 {
+async fn count_audit_rows(pool: &sqlx::PgPool, tenant_id: &TenantId, invoice_id: Uuid) -> i64 {
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM invoice_audit_log WHERE tenant_id = $1 AND invoice_id = $2",
     )
@@ -99,8 +95,20 @@ async fn read_latest_audit(
     pool: &sqlx::PgPool,
     tenant_id: &TenantId,
     invoice_id: Uuid,
-) -> Option<(Option<Uuid>, Option<String>, String, String, serde_json::Value)> {
-    let row: Option<(Option<Uuid>, Option<String>, String, String, serde_json::Value)> = sqlx::query_as(
+) -> Option<(
+    Option<Uuid>,
+    Option<String>,
+    String,
+    String,
+    serde_json::Value,
+)> {
+    let row: Option<(
+        Option<Uuid>,
+        Option<String>,
+        String,
+        String,
+        serde_json::Value,
+    )> = sqlx::query_as(
         r#"SELECT actor_id, from_status, to_status, event_type, metadata
            FROM invoice_audit_log
            WHERE tenant_id = $1 AND invoice_id = $2

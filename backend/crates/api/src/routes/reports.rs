@@ -4,13 +4,13 @@ use crate::error::ApiResult;
 use crate::extractors::{AuthUser, ReportingAccess, TenantCtx};
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State, Path},
-    routing::{get, post, delete},
+    extract::{Path, Query, State},
+    routing::{delete, get},
     Json, Router,
 };
+use billforge_reporting::DashboardSummary;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use billforge_reporting::DashboardSummary;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -31,6 +31,8 @@ pub fn routes() -> Router<AppState> {
         .route("/categories/breakdown", get(category_breakdown))
         .route("/vendors/performance", get(vendor_performance))
         .route("/approvals/analytics", get(approval_analytics))
+        .route("/approvals/sla", get(approval_sla))
+        .route("/cash-flow/obligations", get(cash_flow_obligations))
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
         .route("/digests/:id", delete(delete_digest))
@@ -47,7 +49,9 @@ async fn dashboard_summary(
 
     // Use reporting service
     let reporting_service = billforge_reporting::ReportingService::new();
-    let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
+    let summary = reporting_service
+        .get_dashboard_summary(&tenant.tenant_id, &pool)
+        .await?;
 
     Ok(Json(summary))
 }
@@ -117,12 +121,26 @@ async fn dashboard_kpis(
 ) -> ApiResult<Json<DashboardKpis>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let row = sqlx::query_as::<_, (
-        i64, i64, i64, i64,
-        i64, i64, i64, i64, i64, i64, i64, i64,
-        serde_json::Value,
-        i64, f64,
-    )>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            serde_json::Value,
+            i64,
+            f64,
+        ),
+    >(
         r#"SELECT
             queue_count, approved_count, paid_count, rejected_count,
             aging_0_7, aging_0_7_amount,
@@ -138,11 +156,13 @@ async fn dashboard_kpis(
     .bind(*tenant.tenant_id.as_uuid())
     .fetch_optional(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to query dashboard_kpis_mv: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to query dashboard_kpis_mv: {}", e))
+    })?;
 
     let kpis = if let Some(row) = row {
-        let spend_by_vendor: Vec<VendorSpendEntry> = serde_json::from_value(row.12)
-            .unwrap_or_default();
+        let spend_by_vendor: Vec<VendorSpendEntry> =
+            serde_json::from_value(row.12).unwrap_or_default();
         DashboardKpis {
             queue_count: row.0,
             approved_count: row.1,
@@ -212,27 +232,34 @@ async fn invoices_by_vendor(
     let reporting_service = billforge_reporting::ReportingService::new();
 
     // Parse date range (default to last 30 days if not provided)
-    let end_date = query.end_date
+    let end_date = query
+        .end_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
         .unwrap_or_else(|| chrono::Utc::now().naive_utc().date());
-    let start_date = query.start_date
+    let start_date = query
+        .start_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
         .unwrap_or_else(|| end_date - chrono::Duration::days(30));
 
-    let vendor_spend = reporting_service.get_vendor_spend(
-        &tenant.tenant_id,
-        &pool,
-        Some(start_date),
-        Some(end_date),
-        100, // limit
-    ).await?;
+    let vendor_spend = reporting_service
+        .get_vendor_spend(
+            &tenant.tenant_id,
+            &pool,
+            Some(start_date),
+            Some(end_date),
+            100, // limit
+        )
+        .await?;
 
-    let result: Vec<InvoicesByVendor> = vendor_spend.into_iter().map(|vs| InvoicesByVendor {
-        vendor_id: vs.vendor_id,
-        vendor_name: vs.vendor_name,
-        invoice_count: vs.invoice_count,
-        total_amount: vs.total_spend,
-    }).collect();
+    let result: Vec<InvoicesByVendor> = vendor_spend
+        .into_iter()
+        .map(|vs| InvoicesByVendor {
+            vendor_id: vs.vendor_id,
+            vendor_name: vs.vendor_name,
+            invoice_count: vs.invoice_count,
+            total_amount: vs.total_spend,
+        })
+        .collect();
 
     Ok(Json(result))
 }
@@ -253,13 +280,18 @@ async fn invoices_by_status(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let status_dist = reporting_service.get_status_distribution(&tenant.tenant_id, &pool).await?;
+    let status_dist = reporting_service
+        .get_status_distribution(&tenant.tenant_id, &pool)
+        .await?;
 
-    let result: Vec<InvoicesByStatus> = status_dist.into_iter().map(|sd| InvoicesByStatus {
-        status: sd.status,
-        count: sd.count,
-        total_amount: sd.total_amount,
-    }).collect();
+    let result: Vec<InvoicesByStatus> = status_dist
+        .into_iter()
+        .map(|sd| InvoicesByStatus {
+            status: sd.status,
+            count: sd.count,
+            total_amount: sd.total_amount,
+        })
+        .collect();
 
     Ok(Json(result))
 }
@@ -279,13 +311,18 @@ async fn invoice_aging(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let aging_data = reporting_service.get_invoice_aging(&tenant.tenant_id, &pool).await?;
+    let aging_data = reporting_service
+        .get_invoice_aging(&tenant.tenant_id, &pool)
+        .await?;
 
-    let result: Vec<AgingBucket> = aging_data.into_iter().map(|ab| AgingBucket {
-        bucket: ab.bucket_name,
-        count: ab.invoice_count,
-        total_amount: ab.total_amount,
-    }).collect();
+    let result: Vec<AgingBucket> = aging_data
+        .into_iter()
+        .map(|ab| AgingBucket {
+            bucket: ab.bucket_name,
+            count: ab.invoice_count,
+            total_amount: ab.total_amount,
+        })
+        .collect();
 
     Ok(Json(result))
 }
@@ -309,27 +346,25 @@ async fn vendor_spend(
     let reporting_service = billforge_reporting::ReportingService::new();
 
     // Get all vendors with their spend data
-    let vendor_spend = reporting_service.get_vendor_spend(
-        &tenant.tenant_id,
-        &pool,
-        None,
-        None,
-        100, // limit
-    ).await?;
+    let vendor_spend = reporting_service
+        .get_vendor_spend(
+            &tenant.tenant_id,
+            &pool,
+            None,
+            None,
+            100, // limit
+        )
+        .await?;
 
     // Get YTD spend for each vendor
-    let ytd_spend = reporting_service.get_vendor_spend_ytd(
-        &tenant.tenant_id,
-        &pool,
-        100,
-    ).await?;
+    let ytd_spend = reporting_service
+        .get_vendor_spend_ytd(&tenant.tenant_id, &pool, 100)
+        .await?;
 
     // Get MTD spend for each vendor
-    let mtd_spend = reporting_service.get_vendor_spend_mtd(
-        &tenant.tenant_id,
-        &pool,
-        100,
-    ).await?;
+    let mtd_spend = reporting_service
+        .get_vendor_spend_mtd(&tenant.tenant_id, &pool, 100)
+        .await?;
 
     // Build lookup maps for YTD and MTD
     let ytd_map: std::collections::HashMap<String, f64> = ytd_spend
@@ -343,13 +378,16 @@ async fn vendor_spend(
         .collect();
 
     // Combine data
-    let result: Vec<VendorSpend> = vendor_spend.into_iter().map(|vs| VendorSpend {
-        vendor_id: vs.vendor_id.clone(),
-        vendor_name: vs.vendor_name,
-        ytd_spend: ytd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
-        mtd_spend: mtd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
-        invoice_count: vs.invoice_count,
-    }).collect();
+    let result: Vec<VendorSpend> = vendor_spend
+        .into_iter()
+        .map(|vs| VendorSpend {
+            vendor_id: vs.vendor_id.clone(),
+            vendor_name: vs.vendor_name,
+            ytd_spend: ytd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
+            mtd_spend: mtd_map.get(&vs.vendor_id).copied().unwrap_or(0.0),
+            invoice_count: vs.invoice_count,
+        })
+        .collect();
 
     Ok(Json(result))
 }
@@ -372,13 +410,19 @@ async fn workflow_metrics(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let metrics = reporting_service.get_processing_metrics(&tenant.tenant_id, &pool).await?;
+    let metrics = reporting_service
+        .get_processing_metrics(&tenant.tenant_id, &pool)
+        .await?;
 
     // Get invoices processed today from dashboard summary
-    let summary = reporting_service.get_dashboard_summary(&tenant.tenant_id, &pool).await?;
+    let summary = reporting_service
+        .get_dashboard_summary(&tenant.tenant_id, &pool)
+        .await?;
 
     // Get invoices processed this week
-    let invoices_this_week = reporting_service.get_invoices_processed_this_week(&tenant.tenant_id, &pool).await?;
+    let invoices_this_week = reporting_service
+        .get_invoices_processed_this_week(&tenant.tenant_id, &pool)
+        .await?;
 
     Ok(Json(WorkflowMetrics {
         avg_processing_time_hours: metrics.avg_total_processing_time_hours,
@@ -422,16 +466,19 @@ async fn custom_report(
                 });
 
                 // Extract filters array
-                let filters = json.get("filters")
+                let filters = json
+                    .get("filters")
                     .and_then(|f| f.as_array())
                     .map(|arr| {
-                        arr.iter().filter_map(|filter| {
-                            Some(billforge_reporting::ReportFilter {
-                                field: filter.get("field")?.as_str()?.to_string(),
-                                operator: filter.get("operator")?.as_str()?.to_string(),
-                                value: filter.get("value")?.clone(),
+                        arr.iter()
+                            .filter_map(|filter| {
+                                Some(billforge_reporting::ReportFilter {
+                                    field: filter.get("field")?.as_str()?.to_string(),
+                                    operator: filter.get("operator")?.as_str()?.to_string(),
+                                    value: filter.get("value")?.clone(),
+                                })
                             })
-                        }).collect()
+                            .collect()
                     })
                     .unwrap_or_default();
 
@@ -453,7 +500,9 @@ async fn custom_report(
         limit: None,
     };
 
-    let result = reporting_service.execute_custom_report(&tenant.tenant_id, &pool, report_query).await?;
+    let result = reporting_service
+        .execute_custom_report(&tenant.tenant_id, &pool, report_query)
+        .await?;
 
     // Convert CustomReportResult to JSON
     Ok(Json(serde_json::json!({
@@ -480,20 +529,22 @@ async fn spend_trends(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let start_date = chrono::NaiveDate::parse_from_str(&query.start_date, "%Y-%m-%d")
-        .map_err(|_| billforge_core::Error::Validation("Invalid start_date format. Use YYYY-MM-DD".to_string()))?;
-    let end_date = chrono::NaiveDate::parse_from_str(&query.end_date, "%Y-%m-%d")
-        .map_err(|_| billforge_core::Error::Validation("Invalid end_date format. Use YYYY-MM-DD".to_string()))?;
+    let start_date =
+        chrono::NaiveDate::parse_from_str(&query.start_date, "%Y-%m-%d").map_err(|_| {
+            billforge_core::Error::Validation(
+                "Invalid start_date format. Use YYYY-MM-DD".to_string(),
+            )
+        })?;
+    let end_date =
+        chrono::NaiveDate::parse_from_str(&query.end_date, "%Y-%m-%d").map_err(|_| {
+            billforge_core::Error::Validation("Invalid end_date format. Use YYYY-MM-DD".to_string())
+        })?;
 
     let group_by = query.group_by.as_deref().unwrap_or("month");
 
-    let trends = reporting_service.get_spend_trends(
-        &tenant.tenant_id,
-        &pool,
-        start_date,
-        end_date,
-        group_by,
-    ).await?;
+    let trends = reporting_service
+        .get_spend_trends(&tenant.tenant_id, &pool, start_date, end_date, group_by)
+        .await?;
 
     Ok(Json(trends))
 }
@@ -514,18 +565,22 @@ async fn category_breakdown(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let start_date = query.start_date
+    let start_date = query
+        .start_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-    let end_date = query.end_date
+    let end_date = query
+        .end_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
 
-    let breakdown = reporting_service.get_category_breakdown(
-        &tenant.tenant_id,
-        &pool,
-        &query.category_type,
-        start_date,
-        end_date,
-    ).await?;
+    let breakdown = reporting_service
+        .get_category_breakdown(
+            &tenant.tenant_id,
+            &pool,
+            &query.category_type,
+            start_date,
+            end_date,
+        )
+        .await?;
 
     Ok(Json(breakdown))
 }
@@ -546,11 +601,9 @@ async fn vendor_performance(
 
     let limit = query.limit.unwrap_or(50);
 
-    let performance = reporting_service.get_vendor_performance(
-        &tenant.tenant_id,
-        &pool,
-        limit,
-    ).await?;
+    let performance = reporting_service
+        .get_vendor_performance(&tenant.tenant_id, &pool, limit)
+        .await?;
 
     Ok(Json(performance))
 }
@@ -570,19 +623,193 @@ async fn approval_analytics(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let start_date = query.start_date
+    let start_date = query
+        .start_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-    let end_date = query.end_date
+    let end_date = query
+        .end_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
 
-    let analytics = reporting_service.get_approval_analytics(
-        &tenant.tenant_id,
-        &pool,
-        start_date,
-        end_date,
-    ).await?;
+    let analytics = reporting_service
+        .get_approval_analytics(&tenant.tenant_id, &pool, start_date, end_date)
+        .await?;
 
     Ok(Json(analytics))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApprovalSlaItem {
+    pub invoice_id: Uuid,
+    pub invoice_number: String,
+    pub vendor_name: String,
+    pub amount_cents: i64,
+    pub currency: String,
+    pub approval_id: Uuid,
+    pub hours_waiting: f64,
+    pub sla_hours: i32,
+    pub sla_state: String,
+    pub approver_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApprovalSlaSummary {
+    pub pending_count: i64,
+    pub near_breach_count: i64,
+    pub breached_count: i64,
+    pub items: Vec<ApprovalSlaItem>,
+}
+
+#[utoipa::path(get, path = "/api/v1/reports/approvals/sla", tag = "Reports", responses((status = 200, description = "Approval SLA tracking")))]
+async fn approval_sla(
+    State(state): State<AppState>,
+    ReportingAccess(_user, tenant): ReportingAccess,
+) -> ApiResult<Json<ApprovalSlaSummary>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let rows = sqlx::query_as::<_, (Uuid, String, String, i64, String, Uuid, f64, Option<String>)>(
+        r#"
+        SELECT
+            i.id,
+            i.invoice_number,
+            i.vendor_name,
+            i.total_amount_cents,
+            i.currency,
+            ar.id,
+            EXTRACT(EPOCH FROM (NOW() - ar.created_at)) / 3600.0 AS hours_waiting,
+            u.name AS approver_name
+        FROM approval_requests ar
+        JOIN invoices i ON i.id = ar.invoice_id
+        LEFT JOIN users u ON u.id = ar.responded_by
+        WHERE ar.tenant_id = $1 AND ar.status = 'pending'
+        ORDER BY ar.created_at ASC
+        LIMIT 100
+        "#,
+    )
+    .bind(tenant.tenant_id.as_str())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to query approval SLA data: {}", e))
+    })?;
+
+    let default_sla_hours = 24;
+    let near_breach_hours = (default_sla_hours as f64) * 0.8;
+    let items: Vec<ApprovalSlaItem> = rows
+        .into_iter()
+        .map(|row| {
+            let sla_state = if row.6 >= default_sla_hours as f64 {
+                "breached"
+            } else if row.6 >= near_breach_hours {
+                "near_breach"
+            } else {
+                "within_sla"
+            };
+            ApprovalSlaItem {
+                invoice_id: row.0,
+                invoice_number: row.1,
+                vendor_name: row.2,
+                amount_cents: row.3,
+                currency: row.4,
+                approval_id: row.5,
+                hours_waiting: row.6,
+                sla_hours: default_sla_hours,
+                sla_state: sla_state.to_string(),
+                approver_name: row.7,
+            }
+        })
+        .collect();
+
+    let near_breach_count = items
+        .iter()
+        .filter(|item| item.sla_state == "near_breach")
+        .count() as i64;
+    let breached_count = items
+        .iter()
+        .filter(|item| item.sla_state == "breached")
+        .count() as i64;
+
+    Ok(Json(ApprovalSlaSummary {
+        pending_count: items.len() as i64,
+        near_breach_count,
+        breached_count,
+        items,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct CashFlowObligation {
+    pub invoice_id: Uuid,
+    pub invoice_number: String,
+    pub vendor_name: String,
+    pub due_date: Option<chrono::NaiveDate>,
+    pub projected_payment_date: Option<chrono::NaiveDate>,
+    pub amount_cents: i64,
+    pub currency: String,
+    pub processing_status: String,
+    pub late_risk: bool,
+}
+
+#[utoipa::path(get, path = "/api/v1/reports/cash-flow/obligations", tag = "Reports", responses((status = 200, description = "Cash-flow obligations")))]
+async fn cash_flow_obligations(
+    State(state): State<AppState>,
+    ReportingAccess(_user, tenant): ReportingAccess,
+) -> ApiResult<Json<Vec<CashFlowObligation>>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let rows = sqlx::query_as::<_, (
+        Uuid,
+        String,
+        String,
+        Option<chrono::NaiveDate>,
+        i64,
+        String,
+        String,
+    )>(
+        r#"
+        SELECT
+            id,
+            invoice_number,
+            vendor_name,
+            due_date,
+            total_amount_cents,
+            currency,
+            processing_status
+        FROM invoices
+        WHERE tenant_id = $1
+          AND processing_status IN ('submitted', 'pending_approval', 'approved', 'ready_for_payment')
+        ORDER BY due_date NULLS LAST, vendor_name ASC
+        LIMIT 250
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query cash-flow obligations: {}", e)))?;
+
+    let today = chrono::Utc::now().date_naive();
+    let obligations = rows
+        .into_iter()
+        .map(|row| {
+            let projected_payment_date = match row.6.as_str() {
+                "approved" | "ready_for_payment" => row.3,
+                "pending_approval" => row
+                    .3
+                    .map(|date| date.max(today + chrono::Duration::days(1))),
+                _ => row.3,
+            };
+            CashFlowObligation {
+                invoice_id: row.0,
+                invoice_number: row.1,
+                vendor_name: row.2,
+                due_date: row.3,
+                projected_payment_date,
+                amount_cents: row.4,
+                currency: row.5,
+                processing_status: row.6,
+                late_risk: row.3.map(|date| date < today).unwrap_or(false),
+            }
+        })
+        .collect();
+
+    Ok(Json(obligations))
 }
 
 #[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]
@@ -594,7 +821,9 @@ async fn list_digests(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let digests = reporting_service.list_user_digests(&tenant.tenant_id, &pool, user.user_id.0).await?;
+    let digests = reporting_service
+        .list_user_digests(&tenant.tenant_id, &pool, user.user_id.0)
+        .await?;
 
     Ok(Json(digests))
 }
@@ -609,7 +838,9 @@ async fn create_digest(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    let digest = reporting_service.upsert_digest(&tenant.tenant_id, &pool, user.user_id.0, request).await?;
+    let digest = reporting_service
+        .upsert_digest(&tenant.tenant_id, &pool, user.user_id.0, request)
+        .await?;
 
     Ok(Json(digest))
 }
@@ -624,7 +855,9 @@ async fn delete_digest(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
 
-    reporting_service.delete_digest(&tenant.tenant_id, &pool, user.user_id.0, digest_id).await?;
+    reporting_service
+        .delete_digest(&tenant.tenant_id, &pool, user.user_id.0, digest_id)
+        .await?;
 
     Ok(())
 }

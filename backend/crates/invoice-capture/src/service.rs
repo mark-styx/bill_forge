@@ -2,13 +2,28 @@
 
 use crate::ocr;
 use billforge_core::{
-    domain::{CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, OcrExtractionResult},
+    domain::{
+        CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, OcrExtractionResult,
+    },
     traits::{InvoiceRepository, OcrService, StorageService},
-    types::{Money, TenantId, UserId},
+    types::{Money, TenantId, TenantSettings, UserId},
     Result,
 };
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// OCR confidence required before an invoice can continue through straight-through processing.
+pub const OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD: f32 = 0.90;
+pub const LOCAL_OCR_PROVIDER: &str = "tesseract";
+
+/// Resolve the OCR provider for a tenant, enforcing local-only privacy settings.
+pub fn resolve_ocr_provider_name(global_provider: &str, settings: &TenantSettings) -> String {
+    if settings.features.local_ocr_required {
+        LOCAL_OCR_PROVIDER.to_string()
+    } else {
+        global_provider.to_string()
+    }
+}
 
 /// Service for capturing and processing invoices
 pub struct InvoiceCaptureService {
@@ -96,14 +111,8 @@ impl InvoiceCaptureService {
             invoice_date: ocr_result.invoice_date.value,
             due_date: ocr_result.due_date.value,
             po_number: ocr_result.po_number.value.clone(),
-            subtotal: ocr_result
-                .subtotal
-                .value
-                .map(Money::usd),
-            tax_amount: ocr_result
-                .tax_amount
-                .value
-                .map(Money::usd),
+            subtotal: ocr_result.subtotal.value.map(Money::usd),
+            tax_amount: ocr_result.tax_amount.value.map(Money::usd),
             total_amount: Money::usd(ocr_result.total_amount.value.unwrap_or(0.0)),
             currency: ocr_result
                 .currency
@@ -114,11 +123,7 @@ impl InvoiceCaptureService {
                 .line_items
                 .iter()
                 .map(|item| CreateLineItemInput {
-                    description: item
-                        .description
-                        .value
-                        .clone()
-                        .unwrap_or_default(),
+                    description: item.description.value.clone().unwrap_or_default(),
                     quantity: item.quantity.value,
                     unit_price: item.unit_price.value.map(Money::usd),
                     amount: Money::usd(item.amount.value.unwrap_or(0.0)),
@@ -135,7 +140,9 @@ impl InvoiceCaptureService {
             tags: Vec::new(),
         };
 
-        self.invoice_repo.create(tenant_id, input, Some(user_id)).await
+        self.invoice_repo
+            .create(tenant_id, input, Some(user_id))
+            .await
     }
 
     /// Calculate overall confidence score from OCR result
@@ -168,7 +175,10 @@ impl InvoiceCaptureService {
             })?;
 
         // Download the document
-        let document_bytes = self.storage.download(tenant_id, invoice.document_id).await?;
+        let document_bytes = self
+            .storage
+            .download(tenant_id, invoice.document_id)
+            .await?;
 
         // Update status
         self.invoice_repo
@@ -181,9 +191,15 @@ impl InvoiceCaptureService {
             .extract(&document_bytes, "application/pdf")
             .await?;
 
-        // Update status
+        let confidence = self.calculate_confidence(&ocr_result);
+        let status = if confidence < 0.3 {
+            CaptureStatus::Failed
+        } else {
+            CaptureStatus::ReadyForReview
+        };
+
         self.invoice_repo
-            .update_capture_status(tenant_id, invoice_id, CaptureStatus::ReadyForReview)
+            .update_capture_status(tenant_id, invoice_id, status)
             .await?;
 
         Ok(ocr_result)

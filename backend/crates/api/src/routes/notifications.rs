@@ -73,11 +73,17 @@ async fn install_slack(
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
     // Generate authorization URL
-    let client_id = std::env::var("SLACK_CLIENT_ID")
-        .map_err(|_| ApiError(billforge_core::Error::Validation("SLACK_CLIENT_ID not configured".to_string())))?;
+    let client_id = std::env::var("SLACK_CLIENT_ID").map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_CLIENT_ID not configured".to_string(),
+        ))
+    })?;
 
-    let redirect_uri = std::env::var("SLACK_REDIRECT_URI")
-        .map_err(|_| ApiError(billforge_core::Error::Validation("SLACK_REDIRECT_URI not configured".to_string())))?;
+    let redirect_uri = std::env::var("SLACK_REDIRECT_URI").map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_REDIRECT_URI not configured".to_string(),
+        ))
+    })?;
 
     let authorize_url = format!(
         "https://slack.com/oauth/v2/authorize?client_id={}&scope=chat:write,users:read,im:write&redirect_uri={}&state={}",
@@ -125,7 +131,11 @@ async fn slack_callback(
     .fetch_optional(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?
-    .ok_or_else(|| ApiError(billforge_core::Error::Validation("Invalid or expired OAuth state".to_string())))?;
+    .ok_or_else(|| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid or expired OAuth state".to_string(),
+        ))
+    })?;
 
     // Mark state as used
     sqlx::query!(
@@ -141,14 +151,23 @@ async fn slack_callback(
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
     // Exchange code for tokens
-    let client_id = std::env::var("SLACK_CLIENT_ID")
-        .map_err(|_| ApiError(billforge_core::Error::Validation("SLACK_CLIENT_ID not configured".to_string())))?;
+    let client_id = std::env::var("SLACK_CLIENT_ID").map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_CLIENT_ID not configured".to_string(),
+        ))
+    })?;
 
-    let client_secret = std::env::var("SLACK_CLIENT_SECRET")
-        .map_err(|_| ApiError(billforge_core::Error::Validation("SLACK_CLIENT_SECRET not configured".to_string())))?;
+    let client_secret = std::env::var("SLACK_CLIENT_SECRET").map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_CLIENT_SECRET not configured".to_string(),
+        ))
+    })?;
 
-    let redirect_uri = std::env::var("SLACK_REDIRECT_URI")
-        .map_err(|_| ApiError(billforge_core::Error::Validation("SLACK_REDIRECT_URI not configured".to_string())))?;
+    let redirect_uri = std::env::var("SLACK_REDIRECT_URI").map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_REDIRECT_URI not configured".to_string(),
+        ))
+    })?;
 
     let http_client = reqwest::Client::new();
     let response = http_client
@@ -161,18 +180,19 @@ async fn slack_callback(
         ])
         .send()
         .await
-        .map_err(|e| ApiError(billforge_core::Error::ExternalService {
-            service: "Slack".to_string(),
-            message: format!("OAuth failed: {}", e)
-        }))?;
+        .map_err(|e| {
+            ApiError(billforge_core::Error::ExternalService {
+                service: "Slack".to_string(),
+                message: format!("OAuth failed: {}", e),
+            })
+        })?;
 
-    let oauth_response: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| ApiError(billforge_core::Error::ExternalService {
+    let oauth_response: serde_json::Value = response.json().await.map_err(|e| {
+        ApiError(billforge_core::Error::ExternalService {
             service: "Slack".to_string(),
-            message: format!("Failed to parse response: {}", e)
-        }))?;
+            message: format!("Failed to parse response: {}", e),
+        })
+    })?;
 
     if !oauth_response["ok"].as_bool().unwrap_or(false) {
         return Err(ApiError(billforge_core::Error::Validation(format!(
@@ -186,7 +206,9 @@ async fn slack_callback(
     let slack_user_id = oauth_response["authed_user"]["id"].as_str().unwrap_or("");
     let bot_user_id = oauth_response["bot_user_id"].as_str().unwrap_or("");
     let access_token = oauth_response["access_token"].as_str().unwrap_or("");
-    let bot_access_token = oauth_response["authed_user"]["access_token"].as_str().unwrap_or("");
+    let bot_access_token = oauth_response["authed_user"]["access_token"]
+        .as_str()
+        .unwrap_or("");
     let scope = oauth_response["scope"].as_str().unwrap_or("");
 
     // Store connection in database
@@ -248,8 +270,13 @@ async fn configure_teams(
     Json(json): Json<ConfigureTeamsRequest>,
 ) -> ApiResult<Json<ConfigureTeamsResponse>> {
     // Validate webhook URL format
-    if !json.webhook_url.starts_with("https://outlook.office.com/webhook/") {
-        return Err(ApiError(billforge_core::Error::Validation("Invalid Teams webhook URL".to_string())));
+    if !json
+        .webhook_url
+        .starts_with("https://outlook.office.com/webhook/")
+    {
+        return Err(ApiError(billforge_core::Error::Validation(
+            "Invalid Teams webhook URL".to_string(),
+        )));
     }
 
     let webhook_id = Uuid::new_v4();
@@ -361,8 +388,10 @@ async fn update_notification_preferences(
         json.enabled,
         json.notification_types.as_deref().unwrap_or(&[]),
         json.priority_filter,
-        json.quiet_hours_start.and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
-        json.quiet_hours_end.and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
+        json.quiet_hours_start
+            .and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
+        json.quiet_hours_end
+            .and_then(|s| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S").ok()),
         json.quiet_hours_timezone,
     )
     .execute(&*state.db.metadata())

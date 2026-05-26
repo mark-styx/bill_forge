@@ -41,7 +41,9 @@ fn access_token_round_trip() {
     let token = svc
         .create_access_token(&uid, &tid, email, &roles)
         .expect("create_access_token");
-    let claims: Claims = svc.validate_access_token(&token).expect("validate_access_token");
+    let claims: Claims = svc
+        .validate_access_token(&token)
+        .expect("validate_access_token");
 
     assert_eq!(claims.sub, uid.to_string());
     assert_eq!(claims.tenant_id, tid.as_str());
@@ -64,7 +66,9 @@ fn refresh_token_round_trip() {
     let token = svc
         .create_refresh_token(&uid, &tid)
         .expect("create_refresh_token");
-    let claims = svc.validate_refresh_token(&token).expect("validate_refresh_token");
+    let claims = svc
+        .validate_refresh_token(&token)
+        .expect("validate_refresh_token");
 
     assert_eq!(claims.sub, uid.to_string());
     assert_eq!(claims.tenant_id, tid.as_str());
@@ -131,7 +135,14 @@ fn tampered_signature_rejected() {
 
     // Flip a byte near the end of the token (the signature segment).
     let last = token.len() - 1;
-    token.replace_range(last.., if token.as_bytes()[last] == b'A' { "B" } else { "A" });
+    token.replace_range(
+        last..,
+        if token.as_bytes()[last] == b'A' {
+            "B"
+        } else {
+            "A"
+        },
+    );
 
     let err = svc
         .validate_access_token(&token)

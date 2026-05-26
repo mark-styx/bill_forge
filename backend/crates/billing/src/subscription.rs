@@ -1,7 +1,7 @@
 //! Subscription management
 
 use billforge_core::TenantId;
-use chrono::{Datelike, DateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,6 +46,7 @@ impl BillingCycle {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "monthly" => Ok(BillingCycle::Monthly),
@@ -85,6 +86,7 @@ impl SubscriptionStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "active" => Ok(SubscriptionStatus::Active),
@@ -146,11 +148,16 @@ impl Subscription {
         // Anchor to start of current month so usage queries include invoices
         // that already exist (rather than only future invoices).
         let period_start = now
-            .with_day(1).unwrap()
-            .with_hour(0).unwrap()
-            .with_minute(0).unwrap()
-            .with_second(0).unwrap()
-            .with_nanosecond(0).unwrap();
+            .with_day(1)
+            .unwrap()
+            .with_hour(0)
+            .unwrap()
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
         Self {
             id: SubscriptionId::new(),
             tenant_id,

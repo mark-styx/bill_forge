@@ -10,8 +10,9 @@ use sqlx::PgPool;
 async fn main() -> Result<()> {
     dotenv::dotenv().ok();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://billforge:billforge_dev@localhost:5432/billforge_control".to_string());
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://billforge:billforge_dev@localhost:5432/billforge_control".to_string()
+    });
 
     println!("🔌 Connecting to database...");
     let pool = PgPool::connect(&database_url).await?;

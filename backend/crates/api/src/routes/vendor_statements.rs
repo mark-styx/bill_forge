@@ -16,14 +16,8 @@ use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/vendors/:vendor_id/statements",
-            post(create_statement),
-        )
-        .route(
-            "/vendors/:vendor_id/statements",
-            get(list_statements),
-        )
+        .route("/vendors/:vendor_id/statements", post(create_statement))
+        .route("/vendors/:vendor_id/statements", get(list_statements))
         .route(
             "/vendors/:vendor_id/statements/:statement_id",
             get(get_statement),
@@ -78,12 +72,10 @@ async fn create_statement(
     Json(input): Json<CreateStatementInput>,
 ) -> ApiResult<Json<StatementDetailResponse>> {
     if input.vendor_id != vendor_id {
-        return Err(
-            billforge_core::Error::Validation(
-                "Vendor ID in path does not match input".to_string(),
-            )
-            .into(),
-        );
+        return Err(billforge_core::Error::Validation(
+            "Vendor ID in path does not match input".to_string(),
+        )
+        .into());
     }
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -105,7 +97,8 @@ async fn create_statement(
         .await?;
 
     let match_results = auto_match_lines(&lines, &invoices);
-    repo.apply_match_results(&tenant.tenant_id, &match_results).await?;
+    repo.apply_match_results(&tenant.tenant_id, &match_results)
+        .await?;
 
     let lines = repo.get_lines(&tenant.tenant_id, statement.id.0).await?;
     let summary = compute_reconciliation_summary(&lines);
@@ -214,7 +207,8 @@ async fn run_auto_match(
         .await?;
 
     let results = auto_match_lines(&lines, &invoices);
-    repo.apply_match_results(&tenant.tenant_id, &results).await?;
+    repo.apply_match_results(&tenant.tenant_id, &results)
+        .await?;
 
     let lines = repo.get_lines(&tenant.tenant_id, statement_id).await?;
     let summary = compute_reconciliation_summary(&lines);
@@ -257,9 +251,11 @@ async fn update_line(
         let invoice_amount = repo
             .validate_invoice_ownership(&tenant.tenant_id, invoice_id, vendor_id)
             .await?
-            .ok_or_else(|| billforge_core::Error::Validation(
-                "Matched invoice not found or does not belong to this vendor".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                billforge_core::Error::Validation(
+                    "Matched invoice not found or does not belong to this vendor".to_string(),
+                )
+            })?;
         line.amount_cents - invoice_amount
     } else {
         0

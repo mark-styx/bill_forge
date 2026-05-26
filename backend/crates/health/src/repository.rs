@@ -56,10 +56,7 @@ pub async fn save_health_score(pool: &PgPool, score: &HealthScore) -> Result<()>
 }
 
 /// Get latest health score for a tenant
-pub async fn get_health_score(
-    pool: &PgPool,
-    tenant_id: &str,
-) -> Result<Option<HealthScore>> {
+pub async fn get_health_score(pool: &PgPool, tenant_id: &str) -> Result<Option<HealthScore>> {
     let row = sqlx::query_as::<_, (String, i32, String, f64, f64, f64, f64, f64, DateTime<Utc>)>(
         r#"
         SELECT
@@ -82,24 +79,36 @@ pub async fn get_health_score(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(tenant_id, score, classification, usage_score, feature_adoption_score, error_rate_score, sentiment_score, payment_score, calculated_at)| {
-        HealthScore {
+    Ok(row.map(
+        |(
             tenant_id,
             score,
-            classification: match classification.as_str() {
-                "at_risk" => HealthClassification::AtRisk,
-                "needs_attention" => HealthClassification::NeedsAttention,
-                "healthy" => HealthClassification::Healthy,
-                _ => HealthClassification::NeedsAttention,
-            },
+            classification,
             usage_score,
             feature_adoption_score,
             error_rate_score,
             sentiment_score,
             payment_score,
             calculated_at,
-        }
-    }))
+        )| {
+            HealthScore {
+                tenant_id,
+                score,
+                classification: match classification.as_str() {
+                    "at_risk" => HealthClassification::AtRisk,
+                    "needs_attention" => HealthClassification::NeedsAttention,
+                    "healthy" => HealthClassification::Healthy,
+                    _ => HealthClassification::NeedsAttention,
+                },
+                usage_score,
+                feature_adoption_score,
+                error_rate_score,
+                sentiment_score,
+                payment_score,
+                calculated_at,
+            }
+        },
+    ))
 }
 
 /// Get all tenant health scores
@@ -123,24 +132,39 @@ pub async fn list_health_scores(pool: &PgPool) -> Result<Vec<HealthScore>> {
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|(tenant_id, score, classification, usage_score, feature_adoption_score, error_rate_score, sentiment_score, payment_score, calculated_at)| {
-        HealthScore {
-            tenant_id,
-            score,
-            classification: match classification.as_str() {
-                "at_risk" => HealthClassification::AtRisk,
-                "needs_attention" => HealthClassification::NeedsAttention,
-                "healthy" => HealthClassification::Healthy,
-                _ => HealthClassification::NeedsAttention,
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                tenant_id,
+                score,
+                classification,
+                usage_score,
+                feature_adoption_score,
+                error_rate_score,
+                sentiment_score,
+                payment_score,
+                calculated_at,
+            )| {
+                HealthScore {
+                    tenant_id,
+                    score,
+                    classification: match classification.as_str() {
+                        "at_risk" => HealthClassification::AtRisk,
+                        "needs_attention" => HealthClassification::NeedsAttention,
+                        "healthy" => HealthClassification::Healthy,
+                        _ => HealthClassification::NeedsAttention,
+                    },
+                    usage_score,
+                    feature_adoption_score,
+                    error_rate_score,
+                    sentiment_score,
+                    payment_score,
+                    calculated_at,
+                }
             },
-            usage_score,
-            feature_adoption_score,
-            error_rate_score,
-            sentiment_score,
-            payment_score,
-            calculated_at,
-        }
-    }).collect())
+        )
+        .collect())
 }
 
 /// Get historical health scores for a tenant
@@ -172,22 +196,37 @@ pub async fn get_health_score_history(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|(tenant_id, score, classification, usage_score, feature_adoption_score, error_rate_score, sentiment_score, payment_score, calculated_at)| {
-        HealthScore {
-            tenant_id,
-            score,
-            classification: match classification.as_str() {
-                "at_risk" => HealthClassification::AtRisk,
-                "needs_attention" => HealthClassification::NeedsAttention,
-                "healthy" => HealthClassification::Healthy,
-                _ => HealthClassification::NeedsAttention,
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                tenant_id,
+                score,
+                classification,
+                usage_score,
+                feature_adoption_score,
+                error_rate_score,
+                sentiment_score,
+                payment_score,
+                calculated_at,
+            )| {
+                HealthScore {
+                    tenant_id,
+                    score,
+                    classification: match classification.as_str() {
+                        "at_risk" => HealthClassification::AtRisk,
+                        "needs_attention" => HealthClassification::NeedsAttention,
+                        "healthy" => HealthClassification::Healthy,
+                        _ => HealthClassification::NeedsAttention,
+                    },
+                    usage_score,
+                    feature_adoption_score,
+                    error_rate_score,
+                    sentiment_score,
+                    payment_score,
+                    calculated_at,
+                }
             },
-            usage_score,
-            feature_adoption_score,
-            error_rate_score,
-            sentiment_score,
-            payment_score,
-            calculated_at,
-        }
-    }).collect())
+        )
+        .collect())
 }

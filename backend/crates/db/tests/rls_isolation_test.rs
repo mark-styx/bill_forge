@@ -29,8 +29,9 @@ use uuid::Uuid;
 /// Set up a single tenant database with all migrations (including 080_enable_rls).
 /// Returns the manager, tenant ID, and pool.
 async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
-    let metadata_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+    let metadata_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
+    });
     let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
 
@@ -38,13 +39,11 @@ async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
         .await
         .expect("Failed to create PgManager");
 
-    let tenant_id: TenantId = Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("rls-tenant-{tag}").as_bytes(),
-    )
-    .to_string()
-    .parse()
-    .unwrap();
+    let tenant_id: TenantId =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("rls-tenant-{tag}").as_bytes())
+            .to_string()
+            .parse()
+            .unwrap();
 
     // Cleanup previous run then create fresh
     manager.delete_tenant(&tenant_id).await.ok();
@@ -53,8 +52,7 @@ async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
         .await
         .expect("create tenant");
 
-    let pool = (*manager.tenant(&tenant_id).await.expect("pool"))
-        .clone();
+    let pool = (*manager.tenant(&tenant_id).await.expect("pool")).clone();
 
     // Run migrations so tables + RLS policies exist
     manager
@@ -156,23 +154,31 @@ async fn rls_correct_tenant_sees_own_rows() {
         .fetch_one(&pool)
         .await
         .expect("count vendors");
-    assert!(count.0 >= 1, "Should see at least 1 vendor with correct session var");
+    assert!(
+        count.0 >= 1,
+        "Should see at least 1 vendor with correct session var"
+    );
 
     // Verify user is visible
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM users")
         .fetch_one(&pool)
         .await
         .expect("count users");
-    assert!(count.0 >= 1, "Should see at least 1 user with correct session var");
+    assert!(
+        count.0 >= 1,
+        "Should see at least 1 user with correct session var"
+    );
 
     // Verify invoice is visible
-    let found: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM invoices WHERE id = $1")
-            .bind(invoice_id)
-            .fetch_optional(&pool)
-            .await
-            .expect("find invoice");
-    assert!(found.is_some(), "Invoice should be visible with correct session var");
+    let found: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM invoices WHERE id = $1")
+        .bind(invoice_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("find invoice");
+    assert!(
+        found.is_some(),
+        "Invoice should be visible with correct session var"
+    );
 
     teardown(&manager, &tenant_id).await;
 }
@@ -267,12 +273,11 @@ async fn rls_wrong_session_variable_blocks_reads() {
     );
 
     // Verify the specific invoice is not findable
-    let found: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM invoices WHERE id = $1")
-            .bind(invoice_id)
-            .fetch_optional(&pool)
-            .await
-            .expect("find invoice");
+    let found: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM invoices WHERE id = $1")
+        .bind(invoice_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("find invoice");
     assert!(
         found.is_none(),
         "Specific invoice should not be visible with wrong session var"
@@ -283,14 +288,20 @@ async fn rls_wrong_session_variable_blocks_reads() {
         .fetch_one(&pool)
         .await
         .expect("count vendors");
-    assert_eq!(count.0, 0, "Vendors should be invisible with wrong session var");
+    assert_eq!(
+        count.0, 0,
+        "Vendors should be invisible with wrong session var"
+    );
 
     // Verify users invisible
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM users")
         .fetch_one(&pool)
         .await
         .expect("count users");
-    assert_eq!(count.0, 0, "Users should be invisible with wrong session var");
+    assert_eq!(
+        count.0, 0,
+        "Users should be invisible with wrong session var"
+    );
 
     teardown(&manager, &tenant_id).await;
 }
@@ -335,9 +346,7 @@ async fn rls_insert_wrong_tenant_blocked() {
     );
     let err_msg = format!("{:?}", result.unwrap_err()).to_lowercase();
     assert!(
-        err_msg.contains("policy")
-            || err_msg.contains("violation")
-            || err_msg.contains("check"),
+        err_msg.contains("policy") || err_msg.contains("violation") || err_msg.contains("check"),
         "Error should reference RLS policy violation, got: {}",
         err_msg
     );
@@ -410,7 +419,8 @@ async fn rls_update_wrong_tenant_blocked() {
         .expect("query should succeed (but affect 0 rows)");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "UPDATE on invisible row should affect 0 rows due to RLS"
     );
 
@@ -468,7 +478,8 @@ async fn rls_delete_wrong_tenant_blocked() {
         .expect("query should succeed (but affect 0 rows)");
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "DELETE on invisible row should affect 0 rows due to RLS"
     );
 
@@ -505,30 +516,27 @@ async fn rls_policies_exist_on_core_tables() {
     let (manager, tenant_id, pool) = setup_rls_tenant("meta-check").await;
 
     // Check RLS is enabled on invoices
-    let rls_enabled: (String,) = sqlx::query_as(
-        "SELECT relrowsecurity::text FROM pg_class WHERE relname = 'invoices'"
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("check RLS on invoices");
+    let rls_enabled: (String,) =
+        sqlx::query_as("SELECT relrowsecurity::text FROM pg_class WHERE relname = 'invoices'")
+            .fetch_one(&pool)
+            .await
+            .expect("check RLS on invoices");
     assert_eq!(rls_enabled.0, "true", "RLS should be enabled on invoices");
 
     // Check RLS is enabled on users
-    let rls_enabled: (String,) = sqlx::query_as(
-        "SELECT relrowsecurity::text FROM pg_class WHERE relname = 'users'"
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("check RLS on users");
+    let rls_enabled: (String,) =
+        sqlx::query_as("SELECT relrowsecurity::text FROM pg_class WHERE relname = 'users'")
+            .fetch_one(&pool)
+            .await
+            .expect("check RLS on users");
     assert_eq!(rls_enabled.0, "true", "RLS should be enabled on users");
 
     // Check RLS is enabled on vendors
-    let rls_enabled: (String,) = sqlx::query_as(
-        "SELECT relrowsecurity::text FROM pg_class WHERE relname = 'vendors'"
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("check RLS on vendors");
+    let rls_enabled: (String,) =
+        sqlx::query_as("SELECT relrowsecurity::text FROM pg_class WHERE relname = 'vendors'")
+            .fetch_one(&pool)
+            .await
+            .expect("check RLS on vendors");
     assert_eq!(rls_enabled.0, "true", "RLS should be enabled on vendors");
 
     // Verify specific policies exist

@@ -13,9 +13,7 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{
-        AuditAction, AuditEntry, CreateInvoiceInput, InvoiceId, ResourceType, VendorId,
-    },
+    domain::{AuditAction, AuditEntry, CreateInvoiceInput, InvoiceId, ResourceType, VendorId},
     traits::{AuditService, InvoiceRepository, VendorRepository},
     types::{Money, TenantId},
     Error,
@@ -58,8 +56,8 @@ fn vendor_ctx(
     let vid_str = claims
         .vendor_id
         .ok_or_else(|| ApiError(Error::InvalidToken("Missing vendor_id claim".to_string())))?;
-    let vendor_uuid =
-        Uuid::parse_str(&vid_str).map_err(|_| ApiError(Error::InvalidToken("Invalid vendor_id".to_string())))?;
+    let vendor_uuid = Uuid::parse_str(&vid_str)
+        .map_err(|_| ApiError(Error::InvalidToken("Invalid vendor_id".to_string())))?;
     let vendor_id = VendorId(vendor_uuid);
 
     Ok((tenant_id, vendor_id))

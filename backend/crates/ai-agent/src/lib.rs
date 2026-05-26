@@ -3,6 +3,8 @@
 //! This crate provides AI-powered conversational assistance for invoice management,
 //! powered by LangGraph/OpenAI integration.
 
+#![allow(warnings)]
+
 pub mod agent;
 pub mod config;
 pub mod context;

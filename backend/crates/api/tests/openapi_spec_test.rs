@@ -3,6 +3,8 @@
 //! Verifies the generated OpenAPI spec has the correct base path
 //! and includes the expected auth and invoice route paths.
 
+#![allow(warnings)]
+
 use billforge_api::openapi::ApiDoc;
 use utoipa::OpenApi;
 
@@ -14,9 +16,12 @@ fn test_openapi_spec_is_valid_json() {
     assert!(json.is_ok(), "OpenAPI spec should serialize to valid JSON");
 
     // Also verify it parses back as a generic JSON value
-    let parsed: serde_json::Value = serde_json::from_str(&json.unwrap())
-        .expect("Serialized JSON should be parseable");
-    assert!(parsed.is_object(), "OpenAPI spec root should be a JSON object");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json.unwrap()).expect("Serialized JSON should be parseable");
+    assert!(
+        parsed.is_object(),
+        "OpenAPI spec root should be a JSON object"
+    );
 }
 
 /// Test that the server base path is /api/v1 (not /api).
@@ -26,11 +31,13 @@ fn test_openapi_base_path_is_api_v1() {
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    let servers = parsed["servers"].as_array()
+    let servers = parsed["servers"]
+        .as_array()
         .expect("servers should be an array");
     assert!(!servers.is_empty(), "servers array should not be empty");
 
-    let url = servers[0]["url"].as_str()
+    let url = servers[0]["url"]
+        .as_str()
         .expect("first server should have a url string");
     assert_eq!(
         url, "/api/v1",
@@ -45,7 +52,8 @@ fn test_openapi_contains_auth_paths() {
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    let paths = parsed["paths"].as_object()
+    let paths = parsed["paths"]
+        .as_object()
         .expect("paths should be a JSON object");
 
     let expected_paths = [
@@ -72,7 +80,8 @@ fn test_openapi_contains_invoice_paths() {
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    let paths = parsed["paths"].as_object()
+    let paths = parsed["paths"]
+        .as_object()
         .expect("paths should be a JSON object");
 
     let expected_paths = [
@@ -100,12 +109,11 @@ fn test_openapi_contains_payment_request_tag() {
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    let tags = parsed["tags"].as_array()
+    let tags = parsed["tags"]
+        .as_array()
         .expect("tags should be a JSON array");
 
-    let names: Vec<&str> = tags.iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
+    let names: Vec<&str> = tags.iter().filter_map(|t| t["name"].as_str()).collect();
 
     assert!(
         names.contains(&"Payment Requests"),
@@ -124,7 +132,8 @@ fn test_openapi_covers_all_mounted_route_groups() {
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-    let spec_paths = parsed["paths"].as_object()
+    let spec_paths = parsed["paths"]
+        .as_object()
         .expect("paths should be a JSON object");
 
     // Route groups that are documented in the OpenAPI spec.
@@ -132,32 +141,77 @@ fn test_openapi_covers_all_mounted_route_groups() {
     let documented_groups: &[(&str, &[&str])] = &[
         ("auth", &["/auth/login", "/auth/register"]),
         ("invoices", &["/invoices", "/invoices/{id}"]),
-        ("dashboard", &["/api/v1/dashboard/metrics", "/api/v1/dashboard/metrics/invoices"]),
-        ("quickbooks", &["/api/v1/quickbooks/connect", "/api/v1/quickbooks/status"]),
+        (
+            "dashboard",
+            &[
+                "/api/v1/dashboard/metrics",
+                "/api/v1/dashboard/metrics/invoices",
+            ],
+        ),
+        (
+            "quickbooks",
+            &["/api/v1/quickbooks/connect", "/api/v1/quickbooks/status"],
+        ),
         ("xero", &["/api/v1/xero/connect", "/api/v1/xero/status"]),
-        ("sage-intacct", &["/api/v1/sage-intacct/connect", "/api/v1/sage-intacct/status"]),
-        ("salesforce", &["/api/v1/salesforce/connect", "/api/v1/salesforce/status"]),
-        ("workday", &["/api/v1/workday/connect", "/api/v1/workday/status"]),
-        ("bill-com", &["/api/v1/bill-com/connect", "/api/v1/bill-com/status"]),
+        (
+            "sage-intacct",
+            &[
+                "/api/v1/sage-intacct/connect",
+                "/api/v1/sage-intacct/status",
+            ],
+        ),
+        (
+            "salesforce",
+            &["/api/v1/salesforce/connect", "/api/v1/salesforce/status"],
+        ),
+        (
+            "workday",
+            &["/api/v1/workday/connect", "/api/v1/workday/status"],
+        ),
+        (
+            "bill-com",
+            &["/api/v1/bill-com/connect", "/api/v1/bill-com/status"],
+        ),
         ("vendors", &["/api/v1/vendors", "/api/v1/vendors/{id}"]),
-        ("workflows", &["/api/v1/workflows/rules", "/api/v1/workflows/queues"]),
-        ("reports", &["/api/v1/reports/dashboard/summary", "/api/v1/reports/invoices/by-vendor"]),
+        (
+            "workflows",
+            &["/api/v1/workflows/rules", "/api/v1/workflows/queues"],
+        ),
+        (
+            "reports",
+            &[
+                "/api/v1/reports/dashboard/summary",
+                "/api/v1/reports/invoices/by-vendor",
+            ],
+        ),
         ("export", &["/api/v1/export/invoices/csv"]),
-        ("documents", &["/api/v1/documents", "/api/v1/documents/{id}"]),
+        (
+            "documents",
+            &["/api/v1/documents", "/api/v1/documents/{id}"],
+        ),
         ("audit", &["/api/v1/audit"]),
         ("sandbox", &["/api/v1/sandbox/personas"]),
         ("edi", &["/api/v1/edi/status", "/api/v1/edi/documents"]),
         ("purchase-orders", &["/api/v1/edi/purchase-orders"]),
         ("notifications", &["/api/v1/notifications/slack/install"]),
         ("predictive", &["/api/v1/analytics/predictive/forecasts"]),
-        ("mobile", &["/api/v1/mobile/dashboard", "/api/v1/mobile/devices"]),
+        (
+            "mobile",
+            &["/api/v1/mobile/dashboard", "/api/v1/mobile/devices"],
+        ),
         ("settings", &["/api/v1/settings"]),
         ("feedback", &["/api/v1/feedback"]),
-        ("theme", &["/api/v1/organization/theme", "/api/v1/user/theme"]),
+        (
+            "theme",
+            &["/api/v1/organization/theme", "/api/v1/user/theme"],
+        ),
         ("email-actions", &["/api/v1/actions/approve"]),
         ("ai", &["/api/v1/ai/chat"]),
         ("billing", &["/api/v1/billing/plans"]),
-        ("vendor-statements", &["/api/v1/vendors/{vendor_id}/statements"]),
+        (
+            "vendor-statements",
+            &["/api/v1/vendors/{vendor_id}/statements"],
+        ),
         ("payment-requests", &["/api/v1/payment-requests"]),
         ("routing", &["/api/v1/routing/workload"]),
     ];
@@ -261,7 +315,9 @@ fn test_login_response_schema_matches_auth_response_shape() {
 
     // Serialize to JSON value and collect top-level keys
     let serialized = serde_json::to_value(&sample).expect("AuthResponse should serialize");
-    let obj = serialized.as_object().expect("AuthResponse should be a JSON object");
+    let obj = serialized
+        .as_object()
+        .expect("AuthResponse should be a JSON object");
     let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
     actual_keys.sort();
 
@@ -307,7 +363,9 @@ fn test_login_response_schema_matches_auth_response_shape() {
 /// in openapi.rs and the real domain type.
 #[test]
 fn test_invoice_schema_matches_domain_invoice_shape() {
-    use billforge_core::domain::{CaptureStatus, Invoice, InvoiceLineItem, InvoiceId, ProcessingStatus};
+    use billforge_core::domain::{
+        CaptureStatus, Invoice, InvoiceId, InvoiceLineItem, ProcessingStatus,
+    };
     use billforge_core::types::{Money, TenantId, UserId};
 
     let sample = Invoice {
@@ -348,13 +406,15 @@ fn test_invoice_schema_matches_domain_invoice_shape() {
         notes: None,
         tags: vec![],
         custom_fields: serde_json::Value::Null,
-        created_by: UserId::new(),
+        created_by: Some(UserId::new()),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
 
     let serialized = serde_json::to_value(&sample).expect("Invoice should serialize");
-    let obj = serialized.as_object().expect("Invoice should be a JSON object");
+    let obj = serialized
+        .as_object()
+        .expect("Invoice should be a JSON object");
     let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
     actual_keys.sort();
 
@@ -369,7 +429,14 @@ fn test_invoice_schema_matches_domain_invoice_shape() {
     schema_keys.sort();
 
     // Regression guard: critical fields must be present
-    for expected in &["line_items", "po_number", "subtotal", "document_id", "created_by", "updated_at"] {
+    for expected in &[
+        "line_items",
+        "po_number",
+        "subtotal",
+        "document_id",
+        "created_by",
+        "updated_at",
+    ] {
         assert!(
             schema_keys.contains(&expected.to_string()),
             "Invoice schema must contain field '{}'",
@@ -387,7 +454,7 @@ fn test_invoice_schema_matches_domain_invoice_shape() {
 /// as a serialized `billforge_core::domain::Vendor`.
 #[test]
 fn test_vendor_schema_matches_domain_vendor_shape() {
-    use billforge_core::domain::{Vendor, VendorId, VendorType, VendorStatus};
+    use billforge_core::domain::{Vendor, VendorId, VendorStatus, VendorType};
 
     let sample = Vendor {
         id: VendorId::new(),
@@ -420,7 +487,9 @@ fn test_vendor_schema_matches_domain_vendor_shape() {
     };
 
     let serialized = serde_json::to_value(&sample).expect("Vendor should serialize");
-    let obj = serialized.as_object().expect("Vendor should be a JSON object");
+    let obj = serialized
+        .as_object()
+        .expect("Vendor should be a JSON object");
     let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
     actual_keys.sort();
 
@@ -435,7 +504,14 @@ fn test_vendor_schema_matches_domain_vendor_shape() {
     schema_keys.sort();
 
     // Regression guard: critical fields must be present
-    for expected in &["legal_name", "address", "contacts", "tax_id", "w9_on_file", "updated_at"] {
+    for expected in &[
+        "legal_name",
+        "address",
+        "contacts",
+        "tax_id",
+        "w9_on_file",
+        "updated_at",
+    ] {
         assert!(
             schema_keys.contains(&expected.to_string()),
             "Vendor schema must contain field '{}'",
@@ -456,7 +532,12 @@ fn test_auth_paths_200_reference_login_response() {
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 
-    let paths_to_check = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/provision"];
+    let paths_to_check = [
+        "/auth/login",
+        "/auth/register",
+        "/auth/refresh",
+        "/auth/provision",
+    ];
 
     for path in &paths_to_check {
         let response_ref = parsed["paths"][path]["post"]["responses"]["200"]

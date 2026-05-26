@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+type SyncStateRow = (chrono::DateTime<Utc>, Option<String>, Option<String>, i32);
+
 // ---------------------------------------------------------------------------
 // Sync direction
 // ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ impl SyncState {
         connector: &str,
         entity_type: &str,
     ) -> sqlx::Result<Self> {
-        let row: Option<(chrono::DateTime<Utc>, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        let row: Option<SyncStateRow> = sqlx::query_as(
             "SELECT last_sync_at, last_remote_version, cursor->>'page_token', conflict_count \
              FROM erp_sync_state \
              WHERE tenant_id = $1 AND connector = $2 AND entity_type = $3",
@@ -153,14 +155,22 @@ pub enum ResolvedSide {
 /// Trait for resolving sync conflicts. Implementors choose a winner based on
 /// the timestamps of the local and remote versions.
 pub trait ConflictResolver: Send + Sync {
-    fn resolve(&self, local_updated_at: DateTime<Utc>, remote_updated_at: DateTime<Utc>) -> ResolvedSide;
+    fn resolve(
+        &self,
+        local_updated_at: DateTime<Utc>,
+        remote_updated_at: DateTime<Utc>,
+    ) -> ResolvedSide;
 }
 
 /// Default resolver: whichever side was updated more recently wins.
 pub struct LastWriteWinsResolver;
 
 impl ConflictResolver for LastWriteWinsResolver {
-    fn resolve(&self, local_updated_at: DateTime<Utc>, remote_updated_at: DateTime<Utc>) -> ResolvedSide {
+    fn resolve(
+        &self,
+        local_updated_at: DateTime<Utc>,
+        remote_updated_at: DateTime<Utc>,
+    ) -> ResolvedSide {
         if remote_updated_at > local_updated_at {
             ResolvedSide::Remote
         } else {
@@ -216,7 +226,7 @@ pub async fn log_conflict(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, TimeZone, Utc as ChronoUtc};
+    use chrono::{TimeZone, Utc as ChronoUtc};
 
     #[test]
     fn last_write_wins_picks_newer_timestamp() {

@@ -2,6 +2,8 @@
 //!
 //! Tests secure email-based actions for approve/reject/hold without login
 
+#![allow(warnings)]
+
 // Note: Authentication and routing tests removed - they require PostgreSQL database setup.
 // These are tested in integration tests with a real database.
 // The following tests verify the data structures and service functionality.
@@ -42,10 +44,7 @@ fn test_email_action_enum_variants() {
         std::mem::discriminant(&approve),
         std::mem::discriminant(&hold)
     );
-    assert_ne!(
-        std::mem::discriminant(&hold),
-        std::mem::discriminant(&view)
-    );
+    assert_ne!(std::mem::discriminant(&hold), std::mem::discriminant(&view));
 }
 
 // ============================================================================
@@ -61,7 +60,10 @@ fn test_generate_action_url() {
 
     let url = format!("{}/api/v1/actions/{}?t={}", base_url, action, token);
 
-    assert_eq!(url, "http://localhost:3000/api/v1/actions/approve?t=test_token_123");
+    assert_eq!(
+        url,
+        "http://localhost:3000/api/v1/actions/approve?t=test_token_123"
+    );
 }
 
 // ============================================================================

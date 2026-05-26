@@ -6,28 +6,38 @@
 
 use crate::config::WorkerConfig;
 use anyhow::Result;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Run approval expiry checks and send reminders for a tenant.
 pub async fn process_approval_expiry(tenant_id_str: &str, config: &WorkerConfig) -> Result<()> {
     info!("Processing approval expiry for tenant: {}", tenant_id_str);
 
-    let tenant_id = tenant_id_str.parse()
+    let tenant_id = tenant_id_str
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid tenant ID: {}", e))?;
 
-    let pool = config.pg_manager.tenant(&tenant_id).await
+    let pool = config
+        .pg_manager
+        .tenant(&tenant_id)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to get tenant database: {}", e))?;
 
     // 1. Expire stale approval requests
     let expired_count = expire_stale_requests(&pool, tenant_id_str).await?;
     if expired_count > 0 {
-        info!("Expired {} stale approval requests for tenant {}", expired_count, tenant_id_str);
+        info!(
+            "Expired {} stale approval requests for tenant {}",
+            expired_count, tenant_id_str
+        );
     }
 
     // 2. Send reminders for approvals expiring within 24 hours
     let reminder_count = send_expiry_reminders(&pool, tenant_id_str).await?;
     if reminder_count > 0 {
-        info!("Queued {} expiry reminder emails for tenant {}", reminder_count, tenant_id_str);
+        info!(
+            "Queued {} expiry reminder emails for tenant {}",
+            reminder_count, tenant_id_str
+        );
     }
 
     Ok(())
@@ -43,7 +53,7 @@ async fn expire_stale_requests(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
           AND status = 'pending'
           AND expires_at IS NOT NULL
           AND expires_at < NOW()
-        "#
+        "#,
     )
     .bind(tenant_id)
     .execute(pool)
@@ -62,7 +72,7 @@ async fn expire_stale_requests(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
             WHERE tenant_id = $1
               AND status = 'expired'
               AND updated_at > NOW() - INTERVAL '1 minute'
-            "#
+            "#,
         )
         .bind(tenant_id)
         .fetch_all(pool)
@@ -79,14 +89,17 @@ async fn expire_stale_requests(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
                     gen_random_uuid(), $1, 'ApprovalRequest', $2, 'expired',
                     'system', '{"reason": "approval_request_expired"}'::jsonb, NOW()
                 )
-                "#
+                "#,
             )
             .bind(tenant_id)
             .bind(invoice_id)
             .execute(pool)
             .await
             {
-                error!("Failed to log approval expiry audit for invoice {}: {}", invoice_id, e);
+                error!(
+                    "Failed to log approval expiry audit for invoice {}: {}",
+                    invoice_id, e
+                );
             }
         }
     }
@@ -117,7 +130,7 @@ async fn send_expiry_reminders(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
               AND en.metadata->>'approval_request_id' = ar.id::text
               AND en.metadata->>'type' = 'expiry_reminder'
           )
-        "#
+        "#,
     )
     .bind(tenant_id)
     .fetch_all(pool)
@@ -135,22 +148,24 @@ async fn send_expiry_reminders(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
         }
 
         // Look up the approver's email
-        let email: Option<String> = sqlx::query_scalar(
-            "SELECT email FROM users WHERE id = $1 AND tenant_id = $2"
-        )
-        .bind(uuid::Uuid::parse_str(approver_id).unwrap_or_default())
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await?;
+        let email: Option<String> =
+            sqlx::query_scalar("SELECT email FROM users WHERE id = $1 AND tenant_id = $2")
+                .bind(uuid::Uuid::parse_str(approver_id).unwrap_or_default())
+                .bind(tenant_id)
+                .fetch_optional(pool)
+                .await?;
 
         let Some(email) = email else {
-            warn!("No email found for approver {} on request {}", approver_id, request_id);
+            warn!(
+                "No email found for approver {} on request {}",
+                approver_id, request_id
+            );
             continue;
         };
 
         // Look up invoice details for the reminder
         let invoice_number: Option<String> = sqlx::query_scalar(
-            "SELECT invoice_number FROM invoices WHERE id = $1 AND tenant_id = $2"
+            "SELECT invoice_number FROM invoices WHERE id = $1 AND tenant_id = $2",
         )
         .bind(invoice_id)
         .bind(tenant_id)
@@ -159,7 +174,10 @@ async fn send_expiry_reminders(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
 
         let invoice_number = invoice_number.unwrap_or_else(|| "N/A".to_string());
 
-        let subject = format!("Reminder: Approval expiring soon for Invoice {}", invoice_number);
+        let subject = format!(
+            "Reminder: Approval expiring soon for Invoice {}",
+            invoice_number
+        );
         let html_body = format!(
             r#"<p>Your approval for <strong>Invoice {}</strong> is expiring soon.</p>
             <p>Please review and take action before the deadline.</p>
@@ -183,7 +201,7 @@ async fn send_expiry_reminders(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
                 gen_random_uuid(), $1, $2, $3, $4, $5,
                 'pending', 5, $6, NOW()
             )
-            "#
+            "#,
         )
         .bind(tenant_id)
         .bind(&email)
@@ -198,7 +216,10 @@ async fn send_expiry_reminders(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u
         .execute(pool)
         .await
         {
-            error!("Failed to queue expiry reminder for request {}: {}", request_id, e);
+            error!(
+                "Failed to queue expiry reminder for request {}: {}",
+                request_id, e
+            );
         } else {
             queued += 1;
         }

@@ -4,8 +4,8 @@
 //! purchased individually. This module provides the pure pricing/entitlement core that
 //! downstream integrations (API, UI, Stripe) will consume.
 
-use billforge_core::Module;
 use crate::plans::{Plan, PlanFeatures, PlanId};
+use billforge_core::Module;
 
 /// A purchasable add-on module with its own pricing independent of base plans.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -25,8 +25,8 @@ impl ModuleAddOn {
             module: Module::InvoiceCapture,
             name: "Invoice Capture".to_string(),
             description: "OCR-based invoice scanning and data extraction".to_string(),
-            monthly_price_cents: 1900,  // $19/mo
-            annual_price_cents: 18200,  // $182/yr
+            monthly_price_cents: 1900, // $19/mo
+            annual_price_cents: 18200, // $182/yr
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -37,8 +37,8 @@ impl ModuleAddOn {
             module: Module::InvoiceProcessing,
             name: "Invoice Processing".to_string(),
             description: "Automated invoice coding, approval routing, and GL posting".to_string(),
-            monthly_price_cents: 3900,  // $39/mo
-            annual_price_cents: 37400,  // $374/yr
+            monthly_price_cents: 3900, // $39/mo
+            annual_price_cents: 37400, // $374/yr
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -49,8 +49,8 @@ impl ModuleAddOn {
             module: Module::VendorManagement,
             name: "Vendor Management".to_string(),
             description: "Vendor portal, 1099 tracking, and compliance management".to_string(),
-            monthly_price_cents: 2900,  // $29/mo
-            annual_price_cents: 27800,  // $278/yr
+            monthly_price_cents: 2900, // $29/mo
+            annual_price_cents: 27800, // $278/yr
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -61,8 +61,8 @@ impl ModuleAddOn {
             module: Module::Reporting,
             name: "Reporting & Analytics".to_string(),
             description: "Dashboards, spend analytics, and custom report builder".to_string(),
-            monthly_price_cents: 2500,  // $25/mo
-            annual_price_cents: 24000,  // $240/yr
+            monthly_price_cents: 2500, // $25/mo
+            annual_price_cents: 24000, // $240/yr
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -73,8 +73,8 @@ impl ModuleAddOn {
             module: Module::AiAssistant,
             name: "Winston AI Assistant".to_string(),
             description: "Paid conversational AI assistant add-on powered by Winston".to_string(),
-            monthly_price_cents: 29900,  // $299/mo fixed monthly
-            annual_price_cents: 358800,  // $299/mo * 12 = $3,588/yr fixed
+            monthly_price_cents: 29900, // $299/mo fixed monthly
+            annual_price_cents: 358800, // $299/mo * 12 = $3,588/yr fixed
             stripe_monthly_price_id: None,
             stripe_annual_price_id: None,
         }
@@ -242,7 +242,9 @@ mod tests {
         let catalog = ModuleAddOn::catalog();
         assert_eq!(catalog.len(), 5);
         assert!(catalog.iter().any(|a| a.module == Module::InvoiceCapture));
-        assert!(catalog.iter().any(|a| a.module == Module::InvoiceProcessing));
+        assert!(catalog
+            .iter()
+            .any(|a| a.module == Module::InvoiceProcessing));
         assert!(catalog.iter().any(|a| a.module == Module::VendorManagement));
         assert!(catalog.iter().any(|a| a.module == Module::Reporting));
         assert!(catalog.iter().any(|a| a.module == Module::AiAssistant));
@@ -266,7 +268,12 @@ mod tests {
         // Winston is not bundled in any base plan, so quoting it on every MVP
         // plan should result in the full add-on price being charged.
         let expected_cents = 29900u64;
-        for plan_id in [PlanId::Free, PlanId::Starter, PlanId::Professional, PlanId::Enterprise] {
+        for plan_id in [
+            PlanId::Free,
+            PlanId::Starter,
+            PlanId::Professional,
+            PlanId::Enterprise,
+        ] {
             let quote = quote_subscription(plan_id, &[Module::AiAssistant]);
             assert_eq!(
                 quote.addon_monthly_cents, expected_cents,
@@ -283,7 +290,12 @@ mod tests {
 
     #[test]
     fn test_no_mvp_plan_bundles_ai_assistant() {
-        for plan in [Plan::free(), Plan::starter(), Plan::professional(), Plan::enterprise()] {
+        for plan in [
+            Plan::free(),
+            Plan::starter(),
+            Plan::professional(),
+            Plan::enterprise(),
+        ] {
             assert!(
                 !plan.features.modules.contains(&Module::AiAssistant),
                 "{:?} plan must not bundle Module::AiAssistant",

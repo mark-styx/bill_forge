@@ -122,10 +122,7 @@ async fn insert_workflow_rule(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Uuid
 }
 
 /// Read changes JSONB from audit_log for a given resource_id.
-async fn read_audit_changes(
-    pool: &sqlx::PgPool,
-    resource_id: &str,
-) -> Option<serde_json::Value> {
+async fn read_audit_changes(pool: &sqlx::PgPool, resource_id: &str) -> Option<serde_json::Value> {
     let row: Option<(Option<serde_json::Value>,)> = sqlx::query_as(
         "SELECT changes FROM audit_log WHERE resource_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
@@ -255,8 +252,7 @@ async fn approve_persists_status_transition_to_audit_log(pool: sqlx::PgPool) {
     insert_user(&pool, &tenant_id, user_id).await;
     let _vendor_id = insert_vendor(&pool, &tenant_id).await;
     let invoice_id = insert_invoice(&pool, &tenant_id, user_id).await;
-    let approval_id =
-        insert_approval_request(&pool, &tenant_id, invoice_id, user_id).await;
+    let approval_id = insert_approval_request(&pool, &tenant_id, invoice_id, user_id).await;
 
     // Simulate the approve handler's before/after pattern
     let old_value = serde_json::json!({
@@ -424,13 +420,12 @@ async fn audit_log_action_and_resource_type_columns_match_entry(pool: sqlx::PgPo
     audit_repo.log(entry).await.expect("audit log write");
 
     // Verify the action/resource_type columns for SOX query filtering
-    let row: (String, String) = sqlx::query_as(
-        "SELECT action, resource_type FROM audit_log WHERE resource_id = $1",
-    )
-    .bind(rule_id.to_string())
-    .fetch_one(&*pool)
-    .await
-    .expect("audit row");
+    let row: (String, String) =
+        sqlx::query_as("SELECT action, resource_type FROM audit_log WHERE resource_id = $1")
+            .bind(rule_id.to_string())
+            .fetch_one(&*pool)
+            .await
+            .expect("audit row");
 
     assert_eq!(row.0, "update");
     assert_eq!(row.1, "workflow_rule");
