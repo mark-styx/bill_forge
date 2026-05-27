@@ -150,7 +150,7 @@ impl AppState {
         // Check if sandbox tenant already exists
         if metadata_db.tenant_exists(&sandbox_tenant_id).await? {
             tracing::info!("Sandbox tenant already exists, ensuring migrations are up to date...");
-            // Re-run only workflow/vendor-statement migrations to pick up new tables
+            // Re-run workflow/vendor-statement migrations to pick up new tables
             // (uses CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN IF NOT EXISTS)
             let tenant_pool = db
                 .tenant(&sandbox_tenant_id)
@@ -159,7 +159,14 @@ impl AppState {
             billforge_db::tenant_db::run_workflow_migrations(&tenant_pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to re-run workflow migrations: {}", e))?;
-            tracing::info!("Sandbox tenant migrations updated successfully");
+            Self::ensure_sandbox_support_tables(&tenant_pool).await?;
+            audit
+                .run_migrations(&sandbox_tenant_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
+            Self::ensure_sandbox_metadata_user(&metadata_db, &sandbox_tenant_id).await?;
+            Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
+            tracing::info!("Sandbox tenant migrations and demo data updated successfully");
             return Ok(());
         }
 
@@ -219,7 +226,28 @@ impl AppState {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
 
-        // Create invoice_line_items and invoice_status_config for seed data
+        Self::ensure_sandbox_support_tables(&tenant_pool).await?;
+
+        // Run audit migrations
+        audit
+            .run_migrations(&sandbox_tenant_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
+
+        Self::ensure_sandbox_metadata_user(&metadata_db, &sandbox_tenant_id).await?;
+
+        // Seed demo data
+        Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
+
+        tracing::info!("Demo environment initialized. Login with:");
+        tracing::info!("  Tenant: Meridian Industries ({})", sandbox_tenant_id);
+        tracing::info!("  Email: admin@sandbox.local");
+        tracing::info!("  Password: sandbox123");
+
+        Ok(())
+    }
+
+    async fn ensure_sandbox_support_tables(pool: &sqlx::PgPool) -> Result<()> {
         sqlx::raw_sql(
             r#"
             CREATE TABLE IF NOT EXISTS invoice_line_items (
@@ -251,26 +279,40 @@ impl AppState {
                 UNIQUE(tenant_id, status_key)
             );
             CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS unit_price_cents BIGINT;
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_amount_cents BIGINT;
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS unit_price_amount BIGINT;
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_amount BIGINT;
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_currency TEXT NOT NULL DEFAULT 'USD';
         "#,
         )
-        .execute(&*tenant_pool)
+        .execute(pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create line items tables: {}", e))?;
 
-        // Run audit migrations
-        audit
-            .run_migrations(&sandbox_tenant_id)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to run audit migrations: {}", e))?;
+        Ok(())
+    }
 
-        // Create sandbox admin user with hashed password
+    async fn ensure_sandbox_metadata_user(
+        metadata_db: &billforge_db::MetadataDatabase,
+        tenant_id: &TenantId,
+    ) -> Result<()> {
+        if metadata_db
+            .get_user_by_email(tenant_id, "admin@sandbox.local")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to look up sandbox user: {}", e))?
+            .is_some()
+        {
+            return Ok(());
+        }
+
         let password_hash = billforge_auth::PasswordService::new()
             .hash("sandbox123")
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
 
         metadata_db
             .create_user(&CreateUserInput {
-                tenant_id: sandbox_tenant_id.clone(),
+                tenant_id: tenant_id.clone(),
                 email: "admin@sandbox.local".to_string(),
                 password_hash,
                 name: "Sarah Chen".to_string(),
@@ -279,19 +321,29 @@ impl AppState {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create sandbox user: {}", e))?;
 
-        // Seed demo data
-        Self::seed_sandbox_data(&tenant_pool, &sandbox_tenant_id).await?;
-
-        tracing::info!("Demo environment initialized. Login with:");
-        tracing::info!("  Tenant: Meridian Industries ({})", sandbox_tenant_id);
-        tracing::info!("  Email: admin@sandbox.local");
-        tracing::info!("  Password: sandbox123");
-
         Ok(())
     }
 
     /// Seed demo vendors, invoices, and default queues for the sandbox
-    async fn seed_sandbox_data(pool: &sqlx::PgPool, _tenant_id: &TenantId) -> Result<()> {
+    async fn seed_sandbox_data(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Result<()> {
+        let tenant_uuid = *tenant_id.as_uuid();
+        let admin_id = "17b66d9b-6da5-4cfb-93ad-f8d2f1aefe8f";
+        let admin_uuid = uuid::Uuid::parse_str(admin_id)?;
+
+        sqlx::query(
+            r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles, settings, created_at, updated_at)
+               VALUES ($1, $2, 'admin@sandbox.local', 'sandbox-metadata-auth', 'Sarah Chen', '["tenant_admin"]'::jsonb, '{}'::jsonb, NOW(), NOW())
+               ON CONFLICT (tenant_id, email) DO UPDATE
+               SET name = EXCLUDED.name,
+                   roles = EXCLUDED.roles,
+                   updated_at = NOW()"#,
+        )
+        .bind(admin_uuid)
+        .bind(tenant_uuid)
+        .execute(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to seed sandbox tenant user: {}", e))?;
+
         // ==========================================================
         // Seed default work queues (the standard AP workflow pipeline)
         // ==========================================================
@@ -336,18 +388,26 @@ impl AppState {
         for (id, name, description, queue_type, is_default) in &queues {
             let id_uuid = uuid::Uuid::parse_str(id)?;
             sqlx::query(
-                "INSERT INTO work_queues (id, name, description, queue_type, is_default, is_active, settings, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, true, '{}'::jsonb, NOW(), NOW())
-                 ON CONFLICT (id) DO NOTHING"
+                "INSERT INTO work_queues (id, tenant_id, name, description, queue_type, is_default, is_active, settings, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, true, '{}'::jsonb, NOW(), NOW())
+                 ON CONFLICT (id) DO UPDATE SET
+                   tenant_id = EXCLUDED.tenant_id,
+                   name = EXCLUDED.name,
+                   description = EXCLUDED.description,
+                   queue_type = EXCLUDED.queue_type,
+                   is_default = EXCLUDED.is_default,
+                   is_active = true,
+                   updated_at = NOW()"
             )
             .bind(id_uuid)
+            .bind(tenant_uuid)
             .bind(name)
             .bind(description)
             .bind(queue_type)
             .bind(*is_default)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox queue {}: {}", name, e))?;
         }
 
         // ==========================================================
@@ -388,11 +448,21 @@ impl AppState {
             let id_uuid = uuid::Uuid::parse_str(id)?;
             let queue_uuid = uuid::Uuid::parse_str(queue_id)?;
             sqlx::query(
-                "INSERT INTO assignment_rules (id, queue_id, name, description, priority, conditions, assign_to, is_active, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, true, NOW(), NOW())
-                 ON CONFLICT (id) DO NOTHING"
+                "INSERT INTO assignment_rules (id, tenant_id, queue_id, name, description, priority, conditions, assign_to, is_active, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, true, NOW(), NOW())
+                 ON CONFLICT (id) DO UPDATE SET
+                   tenant_id = EXCLUDED.tenant_id,
+                   queue_id = EXCLUDED.queue_id,
+                   name = EXCLUDED.name,
+                   description = EXCLUDED.description,
+                   priority = EXCLUDED.priority,
+                   conditions = EXCLUDED.conditions,
+                   assign_to = EXCLUDED.assign_to,
+                   is_active = true,
+                   updated_at = NOW()"
             )
             .bind(id_uuid)
+            .bind(tenant_uuid)
             .bind(queue_uuid)
             .bind(name)
             .bind(description)
@@ -401,7 +471,7 @@ impl AppState {
             .bind(assign_to)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox assignment rule {}: {}", name, e))?;
         }
 
         // ==========================================================
@@ -560,11 +630,20 @@ impl AppState {
         for (id, name, vtype, email, phone, address, status) in &vendors {
             let id_uuid = uuid::Uuid::parse_str(id)?;
             sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, phone, address_line1, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-                 ON CONFLICT (id) DO NOTHING"
+                "INSERT INTO vendors (id, tenant_id, name, vendor_type, email, phone, address_line1, status, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                 ON CONFLICT (id) DO UPDATE SET
+                   tenant_id = EXCLUDED.tenant_id,
+                   name = EXCLUDED.name,
+                   vendor_type = EXCLUDED.vendor_type,
+                   email = EXCLUDED.email,
+                   phone = EXCLUDED.phone,
+                   address_line1 = EXCLUDED.address_line1,
+                   status = EXCLUDED.status,
+                   updated_at = NOW()"
             )
             .bind(id_uuid)
+            .bind(tenant_uuid)
             .bind(name)
             .bind(vtype)
             .bind(email)
@@ -573,13 +652,12 @@ impl AppState {
             .bind(status)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox vendor {}: {}", name, e))?;
         }
 
         // ==========================================================
         // Seed comprehensive invoices with realistic data
         // ==========================================================
-        let admin_id = "17b66d9b-6da5-4cfb-93ad-f8d2f1aefe8f";
         let ap_queue = "11111111-4444-5555-6666-777777770002";
         let approval_queue = "11111111-4444-5555-6666-777777770003";
         let payment_queue = "11111111-4444-5555-6666-777777770004";
@@ -1062,6 +1140,29 @@ impl AppState {
             ),
         ];
 
+        let seeded_invoice_ids: Vec<uuid::Uuid> = invoices
+            .iter()
+            .map(|(id, ..)| uuid::Uuid::parse_str(id))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        sqlx::query("DELETE FROM queue_items WHERE invoice_id = ANY($1)")
+            .bind(&seeded_invoice_ids)
+            .execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to reset sandbox queue items: {}", e))?;
+
+        sqlx::query("DELETE FROM invoice_line_items WHERE invoice_id = ANY($1)")
+            .bind(&seeded_invoice_ids)
+            .execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to reset sandbox line items: {}", e))?;
+
+        sqlx::query("DELETE FROM approval_requests WHERE invoice_id = ANY($1)")
+            .bind(&seeded_invoice_ids)
+            .execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to reset sandbox approval requests: {}", e))?;
+
         for (
             id,
             vendor_id,
@@ -1116,15 +1217,30 @@ impl AppState {
                 Some(*po_number)
             };
             let notes_val = if notes.is_empty() { None } else { Some(*notes) };
-            let admin_uuid = uuid::Uuid::parse_str(admin_id)?;
             let doc_uuid = uuid::Uuid::new_v4();
 
             sqlx::query(
-                "INSERT INTO invoices (id, vendor_id, vendor_name, invoice_number, total_amount_cents, currency, invoice_date, due_date, capture_status, processing_status, current_queue_id, department, gl_code, po_number, notes, document_id, created_by, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, 'USD', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
-                 ON CONFLICT (id) DO NOTHING"
+                "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number, total_amount_cents, currency, invoice_date, due_date, capture_status, processing_status, current_queue_id, department, gl_code, po_number, notes, document_id, created_by, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'USD', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())
+                 ON CONFLICT (id) DO UPDATE SET
+                   tenant_id = EXCLUDED.tenant_id,
+                   vendor_id = EXCLUDED.vendor_id,
+                   vendor_name = EXCLUDED.vendor_name,
+                   invoice_number = EXCLUDED.invoice_number,
+                   total_amount_cents = EXCLUDED.total_amount_cents,
+                   invoice_date = EXCLUDED.invoice_date,
+                   due_date = EXCLUDED.due_date,
+                   capture_status = EXCLUDED.capture_status,
+                   processing_status = EXCLUDED.processing_status,
+                   current_queue_id = EXCLUDED.current_queue_id,
+                   department = EXCLUDED.department,
+                   gl_code = EXCLUDED.gl_code,
+                   po_number = EXCLUDED.po_number,
+                   notes = EXCLUDED.notes,
+                   updated_at = NOW()"
             )
             .bind(id_uuid)
+            .bind(tenant_uuid)
             .bind(vendor_id_val)
             .bind(vendor_name)
             .bind(invoice_number)
@@ -1142,7 +1258,7 @@ impl AppState {
             .bind(admin_uuid)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox invoice {}: {}", invoice_number, e))?;
 
             // Create queue_items for invoices in a queue
             if !queue_id.is_empty() {
@@ -1156,19 +1272,58 @@ impl AppState {
                     0
                 };
                 sqlx::query(
-                    "INSERT INTO queue_items (id, queue_id, invoice_id, priority, entered_at)
-                     VALUES ($1, $2, $3, $4, NOW())
+                    "INSERT INTO queue_items (id, tenant_id, queue_id, invoice_id, priority, entered_at, status)
+                     VALUES ($1, $2, $3, $4, $5, NOW(), 'pending')
                      ON CONFLICT (id) DO NOTHING",
                 )
                 .bind(item_id)
+                .bind(tenant_uuid)
                 .bind(queue_uuid)
                 .bind(id_uuid)
                 .bind(priority)
                 .execute(pool)
                 .await
-                .ok();
+                .map_err(|e| anyhow::anyhow!("Failed to seed sandbox queue item for {}: {}", invoice_number, e))?;
             }
         }
+
+        sqlx::query(
+            r#"
+            UPDATE invoices
+            SET
+              invoice_date = CASE
+                WHEN processing_status = 'paid' THEN CURRENT_DATE - INTERVAL '45 days'
+                WHEN processing_status = 'approved' THEN CURRENT_DATE - INTERVAL '12 days'
+                WHEN processing_status = 'pending_approval' AND invoice_number LIKE '%OLD%' THEN CURRENT_DATE - INTERVAL '55 days'
+                WHEN processing_status = 'pending_approval' THEN CURRENT_DATE - INTERVAL '18 days'
+                WHEN processing_status = 'on_hold' THEN CURRENT_DATE - INTERVAL '21 days'
+                WHEN capture_status = 'failed' THEN CURRENT_DATE - INTERVAL '2 days'
+                ELSE CURRENT_DATE - INTERVAL '5 days'
+              END,
+              due_date = CASE
+                WHEN processing_status = 'paid' THEN CURRENT_DATE - INTERVAL '15 days'
+                WHEN processing_status = 'approved' AND invoice_number = 'OD-2023-LATE' THEN CURRENT_DATE - INTERVAL '10 days'
+                WHEN processing_status = 'approved' THEN CURRENT_DATE + INTERVAL '7 days'
+                WHEN processing_status = 'pending_approval' AND invoice_number LIKE '%OLD%' THEN CURRENT_DATE - INTERVAL '20 days'
+                WHEN processing_status = 'pending_approval' THEN CURRENT_DATE + INTERVAL '3 days'
+                WHEN processing_status = 'on_hold' THEN CURRENT_DATE + INTERVAL '10 days'
+                WHEN capture_status = 'failed' THEN NULL
+                ELSE CURRENT_DATE + INTERVAL '14 days'
+              END,
+              created_at = CASE
+                WHEN processing_status = 'paid' THEN NOW() - INTERVAL '45 days'
+                WHEN processing_status = 'approved' THEN NOW() - INTERVAL '12 days'
+                WHEN processing_status = 'pending_approval' THEN NOW() - INTERVAL '18 days'
+                ELSE NOW() - INTERVAL '5 days'
+              END,
+              updated_at = NOW()
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(&seeded_invoice_ids)
+        .execute(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to refresh sandbox invoice dates: {}", e))?;
 
         // ==========================================================
         // Seed line items for some invoices
@@ -1283,8 +1438,8 @@ impl AppState {
             let invoice_uuid = uuid::Uuid::parse_str(invoice_id)?;
             let total = quantity * unit_price;
             sqlx::query(
-                "INSERT INTO invoice_line_items (id, invoice_id, description, quantity, unit_price_cents, total_amount_cents, notes)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "INSERT INTO invoice_line_items (id, invoice_id, line_number, description, quantity, unit_price_cents, total_amount_cents, unit_price_amount, total_amount, total_currency, notes)
+                 VALUES ($1, $2, 0, $3, $4, $5, $6, $5, $6, 'USD', $7)
                  ON CONFLICT (id) DO NOTHING"
             )
             .bind(line_id)
@@ -1296,7 +1451,7 @@ impl AppState {
             .bind(notes)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox line item {}: {}", description, e))?;
         }
 
         // ==========================================================
@@ -1345,17 +1500,109 @@ impl AppState {
             let invoice_uuid = uuid::Uuid::parse_str(invoice_id)?;
             let requested_uuid = uuid::Uuid::parse_str(requested_from)?;
             sqlx::query(
-                "INSERT INTO approval_requests (id, invoice_id, requested_from, status, comments, created_at)
-                 VALUES ($1, $2, $3, 'pending', $4, NOW())
-                 ON CONFLICT (id) DO NOTHING"
+                r#"INSERT INTO approval_requests (
+                     id, tenant_id, invoice_id, requested_from, status, comments,
+                     expires_at, sla_hours, sla_started_at, created_at, updated_at
+                   )
+                   VALUES (
+                     $1, $2, $3, jsonb_build_object('User', $4::text), 'pending', $5,
+                     CASE
+                       WHEN $3::text IN ('aaaaaaaa-0008-0008-0008-000000000001', 'aaaaaaaa-0008-0008-0008-000000000002') THEN NOW() - INTERVAL '2 hours'
+                       WHEN $3::text = 'aaaaaaaa-0002-0002-0002-000000000005' THEN NOW() + INTERVAL '1 hour'
+                       ELSE NOW() + INTERVAL '18 hours'
+                     END,
+                     24,
+                     CASE
+                       WHEN $3::text IN ('aaaaaaaa-0008-0008-0008-000000000001', 'aaaaaaaa-0008-0008-0008-000000000002') THEN NOW() - INTERVAL '26 hours'
+                       WHEN $3::text = 'aaaaaaaa-0002-0002-0002-000000000005' THEN NOW() - INTERVAL '23 hours'
+                       ELSE NOW() - INTERVAL '6 hours'
+                     END,
+                     CASE
+                       WHEN $3::text IN ('aaaaaaaa-0008-0008-0008-000000000001', 'aaaaaaaa-0008-0008-0008-000000000002') THEN NOW() - INTERVAL '26 hours'
+                       WHEN $3::text = 'aaaaaaaa-0002-0002-0002-000000000005' THEN NOW() - INTERVAL '23 hours'
+                       ELSE NOW() - INTERVAL '6 hours'
+                     END,
+                     NOW()
+                   )
+                   ON CONFLICT (id) DO NOTHING"#
             )
             .bind(request_id)
+            .bind(tenant_uuid)
             .bind(invoice_uuid)
-            .bind(requested_uuid)
+            .bind(requested_uuid.to_string())
             .bind(notes)
             .execute(pool)
             .await
-            .ok();
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox approval request for {}: {}", invoice_id, e))?;
+        }
+
+        let audit_entries = vec![
+            (
+                "11111111-aaaa-bbbb-cccc-000000000001",
+                "InvoiceApproved",
+                "Invoice",
+                "aaaaaaaa-0003-0003-0003-000000000001",
+                "Utilities Co invoice approved and moved to payment queue",
+                "45 minutes",
+            ),
+            (
+                "11111111-aaaa-bbbb-cccc-000000000002",
+                "InvoiceSubmitted",
+                "Invoice",
+                "aaaaaaaa-0002-0002-0002-000000000001",
+                "AWS monthly invoice submitted for approval",
+                "2 hours",
+            ),
+            (
+                "11111111-aaaa-bbbb-cccc-000000000003",
+                "Update",
+                "Vendor",
+                "11111111-2222-3333-4444-555555550004",
+                "Amazon Web Services payment terms confirmed",
+                "4 hours",
+            ),
+            (
+                "11111111-aaaa-bbbb-cccc-000000000004",
+                "Create",
+                "Invoice",
+                "aaaaaaaa-0001-0001-0001-000000000001",
+                "Acme Corporation invoice captured from inbox",
+                "6 hours",
+            ),
+        ];
+
+        for (id, action, resource_type, resource_id, description, age) in &audit_entries {
+            let id_uuid = uuid::Uuid::parse_str(id)?;
+            sqlx::query(
+                r#"INSERT INTO audit_log (
+                     id, tenant_id, user_id, action, resource_type, resource_id,
+                     changes, ip_address, user_agent, created_at
+                   )
+                   VALUES (
+                     $1, $2, $3, $4, $5, $6,
+                     jsonb_build_object('description', $7::text, 'metadata', '{}'::jsonb),
+                     '127.0.0.1', 'BillForge demo seed', NOW() - ($8::interval)
+                   )
+                   ON CONFLICT (id) DO UPDATE SET
+                     tenant_id = EXCLUDED.tenant_id,
+                     user_id = EXCLUDED.user_id,
+                     action = EXCLUDED.action,
+                     resource_type = EXCLUDED.resource_type,
+                     resource_id = EXCLUDED.resource_id,
+                     changes = EXCLUDED.changes,
+                     created_at = EXCLUDED.created_at"#,
+            )
+            .bind(id_uuid)
+            .bind(tenant_uuid)
+            .bind(admin_uuid)
+            .bind(action)
+            .bind(resource_type)
+            .bind(resource_id)
+            .bind(description)
+            .bind(age)
+            .execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to seed sandbox audit entry {}: {}", id, e))?;
         }
 
         tracing::info!("Seeded {} queues, {} assignment rules, {} vendors, {} invoices, {} line items, and {} approval requests",

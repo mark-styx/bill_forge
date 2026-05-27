@@ -536,7 +536,7 @@ export default function LandingPage() {
             <p>&copy; {new Date().getFullYear()} BillForge. All rights reserved.</p>
             <div className="flex items-center gap-2">
               <Lock className="w-4 h-4" />
-              <span>SOC 2 Type II Compliant</span>
+              <span>Security controls designed for audit-ready AP teams</span>
             </div>
           </div>
         </div>

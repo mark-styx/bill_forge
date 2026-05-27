@@ -325,13 +325,10 @@ for f in backend/migrations/*.sql; do
   PGPASSWORD=postgres psql -h localhost -U postgres -d billforge -f "$f"
 done
 
-# 5. Seed demo data (optional)
-cd backend && cargo run --bin seed && cd ..
-
-# 6. Start backend (with hot reload)
+# 5. Start backend (auto-creates and refreshes the sandbox demo tenant)
 pnpm backend:dev
 
-# 7. Start frontend (separate terminal)
+# 6. Start frontend (separate terminal)
 pnpm dev
 ```
 
@@ -358,16 +355,20 @@ Once all services are healthy (takes 2-3 minutes on first build):
 
 | Field | Value |
 |-------|-------|
-| Tenant ID | `11111111-1111-1111-1111-111111111111` |
+| Tenant | Meridian Industries |
 | Email | `admin@sandbox.local` |
 | Password | `sandbox123` |
 
-The demo tenant (Meridian Industries) is auto-created on first startup with:
+Use the **Use demo account** button on the login page for the fastest local sales demo. The sandbox tenant ID is `11111111-1111-1111-1111-111111111111` for API-level checks.
+
+The demo tenant (Meridian Industries) is auto-created and refreshed on API startup with:
 - 16 vendors (business + contractor types)
-- 30+ invoices across all workflow stages (pending review, pending approval, approved, paid, on hold, rejected, OCR errors)
+- invoices across all workflow stages (pending review, pending approval, approved, paid, on hold, rejected, OCR errors)
 - 5 work queues (AP Processing, Approval, Payment, Error, Hold)
-- Assignment rules and approval requests
+- Assignment rules, approval requests, SLA bottlenecks, cash-flow due dates, and recent audit activity
 - Line item details for select invoices
+
+See [Local Sales Demo Runbook](docs/runbooks/local-sales-demo.md) for the recommended walkthrough.
 
 To reset demo data, remove volumes and restart:
 

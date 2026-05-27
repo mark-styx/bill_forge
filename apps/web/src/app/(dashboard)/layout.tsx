@@ -25,7 +25,6 @@ import {
   Workflow,
   ListChecks,
   Sparkles,
-  Bell,
 } from 'lucide-react';
 
 interface NavItem {
@@ -78,40 +77,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const colors = getCurrentColors();
   const brandGradient = getBrandGradient();
 
-  // Notifications driven by real data in production — using realistic samples for demo
-  const [notifications, setNotifications] = useState<Notification[]>([
-    {
-      id: '1',
-      type: 'success',
-      title: 'Invoice approved',
-      message: 'AWS-2024-JAN ($15,234.67) approved by Sarah Chen.',
-      timestamp: new Date(Date.now() - 5 * 60 * 1000),
-      read: false,
-      actionUrl: '/processing/approvals',
-      actionLabel: 'View',
-      module: 'processing',
-    },
-    {
-      id: '2',
-      type: 'warning',
-      title: 'Overdue invoice',
-      message: 'ACME-2023-OLD is 60+ days past due. Needs attention.',
-      timestamp: new Date(Date.now() - 30 * 60 * 1000),
-      read: false,
-      actionUrl: '/processing/approvals',
-      module: 'processing',
-    },
-    {
-      id: '3',
-      type: 'info',
-      title: '5 invoices ready for payment',
-      message: '$7,213.45 total across 5 approved invoices.',
-      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      read: true,
-      actionUrl: '/processing/queues',
-      module: 'processing',
-    },
-  ]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
   // Close sidebar on Escape key
   useEffect(() => {

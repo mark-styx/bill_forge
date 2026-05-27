@@ -17,9 +17,15 @@ import {
 
 const features = [
   { icon: Zap, title: 'Lightning Fast OCR', desc: 'Process invoices in seconds' },
-  { icon: Shield, title: 'Secure & Compliant', desc: 'SOC 2 & GDPR certified' },
+  { icon: Shield, title: 'Audit-Ready Controls', desc: 'Role access and traceable approvals' },
   { icon: BarChart3, title: 'Real-time Analytics', desc: 'Track every dollar' },
 ];
+
+const DEMO_LOGIN = {
+  tenantId: '11111111-1111-1111-1111-111111111111',
+  email: 'admin@sandbox.local',
+  password: 'sandbox123',
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,21 +33,26 @@ export default function LoginPage() {
   const isLoading = useAuthStore((state) => state.isLoading);
 
   const [showPassword, setShowPassword] = useState(false);
-  const [formData, setFormData] = useState({
-    tenantId: '11111111-1111-1111-1111-111111111111',
-    email: 'admin@sandbox.local',
-    password: 'sandbox123',
-  });
+  const [formData, setFormData] = useState(DEMO_LOGIN);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const signIn = async (credentials = formData) => {
     try {
-      await login(formData.tenantId, formData.email, formData.password);
+      await login(credentials.tenantId, credentials.email, credentials.password);
       toast.success('Welcome back!');
       router.push('/dashboard');
     } catch (error: any) {
       toast.error(error.message || 'Login failed');
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await signIn();
+  };
+
+  const handleDemoLogin = async () => {
+    setFormData(DEMO_LOGIN);
+    await signIn(DEMO_LOGIN);
   };
 
   return (
@@ -116,6 +127,18 @@ export default function LoginPage() {
               <h2 className="text-2xl font-semibold text-slate-900">Welcome back</h2>
               <p className="text-slate-500 mt-1">Sign in to your account to continue</p>
             </div>
+
+            <button
+              type="button"
+              onClick={handleDemoLogin}
+              disabled={isLoading}
+              className="w-full rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-left transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span className="block text-sm font-semibold text-blue-900">Use demo account</span>
+              <span className="mt-0.5 block text-xs text-blue-700">
+                Opens Meridian Industries with live sandbox invoices, approvals, reports, and vendors.
+              </span>
+            </button>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
@@ -196,7 +219,7 @@ export default function LoginPage() {
             {/* Security note */}
             <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
               <Lock className="w-3.5 h-3.5" />
-              <span>Protected by 256-bit TLS encryption</span>
+              <span>Role-based access with auditable approval history</span>
             </div>
           </div>
         </div>
