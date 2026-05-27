@@ -10,6 +10,11 @@
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "coverage": "bash scripts/coverage.sh all",
+    "coverage:web": "bash scripts/coverage.sh web",
+    "coverage:backend": "bash scripts/coverage.sh backend",
+    "benchmarks": "bash scripts/perf-benchmarks.sh",
+    "security:audit": "bash scripts/security-audit.sh",
     "db:migrate": "cd backend && cargo run --bin migrate",
     "backend:dev": "cd backend && cargo watch -x run",
     "backend:build": "cd backend && cargo build --release",
@@ -33,7 +38,7 @@
       "lodash": ">=4.18.0",
       "@xmldom/xmldom": ">=0.8.12",
       "esbuild": ">=0.25.0",
-      "brace-expansion": ">=2.0.3",
+      "brace-expansion": "2.0.3",
       "@types/react": "18.2.79"
     }
   },

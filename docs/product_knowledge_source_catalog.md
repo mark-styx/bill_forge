@@ -44,6 +44,9 @@ This file is the canonical product knowledge source catalog used by product expe
 | Module definitions | `apps/web/package.json` | JSON | Web app dependencies and scripts | Dependency change | Current | Identify frontend modules |
 | Module definitions | `pnpm-workspace.yaml` | YAML | Monorepo workspace package list | Package addition or removal | Current | Map workspace structure |
 | Known issues | `docs/known_issues.md` | Markdown | Structured known-issues register | Issue discovery or resolution | Reviewed every sprint | Check for existing known issues |
+| Runbooks | `docs/runbooks/readiness-gates.md` | Markdown | Coverage, benchmark, and security gate commands | Pilot readiness process change | Current with each pilot-readiness phase | Confirm readiness verification commands |
+| Runbooks | `docs/runbooks/security-audit.md` | Markdown | Security audit triage and evidence rules | Security gate change | Current with security process changes | Evaluate dependency advisory handling |
+| Runbooks | `docs/runbooks/pilot-onboarding.md` | Markdown | Pilot tenant setup and validation checklist | Pilot onboarding process change | Current with each pilot cycle | Plan and validate pilot onboarding |
 | Release notes | `CHANGELOG.md` | Markdown | Release history and change log | Every release | Updated per release | Confirm release-note impact |
 | Release notes | `.github/workflows/release.yml` | YAML | Release CI/CD workflow definition | Release process change | Current | Understand release pipeline |
 

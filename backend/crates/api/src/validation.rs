@@ -161,4 +161,61 @@ pub fn sanitize_string(input: &str) -> String {
 
 pub fn sanitize_and_trim(input: &str) -> String {
     sanitize_string(input.trim())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_inputs_reject_invalid_email_and_short_password() {
+        let mut validator = Validator::new();
+        validator
+            .email("email", "admin-at-example")
+            .password("password", "short");
+        let result = validator.result();
+
+        let err = result.expect_err("invalid auth fields should fail validation");
+        assert!(err.field_errors.contains_key("email"));
+        assert!(err.field_errors.contains_key("password"));
+    }
+
+    #[test]
+    fn invoice_and_queue_inputs_reject_bad_numeric_and_enum_values() {
+        let mut validator = Validator::new();
+        validator
+            .money_cents("total_amount", -1)
+            .positive_int("sla_hours", 0)
+            .one_of(
+                "queue_type",
+                "not-a-queue",
+                &["review", "approval", "payment"],
+            );
+        let result = validator.result();
+
+        let err = result.expect_err("bad invoice and queue fields should fail validation");
+        assert!(err.field_errors.contains_key("total_amount"));
+        assert!(err.field_errors.contains_key("sla_hours"));
+        assert!(err.field_errors.contains_key("queue_type"));
+    }
+
+    #[test]
+    fn integration_secret_sanitizer_strips_shell_and_markup_punctuation() {
+        let sanitized = sanitize_and_trim("  token; rm -rf / <script>alert(1)</script>  ");
+
+        assert_eq!(sanitized, "token rm rf scriptalert1script");
+    }
+
+    #[test]
+    fn uuid_validation_rejects_non_uuid_queue_ids() {
+        let mut validator = Validator::new();
+        validator.uuid("queue_id", "not-a-uuid");
+        let result = validator.result();
+
+        let err = result.expect_err("invalid queue id should fail validation");
+        assert!(err.field_errors.contains_key("queue_id"));
+    }
 }

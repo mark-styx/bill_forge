@@ -399,6 +399,14 @@ pnpm build
 | `pnpm test` | Run all tests |
 | `pnpm lint` | Lint all packages |
 | `pnpm typecheck` | TypeScript type checking |
+| `pnpm coverage` | Run web and backend coverage gates |
+| `pnpm benchmarks` | Run pilot-readiness performance baselines |
+| `pnpm security:audit` | Run consolidated Rust and Node.js dependency audit |
+
+Pilot readiness runbooks:
+- [Readiness Gates](docs/runbooks/readiness-gates.md)
+- [Security Audit](docs/runbooks/security-audit.md)
+- [Pilot Onboarding](docs/runbooks/pilot-onboarding.md)
 
 ## Configuration
 

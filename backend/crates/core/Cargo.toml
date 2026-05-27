@@ -21,5 +21,10 @@ hex = "0.4"
 tracing = { workspace = true }
 
 [dev-dependencies]
+criterion = "0.5"
 mockall = { workspace = true }
 tokio = { workspace = true }
+
+[[bench]]
+name = "workflow_evaluator"
+harness = false

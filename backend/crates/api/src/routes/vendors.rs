@@ -1075,6 +1075,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_vendor_csv_rejects_invalid_utf8() {
+        let invalid = [0xff, 0xfe, b'n', b'a', b'm', b'e'];
+        let result = parse_vendor_csv(&invalid);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid UTF-8"));
+    }
+
+    #[test]
+    fn test_parse_vendor_csv_skips_blank_lines_before_header() {
+        let csv = "\n\n name,email\n Acme Corp,ap@acme.test\n";
+        let (inputs, errors) = parse_vendor_csv(csv.as_bytes()).unwrap();
+
+        assert!(errors.is_empty());
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].name, "Acme Corp");
+        assert_eq!(inputs[0].email.as_deref(), Some("ap@acme.test"));
+    }
+
+    #[test]
     fn test_parse_vendor_csv_optional_fields() {
         let csv = "name,tax_id,payment_terms,vendor_code\nAcme Corp,12-3456789,Net 30,V-001\n";
         let (inputs, _) = parse_vendor_csv(csv.as_bytes()).unwrap();

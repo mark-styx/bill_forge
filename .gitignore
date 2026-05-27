@@ -84,6 +84,8 @@ agent-*.txt
 
 # Security audit reports
 security-audit-report.json
+coverage-summary.md
+performance-benchmark-report.md
 
 # Test results output
 test-results/

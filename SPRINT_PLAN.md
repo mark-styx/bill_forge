@@ -141,10 +141,10 @@
 - [x] Basic monitoring alerts — Prometheus alerts wired (4 rule groups, 16 alerts), Grafana dashboard provisioned (11 panels)
 
 ### P2 - Nice to Have
-- [ ] Test coverage improvement (target 80%)
-- [ ] Performance benchmarks (OCR pipeline, API latency)
-- [ ] Security audit (dependency scan, input sanitization)
-- [ ] Onboarding playbook for pilot customers
+- [x] Test coverage improvement gate — `pnpm coverage` with web/backend reports and 80% target documented in `docs/runbooks/readiness-gates.md`
+- [x] Performance benchmarks — `pnpm benchmarks` covers frontend dashboard transforms and backend workflow condition evaluation
+- [x] Security audit — `pnpm security:audit` plus P1/P2 handling in `docs/runbooks/security-audit.md`
+- [x] Onboarding playbook for pilot customers — `docs/runbooks/pilot-onboarding.md`
 
 ---
 
