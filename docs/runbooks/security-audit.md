@@ -20,6 +20,17 @@ Bill Forge uses `scripts/security-audit.sh` as the dependency security gate for 
 - Do not suppress P1 findings in CI without an owner, expiry date, and compensating control.
 - Re-run `pnpm security:audit` after changing dependencies or overrides.
 
+## Current P2 Exceptions
+
+Reviewed on May 27, 2026. Owner: Engineering. Expiry: June 30, 2026.
+
+| Package | Advisory | Path | Rationale | Next action |
+|---------|----------|------|-----------|-------------|
+| `rsa` | RUSTSEC-2023-0071 | Optional `sqlx-mysql` lockfile dependency | Bill Forge enables PostgreSQL-only `sqlx` features. `cargo tree --workspace --all-features --target all -i rsa@0.9.10` reports no reachable package path, but `cargo-audit` still scans the full lockfile. | Re-check after the next `sqlx` update; remove if `cargo-audit` adds feature-aware filtering or the lockfile no longer includes `sqlx-mysql`. |
+| `rustls-webpki` | RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0104 | AWS SDK HTTP/TLS stack | Direct `reqwest` usage has been moved to native TLS. Remaining occurrences are pulled by `aws-config`, `aws-sdk-s3`, and `aws-sdk-textract`. No stable patched `rustls-webpki` release is available in the resolved AWS SDK chain at this review date. | Upgrade AWS SDK/rustls stack when a stable patched chain is available. |
+| `fast-xml-parser` | GHSA-gh4j-gqv2-49f6 | Expo/React Native CLI transitive dependency | Fixed versions require a transitive major upgrade from React Native CLI internals. This code is development/mobile tooling, not server runtime request handling. | Address in the Expo/React Native upgrade pass. |
+| `uuid` | GHSA-w5hq-g745-h8pq | Expo CLI transitive dependency | Fixed versions require transitive major overrides through Expo tooling. The affected UUID buffer APIs are not used by Bill Forge application code. | Address in the Expo/React Native upgrade pass. |
+
 ## Evidence
 
 - CI uploads `security-audit-report.json` for each run.

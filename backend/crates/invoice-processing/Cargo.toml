@@ -20,4 +20,4 @@ anyhow = { workspace = true }
 sqlx = { workspace = true }
 
 # ML Categorization dependencies (Sprint 13)
-async-openai = "0.20"
+async-openai = { version = "0.20", default-features = false, features = ["native-tls"] }

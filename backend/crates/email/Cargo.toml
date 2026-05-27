@@ -8,7 +8,7 @@ rust-version.workspace = true
 billforge-core = { path = "../core" }
 
 # HTTP client for webhook-based email (Sendgrid, Mailgun, etc.)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 
 # Async
 tokio = { workspace = true }

@@ -174,7 +174,9 @@ run_pnpm_audit() {
     return 0
   fi
 
-  # Parse pnpm audit JSON. Handles both npm audit v7 (list) and v9 (dict) formats.
+  # Parse pnpm audit JSON. Handles npm audit list/dict formats and pnpm's
+  # actions/resolves shape. We count only advisories with a concrete dependency
+  # path, which filters workspace-name false positives.
   local parsed="$TMPDIR_WORK/node-parsed.json"
   python3 <<PYEOF > "$parsed"
 import json
@@ -186,67 +188,88 @@ summary = {"critical": 0, "high": 0, "medium": 0, "low": 0}
 items = []
 
 advisories = data.get("advisories", data.get("vulnerabilities", {}))
+actions_by_id = {}
+
+for action in data.get("actions", []) or []:
+    for resolved in action.get("resolves", []) or []:
+        advisory_id = str(resolved.get("id", ""))
+        if advisory_id:
+            actions_by_id[advisory_id] = {
+                "action": action.get("action"),
+                "module": action.get("module"),
+                "target": action.get("target"),
+                "path": resolved.get("path"),
+            }
+
+def normalize_severity(value):
+    sev = str(value or "medium").lower()
+    if sev == "moderate":
+        return "medium"
+    if sev == "info":
+        return "low"
+    if sev not in summary:
+        return "medium"
+    return sev
+
+def finding_paths(v):
+    paths = []
+    for finding in v.get("findings", []) or []:
+        for path in finding.get("paths", []) or []:
+            if path:
+                paths.append(path)
+    for path in v.get("paths", []) or []:
+        if path:
+            paths.append(path)
+    for node in v.get("nodes", []) or []:
+        if node:
+            paths.append(node)
+    for effect in v.get("effects", []) or []:
+        if effect:
+            paths.append(effect)
+    return paths
+
+def add_item(advisory_id, v):
+    paths = finding_paths(v)
+    if not paths:
+        return
+
+    adv = v.get("advisory", v)
+    sev = normalize_severity(v.get("severity", adv.get("severity", "medium")))
+    summary[sev] += 1
+    action = actions_by_id.get(str(advisory_id), {})
+    items.append({
+        "package": v.get("module_name", v.get("name", action.get("module") or "unknown")),
+        "id": str(v.get("cve", v.get("id", advisory_id))),
+        "title": adv.get("title", v.get("title", "")),
+        "severity": sev,
+        "url": adv.get("url", v.get("url", "")),
+        "paths": paths,
+        "action": action.get("action"),
+        "target": action.get("target"),
+    })
 
 if isinstance(advisories, list):
     for v in advisories:
-        # Skip advisories with no dependency path (phantom/false positives)
-        paths = v.get("paths", v.get("findings", []))
-        if isinstance(paths, list) and len(paths) == 0:
-            continue
-        sev = str(v.get("severity", "medium")).lower()
-        if sev not in summary:
-            sev = "medium"
-        summary[sev] += 1
-        adv = v.get("advisory", v)
-        items.append({
-            "package": v.get("module_name", v.get("name", "unknown")),
-            "id": str(v.get("cwe", v.get("id", "unknown"))),
-            "title": adv.get("title", v.get("title", "")),
-            "severity": sev,
-            "url": adv.get("url", v.get("url", ""))
-        })
+        add_item(v.get("id", "unknown"), v)
 elif isinstance(advisories, dict):
     for key, v in advisories.items():
         if isinstance(v, dict):
-            # Skip advisories with no dependency path (phantom/false positives)
-            nodes = v.get("nodes", [])
-            effects = v.get("effects", [])
-            if (not nodes or len(nodes) == 0) and (not effects or len(effects) == 0):
-                continue
-            sev = str(v.get("severity", "medium")).lower()
-            if sev not in summary:
-                sev = "medium"
-            summary[sev] += 1
-            adv = v.get("advisory", v)
-            items.append({
-                "package": v.get("module_name", v.get("name", key)),
-                "id": str(v.get("cve", v.get("id", key))),
-                "title": adv.get("title", v.get("title", "")),
-                "severity": sev,
-                "url": adv.get("url", v.get("url", ""))
-            })
+            add_item(key, v)
 
 print(json.dumps({"summary": summary, "vulnerabilities": items}))
 PYEOF
 
   merge_into_report "$parsed" "node"
 
-  # Human-readable output from metadata.vulnerabilities counts
+  # Human-readable output from parsed, actionable findings.
   python3 <<PYEOF
 import json
 
-with open("$raw_output") as f:
+with open("$parsed") as f:
     data = json.load(f)
 
-meta = data.get("metadata", {})
-vulns = meta.get("vulnerabilities", {})
-total = sum(vulns.values()) if isinstance(vulns, dict) else 0
-if total == 0:
-    # Fall back to parsed summary
-    with open("$parsed") as f2:
-        p = json.load(f2)
-    total = sum(p["summary"].values())
-    vulns = p["summary"]
+vulns = data["summary"]
+total = sum(vulns.values())
 
 if total == 0:
     print("  No Node.js vulnerabilities found")

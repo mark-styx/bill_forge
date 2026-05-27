@@ -25,7 +25,7 @@ s3 = ["aws-sdk-s3", "aws-config"]
 billforge-core = { path = "../core" }
 
 # Database - PostgreSQL with sqlx for async, compile-time checked queries
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros", "chrono", "uuid", "migrate", "json", "bigdecimal"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "macros", "chrono", "uuid", "migrate", "json", "bigdecimal"] }
 
 # Async
 tokio = { workspace = true }

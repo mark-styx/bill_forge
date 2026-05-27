@@ -22,8 +22,8 @@ async-trait = { workspace = true }
 futures = "0.3"
 
 # AI/LLM dependencies
-async-openai = "0.20"
-reqwest = { version = "0.12", default-features = false }
+async-openai = { version = "0.20", default-features = false, features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 tiktoken-rs = "0.5"
 
 # Internal crates

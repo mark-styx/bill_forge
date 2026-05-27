@@ -39,7 +39,7 @@
     "cmdk": "^0.2.0",
     "date-fns": "^3.2.0",
     "lucide-react": "^0.303.0",
-    "next": "^16.2.2",
+    "next": "^16.2.6",
     "next-themes": "^0.4.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -59,17 +59,17 @@
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
-    "@vitejs/plugin-react": "^4.3.0",
-    "@vitest/coverage-v8": "^2.0.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/coverage-v8": "^3.2.4",
     "autoprefixer": "^10.4.16",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.5.14",
-    "jsdom": "^24.1.0",
+    "jsdom": "^29.1.1",
     "msw": "^2.3.0",
-    "postcss": "^8.4.33",
+    "postcss": "^8.5.15",
     "tailwindcss": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.3.0",
-    "vitest": "^2.0.0"
+    "vitest": "^3.2.4"
   }
 }
