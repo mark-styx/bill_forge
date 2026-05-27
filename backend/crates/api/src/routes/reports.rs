@@ -647,8 +647,11 @@ pub struct ApprovalSlaItem {
     pub approval_id: Uuid,
     pub hours_waiting: f64,
     pub sla_hours: i32,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
+    pub percent_elapsed: f64,
     pub sla_state: String,
     pub approver_name: Option<String>,
+    pub approver_label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -665,7 +668,23 @@ async fn approval_sla(
     ReportingAccess(_user, tenant): ReportingAccess,
 ) -> ApiResult<Json<ApprovalSlaSummary>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let rows = sqlx::query_as::<_, (Uuid, String, String, i64, String, Uuid, f64, Option<String>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            i64,
+            String,
+            Uuid,
+            f64,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            serde_json::Value,
+            Option<String>,
+        ),
+    >(
         r#"
         SELECT
             i.id,
@@ -674,35 +693,46 @@ async fn approval_sla(
             i.total_amount_cents,
             i.currency,
             ar.id,
-            EXTRACT(EPOCH FROM (NOW() - ar.created_at)) / 3600.0 AS hours_waiting,
+            EXTRACT(EPOCH FROM (NOW() - COALESCE(ar.sla_started_at, ar.created_at))) / 3600.0 AS hours_waiting,
+            COALESCE(ar.sla_hours, 24) AS sla_hours,
+            COALESCE(ar.sla_started_at, ar.created_at) AS sla_started_at,
+            COALESCE(
+                ar.expires_at,
+                COALESCE(ar.sla_started_at, ar.created_at) + (COALESCE(ar.sla_hours, 24)::text || ' hours')::interval
+            ) AS deadline_at,
+            ar.requested_from,
             u.name AS approver_name
         FROM approval_requests ar
         JOIN invoices i ON i.id = ar.invoice_id
-        LEFT JOIN users u ON u.id = ar.responded_by
+        LEFT JOIN users u ON u.id = NULLIF(ar.requested_from->>'User', '')::uuid
         WHERE ar.tenant_id = $1 AND ar.status = 'pending'
-        ORDER BY ar.created_at ASC
+        ORDER BY deadline_at ASC
         LIMIT 100
         "#,
     )
-    .bind(tenant.tenant_id.as_str())
+    .bind(tenant.tenant_id.as_uuid())
     .fetch_all(&*pool)
     .await
     .map_err(|e| {
         billforge_core::Error::Database(format!("Failed to query approval SLA data: {}", e))
     })?;
 
-    let default_sla_hours = 24;
-    let near_breach_hours = (default_sla_hours as f64) * 0.8;
     let items: Vec<ApprovalSlaItem> = rows
         .into_iter()
         .map(|row| {
-            let sla_state = if row.6 >= default_sla_hours as f64 {
+            let percent_elapsed = if row.7 > 0 {
+                ((row.6 / row.7 as f64) * 100.0).clamp(0.0, 999.0)
+            } else {
+                0.0
+            };
+            let sla_state = if percent_elapsed >= 100.0 {
                 "breached"
-            } else if row.6 >= near_breach_hours {
+            } else if percent_elapsed >= 80.0 {
                 "near_breach"
             } else {
                 "within_sla"
             };
+            let approver_label = approval_target_label(&row.10, row.11.as_deref());
             ApprovalSlaItem {
                 invoice_id: row.0,
                 invoice_number: row.1,
@@ -711,9 +741,12 @@ async fn approval_sla(
                 currency: row.4,
                 approval_id: row.5,
                 hours_waiting: row.6,
-                sla_hours: default_sla_hours,
+                sla_hours: row.7,
+                deadline_at: row.9,
+                percent_elapsed,
                 sla_state: sla_state.to_string(),
-                approver_name: row.7,
+                approver_name: row.11,
+                approver_label,
             }
         })
         .collect();
@@ -733,6 +766,31 @@ async fn approval_sla(
         breached_count,
         items,
     }))
+}
+
+fn approval_target_label(requested_from: &serde_json::Value, user_name: Option<&str>) -> String {
+    if let Some(name) = user_name {
+        return name.to_string();
+    }
+    if let Some(role) = requested_from.get("Role").and_then(|value| value.as_str()) {
+        return format!("Role: {}", role);
+    }
+    if let Some(users) = requested_from
+        .get("AnyOf")
+        .and_then(|value| value.as_array())
+    {
+        return format!("Any of {} approvers", users.len());
+    }
+    if let Some(users) = requested_from
+        .get("AllOf")
+        .and_then(|value| value.as_array())
+    {
+        return format!("All {} approvers", users.len());
+    }
+    if requested_from.get("User").is_some() {
+        return "Assigned user".to_string();
+    }
+    "Approver".to_string()
 }
 
 #[derive(Debug, Serialize)]

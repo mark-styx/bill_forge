@@ -938,8 +938,11 @@ export interface ApprovalSlaItem {
   approval_id: string;
   hours_waiting: number;
   sla_hours: number;
+  deadline_at: string;
+  percent_elapsed: number;
   sla_state: 'within_sla' | 'near_breach' | 'breached';
   approver_name?: string | null;
+  approver_label: string;
 }
 
 export interface ApprovalSlaSummary {
@@ -2400,22 +2403,22 @@ export const aiAssistantApi = {
     ),
 
   approveActionProposal: (
-    conversationId: string,
+    _conversationId: string,
     proposalId: string,
     body: AiActionProposalDecisionRequest = {},
   ) =>
     api.post<AiPendingActionProposal>(
-      `/api/v1/ai/conversations/${conversationId}/action-proposals/${proposalId}/approve`,
+      `/api/v1/ai/action-proposals/${proposalId}/approve`,
       body,
     ),
 
   rejectActionProposal: (
-    conversationId: string,
+    _conversationId: string,
     proposalId: string,
     body: AiActionProposalDecisionRequest = {},
   ) =>
     api.post<AiPendingActionProposal>(
-      `/api/v1/ai/conversations/${conversationId}/action-proposals/${proposalId}/reject`,
+      `/api/v1/ai/action-proposals/${proposalId}/reject`,
       body,
     ),
 

@@ -188,7 +188,7 @@ describe('aiAssistantApi', () => {
     const result = await aiAssistantApi.approveActionProposal('conv-42', 'proposal-1');
 
     expect(api.post).toHaveBeenCalledWith(
-      '/api/v1/ai/conversations/conv-42/action-proposals/proposal-1/approve',
+      '/api/v1/ai/action-proposals/proposal-1/approve',
       {},
     );
     expect(result.status).toBe('approved');
@@ -220,7 +220,7 @@ describe('aiAssistantApi', () => {
     );
 
     expect(api.post).toHaveBeenCalledWith(
-      '/api/v1/ai/conversations/conv-42/action-proposals/proposal-1/reject',
+      '/api/v1/ai/action-proposals/proposal-1/reject',
       { reason: 'Needs human review' },
     );
     expect(result.status).toBe('rejected');

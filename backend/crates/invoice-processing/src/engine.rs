@@ -10,6 +10,7 @@ use billforge_core::{
     types::{TenantId, UserId},
     Result,
 };
+use chrono::Duration;
 use std::sync::Arc;
 
 /// Minimum confidence threshold for ML auto-approval (95%)
@@ -276,6 +277,8 @@ impl WorkflowEngine {
         rule: &WorkflowRule,
         target: ApprovalTarget,
     ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let sla_hours = Self::approval_sla_hours(rule);
         let request = ApprovalRequest {
             id: uuid::Uuid::new_v4(),
             invoice_id: invoice.id.clone(),
@@ -286,12 +289,28 @@ impl WorkflowEngine {
             comments: None,
             responded_by: None,
             responded_at: None,
-            created_at: chrono::Utc::now(),
-            expires_at: None,
+            created_at: now,
+            expires_at: Some(now + Duration::hours(sla_hours as i64)),
         };
 
         self.approval_repo.create(tenant_id, request).await?;
         Ok(())
+    }
+
+    fn approval_sla_hours(rule: &WorkflowRule) -> i32 {
+        rule.actions
+            .iter()
+            .find_map(|action| {
+                action
+                    .params
+                    .get("sla_hours")
+                    .or_else(|| action.params.get("timeout_hours"))
+                    .or_else(|| action.params.get("escalation_hours"))
+                    .and_then(|value| value.as_i64())
+                    .and_then(|hours| i32::try_from(hours).ok())
+                    .filter(|hours| *hours > 0)
+            })
+            .unwrap_or(24)
     }
 
     /// Handle approval response
@@ -338,5 +357,48 @@ impl WorkflowEngine {
 
         // Still waiting for approvals
         Ok(ProcessingStatus::PendingApproval)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use billforge_core::domain::WorkflowRuleId;
+
+    fn rule_with_actions(actions: Vec<RuleAction>) -> WorkflowRule {
+        let now = chrono::Utc::now();
+        WorkflowRule {
+            id: WorkflowRuleId(uuid::Uuid::new_v4()),
+            tenant_id: TenantId::new(),
+            name: "Approval SLA test".to_string(),
+            description: None,
+            priority: 0,
+            is_active: true,
+            rule_type: WorkflowRuleType::Approval,
+            conditions: vec![],
+            actions,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn approval_sla_hours_uses_action_sla_hours() {
+        let rule = rule_with_actions(vec![RuleAction {
+            action_type: ActionType::RequireApproval,
+            params: serde_json::json!({ "sla_hours": 6 }),
+        }]);
+
+        assert_eq!(WorkflowEngine::approval_sla_hours(&rule), 6);
+    }
+
+    #[test]
+    fn approval_sla_hours_defaults_to_twenty_four() {
+        let rule = rule_with_actions(vec![RuleAction {
+            action_type: ActionType::RequireApproval,
+            params: serde_json::json!({ "sla_hours": 0 }),
+        }]);
+
+        assert_eq!(WorkflowEngine::approval_sla_hours(&rule), 24);
     }
 }

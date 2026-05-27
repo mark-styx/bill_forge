@@ -832,12 +832,17 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         request: ApprovalRequest,
     ) -> Result<ApprovalRequest> {
         let now = Utc::now();
+        let expires_at = request
+            .expires_at
+            .unwrap_or_else(|| now + chrono::Duration::hours(24));
+        let sla_seconds = (expires_at - now).num_seconds();
+        let sla_hours = std::cmp::max(1, ((sla_seconds + 3599) / 3600) as i32);
 
         sqlx::query(
             r#"INSERT INTO approval_requests (
                 id, tenant_id, invoice_id, rule_id, requested_from, status,
-                expires_at, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+                expires_at, sla_hours, sla_started_at, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
         )
         .bind(request.id)
         .bind(*tenant_id.as_uuid())
@@ -851,14 +856,20 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
             ApprovalStatus::Expired => "expired",
             ApprovalStatus::Cancelled => "cancelled",
         })
-        .bind(request.expires_at)
+        .bind(expires_at)
+        .bind(sla_hours)
+        .bind(now)
         .bind(now)
         .bind(now)
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create approval request: {}", e)))?;
 
-        Ok(request)
+        Ok(ApprovalRequest {
+            expires_at: Some(expires_at),
+            created_at: now,
+            ..request
+        })
     }
 
     async fn get_by_id(&self, tenant_id: &TenantId, id: Uuid) -> Result<Option<ApprovalRequest>> {

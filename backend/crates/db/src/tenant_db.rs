@@ -51,6 +51,9 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
     let migration_057 = include_str!("../../../migrations/057_create_workflow_templates.sql");
     apply_migration(pool, "057_create_workflow_templates.sql", migration_057).await?;
 
+    let migration_091 = include_str!("../../../migrations/091_approval_sla_tracking.sql");
+    apply_migration(pool, "091_approval_sla_tracking.sql", migration_091).await?;
+
     // Non-workflow tables that were historically bundled here
     apply_migration(
         pool,

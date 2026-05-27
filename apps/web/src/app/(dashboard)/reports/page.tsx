@@ -97,6 +97,18 @@ export default function ReportsPage() {
     queryFn: () => reportsApi.dashboardSummary(),
   });
 
+  const approvalSlaQuery = useQuery({
+    queryKey: ['approval-sla'],
+    queryFn: () => reportsApi.approvalSla(),
+    enabled: showProcessingMetrics,
+  });
+
+  const cashFlowQuery = useQuery({
+    queryKey: ['cash-flow-obligations'],
+    queryFn: () => reportsApi.cashFlowObligations(),
+    enabled: showProcessingMetrics,
+  });
+
   const metrics = metricsQuery.data;
   const summary = summaryQuery.data;
   const reportError = [
@@ -106,6 +118,8 @@ export default function ReportsPage() {
     statusQuery,
     spendTrendQuery,
     vendorSpendQuery,
+    approvalSlaQuery,
+    cashFlowQuery,
   ].some((query) => query.isError);
   const anyLoading = [
     summaryQuery,
@@ -114,6 +128,8 @@ export default function ReportsPage() {
     statusQuery,
     spendTrendQuery,
     vendorSpendQuery,
+    approvalSlaQuery,
+    cashFlowQuery,
   ].some((query) => query.isLoading || query.isFetching);
 
   const monthlyData = (spendTrendQuery.data ?? []).map((point) => ({
@@ -137,7 +153,49 @@ export default function ReportsPage() {
     spend: vendor.total_amount,
   }));
 
+  const cashFlowObligations = cashFlowQuery.data ?? [];
+  const now = new Date();
+  const weekEnd = new Date(now);
+  weekEnd.setDate(now.getDate() + 7);
+  const monthEnd = new Date(now);
+  monthEnd.setDate(now.getDate() + 30);
+  const cashDueThisWeek = cashFlowObligations
+    .filter((item) => {
+      if (!item.projected_payment_date) return false;
+      const date = new Date(item.projected_payment_date);
+      return date >= now && date <= weekEnd;
+    })
+    .reduce((sum, item) => sum + item.amount_cents, 0);
+  const cashDueThisMonth = cashFlowObligations
+    .filter((item) => {
+      if (!item.projected_payment_date) return false;
+      const date = new Date(item.projected_payment_date);
+      return date >= now && date <= monthEnd;
+    })
+    .reduce((sum, item) => sum + item.amount_cents, 0);
+  const lateRiskCount = cashFlowObligations.filter((item) => item.late_risk).length;
+  const upcomingObligations = cashFlowObligations.slice(0, 6);
+  const approvalSla = approvalSlaQuery.data;
+  const bottleneckApprovers = (approvalSla?.items ?? [])
+    .reduce<Record<string, number>>((acc, item) => {
+      acc[item.approver_label] = (acc[item.approver_label] ?? 0) + 1;
+      return acc;
+    }, {});
+  const topBottlenecks = Object.entries(bottleneckApprovers)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
   const formatCurrency = (value: number) => `$${(value / 1000).toFixed(0)}k`;
+  const formatCents = (value: number, currency = 'USD') =>
+    new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 0,
+    }).format(value / 100);
+  const formatDate = (value?: string | null) => {
+    if (!value) return 'Unscheduled';
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value));
+  };
   const refreshReports = () => {
     void summaryQuery.refetch();
     void metricsQuery.refetch();
@@ -145,6 +203,8 @@ export default function ReportsPage() {
     void statusQuery.refetch();
     void spendTrendQuery.refetch();
     void vendorSpendQuery.refetch();
+    void approvalSlaQuery.refetch();
+    void cashFlowQuery.refetch();
   };
 
   return (
@@ -446,6 +506,169 @@ export default function ReportsPage() {
               />
             )}
           </ChartContainer>
+        </div>
+      )}
+
+      {showProcessingMetrics && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="card overflow-hidden">
+            <div className="h-1.5 bg-gradient-to-r from-processing via-processing/70 to-transparent" />
+            <div className="p-6">
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-processing/10">
+                    <Clock className="w-5 h-5 text-processing" />
+                  </div>
+                  <div>
+                    <h2 className="font-semibold text-foreground">Approval SLA</h2>
+                    <p className="text-sm text-muted-foreground">Pending approval bottlenecks and deadlines</p>
+                  </div>
+                </div>
+                <span className="text-sm font-medium text-muted-foreground">
+                  {approvalSla?.pending_count ?? 0} pending
+                </span>
+              </div>
+
+              {approvalSlaQuery.isError ? (
+                <ReportNotice
+                  tone="error"
+                  title="Approval SLA unavailable"
+                  description="The SLA tracking endpoint failed."
+                />
+              ) : (approvalSla?.items ?? []).length === 0 && !approvalSlaQuery.isLoading ? (
+                <ReportNotice
+                  title="No pending approvals"
+                  description="There are no approval SLA items waiting on action."
+                />
+              ) : (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">Near breach</p>
+                      <p className="mt-1 text-2xl font-semibold text-warning">{approvalSla?.near_breach_count ?? 0}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">Breached</p>
+                      <p className="mt-1 text-2xl font-semibold text-error">{approvalSla?.breached_count ?? 0}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">Bottlenecks</p>
+                      <p className="mt-1 text-2xl font-semibold text-foreground">{topBottlenecks.length}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {(approvalSla?.items ?? []).slice(0, 5).map((item) => (
+                      <Link
+                        key={item.approval_id}
+                        href={`/invoices/${item.invoice_id}`}
+                        className="block rounded-xl border border-border p-3 hover:bg-secondary/40 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground truncate">{item.invoice_number}</p>
+                            <p className="text-sm text-muted-foreground truncate">{item.vendor_name} · {item.approver_label}</p>
+                          </div>
+                          <span className={`text-xs font-medium rounded-full px-2 py-1 ${
+                            item.sla_state === 'breached'
+                              ? 'bg-error/10 text-error'
+                              : item.sla_state === 'near_breach'
+                                ? 'bg-warning/10 text-warning'
+                                : 'bg-success/10 text-success'
+                          }`}>
+                            {Math.round(item.percent_elapsed)}%
+                          </span>
+                        </div>
+                        <div className="mt-3 h-2 rounded-full bg-secondary overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${
+                              item.sla_state === 'breached'
+                                ? 'bg-error'
+                                : item.sla_state === 'near_breach'
+                                  ? 'bg-warning'
+                                  : 'bg-success'
+                            }`}
+                            style={{ width: `${Math.min(item.percent_elapsed, 100)}%` }}
+                          />
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Due {formatDate(item.deadline_at)} · {item.hours_waiting.toFixed(1)}h of {item.sla_hours}h elapsed
+                        </p>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card overflow-hidden">
+            <div className="h-1.5 bg-gradient-to-r from-accent via-accent/70 to-transparent" />
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-5">
+                <div className="p-2.5 rounded-xl bg-accent/10">
+                  <Calendar className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h2 className="font-semibold text-foreground">Cash Flow Obligations</h2>
+                  <p className="text-sm text-muted-foreground">Upcoming projected payment commitments</p>
+                </div>
+              </div>
+
+              {cashFlowQuery.isError ? (
+                <ReportNotice
+                  tone="error"
+                  title="Cash-flow forecast unavailable"
+                  description="The obligations endpoint failed."
+                />
+              ) : cashFlowObligations.length === 0 && !cashFlowQuery.isLoading ? (
+                <ReportNotice
+                  title="No upcoming obligations"
+                  description="No approved or in-flight invoices were returned for forecasting."
+                />
+              ) : (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">7 days</p>
+                      <p className="mt-1 text-xl font-semibold text-foreground">{formatCents(cashDueThisWeek)}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">30 days</p>
+                      <p className="mt-1 text-xl font-semibold text-foreground">{formatCents(cashDueThisMonth)}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-secondary/50">
+                      <p className="text-xs text-muted-foreground">Late risk</p>
+                      <p className="mt-1 text-xl font-semibold text-error">{lateRiskCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
+                    {upcomingObligations.map((item) => (
+                      <Link
+                        key={item.invoice_id}
+                        href={`/invoices/${item.invoice_id}`}
+                        className="flex items-center justify-between gap-3 p-3 hover:bg-secondary/40 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium text-foreground truncate">{item.vendor_name}</p>
+                          <p className="text-sm text-muted-foreground truncate">
+                            {item.invoice_number} · {formatDate(item.projected_payment_date ?? item.due_date)}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="font-semibold text-foreground">{formatCents(item.amount_cents, item.currency)}</p>
+                          <p className={`text-xs ${item.late_risk ? 'text-error' : 'text-muted-foreground'}`}>
+                            {item.late_risk ? 'Late risk' : item.processing_status.replace(/_/g, ' ')}
+                          </p>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
