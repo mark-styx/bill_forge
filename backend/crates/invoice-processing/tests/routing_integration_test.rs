@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
-        ApprovalRequest, ApprovalStatus, CaptureStatus, CreateWorkflowTemplateInput, Invoice,
-        InvoiceId, ProcessingStatus, StageType, WorkflowRule, WorkflowRuleId, WorkflowRuleType,
-        WorkflowTemplate, WorkflowTemplateId, WorkflowTemplateStage,
+        ApprovalRequest, ApprovalStatus, ApprovalTarget, CaptureStatus,
+        CreateWorkflowTemplateInput, Invoice, InvoiceId, ProcessingStatus, StageType, WorkflowRule,
+        WorkflowRuleId, WorkflowRuleType, WorkflowTemplate, WorkflowTemplateId,
+        WorkflowTemplateStage,
     },
     intelligent_routing::{
         ApproverAvailability, ApproverWorkload, AvailabilityStatus, IntelligentRoutingEngine,
@@ -368,14 +369,13 @@ async fn test_routing_engine_present_returns_approver() {
         expertise: vec![],
     };
 
-    // When intelligent routing is wired in, this test should use .with_routing()
-    // and assert ApprovalTarget::User. For now the engine falls back to role-based.
     let approval_repo = Arc::new(MockApprovalRepo::new());
     let engine = WorkflowEngine::new(
         Arc::new(MockInvoiceRepo),
         Arc::new(MockRuleRepo),
         approval_repo.clone(),
-    );
+    )
+    .with_routing(Arc::new(MockRoutingProvider::with_context(ctx)));
 
     let invoice = test_invoice();
     let status = engine
@@ -387,11 +387,34 @@ async fn test_routing_engine_present_returns_approver() {
 
     let requests = approval_repo.created_requests();
     assert_eq!(requests.len(), 1);
-    // TODO: switch to ApprovalTarget::User once with_routing() is implemented
     match &requests[0].requested_from {
-        billforge_core::domain::ApprovalTarget::Role(role) => {
-            assert_eq!(role, "approver");
-        }
+        ApprovalTarget::User(user_id) => assert_eq!(user_id, &expected_approver),
+        other => panic!("Expected ApprovalTarget::Role, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_routing_engine_empty_context_falls_back_to_role() {
+    let approval_repo = Arc::new(MockApprovalRepo::new());
+    let engine = WorkflowEngine::new(
+        Arc::new(MockInvoiceRepo),
+        Arc::new(MockRuleRepo),
+        approval_repo.clone(),
+    )
+    .with_routing(Arc::new(MockRoutingProvider::empty()));
+
+    let invoice = test_invoice();
+    let status = engine
+        .process_invoice(&invoice.tenant_id, &invoice)
+        .await
+        .unwrap();
+
+    assert_eq!(status, ProcessingStatus::PendingApproval);
+
+    let requests = approval_repo.created_requests();
+    assert_eq!(requests.len(), 1);
+    match &requests[0].requested_from {
+        ApprovalTarget::Role(role) => assert_eq!(role, "approver"),
         other => panic!("Expected ApprovalTarget::Role, got {:?}", other),
     }
 }

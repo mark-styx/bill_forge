@@ -271,8 +271,11 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::ai::reject_action_proposal_handler,
         // Billing
         crate::routes::billing::list_plans,
+        crate::routes::billing::list_module_addons,
+        crate::routes::billing::quote_billing,
         crate::routes::billing::get_subscription,
         crate::routes::billing::get_usage,
+        crate::routes::billing::create_checkout,
         // Routing
         crate::routes::routing::route_invoice,
         crate::routes::routing::get_workload_stats,

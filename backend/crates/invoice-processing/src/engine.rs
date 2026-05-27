@@ -5,6 +5,7 @@ use billforge_core::{
         ActionType, ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus,
         RuleAction, RuleCondition, WorkflowRule, WorkflowRuleType,
     },
+    intelligent_routing::{IntelligentRoutingEngine, RoutingConfig, RoutingDataProvider},
     traits::{ApprovalRepository, InvoiceRepository, WorkflowRuleRepository},
     types::{TenantId, UserId},
     Result,
@@ -19,6 +20,7 @@ pub struct WorkflowEngine {
     invoice_repo: Arc<dyn InvoiceRepository>,
     rule_repo: Arc<dyn WorkflowRuleRepository>,
     approval_repo: Arc<dyn ApprovalRepository>,
+    routing_provider: Option<Arc<dyn RoutingDataProvider>>,
 }
 
 impl WorkflowEngine {
@@ -31,7 +33,13 @@ impl WorkflowEngine {
             invoice_repo,
             rule_repo,
             approval_repo,
+            routing_provider: None,
         }
+    }
+
+    pub fn with_routing(mut self, routing_provider: Arc<dyn RoutingDataProvider>) -> Self {
+        self.routing_provider = Some(routing_provider);
+        self
     }
 
     /// Process a submitted invoice through the workflow
@@ -178,7 +186,9 @@ impl WorkflowEngine {
             tenant_id,
             invoice,
             rule,
-            ApprovalTarget::Role("approver".to_string()),
+            self.intelligent_approval_target(tenant_id, invoice)
+                .await
+                .unwrap_or_else(|| ApprovalTarget::Role("approver".to_string())),
         )
         .await
     }
@@ -197,7 +207,10 @@ impl WorkflowEngine {
                 .and_then(|value| value.as_str())
                 .and_then(|user_id| uuid::Uuid::parse_str(user_id).ok())
                 .map(|user_id| ApprovalTarget::User(UserId::from_uuid(user_id)))
-                .unwrap_or_else(|| ApprovalTarget::Role("approver".to_string())),
+                .unwrap_or_else(|| {
+                    // Async routing is handled below for the no-explicit-user case.
+                    ApprovalTarget::Role("approver".to_string())
+                }),
             ActionType::RequireRoleApproval => action
                 .params
                 .get("role")
@@ -207,8 +220,53 @@ impl WorkflowEngine {
             _ => ApprovalTarget::Role("approver".to_string()),
         };
 
+        let target = if matches!(target, ApprovalTarget::Role(ref role) if role == "approver") {
+            self.intelligent_approval_target(tenant_id, invoice)
+                .await
+                .unwrap_or(target)
+        } else {
+            target
+        };
+
         self.create_approval_request_with_target(tenant_id, invoice, rule, target)
             .await
+    }
+
+    async fn intelligent_approval_target(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+    ) -> Option<ApprovalTarget> {
+        let provider = self.routing_provider.as_ref()?;
+        let context = match provider.get_routing_context(tenant_id).await {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    invoice_id = %invoice.id.as_uuid(),
+                    error = %error,
+                    "Intelligent routing context failed; falling back to role approval"
+                );
+                return None;
+            }
+        };
+
+        let mut config = RoutingConfig::default();
+        config.tenant_id = tenant_id.clone();
+        let engine = IntelligentRoutingEngine::new(config);
+        let decision = context.route(&engine, invoice);
+        let approver_id = decision.approver_id?;
+
+        tracing::info!(
+            tenant_id = %tenant_id,
+            invoice_id = %invoice.id.as_uuid(),
+            approver_id = %approver_id,
+            score = decision.score,
+            strategy = ?decision.strategy,
+            "Selected approval target through intelligent routing"
+        );
+
+        Some(ApprovalTarget::User(approver_id))
     }
 
     async fn create_approval_request_with_target(

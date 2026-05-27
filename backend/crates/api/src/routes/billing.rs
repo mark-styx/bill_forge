@@ -10,22 +10,36 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use billforge_billing::{BillingConfig, BillingService, BillingServiceTrait, Plan};
+use billforge_billing::{
+    quote_subscription, BillingConfig, BillingService, BillingServiceTrait, ModuleAddOn, Plan,
+};
+use billforge_core::Module;
 
 use crate::error::{ApiError, ApiResult};
 use crate::extractors::AuthUser;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct CheckoutRequest {
+pub struct CheckoutRequest {
     plan_id: String,
     billing_cycle: Option<String>,
+    #[serde(default)]
+    add_on_modules: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct QuoteRequest {
+    plan_id: String,
+    #[serde(default)]
+    add_on_modules: Vec<String>,
 }
 
 /// Create billing sub-router
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/plans", get(list_plans))
+        .route("/module-addons", get(list_module_addons))
+        .route("/quote", post(quote_billing))
         .route("/subscription", get(get_subscription))
         .route("/usage", get(get_usage))
         .route("/checkout", post(create_checkout))
@@ -45,6 +59,47 @@ async fn list_plans() -> Json<Value> {
     Json(json!({
         "plans": plans,
     }))
+}
+
+/// GET /billing/module-addons - return purchasable module add-on catalog
+#[utoipa::path(
+    get,
+    path = "/api/v1/billing/module-addons",
+    tag = "Billing",
+    responses(
+        (status = 200, description = "Available module add-ons"),
+    )
+)]
+pub async fn list_module_addons() -> Json<Value> {
+    Json(json!({
+        "module_addons": ModuleAddOn::catalog(),
+    }))
+}
+
+/// POST /billing/quote - price a base plan plus selected module add-ons
+#[utoipa::path(
+    post,
+    path = "/api/v1/billing/quote",
+    tag = "Billing",
+    request_body = QuoteRequest,
+    responses(
+        (status = 200, description = "Subscription quote"),
+        (status = 400, description = "Validation error"),
+    )
+)]
+pub async fn quote_billing(Json(req): Json<QuoteRequest>) -> ApiResult<Json<Value>> {
+    use billforge_billing::PlanId;
+
+    let plan_id: PlanId = req
+        .plan_id
+        .parse()
+        .map_err(|e| ApiError(billforge_core::Error::Validation(e)))?;
+    let add_on_modules = parse_modules(&req.add_on_modules)?;
+    let quote = quote_subscription(plan_id, &add_on_modules);
+
+    Ok(Json(json!({
+        "quote": quote,
+    })))
 }
 
 /// GET /billing/subscription - return current subscription (default free)
@@ -122,7 +177,7 @@ async fn get_usage(
         (status = 401, description = "Unauthorized"),
     )
 )]
-async fn create_checkout(
+pub async fn create_checkout(
     AuthUser(user): AuthUser,
     State(state): State<AppState>,
     Json(req): Json<CheckoutRequest>,
@@ -136,17 +191,36 @@ async fn create_checkout(
 
     let cycle = BillingCycle::from_str(req.billing_cycle.as_deref().unwrap_or("monthly"))
         .map_err(|e| ApiError(billforge_core::Error::Validation(e)))?;
+    let add_on_modules = parse_modules(&req.add_on_modules)?;
 
     let service = BillingService::new(BillingConfig::from_env(), state.db.metadata());
     let base =
         std::env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let outcome = service
-        .create_checkout(&user.tenant_id, &user.email, plan_id, cycle, &base)
+        .create_checkout_with_modules(
+            &user.tenant_id,
+            &user.email,
+            plan_id,
+            cycle,
+            &add_on_modules,
+            &base,
+        )
         .await?;
 
     Ok(Json(json!({
         "mode": outcome.mode,
         "url": outcome.url,
     })))
+}
+
+fn parse_modules(module_names: &[String]) -> ApiResult<Vec<Module>> {
+    module_names
+        .iter()
+        .map(|module_name| {
+            module_name
+                .parse::<Module>()
+                .map_err(|e| ApiError(billforge_core::Error::Validation(e)))
+        })
+        .collect()
 }

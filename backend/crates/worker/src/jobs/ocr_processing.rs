@@ -429,7 +429,10 @@ async fn run_straight_through_processing(
         Arc::new(InvoiceRepositoryImpl::new(pool.clone())) as Arc<dyn InvoiceRepository>,
         Arc::new(workflow_repo) as Arc<dyn WorkflowRuleRepository>,
         Arc::new(WorkflowRepositoryImpl::new(pool.clone())) as Arc<dyn ApprovalRepository>,
-    );
+    )
+    .with_routing(Arc::new(billforge_db::RoutingRepository::new(
+        pool.as_ref().clone(),
+    )));
     let final_status = engine.process_invoice(tenant_id, &invoice).await?;
 
     repo.update_processing_status(tenant_id, invoice_id, final_status)

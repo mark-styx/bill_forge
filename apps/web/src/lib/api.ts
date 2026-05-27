@@ -1711,12 +1711,19 @@ export interface BillingPlanModule {
   enabled: boolean;
 }
 
+export type BillingModule =
+  | 'invoice_capture'
+  | 'invoice_processing'
+  | 'vendor_management'
+  | 'reporting'
+  | 'ai_assistant';
+
 export interface BillingPlanFeatures {
   max_users: number;
   max_invoices_per_month: number;
   max_vendors: number;
   storage_gb: number;
-  modules: BillingPlanModule[];
+  modules: BillingModule[] | BillingPlanModule[];
   advanced_ocr: boolean;
   api_access: boolean;
   custom_workflows: boolean;
@@ -1743,6 +1750,7 @@ export interface BillingSubscription {
   plan_id: string;
   status: string;
   billing_cycle: string;
+  add_on_modules: BillingModule[];
   started_at: string;
   current_period_start: string;
   current_period_end: string;
@@ -1754,15 +1762,46 @@ export interface BillingSubscription {
   updated_at: string;
 }
 
+export interface BillingModuleAddOn {
+  module: BillingModule;
+  name: string;
+  description: string;
+  monthly_price_cents: number;
+  annual_price_cents: number;
+  stripe_monthly_price_id: string | null;
+  stripe_annual_price_id: string | null;
+}
+
+export interface BillingQuote {
+  base_plan: string;
+  base_monthly_cents: number;
+  base_annual_cents: number;
+  addon_modules: BillingModule[];
+  addon_monthly_cents: number;
+  addon_annual_cents: number;
+  total_monthly_cents: number;
+  total_annual_cents: number;
+}
+
 // Billing API
 export const billingApi = {
   listPlans: () =>
     api.get<{ plans: BillingPlan[] }>('/api/v1/billing/plans'),
 
+  listModuleAddons: () =>
+    api.get<{ module_addons: BillingModuleAddOn[] }>('/api/v1/billing/module-addons'),
+
+  quote: (data: { plan_id: string; add_on_modules?: BillingModule[] }) =>
+    api.post<{ quote: BillingQuote }>('/api/v1/billing/quote', data),
+
   getSubscription: () =>
     api.get<{ subscription: BillingSubscription }>('/api/v1/billing/subscription'),
 
-  createCheckout: (data: { plan_id: string; billing_cycle?: string }) =>
+  createCheckout: (data: {
+    plan_id: string;
+    billing_cycle?: string;
+    add_on_modules?: BillingModule[];
+  }) =>
     api.post<{ mode: string; url: string }>('/api/v1/billing/checkout', data),
 };
 

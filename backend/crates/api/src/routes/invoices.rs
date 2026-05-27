@@ -1052,7 +1052,10 @@ async fn submit_for_processing(
         Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
             pool.clone(),
         )) as Arc<dyn billforge_core::traits::ApprovalRepository>,
-    );
+    )
+    .with_routing(Arc::new(billforge_db::RoutingRepository::new(
+        pool.as_ref().clone(),
+    )));
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
 

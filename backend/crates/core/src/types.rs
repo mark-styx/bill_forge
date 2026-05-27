@@ -110,6 +110,21 @@ impl Module {
     }
 }
 
+impl std::str::FromStr for Module {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "invoice_capture" => Ok(Self::InvoiceCapture),
+            "invoice_processing" => Ok(Self::InvoiceProcessing),
+            "vendor_management" => Ok(Self::VendorManagement),
+            "reporting" => Ok(Self::Reporting),
+            "ai_assistant" => Ok(Self::AiAssistant),
+            _ => Err(format!("Unknown module: {}", s)),
+        }
+    }
+}
+
 /// User roles within the system
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

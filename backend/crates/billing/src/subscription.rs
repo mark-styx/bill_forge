@@ -1,6 +1,6 @@
 //! Subscription management
 
-use billforge_core::TenantId;
+use billforge_core::{Module, TenantId};
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -121,6 +121,9 @@ pub struct Subscription {
     pub status: SubscriptionStatus,
     /// Billing cycle
     pub billing_cycle: BillingCycle,
+    /// Individually purchased modules beyond the base plan bundle
+    #[serde(default)]
+    pub add_on_modules: Vec<Module>,
     /// When the subscription started
     pub started_at: DateTime<Utc>,
     /// When the current period started
@@ -164,6 +167,7 @@ impl Subscription {
             plan_id: PlanId::Free,
             status: SubscriptionStatus::Active,
             billing_cycle: BillingCycle::Monthly,
+            add_on_modules: vec![],
             started_at: now,
             current_period_start: period_start,
             current_period_end: now + chrono::Duration::days(365 * 100), // Effectively unlimited
@@ -186,6 +190,7 @@ impl Subscription {
             plan_id,
             status: SubscriptionStatus::Trialing,
             billing_cycle: BillingCycle::Monthly,
+            add_on_modules: vec![],
             started_at: now,
             current_period_start: now,
             current_period_end: trial_end,
@@ -220,6 +225,11 @@ impl Subscription {
     pub fn days_until_renewal(&self) -> i64 {
         let now = Utc::now();
         (self.current_period_end - now).num_days().max(0)
+    }
+
+    pub fn with_add_on_modules(mut self, add_on_modules: Vec<Module>) -> Self {
+        self.add_on_modules = add_on_modules;
+        self
     }
 }
 

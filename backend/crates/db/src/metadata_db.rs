@@ -42,6 +42,30 @@ impl MetadataDatabase {
             Error::Migration(format!("Failed to run EDI receiver map migration: {}", e))
         })?;
 
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/073_create_tenant_subscriptions.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run tenant subscriptions migration: {}",
+                e
+            ))
+        })?;
+
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/090_subscription_module_addons.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run subscription module add-ons migration: {}",
+                e
+            ))
+        })?;
+
         Ok(())
     }
 
