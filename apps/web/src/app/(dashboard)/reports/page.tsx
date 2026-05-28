@@ -1,8 +1,8 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { reportsApi } from '@/lib/api';
+import { reportsApi, predictiveApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import {
   ChartContainer,
@@ -32,6 +32,12 @@ import {
   Zap,
   RefreshCw,
   AlertCircle,
+  ShieldAlert,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Shield,
+  Bell,
 } from 'lucide-react';
 
 const emptySparkline = [0, 0, 0, 0, 0, 0, 0];
@@ -108,6 +114,43 @@ export default function ReportsPage() {
     queryFn: () => reportsApi.cashFlowObligations(),
     enabled: showProcessingMetrics,
   });
+
+  // --- Predictive Analytics Queries ---
+  const queryClient = useQueryClient();
+
+  const anomaliesQuery = useQuery({
+    queryKey: ['predictive-anomalies'],
+    queryFn: () => predictiveApi.getAnomalies(),
+  });
+
+  const budgetAlertsQuery = useQuery({
+    queryKey: ['predictive-budget-alerts'],
+    queryFn: () => predictiveApi.getBudgetAlerts(),
+  });
+
+  const anomalyRulesQuery = useQuery({
+    queryKey: ['predictive-anomaly-rules'],
+    queryFn: () => predictiveApi.getAnomalyRules(),
+  });
+
+  const detectAnomaliesMutation = useMutation({
+    mutationFn: () => predictiveApi.detectAnomalies(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['predictive-anomalies'] }),
+  });
+
+  const dismissAlertMutation = useMutation({
+    mutationFn: (id: string) => predictiveApi.dismissAlert(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['predictive-budget-alerts'] }),
+  });
+
+  const acknowledgeAnomalyMutation = useMutation({
+    mutationFn: (id: string) => predictiveApi.acknowledgeAnomaly(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['predictive-anomalies'] }),
+  });
+
+  const anomalies = anomaliesQuery.data ?? [];
+  const budgetAlerts = budgetAlertsQuery.data ?? [];
+  const anomalyRules = anomalyRulesQuery.data ?? [];
 
   const metrics = metricsQuery.data;
   const summary = summaryQuery.data;
@@ -205,7 +248,33 @@ export default function ReportsPage() {
     void vendorSpendQuery.refetch();
     void approvalSlaQuery.refetch();
     void cashFlowQuery.refetch();
+    void anomaliesQuery.refetch();
+    void budgetAlertsQuery.refetch();
+    void anomalyRulesQuery.refetch();
   };
+
+  const severityColor = (s: string) => {
+    switch (s) {
+      case 'critical': return 'text-error';
+      case 'high': return 'text-error';
+      case 'medium': return 'text-warning';
+      case 'low': return 'text-success';
+      default: return 'text-muted-foreground';
+    }
+  };
+
+  const severityBg = (s: string) => {
+    switch (s) {
+      case 'critical': return 'bg-error/10 text-error';
+      case 'high': return 'bg-error/10 text-error';
+      case 'medium': return 'bg-warning/10 text-warning';
+      case 'low': return 'bg-success/10 text-success';
+      default: return 'bg-secondary text-muted-foreground';
+    }
+  };
+
+  const anomalyTypeLabel = (t: string) =>
+    t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -816,6 +885,184 @@ export default function ReportsPage() {
             </div>
             <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-reporting group-hover:translate-x-1 transition-all" />
           </button>
+        </div>
+      </div>
+
+      {/* Predictive Insights */}
+      <div className="space-y-6">
+        <div className="card overflow-hidden">
+          <div className="h-1.5 bg-gradient-to-r from-reporting via-accent to-transparent" />
+          <div className="p-6">
+            <div className="flex items-center justify-between gap-3 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-reporting/10">
+                  <Sparkles className="w-5 h-5 text-reporting" />
+                </div>
+                <div>
+                  <h2 className="font-semibold text-foreground">Predictive Insights</h2>
+                  <p className="text-sm text-muted-foreground">Anomaly detection, budget alerts, and proactive recommendations</p>
+                </div>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => detectAnomaliesMutation.mutate()}
+                disabled={detectAnomaliesMutation.isPending}
+              >
+                <ShieldAlert className={`w-4 h-4 mr-1.5 ${detectAnomaliesMutation.isPending ? 'animate-pulse' : ''}`} />
+                Run Detection
+              </button>
+            </div>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              <div className="p-4 bg-secondary/50 rounded-xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <ShieldAlert className="w-4 h-4 text-error" />
+                  <span className="text-sm text-muted-foreground">Anomalies</span>
+                </div>
+                <p className="text-2xl font-bold text-foreground">{anomalies.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {anomalies.filter((a) => !a.acknowledged).length} unacknowledged
+                </p>
+              </div>
+              <div className="p-4 bg-secondary/50 rounded-xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <Bell className="w-4 h-4 text-warning" />
+                  <span className="text-sm text-muted-foreground">Budget Alerts</span>
+                </div>
+                <p className="text-2xl font-bold text-foreground">{budgetAlerts.length}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {budgetAlerts.filter((a) => a.severity === 'high' || a.severity === 'critical').length} high severity
+                </p>
+              </div>
+              <div className="p-4 bg-secondary/50 rounded-xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <Shield className="w-4 h-4 text-reporting" />
+                  <span className="text-sm text-muted-foreground">Active Rules</span>
+                </div>
+                <p className="text-2xl font-bold text-foreground">{anomalyRules.filter((r) => r.enabled).length}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  of {anomalyRules.length} configured
+                </p>
+              </div>
+              <div className="p-4 bg-secondary/50 rounded-xl">
+                <div className="flex items-center gap-2 mb-2">
+                  <Eye className="w-4 h-4 text-success" />
+                  <span className="text-sm text-muted-foreground">Acknowledged</span>
+                </div>
+                <p className="text-2xl font-bold text-foreground">{anomalies.filter((a) => a.acknowledged).length}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  reviewed by team
+                </p>
+              </div>
+            </div>
+
+            {/* Anomalies Table */}
+            <div className="mb-6">
+              <h3 className="text-sm font-medium text-foreground mb-3">Detected Anomalies</h3>
+              {anomaliesQuery.isError ? (
+                <ReportNotice
+                  tone="error"
+                  title="Anomaly data unavailable"
+                  description="The predictive anomalies endpoint failed."
+                />
+              ) : anomalies.length === 0 && !anomaliesQuery.isLoading ? (
+                <ReportNotice
+                  title="No anomalies detected"
+                  description="Run anomaly detection to scan recent invoices for duplicates, outliers, and volume spikes."
+                />
+              ) : (
+                <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
+                  {anomalies.slice(0, 8).map((anomaly) => (
+                    <div
+                      key={anomaly.id}
+                      className="flex items-center justify-between gap-3 p-3 hover:bg-secondary/40 transition-colors"
+                    >
+                      <div className="min-w-0 flex items-center gap-3">
+                        <span className={`text-xs font-medium rounded-full px-2 py-1 ${severityBg(anomaly.severity)}`}>
+                          {anomaly.severity}
+                        </span>
+                        <div>
+                          <p className="font-medium text-foreground truncate">
+                            {anomalyTypeLabel(anomaly.anomaly_type)}
+                          </p>
+                          <p className="text-sm text-muted-foreground truncate">
+                            {anomaly.entity_id} · {formatDate(anomaly.detected_at)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {anomaly.acknowledged ? (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <EyeOff className="w-3 h-3" /> Acknowledged
+                          </span>
+                        ) : (
+                          <button
+                            className="btn btn-secondary btn-sm text-xs"
+                            onClick={() => acknowledgeAnomalyMutation.mutate(anomaly.id)}
+                            disabled={acknowledgeAnomalyMutation.isPending}
+                          >
+                            <Eye className="w-3 h-3 mr-1" />
+                            Acknowledge
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Budget Alerts */}
+            <div>
+              <h3 className="text-sm font-medium text-foreground mb-3">Budget Alerts</h3>
+              {budgetAlertsQuery.isError ? (
+                <ReportNotice
+                  tone="error"
+                  title="Budget alerts unavailable"
+                  description="The budget alerts endpoint failed."
+                />
+              ) : budgetAlerts.length === 0 && !budgetAlertsQuery.isLoading ? (
+                <ReportNotice
+                  title="No active budget alerts"
+                  description="Budget thresholds and concentration risks will appear here when detected."
+                />
+              ) : (
+                <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
+                  {budgetAlerts.slice(0, 6).map((alert) => (
+                    <div
+                      key={alert.id}
+                      className="flex items-center justify-between gap-3 p-3 hover:bg-secondary/40 transition-colors"
+                    >
+                      <div className="min-w-0 flex items-center gap-3">
+                        <span className={`text-xs font-medium rounded-full px-2 py-1 ${severityBg(alert.severity)}`}>
+                          {alert.severity}
+                        </span>
+                        <div>
+                          <p className="font-medium text-foreground truncate">{alert.title}</p>
+                          <p className="text-sm text-muted-foreground truncate">{alert.message}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {alert.threshold_percentage != null && (
+                          <span className="text-sm font-semibold text-foreground">
+                            {alert.threshold_percentage.toFixed(1)}%
+                          </span>
+                        )}
+                        <button
+                          className="btn btn-secondary btn-sm text-xs"
+                          onClick={() => dismissAlertMutation.mutate(alert.id)}
+                          disabled={dismissAlertMutation.isPending}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
