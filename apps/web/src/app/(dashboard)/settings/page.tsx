@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
-import { api, billingApi, invoiceStatusApi, InvoiceStatusConfigInput } from '@/lib/api';
+import { api, billingApi, invoiceStatusApi, InvoiceStatusConfigInput, notificationsApi, NotificationPreference, UpdateNotificationPreferencesInput } from '@/lib/api';
 import { toast } from 'sonner';
 import { ColorPicker, ColorSwatch } from '@/components/ui/color-picker';
 import {
@@ -539,7 +539,7 @@ export default function SettingsPage() {
           {activeTab === 'profile' && (
             <div className="card p-6">
               <h2 className="text-lg font-semibold text-foreground mb-1">Profile Settings</h2>
-              <p className="text-sm text-muted-foreground mb-6">Update your personal information</p>
+              <p className="text-sm text-muted-foreground mb-6">View your personal information</p>
 
               <div className="space-y-4">
                 <div className="flex items-center gap-4 mb-6">
@@ -547,7 +547,7 @@ export default function SettingsPage() {
                     {user?.name?.[0]?.toUpperCase() || 'U'}
                   </div>
                   <div>
-                    <button className="btn btn-secondary btn-sm">
+                    <button className="btn btn-secondary btn-sm" disabled title="Avatar uploads are not yet available">
                       <Upload className="w-4 h-4 mr-1.5" />
                       Change Avatar
                     </button>
@@ -560,7 +560,8 @@ export default function SettingsPage() {
                     <input
                       type="text"
                       defaultValue={user?.name?.split(' ')[0] || ''}
-                      className="input"
+                      className="input bg-secondary/50"
+                      readOnly
                     />
                   </div>
                   <div>
@@ -568,7 +569,8 @@ export default function SettingsPage() {
                     <input
                       type="text"
                       defaultValue={user?.name?.split(' ').slice(1).join(' ') || ''}
-                      className="input"
+                      className="input bg-secondary/50"
+                      readOnly
                     />
                   </div>
                 </div>
@@ -583,8 +585,9 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="mt-6 pt-6 border-t border-border flex justify-end">
-                <button className="btn btn-primary btn-md">
+              <div className="mt-6 pt-6 border-t border-border flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">Profile editing is managed by your organization administrator.</p>
+                <button className="btn btn-primary btn-md" disabled title="Profile editing is not yet available">
                   <Save className="w-4 h-4 mr-1.5" />
                   Save Profile
                 </button>
@@ -594,31 +597,7 @@ export default function SettingsPage() {
 
           {/* Notifications Tab */}
           {activeTab === 'notifications' && (
-            <div className="card p-6">
-              <h2 className="text-lg font-semibold text-foreground mb-1">Notification Preferences</h2>
-              <p className="text-sm text-muted-foreground mb-6">Configure how you receive notifications</p>
-
-              <div className="space-y-1">
-                {[
-                  { label: 'Invoice received', description: 'When a new invoice is uploaded', default: true },
-                  { label: 'Approval required', description: 'When an invoice needs your approval', default: true },
-                  { label: 'Invoice approved', description: 'When your submitted invoice is approved', default: true },
-                  { label: 'Invoice rejected', description: 'When an invoice is rejected', default: true },
-                  { label: 'Weekly digest', description: 'Summary of weekly activity', default: false },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-center justify-between py-4 border-b border-border last:border-0">
-                    <div>
-                      <p className="font-medium text-foreground">{item.label}</p>
-                      <p className="text-sm text-muted-foreground">{item.description}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked={item.default} className="sr-only peer" />
-                      <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary" />
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <NotificationPreferencesTab />
           )}
 
           {/* Security Tab */}
@@ -631,11 +610,12 @@ export default function SettingsPage() {
                 <div>
                   <h3 className="font-medium text-foreground mb-3">Change Password</h3>
                   <div className="space-y-3 max-w-md">
-                    <input type="password" placeholder="Current password" className="input" />
-                    <input type="password" placeholder="New password" className="input" />
-                    <input type="password" placeholder="Confirm new password" className="input" />
+                    <input type="password" placeholder="Current password" className="input bg-secondary/50" disabled />
+                    <input type="password" placeholder="New password" className="input bg-secondary/50" disabled />
+                    <input type="password" placeholder="Confirm new password" className="input bg-secondary/50" disabled />
                   </div>
-                  <button className="btn btn-secondary btn-sm mt-4">Update Password</button>
+                  <button className="btn btn-secondary btn-sm mt-4" disabled title="Password changes are not yet available">Update Password</button>
+                  <p className="text-xs text-muted-foreground mt-2">Password management is coming soon.</p>
                 </div>
 
                 <div className="pt-6 border-t border-border">
@@ -643,7 +623,8 @@ export default function SettingsPage() {
                   <p className="text-sm text-muted-foreground mb-3">
                     Add an extra layer of security to your account
                   </p>
-                  <button className="btn btn-secondary btn-sm">Enable 2FA</button>
+                  <button className="btn btn-secondary btn-sm" disabled title="Two-factor authentication is not yet available">Enable 2FA</button>
+                  <p className="text-xs text-muted-foreground mt-2">Two-factor authentication is coming soon.</p>
                 </div>
 
                 <div className="pt-6 border-t border-border">
@@ -1198,6 +1179,96 @@ function BillingModulesTab() {
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+const NOTIFICATION_CHANNELS = [
+  { key: 'invoice_received', label: 'Invoice received', description: 'When a new invoice is uploaded' },
+  { key: 'approval_required', label: 'Approval required', description: 'When an invoice needs your approval' },
+  { key: 'invoice_approved', label: 'Invoice approved', description: 'When your submitted invoice is approved' },
+  { key: 'invoice_rejected', label: 'Invoice rejected', description: 'When an invoice is rejected' },
+  { key: 'weekly_digest', label: 'Weekly digest', description: 'Summary of weekly activity' },
+];
+
+function NotificationPreferencesTab() {
+  const queryClient = useQueryClient();
+
+  const { data: preferences, isLoading } = useQuery({
+    queryKey: ['notification-preferences'],
+    queryFn: () => notificationsApi.getPreferences(),
+  });
+
+  // Build a map from the API response for quick lookup
+  const prefMap = useCallback((): Record<string, boolean> => {
+    if (!preferences) return {};
+    const map: Record<string, boolean> = {};
+    for (const p of preferences) {
+      map[p.channel] = p.enabled;
+    }
+    return map;
+  }, [preferences]);
+
+  const updateMutation = useMutation({
+    mutationFn: (data: UpdateNotificationPreferencesInput) =>
+      notificationsApi.updatePreferences(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notification-preferences'] });
+      toast.success('Notification preference saved');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to save preference');
+    },
+  });
+
+  const handleToggle = (channel: string, enabled: boolean) => {
+    updateMutation.mutate({ channel, enabled });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="card p-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-6 bg-secondary rounded w-48" />
+          <div className="h-4 bg-secondary rounded w-72" />
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-14 bg-secondary rounded" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const enabled = prefMap();
+
+  return (
+    <div className="card p-6">
+      <h2 className="text-lg font-semibold text-foreground mb-1">Notification Preferences</h2>
+      <p className="text-sm text-muted-foreground mb-6">Configure how you receive notifications</p>
+
+      <div className="space-y-1">
+        {NOTIFICATION_CHANNELS.map((item) => {
+          const isOn = enabled[item.key] !== undefined ? enabled[item.key] : true;
+          return (
+            <div key={item.key} className="flex items-center justify-between py-4 border-b border-border last:border-0">
+              <div>
+                <p className="font-medium text-foreground">{item.label}</p>
+                <p className="text-sm text-muted-foreground">{item.description}</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isOn}
+                  onChange={(e) => handleToggle(item.key, e.target.checked)}
+                  disabled={updateMutation.isPending}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary peer-disabled:opacity-50" />
+              </label>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
