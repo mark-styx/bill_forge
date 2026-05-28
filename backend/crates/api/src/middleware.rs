@@ -40,6 +40,7 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/v1/sage-intacct/webhook/",
     "/api/v1/vendor-portal/",
     "/api/v1/billing/plans",
+    "/api/v1/billing/module-addons",
 ];
 
 fn is_public_path(path: &str) -> bool {

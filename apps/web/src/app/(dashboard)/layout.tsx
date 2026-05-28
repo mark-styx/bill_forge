@@ -25,6 +25,7 @@ import {
   Workflow,
   ListChecks,
   Sparkles,
+  CreditCard,
 } from 'lucide-react';
 
 interface NavItem {
@@ -63,6 +64,7 @@ const navigation: NavItem[] = [
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
   { name: 'Winston AI Assistant', href: '/ai-assistant', icon: Sparkles, module: 'ai_assistant' },
   { name: 'Integrations', href: '/integrations', icon: Workflow, module: null },
+  { name: 'Billing', href: '/settings', icon: CreditCard, module: null },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

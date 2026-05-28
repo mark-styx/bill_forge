@@ -125,10 +125,22 @@ function OnboardInner() {
         },
       });
 
+      // Build add_on_modules from onboarding OCR/ERP choices
+      const addOnModules: string[] = [];
+      if (selectedOcr === 'textract' || selectedOcr === 'google') {
+        addOnModules.push('invoice_capture');
+      }
+      if (selectedErp !== 'none') {
+        addOnModules.push('invoice_processing');
+      }
+
       // If a paid plan was selected from the pricing page, initiate checkout
       if (plan && plan !== 'free') {
         try {
-          const res = await billingApi.createCheckout({ plan_id: plan });
+          const res = await billingApi.createCheckout({
+            plan_id: plan,
+            add_on_modules: addOnModules,
+          });
           if (res.url.startsWith('http')) {
             // Real Stripe redirect
             window.location.href = res.url;

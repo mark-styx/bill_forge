@@ -101,7 +101,10 @@ describe('OnboardPage checkout wiring', () => {
     });
 
     await waitFor(() => {
-      expect(mockCreateCheckout).toHaveBeenCalledWith({ plan_id: 'starter' });
+      expect(mockCreateCheckout).toHaveBeenCalledWith({
+        plan_id: 'starter',
+        add_on_modules: [],
+      });
     });
 
     // Should navigate to the mock URL
@@ -160,5 +163,51 @@ describe('OnboardPage checkout wiring', () => {
     });
 
     expect(mockCreateCheckout).not.toHaveBeenCalled();
+  });
+
+  it('sends add_on_modules when textract OCR and quickbooks ERP are selected', async () => {
+    const user = userEvent.setup();
+    mockSearchParams = { plan: 'starter' };
+
+    mockProvision.mockResolvedValue(provisionResponse());
+    mockCreateCheckout.mockResolvedValue({
+      mode: 'mock',
+      url: '/dashboard?checkout=mock',
+    });
+
+    render(<OnboardPage />);
+
+    // Fill company name (step 0)
+    await user.type(screen.getByPlaceholderText('Acme Corporation'), 'TestCo');
+    await user.click(screen.getByText('Next'));
+
+    // Fill admin fields (step 1)
+    await user.type(screen.getByPlaceholderText('Jane Smith'), 'Test User');
+    await user.type(screen.getByPlaceholderText('jane@acme.com'), 'test@test.com');
+    await user.type(screen.getByPlaceholderText('Min 8 characters'), 'password1');
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'password1');
+    await user.click(screen.getByText('Next'));
+
+    // Select AWS Textract OCR (step 2)
+    await user.click(screen.getByText('AWS Textract'));
+    await user.click(screen.getByText('Next'));
+
+    // Select QuickBooks ERP (step 3)
+    await user.click(screen.getByText('QuickBooks Online'));
+    await user.click(screen.getByText('Next'));
+
+    // Step 4 - Launch
+    await user.click(screen.getByText('Launch BillForge'));
+
+    await waitFor(() => {
+      expect(mockProvision).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(mockCreateCheckout).toHaveBeenCalledWith({
+        plan_id: 'starter',
+        add_on_modules: ['invoice_capture', 'invoice_processing'],
+      });
+    });
   });
 });

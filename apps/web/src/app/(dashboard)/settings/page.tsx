@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore, themePresets, ThemeColors, generateGradient } from '@/stores/theme';
-import { api, invoiceStatusApi, InvoiceStatusConfigInput } from '@/lib/api';
+import { api, billingApi, invoiceStatusApi, InvoiceStatusConfigInput } from '@/lib/api';
 import { toast } from 'sonner';
 import { ColorPicker, ColorSwatch } from '@/components/ui/color-picker';
 import {
@@ -27,12 +27,17 @@ import {
   Trash2,
   ArrowUp,
   ArrowDown,
+  CreditCard,
+  CheckCircle,
+  XCircle,
+  Loader2,
 } from 'lucide-react';
 
 const tabs = [
   { id: 'appearance', name: 'Appearance', icon: Palette },
   { id: 'branding', name: 'Branding', icon: Sparkles },
   { id: 'statuses', name: 'Invoice Statuses', icon: Tags },
+  { id: 'billing', name: 'Billing & Modules', icon: CreditCard },
   { id: 'organization', name: 'Organization', icon: Building2 },
   { id: 'profile', name: 'Profile', icon: User },
   { id: 'notifications', name: 'Notifications', icon: Bell },
@@ -456,6 +461,11 @@ export default function SettingsPage() {
           {/* Invoice Statuses Tab */}
           {activeTab === 'statuses' && (
             <InvoiceStatusesTab />
+          )}
+
+          {/* Billing & Modules Tab */}
+          {activeTab === 'billing' && (
+            <BillingModulesTab />
           )}
 
           {/* Organization Tab */}
@@ -1078,6 +1088,116 @@ function InvoiceStatusesTab() {
           <li><strong>Active</strong> - Inactive statuses are hidden from dropdowns and filters</li>
           <li><strong>Custom statuses</strong> - Add organization-specific statuses beyond the defaults</li>
         </ul>
+      </div>
+    </div>
+  );
+}
+
+const MODULE_LABELS: Record<string, string> = {
+  invoice_capture: 'Invoice Capture',
+  invoice_processing: 'Invoice Processing',
+  vendor_management: 'Vendor Management',
+  reporting: 'Reporting & Analytics',
+  ai_assistant: 'Winston AI Assistant',
+};
+
+function BillingModulesTab() {
+  const { data: subData, isLoading: subLoading } = useQuery({
+    queryKey: ['billing-subscription'],
+    queryFn: () => billingApi.getSubscription(),
+  });
+  const { data: usageData, isLoading: usageLoading } = useQuery({
+    queryKey: ['billing-usage'],
+    queryFn: () => api.get<{ usage: { invoices_count: number; vendor_count: number; user_count: number }; plan_id: string }>('/api/v1/billing/usage'),
+  });
+
+  const subscription = subData?.subscription;
+  const usage = usageData?.usage;
+  const loading = subLoading || usageLoading;
+
+  if (loading) {
+    return (
+      <div className="card p-6 flex items-center justify-center min-h-[200px]">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const planLabel = subscription?.plan_id
+    ? subscription.plan_id.charAt(0).toUpperCase() + subscription.plan_id.slice(1)
+    : 'Free';
+  const statusLabel = subscription?.status
+    ? subscription.status.charAt(0).toUpperCase() + subscription.status.replace('_', ' ').slice(1)
+    : 'Active';
+  const isActive = subscription?.status === 'active' || subscription?.status === 'trialing';
+  const enabledModules: string[] = subscription?.add_on_modules || [];
+
+  return (
+    <div className="space-y-6">
+      {/* Current Plan */}
+      <div className="card p-6">
+        <h2 className="text-lg font-semibold text-foreground mb-1">Current Plan</h2>
+        <p className="text-sm text-muted-foreground mb-4">Your subscription and billing details</p>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="p-4 bg-secondary/50 rounded-xl">
+            <p className="text-xs text-muted-foreground">Plan</p>
+            <p className="text-lg font-semibold text-foreground">{planLabel}</p>
+          </div>
+          <div className="p-4 bg-secondary/50 rounded-xl">
+            <p className="text-xs text-muted-foreground">Status</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              {isActive ? (
+                <CheckCircle className="w-4 h-4 text-success" />
+              ) : (
+                <XCircle className="w-4 h-4 text-error" />
+              )}
+              <span className="text-sm font-medium text-foreground">{statusLabel}</span>
+            </div>
+          </div>
+          <div className="p-4 bg-secondary/50 rounded-xl">
+            <p className="text-xs text-muted-foreground">Invoices This Period</p>
+            <p className="text-lg font-semibold text-foreground">{usage?.invoices_count ?? 0}</p>
+          </div>
+          <div className="p-4 bg-secondary/50 rounded-xl">
+            <p className="text-xs text-muted-foreground">Vendors</p>
+            <p className="text-lg font-semibold text-foreground">{usage?.vendor_count ?? 0}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Enabled Modules */}
+      <div className="card p-6">
+        <h2 className="text-lg font-semibold text-foreground mb-1">Enabled Modules</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Modules included in your plan or purchased as add-ons
+        </p>
+
+        <div className="space-y-3">
+          {Object.entries(MODULE_LABELS).map(([key, label]) => {
+            const isEnabled = enabledModules.includes(key);
+            return (
+              <div
+                key={key}
+                className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  {isEnabled ? (
+                    <CheckCircle className="w-4 h-4 text-success" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-muted-foreground/40" />
+                  )}
+                  <span className={`text-sm font-medium ${isEnabled ? 'text-foreground' : 'text-muted-foreground'}`}>
+                    {label}
+                  </span>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${isEnabled ? 'bg-success/10 text-success' : 'bg-secondary text-muted-foreground'}`}>
+                  {isEnabled ? 'Active' : 'Not enabled'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
