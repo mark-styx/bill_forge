@@ -11,7 +11,9 @@ mod slack;
 mod teams;
 
 pub use notification_router::{NotificationPreference, NotificationRouter};
-pub use slack::{SlackClient, SlackConfig, SlackError};
+pub use slack::{
+    InMemorySlackUserStore, SlackClient, SlackConfig, SlackError, SlackUserConfig, SlackUserStore,
+};
 pub use teams::{TeamsClient, TeamsConfig, TeamsError};
 
 use async_trait::async_trait;

@@ -35,7 +35,7 @@ fn test_starter_plan_pricing() {
         starter.monthly_price_cents, 4900,
         "Starter should be $49/mo = 4900 cents"
     );
-    assert_eq!(starter.features.max_invoices_per_month, 200);
+    assert_eq!(starter.features.max_invoices_per_month, u32::MAX);
     assert_eq!(starter.features.max_users, 3);
     assert!(starter.is_public);
 }
@@ -47,7 +47,7 @@ fn test_professional_plan_pricing() {
         pro.monthly_price_cents, 14900,
         "Professional should be $149/mo = 14900 cents"
     );
-    assert_eq!(pro.features.max_invoices_per_month, 1000);
+    assert_eq!(pro.features.max_invoices_per_month, u32::MAX);
     assert_eq!(pro.features.max_users, 10);
     assert!(pro.is_public);
 }

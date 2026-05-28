@@ -3,18 +3,65 @@
 //! Provides OAuth-based Slack integration with interactive message buttons
 //! for approval workflows.
 
-use crate::{Notification, NotificationError, NotificationProvider, NotificationResult};
+use crate::{Notification, NotificationChannel, NotificationError, NotificationProvider, NotificationResult};
 use async_trait::async_trait;
 use billforge_core::UserId;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::warn;
 use uuid::Uuid;
+
+/// Per-user Slack credentials stored after OAuth completion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlackUserConfig {
+    pub access_token: String,
+    pub slack_user_id: Option<String>,
+    pub channel_id: Option<String>,
+}
 
 /// Slack API client
 pub struct SlackClient {
     config: SlackConfig,
     http_client: Client,
+    /// Runtime user configs - in production this would be a database-backed store.
+    /// Uses `Arc<dyn …>` so callers can inject a real persistence layer.
+    user_configs: Arc<dyn SlackUserStore + Send + Sync>,
+}
+
+/// Abstraction over per-user Slack credential storage.
+pub trait SlackUserStore: Send + Sync {
+    fn get(&self, user_id: &UserId) -> Option<SlackUserConfig>;
+}
+
+/// Simple in-memory store used by default and in tests.
+pub struct InMemorySlackUserStore {
+    configs: HashMap<UserId, SlackUserConfig>,
+}
+
+impl InMemorySlackUserStore {
+    pub fn new() -> Self {
+        Self {
+            configs: HashMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, user_id: UserId, config: SlackUserConfig) {
+        self.configs.insert(user_id, config);
+    }
+}
+
+impl Default for InMemorySlackUserStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SlackUserStore for InMemorySlackUserStore {
+    fn get(&self, user_id: &UserId) -> Option<SlackUserConfig> {
+        self.configs.get(user_id).cloned()
+    }
 }
 
 /// Slack configuration
@@ -238,11 +285,24 @@ pub enum SlackError {
 }
 
 impl SlackClient {
-    /// Create a new Slack client
+    /// Create a new Slack client with default in-memory user store
     pub fn new(config: SlackConfig) -> Result<Self, SlackError> {
         Ok(Self {
             config,
             http_client: Client::new(),
+            user_configs: Arc::new(InMemorySlackUserStore::new()),
+        })
+    }
+
+    /// Create a new Slack client with a custom user store (e.g. database-backed)
+    pub fn new_with_store(
+        config: SlackConfig,
+        store: Arc<dyn SlackUserStore + Send + Sync>,
+    ) -> Result<Self, SlackError> {
+        Ok(Self {
+            config,
+            http_client: Client::new(),
+            user_configs: store,
         })
     }
 
@@ -425,23 +485,48 @@ impl NotificationProvider for SlackClient {
         &self,
         notification: &Notification,
     ) -> Result<NotificationResult, NotificationError> {
-        // This is a placeholder - actual implementation would need to:
-        // 1. Fetch user's Slack access token and channel from database
-        // 2. Send message using send_message()
-        // 3. Return result with external message ID
+        let user_config = self
+            .user_configs
+            .get(&notification.user_id)
+            .ok_or_else(|| NotificationError::NotConfigured(notification.user_id.clone()))?;
 
-        Err(NotificationError::NotConfigured(
-            notification.user_id.clone(),
-        ))
+        // Determine channel: prefer explicit channel_id, otherwise open DM via slack_user_id
+        let channel = if let Some(ref ch) = user_config.channel_id {
+            ch.clone()
+        } else if let Some(ref slack_uid) = user_config.slack_user_id {
+            self.open_im_channel(&user_config.access_token, slack_uid)
+                .await?
+        } else {
+            return Err(NotificationError::NotConfigured(
+                notification.user_id.clone(),
+            ));
+        };
+
+        match self
+            .send_message(&user_config.access_token, &channel, notification)
+            .await
+        {
+            Ok((_channel_id, ts)) => Ok(NotificationResult {
+                success: true,
+                channel: NotificationChannel::Slack,
+                external_id: Some(ts),
+                error_message: None,
+            }),
+            Err(e) => Ok(NotificationResult {
+                success: false,
+                channel: NotificationChannel::Slack,
+                external_id: None,
+                error_message: Some(e.to_string()),
+            }),
+        }
     }
 
     fn provider_name(&self) -> &'static str {
         "slack"
     }
 
-    async fn is_configured(&self, _user_id: &UserId) -> Result<bool, NotificationError> {
-        // Placeholder - would check database for Slack connection
-        Ok(false)
+    async fn is_configured(&self, user_id: &UserId) -> Result<bool, NotificationError> {
+        Ok(self.user_configs.get(user_id).is_some())
     }
 }
 
@@ -449,16 +534,18 @@ impl NotificationProvider for SlackClient {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_block_message() {
-        let config = SlackConfig {
+    fn test_config() -> SlackConfig {
+        SlackConfig {
             client_id: "test".to_string(),
             client_secret: "secret".to_string(),
             redirect_uri: "http://localhost/callback".to_string(),
             signing_secret: "secret".to_string(),
-        };
+        }
+    }
 
-        let client = SlackClient::new(config).unwrap();
+    #[test]
+    fn test_build_block_message() {
+        let client = SlackClient::new(test_config()).unwrap();
 
         let notification = Notification::new(
             UserId(Uuid::new_v4()),
@@ -473,14 +560,7 @@ mod tests {
 
     #[test]
     fn test_oauth_url_generation() {
-        let config = SlackConfig {
-            client_id: "test_client_id".to_string(),
-            client_secret: "secret".to_string(),
-            redirect_uri: "http://localhost/callback".to_string(),
-            signing_secret: "secret".to_string(),
-        };
-
-        let client = SlackClient::new(config).unwrap();
+        let client = SlackClient::new(test_config()).unwrap();
 
         let state = SlackOAuthState {
             tenant_id: Uuid::new_v4(),
@@ -490,7 +570,94 @@ mod tests {
         };
 
         let url = client.get_authorize_url(&state);
-        assert!(url.contains("test_client_id"));
+        assert!(url.contains("client_id=test"));
         assert!(url.contains("test_state"));
+    }
+
+    #[tokio::test]
+    async fn test_is_configured_false_when_no_user_config() {
+        let client = SlackClient::new(test_config()).unwrap();
+        let user_id = UserId(Uuid::new_v4());
+        assert!(!client.is_configured(&user_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_configured_true_when_user_config_present() {
+        let user_id = UserId(Uuid::new_v4());
+        let store = Arc::new({
+            let mut s = InMemorySlackUserStore::new();
+            s.add(
+                user_id.clone(),
+                SlackUserConfig {
+                    access_token: "xoxb-test".to_string(),
+                    slack_user_id: Some("U123".to_string()),
+                    channel_id: None,
+                },
+            );
+            s
+        });
+
+        let client = SlackClient::new_with_store(test_config(), store).unwrap();
+        assert!(client.is_configured(&user_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_send_returns_not_configured_when_no_user_config() {
+        let client = SlackClient::new(test_config()).unwrap();
+        let user_id = UserId(Uuid::new_v4());
+        let notification = Notification::new(
+            user_id.clone(),
+            crate::NotificationType::ApprovalRequest,
+            "Test".to_string(),
+            "Test message".to_string(),
+        );
+
+        let result = client.send(&notification).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            NotificationError::NotConfigured(uid) => assert_eq!(uid, user_id),
+            other => panic!("Expected NotConfigured, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_returns_not_configured_when_no_channel_or_slack_uid() {
+        let user_id = UserId(Uuid::new_v4());
+        let store = Arc::new({
+            let mut s = InMemorySlackUserStore::new();
+            s.add(
+                user_id.clone(),
+                SlackUserConfig {
+                    access_token: "xoxb-test".to_string(),
+                    slack_user_id: None,
+                    channel_id: None,
+                },
+            );
+            s
+        });
+
+        let client = SlackClient::new_with_store(test_config(), store).unwrap();
+
+        let notification = Notification::new(
+            user_id.clone(),
+            crate::NotificationType::ApprovalRequest,
+            "Test".to_string(),
+            "Test message".to_string(),
+        );
+
+        let result = client.send(&notification).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NotificationError::NotConfigured(_) => {}
+            other => panic!("Expected NotConfigured, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_in_memory_store_default() {
+        let store = InMemorySlackUserStore::default();
+        let uid = UserId(Uuid::new_v4());
+        assert!(store.get(&uid).is_none());
     }
 }
