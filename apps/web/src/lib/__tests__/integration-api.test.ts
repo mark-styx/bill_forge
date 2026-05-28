@@ -194,6 +194,33 @@ describe('Integration API URL paths', () => {
     );
   });
 
+  it('sageIntacctApi.connect posts the full credential payload', async () => {
+    const spy = mockOk();
+    await sageIntacctApi.connect({
+      sender_id: 'sender-1',
+      sender_password: 'sender-secret',
+      company_id: 'company-1',
+      entity_id: 'entity-1',
+      user_id: 'user-1',
+      user_password: 'user-secret',
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/sage-intacct/connect'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          sender_id: 'sender-1',
+          sender_password: 'sender-secret',
+          company_id: 'company-1',
+          entity_id: 'entity-1',
+          user_id: 'user-1',
+          user_password: 'user-secret',
+        }),
+      }),
+    );
+  });
+
   it('salesforceApi.syncAccounts hits /api/v1/salesforce/sync/accounts', async () => {
     const spy = mockOk();
     await salesforceApi.syncAccounts();
@@ -218,6 +245,31 @@ describe('Integration API URL paths', () => {
     expect(spy).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/bill-com/pay/bill/abc-123'),
       expect.anything(),
+    );
+  });
+
+  it('billComApi.connect posts credential payload instead of using GET', async () => {
+    const spy = mockOk();
+    await billComApi.connect({
+      dev_key: 'dev-key',
+      org_id: 'org-1',
+      user_name: 'finance@example.com',
+      password: 'bill-secret',
+      environment: 'sandbox',
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/bill-com/connect'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          dev_key: 'dev-key',
+          org_id: 'org-1',
+          user_name: 'finance@example.com',
+          password: 'bill-secret',
+          environment: 'sandbox',
+        }),
+      }),
     );
   });
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { reportsApi, predictiveApi } from '@/lib/api';
@@ -10,13 +11,10 @@ import {
   BillForgeBarChart,
   BillForgeLineChart,
   BillForgeDonutChart,
-  BillForgeProgressChart,
   BillForgeSparkline,
 } from '@/components/ui/charts';
 import {
   BarChart3,
-  TrendingUp,
-  TrendingDown,
   DollarSign,
   Clock,
   Download,
@@ -24,12 +22,9 @@ import {
   Users,
   FileText,
   ScanLine,
-  CheckCircle,
   ArrowRight,
   Filter,
   Activity,
-  Target,
-  Zap,
   RefreshCw,
   AlertCircle,
   ShieldAlert,
@@ -41,6 +36,32 @@ import {
 } from 'lucide-react';
 
 const emptySparkline = [0, 0, 0, 0, 0, 0, 0];
+
+type DatePreset = 'last_30_days' | 'last_90_days' | 'last_12_months';
+type ReportSectionFilter = 'all' | 'cash_flow' | 'vendors' | 'processing' | 'ocr';
+type StatusFilter = 'all' | 'submitted' | 'pending_approval' | 'approved' | 'ready_for_payment';
+
+const reportDatePresets: Record<DatePreset, { label: string; days: number; groupBy: 'day' | 'week' | 'month' }> = {
+  last_30_days: { label: 'Last 30 days', days: 30, groupBy: 'day' },
+  last_90_days: { label: 'Last 90 days', days: 90, groupBy: 'week' },
+  last_12_months: { label: 'Last 12 months', days: 365, groupBy: 'month' },
+};
+
+const reportSections = [
+  { id: 'all', label: 'All reports' },
+  { id: 'cash_flow', label: 'Cash flow' },
+  { id: 'vendors', label: 'Vendors' },
+  { id: 'processing', label: 'Processing' },
+  { id: 'ocr', label: 'OCR' },
+] satisfies Array<{ id: ReportSectionFilter; label: string }>;
+
+const statusFilters = [
+  { id: 'all', label: 'All statuses' },
+  { id: 'submitted', label: 'Submitted' },
+  { id: 'pending_approval', label: 'Pending approval' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'ready_for_payment', label: 'Ready for payment' },
+] satisfies Array<{ id: StatusFilter; label: string }>;
 
 function ReportNotice({ title, description, tone = 'muted' }: {
   title: string;
@@ -63,10 +84,31 @@ function ReportNotice({ title, description, tone = 'muted' }: {
 
 export default function ReportsPage() {
   const { hasModule } = useAuthStore();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [datePreset, setDatePreset] = useState<DatePreset>('last_12_months');
+  const [sectionFilter, setSectionFilter] = useState<ReportSectionFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [lateRiskOnly, setLateRiskOnly] = useState(false);
+  const [cashThresholdInput, setCashThresholdInput] = useState('100000');
+  const [scenarioVendor, setScenarioVendor] = useState('all');
+  const [scenarioDelayInput, setScenarioDelayInput] = useState('0');
+  const [scenarioDiscountPercent, setScenarioDiscountPercent] = useState('0');
 
   const showOcrMetrics = hasModule('invoice_capture');
   const showProcessingMetrics = hasModule('invoice_processing');
   const showVendorMetrics = hasModule('vendor_management');
+  const selectedPreset = reportDatePresets[datePreset];
+  const reportDateRange = useMemo(() => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - selectedPreset.days);
+
+    return {
+      start_date: start.toISOString().slice(0, 10),
+      end_date: end.toISOString().slice(0, 10),
+      group_by: selectedPreset.groupBy,
+    };
+  }, [selectedPreset.days, selectedPreset.groupBy]);
 
   const metricsQuery = useQuery({
     queryKey: ['workflow-metrics'],
@@ -87,14 +129,14 @@ export default function ReportsPage() {
   });
 
   const spendTrendQuery = useQuery({
-    queryKey: ['spend-trends'],
-    queryFn: () => reportsApi.spendTrends(),
+    queryKey: ['spend-trends', reportDateRange],
+    queryFn: () => reportsApi.spendTrends(reportDateRange),
     enabled: showProcessingMetrics,
   });
 
   const vendorSpendQuery = useQuery({
-    queryKey: ['vendor-spend'],
-    queryFn: () => reportsApi.invoicesByVendor(),
+    queryKey: ['vendor-spend', reportDateRange],
+    queryFn: () => reportsApi.invoicesByVendor(reportDateRange),
     enabled: showVendorMetrics,
   });
 
@@ -202,22 +244,87 @@ export default function ReportsPage() {
   weekEnd.setDate(now.getDate() + 7);
   const monthEnd = new Date(now);
   monthEnd.setDate(now.getDate() + 30);
-  const cashDueThisWeek = cashFlowObligations
+  const cashDateRangeStart = new Date(now);
+  cashDateRangeStart.setHours(0, 0, 0, 0);
+  const cashDateRangeEnd = new Date(now);
+  cashDateRangeEnd.setDate(now.getDate() + selectedPreset.days);
+  cashDateRangeEnd.setHours(23, 59, 59, 999);
+  const obligationDate = (item: { projected_payment_date?: string | null; due_date?: string | null }) =>
+    item.projected_payment_date ?? item.due_date ?? null;
+  const cashFlowInDateRange = cashFlowObligations.filter((item) => {
+    const due = obligationDate(item);
+    if (!due) return false;
+    const date = new Date(due);
+    return date >= cashDateRangeStart && date <= cashDateRangeEnd;
+  });
+  const filteredCashFlowObligations = cashFlowInDateRange.filter((item) => {
+    if (statusFilter !== 'all' && item.processing_status !== statusFilter) return false;
+    if (lateRiskOnly && !item.late_risk) return false;
+    return true;
+  });
+  const cashDueThisWeek = filteredCashFlowObligations
     .filter((item) => {
-      if (!item.projected_payment_date) return false;
-      const date = new Date(item.projected_payment_date);
+      const due = obligationDate(item);
+      if (!due) return false;
+      const date = new Date(due);
       return date >= now && date <= weekEnd;
     })
     .reduce((sum, item) => sum + item.amount_cents, 0);
-  const cashDueThisMonth = cashFlowObligations
+  const cashDueThisMonth = filteredCashFlowObligations
     .filter((item) => {
-      if (!item.projected_payment_date) return false;
-      const date = new Date(item.projected_payment_date);
+      const due = obligationDate(item);
+      if (!due) return false;
+      const date = new Date(due);
       return date >= now && date <= monthEnd;
     })
     .reduce((sum, item) => sum + item.amount_cents, 0);
-  const lateRiskCount = cashFlowObligations.filter((item) => item.late_risk).length;
-  const upcomingObligations = cashFlowObligations.slice(0, 6);
+  const lateRiskCount = filteredCashFlowObligations.filter((item) => item.late_risk).length;
+  const upcomingObligations = filteredCashFlowObligations.slice(0, 6);
+  const vendorOptions = Array.from(new Set(cashFlowInDateRange.map((item) => item.vendor_name))).sort();
+  const cashThresholdCents = Math.max(0, Math.round((Number(cashThresholdInput) || 0) * 100));
+  const scenarioDelayDays = Math.max(0, Math.min(90, Number(scenarioDelayInput) || 0));
+  const scenarioDiscountRate = Math.max(0, Math.min(25, Number(scenarioDiscountPercent) || 0)) / 100;
+  const scenarioObligations = filteredCashFlowObligations.map((item) => {
+    if (scenarioVendor !== 'all' && item.vendor_name !== scenarioVendor) return item;
+    const due = obligationDate(item);
+    const adjustedDate = due ? new Date(due) : null;
+    adjustedDate?.setDate(adjustedDate.getDate() + scenarioDelayDays);
+    return {
+      ...item,
+      amount_cents: Math.round(item.amount_cents * (1 - scenarioDiscountRate)),
+      projected_payment_date: adjustedDate ? adjustedDate.toISOString().slice(0, 10) : item.projected_payment_date,
+    };
+  });
+  const modeledCashDueThisMonth = scenarioObligations
+    .filter((item) => {
+      const due = obligationDate(item);
+      if (!due) return false;
+      const date = new Date(due);
+      return date >= now && date <= monthEnd;
+    })
+    .reduce((sum, item) => sum + item.amount_cents, 0);
+  const modeledSavings = filteredCashFlowObligations.reduce((sum, item, index) => {
+    return sum + Math.max(0, item.amount_cents - scenarioObligations[index].amount_cents);
+  }, 0);
+  const buildBucketTotals = (items: typeof filteredCashFlowObligations, bucket: 'week' | 'month') => {
+    const totals = items.reduce<Record<string, number>>((acc, item) => {
+      const due = obligationDate(item);
+      if (!due) return acc;
+      const date = new Date(due);
+      const label = bucket === 'week'
+        ? `Week of ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date)}`
+        : new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(date);
+      acc[label] = (acc[label] ?? 0) + item.amount_cents;
+      return acc;
+    }, {});
+
+    return Object.entries(totals)
+      .map(([name, amount]) => ({ name, amount }))
+      .slice(0, 6);
+  };
+  const weeklyCashFlow = buildBucketTotals(scenarioObligations, 'week');
+  const monthlyCashFlow = buildBucketTotals(scenarioObligations, 'month');
+  const thresholdExceeded = cashThresholdCents > 0 && modeledCashDueThisMonth > cashThresholdCents;
   const approvalSla = approvalSlaQuery.data;
   const bottleneckApprovers = (approvalSla?.items ?? [])
     .reduce<Record<string, number>>((acc, item) => {
@@ -253,16 +360,6 @@ export default function ReportsPage() {
     void anomalyRulesQuery.refetch();
   };
 
-  const severityColor = (s: string) => {
-    switch (s) {
-      case 'critical': return 'text-error';
-      case 'high': return 'text-error';
-      case 'medium': return 'text-warning';
-      case 'low': return 'text-success';
-      default: return 'text-muted-foreground';
-    }
-  };
-
   const severityBg = (s: string) => {
     switch (s) {
       case 'critical': return 'bg-error/10 text-error';
@@ -275,6 +372,7 @@ export default function ReportsPage() {
 
   const anomalyTypeLabel = (t: string) =>
     t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const showSection = (section: ReportSectionFilter) => sectionFilter === 'all' || sectionFilter === section;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -294,7 +392,7 @@ export default function ReportsPage() {
             <RefreshCw className={`w-4 h-4 mr-1.5 ${anyLoading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <button className="btn btn-secondary btn-sm">
+          <button className="btn btn-secondary btn-sm" onClick={() => setFiltersOpen((open) => !open)}>
             <Filter className="w-4 h-4 mr-1.5" />
             Filter
           </button>
@@ -305,6 +403,57 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {filtersOpen && (
+        <div className="card p-4" aria-label="Report filters">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">Date range</span>
+              <select
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                value={datePreset}
+                onChange={(event) => setDatePreset(event.target.value as DatePreset)}
+              >
+                {Object.entries(reportDatePresets).map(([value, preset]) => (
+                  <option key={value} value={value}>{preset.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">Report section</span>
+              <select
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                value={sectionFilter}
+                onChange={(event) => setSectionFilter(event.target.value as ReportSectionFilter)}
+              >
+                {reportSections.map((section) => (
+                  <option key={section.id} value={section.id}>{section.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-foreground">Payment status</span>
+              <select
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+              >
+                {statusFilters.map((status) => (
+                  <option key={status.id} value={status.id}>{status.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={lateRiskOnly}
+                onChange={(event) => setLateRiskOnly(event.target.checked)}
+              />
+              <span>Late-risk obligations only</span>
+            </label>
+          </div>
+        </div>
+      )}
+
       {reportError && (
         <ReportNotice
           tone="error"
@@ -314,7 +463,7 @@ export default function ReportsPage() {
       )}
 
       {/* Key Metrics - Modern Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div id="monthly-summary" className="grid grid-cols-2 lg:grid-cols-4 gap-4 scroll-mt-24">
         {showVendorMetrics && (
           <div className="bright-stat-card group animate-fade-in-up">
             <div className="absolute top-0 left-0 w-1 h-full rounded-l-2xl bg-gradient-to-b from-vendor to-vendor/50" />
@@ -340,10 +489,6 @@ export default function ReportsPage() {
               <div className="flex items-center justify-between mb-3">
                 <div className="p-2.5 rounded-xl bg-capture/10">
                   <FileText className="w-5 h-5 text-capture" />
-                </div>
-                <div className="flex items-center gap-1 text-xs font-medium text-success">
-                  <TrendingUp className="w-3 h-3" />
-                  12%
                 </div>
               </div>
               <p className="text-2xl font-bold text-foreground">{summary?.invoices_processed_today ?? '—'}</p>
@@ -375,10 +520,6 @@ export default function ReportsPage() {
               <div className="p-2.5 rounded-xl bg-processing/10">
                 <Clock className="w-5 h-5 text-processing" />
               </div>
-              <div className="flex items-center gap-1 text-xs font-medium text-success">
-                <TrendingDown className="w-3 h-3" />
-                -15%
-              </div>
             </div>
             <p className="text-2xl font-bold text-foreground">{metrics?.avg_processing_time_hours?.toFixed(1) ?? '—'}h</p>
             <p className="text-sm text-muted-foreground">Avg Processing</p>
@@ -387,7 +528,8 @@ export default function ReportsPage() {
       </div>
 
       {/* Main Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {showProcessingMetrics && showSection('processing') && (
+      <div id="invoice-volume" className="grid grid-cols-1 lg:grid-cols-3 gap-6 scroll-mt-24">
         {/* Invoice Volume Chart */}
         <div className="lg:col-span-2">
           <ChartContainer
@@ -467,10 +609,11 @@ export default function ReportsPage() {
           )}
         </ChartContainer>
       </div>
+      )}
 
       {/* OCR Metrics - Enhanced */}
-      {showOcrMetrics && (
-        <div className="card overflow-hidden">
+      {showOcrMetrics && showSection('ocr') && (
+        <div id="ocr-performance" className="card overflow-hidden scroll-mt-24">
           <div className="h-1.5 bg-gradient-to-r from-capture via-capture/70 to-transparent" />
           <div className="p-6">
             <div className="flex items-center gap-3 mb-6">
@@ -483,19 +626,14 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="text-center">
-                <BillForgeProgressChart
-                  value={94}
-                  color="capture"
-                  label="OCR Accuracy"
-                  height={140}
-                />
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <ReportNotice
+                title="OCR accuracy unavailable"
+                description="Connect capture quality telemetry before showing accuracy, process-time, or error-rate metrics."
+              />
               {[
-                { label: 'Avg Process Time', value: '2.3s', trend: '-0.5s', up: true, icon: Zap },
-                { label: 'Pending Review', value: summary?.invoices_pending_review ?? 0, trend: null, icon: Clock },
-                { label: 'Error Rate', value: '3%', trend: '-1%', up: true, icon: Target },
+                { label: 'Pending Review', value: summary?.invoices_pending_review ?? 0, icon: Clock },
+                { label: 'Processed Today', value: summary?.invoices_processed_today ?? 0, icon: FileText },
               ].map((metric) => (
                 <div key={metric.label} className="p-4 bg-secondary/50 rounded-xl flex flex-col justify-center">
                   <div className="flex items-center gap-2 mb-2">
@@ -503,12 +641,6 @@ export default function ReportsPage() {
                     <span className="text-sm text-muted-foreground">{metric.label}</span>
                   </div>
                   <p className="text-2xl font-bold text-foreground">{metric.value}</p>
-                  {metric.trend && (
-                    <span className={`text-xs flex items-center gap-0.5 mt-1 ${metric.up ? 'text-success' : 'text-error'}`}>
-                      {metric.up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                      {metric.trend}
-                    </span>
-                  )}
                 </div>
               ))}
             </div>
@@ -517,7 +649,7 @@ export default function ReportsPage() {
       )}
 
       {/* Processing Metrics Row */}
-      {showProcessingMetrics && (
+      {showProcessingMetrics && showSection('processing') && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Invoice Aging with Bars */}
           <ChartContainer
@@ -578,8 +710,9 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {showProcessingMetrics && (
+      {showProcessingMetrics && (showSection('processing') || showSection('cash_flow')) && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {showSection('processing') && (
           <div className="card overflow-hidden">
             <div className="h-1.5 bg-gradient-to-r from-processing via-processing/70 to-transparent" />
             <div className="p-6">
@@ -670,8 +803,10 @@ export default function ReportsPage() {
               )}
             </div>
           </div>
+          )}
 
-          <div className="card overflow-hidden">
+          {showSection('cash_flow') && (
+          <div id="cash-flow" className="card overflow-hidden scroll-mt-24">
             <div className="h-1.5 bg-gradient-to-r from-accent via-accent/70 to-transparent" />
             <div className="p-6">
               <div className="flex items-center gap-3 mb-5">
@@ -690,10 +825,10 @@ export default function ReportsPage() {
                   title="Cash-flow forecast unavailable"
                   description="The obligations endpoint failed."
                 />
-              ) : cashFlowObligations.length === 0 && !cashFlowQuery.isLoading ? (
+              ) : filteredCashFlowObligations.length === 0 && !cashFlowQuery.isLoading ? (
                 <ReportNotice
                   title="No upcoming obligations"
-                  description="No approved or in-flight invoices were returned for forecasting."
+                  description="No approved or in-flight invoices match the active report filters."
                 />
               ) : (
                 <div className="space-y-5">
@@ -709,6 +844,99 @@ export default function ReportsPage() {
                     <div className="p-3 rounded-xl bg-secondary/50">
                       <p className="text-xs text-muted-foreground">Late risk</p>
                       <p className="mt-1 text-xl font-semibold text-error">{lateRiskCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-muted-foreground">Runway threshold</span>
+                        <input
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                          inputMode="numeric"
+                          value={cashThresholdInput}
+                          onChange={(event) => setCashThresholdInput(event.target.value)}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-muted-foreground">Scenario vendor</span>
+                        <select
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                          value={scenarioVendor}
+                          onChange={(event) => setScenarioVendor(event.target.value)}
+                        >
+                          <option value="all">All vendors</option>
+                          {vendorOptions.map((vendor) => (
+                            <option key={vendor} value={vendor}>{vendor}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-muted-foreground">Delay days</span>
+                        <input
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                          inputMode="numeric"
+                          value={scenarioDelayInput}
+                          onChange={(event) => setScenarioDelayInput(event.target.value)}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-muted-foreground">Discount %</span>
+                        <input
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                          inputMode="decimal"
+                          value={scenarioDiscountPercent}
+                          onChange={(event) => setScenarioDiscountPercent(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Modeled 30 days</p>
+                        <p className="font-semibold text-foreground">{formatCents(modeledCashDueThisMonth)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Modeled savings</p>
+                        <p className="font-semibold text-success">{formatCents(modeledSavings)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Scenario</p>
+                        <p className="font-semibold text-foreground">{scenarioDelayDays} day delay</p>
+                      </div>
+                    </div>
+                    {thresholdExceeded && (
+                      <div className="mt-4">
+                        <ReportNotice
+                          tone="error"
+                          title="Runway threshold exceeded"
+                          description={`${formatCents(modeledCashDueThisMonth)} is modeled inside 30 days against a ${formatCents(cashThresholdCents)} threshold.`}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-border p-4">
+                      <h3 className="text-sm font-medium text-foreground mb-3">Weekly forecast</h3>
+                      <div className="space-y-2">
+                        {weeklyCashFlow.map((bucket) => (
+                          <div key={bucket.name} className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">{bucket.name}</span>
+                            <span className="font-medium text-foreground">{formatCents(bucket.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border p-4">
+                      <h3 className="text-sm font-medium text-foreground mb-3">Monthly forecast</h3>
+                      <div className="space-y-2">
+                        {monthlyCashFlow.map((bucket) => (
+                          <div key={bucket.name} className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">{bucket.name}</span>
+                            <span className="font-medium text-foreground">{formatCents(bucket.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
@@ -738,12 +966,13 @@ export default function ReportsPage() {
               )}
             </div>
           </div>
+          )}
         </div>
       )}
 
       {/* Vendor Analytics - Enhanced */}
-      {showVendorMetrics && (
-        <div className="card overflow-hidden">
+      {showVendorMetrics && showSection('vendors') && (
+        <div id="vendor-spend" className="card overflow-hidden scroll-mt-24">
           <div className="h-1.5 bg-gradient-to-r from-vendor via-vendor/70 to-transparent" />
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
@@ -767,8 +996,7 @@ export default function ReportsPage() {
               <div className="space-y-3">
                 {[
                   { label: 'Active Vendors', value: summary?.vendors_active ?? 0, color: 'bg-vendor' },
-                  { label: 'W-9 On File', value: '85%', color: 'bg-success' },
-                  { label: 'New This Month', value: 12, color: 'bg-capture' },
+                  { label: 'Vendor Spend Rows', value: vendorSpendData.length, color: 'bg-success' },
                 ].map((metric) => (
                   <div key={metric.label} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl">
                     <div className="flex items-center gap-3">
@@ -778,6 +1006,10 @@ export default function ReportsPage() {
                     <span className="text-lg font-semibold text-foreground">{metric.value}</span>
                   </div>
                 ))}
+                <ReportNotice
+                  title="Compliance metrics unavailable"
+                  description="W-9 coverage and new-vendor counts need a live vendor compliance feed before they can be reported."
+                />
               </div>
 
               {/* Top Vendors by Spend */}
@@ -824,7 +1056,7 @@ export default function ReportsPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {showVendorMetrics && (
-            <button className="action-card group text-left">
+            <a href="#vendor-spend" className="action-card group text-left">
               <div className="action-card-icon bg-vendor/10">
                 <Users className="w-5 h-5 text-vendor" />
               </div>
@@ -833,12 +1065,12 @@ export default function ReportsPage() {
                 <p className="text-sm text-muted-foreground">Analysis by vendor</p>
               </div>
               <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-vendor group-hover:translate-x-1 transition-all" />
-            </button>
+            </a>
           )}
 
           {showProcessingMetrics && (
             <>
-              <button className="action-card group text-left">
+              <a href="#invoice-volume" className="action-card group text-left">
                 <div className="action-card-icon bg-processing/10">
                   <BarChart3 className="w-5 h-5 text-processing" />
                 </div>
@@ -847,9 +1079,9 @@ export default function ReportsPage() {
                   <p className="text-sm text-muted-foreground">Monthly trends</p>
                 </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-processing group-hover:translate-x-1 transition-all" />
-              </button>
+              </a>
 
-              <button className="action-card group text-left">
+              <a href="#cash-flow" className="action-card group text-left">
                 <div className="action-card-icon bg-processing/10">
                   <Calendar className="w-5 h-5 text-processing" />
                 </div>
@@ -858,12 +1090,12 @@ export default function ReportsPage() {
                   <p className="text-sm text-muted-foreground">Upcoming payments</p>
                 </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-processing group-hover:translate-x-1 transition-all" />
-              </button>
+              </a>
             </>
           )}
 
           {showOcrMetrics && (
-            <button className="action-card group text-left">
+            <a href="#ocr-performance" className="action-card group text-left">
               <div className="action-card-icon bg-capture/10">
                 <ScanLine className="w-5 h-5 text-capture" />
               </div>
@@ -872,10 +1104,10 @@ export default function ReportsPage() {
                 <p className="text-sm text-muted-foreground">Accuracy metrics</p>
               </div>
               <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-capture group-hover:translate-x-1 transition-all" />
-            </button>
+            </a>
           )}
 
-          <button className="action-card group text-left">
+          <a href="#monthly-summary" className="action-card group text-left">
             <div className="action-card-icon bg-reporting/10">
               <Activity className="w-5 h-5 text-reporting" />
             </div>
@@ -884,7 +1116,7 @@ export default function ReportsPage() {
               <p className="text-sm text-muted-foreground">Financial overview</p>
             </div>
             <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-reporting group-hover:translate-x-1 transition-all" />
-          </button>
+          </a>
         </div>
       </div>
 

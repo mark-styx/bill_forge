@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import {
   Cable,
   CheckCircle2,
@@ -15,15 +15,26 @@ import {
   BarChart3,
   Loader2,
   AlertTriangle,
+  Bell,
+  MessageSquare,
+  X,
 } from 'lucide-react';
-import { api, getIntegrationStatus, IntegrationStatusResponse } from '@/lib/api';
+import {
+  api,
+  billComApi,
+  getIntegrationStatus,
+  IntegrationStatusResponse,
+  notificationsApi,
+  sageIntacctApi,
+} from '@/lib/api';
 
 type IntegrationStatus = 'connected' | 'disconnected' | 'available' | 'loading' | 'error';
-type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'all';
+type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'notifications' | 'all';
 
 interface IntegrationStatusState {
   status: IntegrationStatus;
   liveStatus?: IntegrationStatusResponse;
+  detail?: string;
   error?: string;
 }
 
@@ -32,17 +43,34 @@ interface Integration {
   name: string;
   description: string;
   longDescription: string;
-  category: 'erp' | 'crm' | 'payments';
+  category: Exclude<IntegrationCategory, 'all'>;
   status: IntegrationStatus;
   logo: string;
-  authType: 'oauth' | 'credentials';
+  authType: 'oauth' | 'credentials' | 'slack' | 'teams';
   capabilities: string[];
   endpoints: {
-    connect: string;
-    status: string;
-    disconnect: string;
+    connect?: string;
+    status?: string;
+    disconnect?: string;
   };
   docsUrl?: string;
+}
+
+interface SageCredentials {
+  sender_id: string;
+  sender_password: string;
+  company_id: string;
+  entity_id: string;
+  user_id: string;
+  user_password: string;
+}
+
+interface BillComCredentials {
+  dev_key: string;
+  org_id: string;
+  user_name: string;
+  password: string;
+  environment: 'sandbox' | 'production';
 }
 
 const integrations: Integration[] = [
@@ -162,8 +190,8 @@ const integrations: Integration[] = [
   {
     id: 'bill-com',
     name: 'Bill.com',
-    description: 'AP payment execution — ACH, check, and virtual card payments from approved invoices.',
-    longDescription: 'Connect Bill.com to execute payments directly from BillForge. After an invoice is approved and pushed to Bill.com as a bill, pay vendors via ACH, check, or virtual card — all without leaving BillForge. Supports bulk payments, funding account selection, and real-time payment status tracking. Uses session-based API authentication.',
+    description: 'AP payment execution - ACH, check, and virtual card payments from approved invoices.',
+    longDescription: 'Connect Bill.com to execute payments directly from BillForge. After an invoice is approved and pushed to Bill.com as a bill, pay vendors via ACH, check, or virtual card - all without leaving BillForge. Supports bulk payments, funding account selection, and real-time payment status tracking. Uses session-based API authentication.',
     category: 'payments',
     status: 'disconnected' as IntegrationStatus,
     logo: '/integrations/bill-com.svg',
@@ -182,18 +210,56 @@ const integrations: Integration[] = [
     },
     docsUrl: 'https://developer.bill.com/docs',
   },
+  {
+    id: 'slack',
+    name: 'Slack',
+    description: 'Send approval requests, invoice exceptions, and AP updates into Slack.',
+    longDescription: 'Install the Slack app so BillForge can notify finance teams and approvers in the channels where invoice work already happens. The existing notification preferences control which events are delivered after installation.',
+    category: 'notifications',
+    status: 'disconnected' as IntegrationStatus,
+    logo: '/integrations/slack.svg',
+    authType: 'slack' as const,
+    capabilities: [
+      'Approval request notifications',
+      'Invoice exception alerts',
+      'Direct approver messages',
+      'Preference-based routing',
+    ],
+    endpoints: {},
+    docsUrl: 'https://api.slack.com/start',
+  },
+  {
+    id: 'teams',
+    name: 'Microsoft Teams',
+    description: 'Post AP notifications to a Teams channel through an incoming webhook.',
+    longDescription: 'Configure a Microsoft Teams incoming webhook for invoice and approval notifications. BillForge stores the webhook configuration and uses notification preferences to determine which events are sent.',
+    category: 'notifications',
+    status: 'disconnected' as IntegrationStatus,
+    logo: '/integrations/teams.svg',
+    authType: 'teams' as const,
+    capabilities: [
+      'Teams channel notifications',
+      'Approval and exception updates',
+      'Webhook-based setup',
+      'Preference-based routing',
+    ],
+    endpoints: {},
+    docsUrl: 'https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook',
+  },
 ];
 
 const categoryIcons = {
   erp: Database,
   crm: Users,
   payments: BarChart3,
+  notifications: Bell,
 };
 
 const categoryLabels = {
   erp: 'ERP / Accounting',
   crm: 'CRM',
   payments: 'Payments',
+  notifications: 'Notifications',
 };
 
 function IntegrationLogo({ integration }: { integration: Integration }) {
@@ -205,6 +271,8 @@ function IntegrationLogo({ integration }: { integration: Integration }) {
     'salesforce': { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-300', label: 'SF' },
     'workday': { bg: 'bg-orange-100 dark:bg-orange-900/40', text: 'text-orange-700 dark:text-orange-300', label: 'WD' },
     'bill-com': { bg: 'bg-violet-100 dark:bg-violet-900/40', text: 'text-violet-700 dark:text-violet-300', label: 'BC' },
+    'slack': { bg: 'bg-fuchsia-100 dark:bg-fuchsia-900/40', text: 'text-fuchsia-700 dark:text-fuchsia-300', label: 'SL' },
+    'teams': { bg: 'bg-indigo-100 dark:bg-indigo-900/40', text: 'text-indigo-700 dark:text-indigo-300', label: 'TM' },
   };
 
   const style = logoMap[integration.id] || { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-300', label: '??' };
@@ -281,6 +349,11 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
                 Last synced: {new Date(lastSync).toLocaleString()}
               </p>
             )}
+            {liveStatus?.detail && (
+              <p className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">
+                {liveStatus.detail}
+              </p>
+            )}
             {displayStatus === 'error' && (
               <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                 {liveStatus?.error ?? 'Status could not be refreshed.'} Last known state is preserved when available.
@@ -331,6 +404,12 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
                 This integration uses credential-based authentication. Your credentials are encrypted at rest.
               </div>
             )}
+            {(integration.authType === 'slack' || integration.authType === 'teams') && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-900/20 px-3 py-2 rounded-lg">
+                <MessageSquare className="h-3.5 w-3.5" />
+                Notification delivery is controlled by your notification preferences after setup.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -358,6 +437,7 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
           {displayStatus === 'connected' ? (
             <button
               onClick={() => onDisconnect(integration.id)}
+              aria-label={`Disconnect ${integration.name}`}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors"
             >
               Disconnect
@@ -365,6 +445,7 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
           ) : displayStatus === 'error' ? (
             <button
               onClick={() => onRefresh(integration.id)}
+              aria-label={`Retry ${integration.name} status`}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
             >
               Retry status
@@ -380,6 +461,7 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
           ) : (
             <button
               onClick={() => onConnect(integration.id)}
+              aria-label={`Connect ${integration.name}`}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 rounded-lg transition-colors"
             >
               Connect
@@ -392,11 +474,355 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
   );
 }
 
+const emptySageCredentials: SageCredentials = {
+  sender_id: '',
+  sender_password: '',
+  company_id: '',
+  entity_id: '',
+  user_id: '',
+  user_password: '',
+};
+
+const emptyBillComCredentials: BillComCredentials = {
+  dev_key: '',
+  org_id: '',
+  user_name: '',
+  password: '',
+  environment: 'sandbox',
+};
+
+function TextField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  required = true,
+  autoComplete,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  required?: boolean;
+  autoComplete?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{label}</span>
+      <input
+        type={type}
+        required={required}
+        value={value}
+        autoComplete={autoComplete}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 w-full px-3 py-2 text-sm border border-zinc-200 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
+      />
+    </label>
+  );
+}
+
+function CredentialModal({
+  integration,
+  sageCredentials,
+  billComCredentials,
+  error,
+  isSubmitting,
+  onClose,
+  onSubmit,
+  onSageChange,
+  onBillComChange,
+}: {
+  integration: Integration;
+  sageCredentials: SageCredentials;
+  billComCredentials: BillComCredentials;
+  error: string | null;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSageChange: (credentials: SageCredentials) => void;
+  onBillComChange: (credentials: BillComCredentials) => void;
+}) {
+  const isSage = integration.id === 'sage-intacct';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true" aria-labelledby="credential-modal-title">
+      <div className="w-full max-w-2xl bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
+          <div>
+            <h2 id="credential-modal-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              Connect {integration.name}
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Enter the credentials BillForge will use to verify and sync this integration.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
+            aria-label="Close credential form"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit} className="p-5 space-y-5">
+          {isSage ? (
+            <div className="grid sm:grid-cols-2 gap-4">
+              <TextField
+                label="Sender ID"
+                value={sageCredentials.sender_id}
+                onChange={(value) => onSageChange({ ...sageCredentials, sender_id: value })}
+                autoComplete="off"
+              />
+              <TextField
+                label="Sender Password"
+                type="password"
+                value={sageCredentials.sender_password}
+                onChange={(value) => onSageChange({ ...sageCredentials, sender_password: value })}
+                autoComplete="new-password"
+              />
+              <TextField
+                label="Company ID"
+                value={sageCredentials.company_id}
+                onChange={(value) => onSageChange({ ...sageCredentials, company_id: value })}
+                autoComplete="organization"
+              />
+              <TextField
+                label="Entity ID"
+                value={sageCredentials.entity_id}
+                onChange={(value) => onSageChange({ ...sageCredentials, entity_id: value })}
+                required={false}
+                autoComplete="off"
+              />
+              <TextField
+                label="User ID"
+                value={sageCredentials.user_id}
+                onChange={(value) => onSageChange({ ...sageCredentials, user_id: value })}
+                autoComplete="username"
+              />
+              <TextField
+                label="User Password"
+                type="password"
+                value={sageCredentials.user_password}
+                onChange={(value) => onSageChange({ ...sageCredentials, user_password: value })}
+                autoComplete="new-password"
+              />
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 gap-4">
+              <TextField
+                label="Developer Key"
+                value={billComCredentials.dev_key}
+                onChange={(value) => onBillComChange({ ...billComCredentials, dev_key: value })}
+                autoComplete="off"
+              />
+              <TextField
+                label="Organization ID"
+                value={billComCredentials.org_id}
+                onChange={(value) => onBillComChange({ ...billComCredentials, org_id: value })}
+                autoComplete="organization"
+              />
+              <TextField
+                label="User Name"
+                value={billComCredentials.user_name}
+                onChange={(value) => onBillComChange({ ...billComCredentials, user_name: value })}
+                autoComplete="username"
+              />
+              <TextField
+                label="Password"
+                type="password"
+                value={billComCredentials.password}
+                onChange={(value) => onBillComChange({ ...billComCredentials, password: value })}
+                autoComplete="new-password"
+              />
+              <label className="block sm:col-span-2">
+                <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Environment</span>
+                <select
+                  value={billComCredentials.environment}
+                  onChange={(event) =>
+                    onBillComChange({
+                      ...billComCredentials,
+                      environment: event.target.value as BillComCredentials['environment'],
+                    })
+                  }
+                  className="mt-1 w-full px-3 py-2 text-sm border border-zinc-200 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600"
+                >
+                  <option value="sandbox">Sandbox</option>
+                  <option value="production">Production</option>
+                </select>
+              </label>
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 disabled:bg-zinc-400 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 rounded-lg transition-colors"
+            >
+              {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              Connect
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function TeamsModal({
+  webhookUrl,
+  channelName,
+  error,
+  isSubmitting,
+  onClose,
+  onSubmit,
+  onWebhookUrlChange,
+  onChannelNameChange,
+}: {
+  webhookUrl: string;
+  channelName: string;
+  error: string | null;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onWebhookUrlChange: (value: string) => void;
+  onChannelNameChange: (value: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true" aria-labelledby="teams-modal-title">
+      <div className="w-full max-w-xl bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
+          <div>
+            <h2 id="teams-modal-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              Configure Microsoft Teams
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Paste the incoming webhook URL for the Teams channel that should receive AP notifications.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
+            aria-label="Close Teams form"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit} className="p-5 space-y-4">
+          <TextField
+            label="Webhook URL"
+            type="url"
+            value={webhookUrl}
+            onChange={onWebhookUrlChange}
+            autoComplete="url"
+          />
+          <TextField
+            label="Channel Name"
+            value={channelName}
+            onChange={onChannelNameChange}
+            required={false}
+            autoComplete="off"
+          />
+
+          {error && (
+            <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 disabled:bg-zinc-400 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 rounded-lg transition-colors"
+            >
+              {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function getInitialCategory(): IntegrationCategory {
+  if (typeof window === 'undefined') return 'all';
+  const category = new URLSearchParams(window.location.search).get('category');
+  return category === 'erp' || category === 'crm' || category === 'payments' || category === 'notifications'
+    ? category
+    : 'all';
+}
+
 export default function IntegrationsPage() {
-  const [filter, setFilter] = useState<IntegrationCategory>('all');
+  const [filter, setFilter] = useState<IntegrationCategory>(getInitialCategory);
   const [searchQuery, setSearchQuery] = useState('');
   const [statuses, setStatuses] = useState<Record<string, IntegrationStatusState>>({});
   const [loading, setLoading] = useState(true);
+  const [credentialIntegration, setCredentialIntegration] = useState<Integration | null>(null);
+  const [sageCredentials, setSageCredentials] = useState<SageCredentials>(emptySageCredentials);
+  const [billComCredentials, setBillComCredentials] = useState<BillComCredentials>(emptyBillComCredentials);
+  const [teamsModalOpen, setTeamsModalOpen] = useState(false);
+  const [teamsWebhookUrl, setTeamsWebhookUrl] = useState('');
+  const [teamsChannelName, setTeamsChannelName] = useState('');
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [submittingModal, setSubmittingModal] = useState(false);
+
+  const getStatusForIntegration = async (integration: Integration): Promise<IntegrationStatusState> => {
+    if (integration.authType === 'slack') {
+      const status = await notificationsApi.getSlackStatus();
+      return status
+        ? {
+            status: status.is_active ? 'connected' : 'disconnected',
+            detail: status.slack_team_name ? `Workspace: ${status.slack_team_name}` : undefined,
+          }
+        : { status: 'disconnected' };
+    }
+
+    if (integration.authType === 'teams') {
+      const status = await notificationsApi.getTeamsStatus();
+      return status
+        ? {
+            status: status.is_active ? 'connected' : 'disconnected',
+            detail: status.channel_name ? `Channel: ${status.channel_name}` : undefined,
+          }
+        : { status: 'disconnected' };
+    }
+
+    if (!integration.endpoints.status) {
+      return { status: 'disconnected' };
+    }
+
+    const result = await getIntegrationStatus(integration.endpoints.status);
+    return {
+      status: result.connected ? 'connected' : 'disconnected',
+      liveStatus: result,
+    };
+  };
 
   useEffect(() => {
     async function fetchStatuses() {
@@ -405,17 +831,14 @@ export default function IntegrationsPage() {
       ));
       const results = await Promise.allSettled(
         integrations.map(i =>
-          getIntegrationStatus(i.endpoints.status).then(r => [i.id, r] as const)
+          getStatusForIntegration(i).then(r => [i.id, r] as const)
         )
       );
       const map: Record<string, IntegrationStatusState> = {};
       for (const r of results) {
         if (r.status === 'fulfilled') {
           const [id, result] = r.value;
-          map[id] = {
-            status: result.connected ? 'connected' : 'disconnected',
-            liveStatus: result,
-          };
+          map[id] = result;
         }
       }
       for (const integration of integrations) {
@@ -443,13 +866,10 @@ export default function IntegrationsPage() {
       },
     }));
     try {
-      const result = await getIntegrationStatus(integration.endpoints.status);
+      const result = await getStatusForIntegration(integration);
       setStatuses(prev => ({
         ...prev,
-        [integrationId]: {
-          status: result.connected ? 'connected' : 'disconnected',
-          liveStatus: result,
-        },
+        [integrationId]: result,
       }));
     } catch (error) {
       setStatuses(prev => ({
@@ -473,17 +893,59 @@ export default function IntegrationsPage() {
 
   const connectedCount = integrations.filter((i) => statuses[i.id]?.status === 'connected').length;
 
-  const handleConnect = (integrationId: string) => {
+  const resetCredentialModal = () => {
+    setCredentialIntegration(null);
+    setSageCredentials(emptySageCredentials);
+    setBillComCredentials(emptyBillComCredentials);
+    setModalError(null);
+    setSubmittingModal(false);
+  };
+
+  const resetTeamsModal = () => {
+    setTeamsModalOpen(false);
+    setTeamsWebhookUrl('');
+    setTeamsChannelName('');
+    setModalError(null);
+    setSubmittingModal(false);
+  };
+
+  const handleConnect = async (integrationId: string) => {
     const integration = integrations.find((i) => i.id === integrationId);
     if (!integration) return;
 
-    if (integration.authType === 'oauth') {
+    if (integration.authType === 'oauth' && integration.endpoints.connect) {
       // Redirect to OAuth flow
       window.location.href = integration.endpoints.connect;
-    } else {
-      // Show credentials modal (for Sage Intacct, Bill.com)
-      // In production this would open a modal form
-      alert(`Configure ${integration.name} credentials in Settings → Integrations`);
+      return;
+    }
+
+    if (integration.authType === 'credentials') {
+      setCredentialIntegration(integration);
+      setModalError(null);
+      return;
+    }
+
+    if (integration.authType === 'slack') {
+      try {
+        const redirectUrl = `${window.location.origin}/integrations?category=notifications`;
+        const response = await notificationsApi.installSlack(redirectUrl);
+        window.location.href = response.authorize_url;
+      } catch (error) {
+        setStatuses(prev => ({
+          ...prev,
+          [integration.id]: {
+            ...prev[integration.id],
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Failed to start Slack install',
+          },
+        }));
+      }
+      return;
+    }
+
+    if (integration.authType === 'teams') {
+      setTeamsModalOpen(true);
+      setModalError(null);
     }
   };
 
@@ -493,11 +955,59 @@ export default function IntegrationsPage() {
 
     if (confirm(`Disconnect ${integration.name}? Sync will stop and mappings will be preserved.`)) {
       try {
-        await api.post(integration.endpoints.disconnect);
+        if (integration.authType === 'slack') {
+          await notificationsApi.disconnectSlack();
+        } else if (integration.authType === 'teams') {
+          await notificationsApi.disconnectTeams();
+        } else if (integration.endpoints.disconnect) {
+          await api.post(integration.endpoints.disconnect);
+        }
         await fetchSingleStatus(integrationId);
       } catch {
         alert('Failed to disconnect. Please try again.');
       }
+    }
+  };
+
+  const handleCredentialSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!credentialIntegration) return;
+
+    setSubmittingModal(true);
+    setModalError(null);
+    try {
+      if (credentialIntegration.id === 'sage-intacct') {
+        const payload = {
+          ...sageCredentials,
+          entity_id: sageCredentials.entity_id.trim() || undefined,
+        };
+        await sageIntacctApi.connect(payload);
+      } else if (credentialIntegration.id === 'bill-com') {
+        await billComApi.connect(billComCredentials);
+      }
+      const integrationId = credentialIntegration.id;
+      resetCredentialModal();
+      await fetchSingleStatus(integrationId);
+    } catch (error) {
+      setModalError(error instanceof Error ? error.message : 'Failed to connect integration');
+      setSubmittingModal(false);
+    }
+  };
+
+  const handleTeamsSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmittingModal(true);
+    setModalError(null);
+    try {
+      await notificationsApi.configureTeams({
+        webhook_url: teamsWebhookUrl,
+        channel_name: teamsChannelName.trim() || undefined,
+      });
+      resetTeamsModal();
+      await fetchSingleStatus('teams');
+    } catch (error) {
+      setModalError(error instanceof Error ? error.message : 'Failed to configure Microsoft Teams');
+      setSubmittingModal(false);
     }
   };
 
@@ -510,7 +1020,7 @@ export default function IntegrationsPage() {
             Integrations
           </h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Connect your ERP, accounting, and CRM systems to automate the AP workflow.
+            Connect ERP, accounting, payment, and notification systems to automate the AP workflow.
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
@@ -521,7 +1031,7 @@ export default function IntegrationsPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-6">
-        {(['all', 'erp', 'crm', 'payments'] as IntegrationCategory[]).map((cat) => (
+        {(['all', 'erp', 'crm', 'payments', 'notifications'] as IntegrationCategory[]).map((cat) => (
           <button
             key={cat}
             onClick={() => setFilter(cat)}
@@ -597,6 +1107,33 @@ export default function IntegrationsPage() {
           ))}
         </div>
       </div>
+
+      {credentialIntegration && (
+        <CredentialModal
+          integration={credentialIntegration}
+          sageCredentials={sageCredentials}
+          billComCredentials={billComCredentials}
+          error={modalError}
+          isSubmitting={submittingModal}
+          onClose={resetCredentialModal}
+          onSubmit={handleCredentialSubmit}
+          onSageChange={setSageCredentials}
+          onBillComChange={setBillComCredentials}
+        />
+      )}
+
+      {teamsModalOpen && (
+        <TeamsModal
+          webhookUrl={teamsWebhookUrl}
+          channelName={teamsChannelName}
+          error={modalError}
+          isSubmitting={submittingModal}
+          onClose={resetTeamsModal}
+          onSubmit={handleTeamsSubmit}
+          onWebhookUrlChange={setTeamsWebhookUrl}
+          onChannelNameChange={setTeamsChannelName}
+        />
+      )}
     </div>
   );
 }

@@ -520,8 +520,13 @@ export const reportsApi = {
   dashboardKpis: () =>
     api.get<DashboardKpis>('/api/v1/reports/dashboard/kpis'),
 
-  invoicesByVendor: () =>
-    api.get<InvoicesByVendor[]>('/api/v1/reports/invoices/by-vendor'),
+  invoicesByVendor: (params?: { start_date?: string; end_date?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.start_date) qs.set('start_date', params.start_date);
+    if (params?.end_date) qs.set('end_date', params.end_date);
+    const query = qs.toString();
+    return api.get<InvoicesByVendor[]>(`/api/v1/reports/invoices/by-vendor${query ? `?${query}` : ''}`);
+  },
 
   invoicesByStatus: () =>
     api.get<InvoicesByStatus[]>('/api/v1/reports/invoices/by-status'),
@@ -1070,6 +1075,23 @@ export interface OAuthConnectResponse {
   redirect_url: string;
 }
 
+export interface SageIntacctConnectInput {
+  sender_id: string;
+  sender_password: string;
+  company_id: string;
+  entity_id?: string;
+  user_id: string;
+  user_password: string;
+}
+
+export interface BillComConnectInput {
+  dev_key: string;
+  org_id: string;
+  user_name: string;
+  password: string;
+  environment: 'sandbox' | 'production';
+}
+
 // QuickBooks API
 export const quickbooksApi = {
   connect: () => api.get<OAuthConnectResponse>('/api/v1/quickbooks/connect'),
@@ -1098,7 +1120,7 @@ export const xeroApi = {
 
 // Sage Intacct API
 export const sageIntacctApi = {
-  connect: (credentials: { company_id: string; user_id: string; user_password: string }) =>
+  connect: (credentials: SageIntacctConnectInput) =>
     api.post<OAuthConnectResponse>('/api/v1/sage-intacct/connect', credentials),
   disconnect: () => api.post('/api/v1/sage-intacct/disconnect'),
   status: () => api.get<IntegrationStatusResponse>('/api/v1/sage-intacct/status'),
@@ -1138,7 +1160,8 @@ export const workdayApi = {
 
 // Bill.com API
 export const billComApi = {
-  connect: () => api.get<OAuthConnectResponse>('/api/v1/bill-com/connect'),
+  connect: (credentials: BillComConnectInput) =>
+    api.post<OAuthConnectResponse>('/api/v1/bill-com/connect', credentials),
   disconnect: () => api.post('/api/v1/bill-com/disconnect'),
   status: () => api.get<IntegrationStatusResponse>('/api/v1/bill-com/status'),
   syncVendors: () => api.post<SyncResult>('/api/v1/bill-com/sync/vendors'),

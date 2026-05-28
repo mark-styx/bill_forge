@@ -26,6 +26,7 @@ import {
   ListChecks,
   Sparkles,
   CreditCard,
+  Bell,
 } from 'lucide-react';
 
 interface NavItem {
@@ -63,7 +64,16 @@ const navigation: NavItem[] = [
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
   { name: 'Winston AI Assistant', href: '/ai-assistant', icon: Sparkles, module: 'ai_assistant' },
-  { name: 'Integrations', href: '/integrations', icon: Workflow, module: null },
+  {
+    name: 'Integrations',
+    href: '/integrations',
+    icon: Workflow,
+    module: null,
+    children: [
+      { name: 'All Integrations', href: '/integrations', icon: Workflow, module: null },
+      { name: 'Notifications', href: '/integrations?category=notifications', icon: Bell, module: null },
+    ],
+  },
   { name: 'Billing', href: '/settings', icon: CreditCard, module: null },
 ];
 
@@ -74,7 +84,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { sidebarCollapsed, toggleSidebar, getCurrentColors } = useThemeStore();
   const { getBrandGradient } = useOrganizationTheme();
 
-  const [expandedSections, setExpandedSections] = useState<string[]>(['Invoice Capture', 'Processing']);
+  const [expandedSections, setExpandedSections] = useState<string[]>(['Invoice Capture', 'Processing', 'Integrations']);
 
   const colors = getCurrentColors();
   const brandGradient = getBrandGradient();
@@ -198,7 +208,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                       {isExpanded && (
                         <div className="ml-4 pl-3 border-l border-border/50 space-y-0.5 mt-0.5">
                           {visibleChildren.map((child) => {
-                            const isChildActive = pathname === child.href || pathname.startsWith(`${child.href}/`);
+                            const [childPath, childQuery] = child.href.split('?');
+                            const currentCategory = typeof window !== 'undefined'
+                              ? new URLSearchParams(window.location.search).get('category')
+                              : null;
+                            const childCategory = childQuery ? new URLSearchParams(childQuery).get('category') : null;
+                            const pathMatches = pathname === childPath || pathname.startsWith(`${childPath}/`);
+                            const categoryMatches = childCategory ? currentCategory === childCategory : !currentCategory;
+                            const isChildActive = pathMatches && categoryMatches;
                             return (
                               <Link
                                 key={child.name}

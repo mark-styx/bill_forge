@@ -160,6 +160,12 @@ const mockRules = [
   },
 ];
 
+const futureDate = (days: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
 describe('ReportsPage Predictive Insights', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -169,6 +175,7 @@ describe('ReportsPage Predictive Insights', () => {
       total_pending_amount: 50000,
       invoices_pending_review: 3,
     });
+    vi.mocked(reportsApi.cashFlowObligations).mockResolvedValue([]);
     vi.mocked(predictiveApi.getAnomalies).mockResolvedValue(mockAnomalies);
     vi.mocked(predictiveApi.getBudgetAlerts).mockResolvedValue(mockAlerts);
     vi.mocked(predictiveApi.getAnomalyRules).mockResolvedValue(mockRules);
@@ -302,5 +309,111 @@ describe('ReportsPage Predictive Insights', () => {
     });
 
     expect(screen.getByText('Budget alerts unavailable')).toBeInTheDocument();
+  });
+
+  it('opens the report filter panel from the header button', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ReportsPage />);
+
+    await user.click(screen.getByRole('button', { name: /filter/i }));
+
+    expect(screen.getByLabelText('Report filters')).toBeInTheDocument();
+    expect(screen.getByText('Date range')).toBeInTheDocument();
+    expect(screen.getByText('Payment status')).toBeInTheDocument();
+  });
+
+  it('renders available report cards as section links', async () => {
+    renderWithProviders(<ReportsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Available Reports')).toBeInTheDocument();
+    });
+
+    const links = screen.getAllByRole('link');
+    expect(links.some((link) => link.getAttribute('href') === '#vendor-spend')).toBe(true);
+    expect(links.some((link) => link.getAttribute('href') === '#invoice-volume')).toBe(true);
+    expect(links.some((link) => link.getAttribute('href') === '#cash-flow')).toBe(true);
+    expect(links.some((link) => link.getAttribute('href') === '#ocr-performance')).toBe(true);
+  });
+
+  it('does not show hardcoded demo report metrics', async () => {
+    renderWithProviders(<ReportsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('OCR accuracy unavailable')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('94')).not.toBeInTheDocument();
+    expect(screen.queryByText('2.3s')).not.toBeInTheDocument();
+    expect(screen.queryByText('85%')).not.toBeInTheDocument();
+  });
+
+  it('renders cash-flow forecasts from live obligations', async () => {
+    vi.mocked(reportsApi.cashFlowObligations).mockResolvedValueOnce([
+      {
+        invoice_id: 'invoice-1',
+        invoice_number: 'INV-001',
+        vendor_name: 'Acme',
+        due_date: futureDate(5),
+        projected_payment_date: futureDate(5),
+        amount_cents: 5000000,
+        currency: 'USD',
+        processing_status: 'approved',
+        late_risk: false,
+      },
+      {
+        invoice_id: 'invoice-2',
+        invoice_number: 'INV-002',
+        vendor_name: 'Globex',
+        due_date: futureDate(20),
+        projected_payment_date: futureDate(20),
+        amount_cents: 7500000,
+        currency: 'USD',
+        processing_status: 'pending_approval',
+        late_risk: false,
+      },
+    ]);
+
+    renderWithProviders(<ReportsPage />);
+
+    expect(screen.getByText('Weekly forecast')).toBeInTheDocument();
+    expect(screen.getByText('Monthly forecast')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText('Acme').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText('Globex').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/50,000/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/125,000/).length).toBeGreaterThan(0);
+  });
+
+  it('models threshold warnings and scenario discounts client-side', async () => {
+    vi.mocked(reportsApi.cashFlowObligations).mockResolvedValueOnce([
+      {
+        invoice_id: 'invoice-1',
+        invoice_number: 'INV-001',
+        vendor_name: 'Acme',
+        due_date: futureDate(5),
+        projected_payment_date: futureDate(5),
+        amount_cents: 5000000,
+        currency: 'USD',
+        processing_status: 'approved',
+        late_risk: false,
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderWithProviders(<ReportsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Modeled 30 days')).toBeInTheDocument();
+    });
+
+    await user.clear(screen.getByLabelText(/runway threshold/i));
+    await user.type(screen.getByLabelText(/runway threshold/i), '40000');
+    expect(screen.getByText('Runway threshold exceeded')).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/discount/i));
+    await user.type(screen.getByLabelText(/discount/i), '10');
+    expect(screen.getByText('$5,000')).toBeInTheDocument();
   });
 });
