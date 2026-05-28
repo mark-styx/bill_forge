@@ -5,13 +5,12 @@
 
 #![allow(warnings)]
 
-use billforge_api::openapi::ApiDoc;
-use utoipa::OpenApi;
+use billforge_api::openapi::openapi_doc;
 
 /// Test that the OpenAPI spec serializes to valid JSON without errors.
 #[test]
 fn test_openapi_spec_is_valid_json() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec);
     assert!(json.is_ok(), "OpenAPI spec should serialize to valid JSON");
 
@@ -27,7 +26,7 @@ fn test_openapi_spec_is_valid_json() {
 /// Test that the server base path is /api/v1 (not /api).
 #[test]
 fn test_openapi_base_path_is_api_v1() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
@@ -48,7 +47,7 @@ fn test_openapi_base_path_is_api_v1() {
 /// Test that all expected authentication paths are present in the spec.
 #[test]
 fn test_openapi_contains_auth_paths() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
@@ -76,7 +75,7 @@ fn test_openapi_contains_auth_paths() {
 /// Test that all expected invoice paths are present in the spec.
 #[test]
 fn test_openapi_contains_invoice_paths() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
@@ -105,7 +104,7 @@ fn test_openapi_contains_invoice_paths() {
 /// Verify the "Payment Requests" tag is declared in the OpenAPI spec.
 #[test]
 fn test_openapi_contains_payment_request_tag() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
@@ -128,7 +127,7 @@ fn test_openapi_contains_payment_request_tag() {
 /// group gets utoipa annotations or is added to KNOWN_GAPS.
 #[test]
 fn test_openapi_covers_all_mounted_route_groups() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
@@ -322,7 +321,7 @@ fn test_login_response_schema_matches_auth_response_shape() {
     actual_keys.sort();
 
     // Parse the OpenAPI spec and extract LoginResponse schema properties
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 
@@ -418,7 +417,7 @@ fn test_invoice_schema_matches_domain_invoice_shape() {
     let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
     actual_keys.sort();
 
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 
@@ -493,7 +492,7 @@ fn test_vendor_schema_matches_domain_vendor_shape() {
     let mut actual_keys: Vec<String> = obj.keys().cloned().collect();
     actual_keys.sort();
 
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 
@@ -528,7 +527,7 @@ fn test_vendor_schema_matches_domain_vendor_shape() {
 /// Verify that the 200 response on each auth endpoint references LoginResponse.
 #[test]
 fn test_auth_paths_200_reference_login_response() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 
@@ -572,7 +571,7 @@ fn test_auth_paths_200_reference_login_response() {
 /// paginated response payloads.
 #[test]
 fn test_pagination_info_schema_uses_total_items() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_doc();
     let spec_json = serde_json::to_string(&spec).expect("spec serializes");
     let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
 

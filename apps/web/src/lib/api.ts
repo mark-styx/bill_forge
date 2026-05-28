@@ -2531,8 +2531,15 @@ export interface RouteInvoiceResponse {
 }
 
 /** Workload distribution stats (mirrors WorkloadDistributionStats) */
-// TODO(#161): expand fields once backend type is documented in OpenAPI
-export type WorkloadDistributionStats = Record<string, unknown>;
+export interface WorkloadDistributionStats {
+  average_workload: number;
+  max_workload: number;
+  min_workload: number;
+  std_deviation: number;
+  variance_coefficient: number;
+  overloaded_count: number;
+  underloaded_count: number;
+}
 
 /** Summary for a single approver's workload */
 export interface ApproverWorkloadSummary {

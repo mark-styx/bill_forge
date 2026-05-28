@@ -23,8 +23,10 @@ init_report() {
   cat > "$REPORT_PATH" <<'EOF'
 {
   "timestamp": "",
+  "summary": { "p1_count": 0, "p2_count": 0, "total_count": 0 },
   "rust": { "vulnerabilities": [], "summary": { "critical": 0, "high": 0, "medium": 0, "low": 0 } },
   "node": { "vulnerabilities": [], "summary": { "critical": 0, "high": 0, "medium": 0, "low": 0 } },
+  "exceptions": [],
   "p1_count": 0,
   "p2_count": 0
 }
@@ -127,7 +129,8 @@ for v in vulns:
         "id": adv.get("id", "unknown"),
         "title": adv.get("title", ""),
         "severity": sev,
-        "url": adv.get("url", "")
+        "url": adv.get("url", ""),
+        "aliases": adv.get("aliases", []),
     })
 
 print(json.dumps({"summary": summary, "vulnerabilities": items}))
@@ -237,12 +240,28 @@ def add_item(advisory_id, v):
     sev = normalize_severity(v.get("severity", adv.get("severity", "medium")))
     summary[sev] += 1
     action = actions_by_id.get(str(advisory_id), {})
+    public_id = (
+        v.get("github_advisory_id")
+        or adv.get("github_advisory_id")
+        or v.get("cve")
+        or v.get("id")
+        or advisory_id
+    )
+    aliases = []
+    for key in ("cves", "aliases"):
+        value = v.get(key, adv.get(key, []))
+        if isinstance(value, list):
+            aliases.extend(str(item) for item in value)
+        elif value:
+            aliases.append(str(value))
+
     items.append({
         "package": v.get("module_name", v.get("name", action.get("module") or "unknown")),
-        "id": str(v.get("cve", v.get("id", advisory_id))),
+        "id": str(public_id),
         "title": adv.get("title", v.get("title", "")),
         "severity": sev,
         "url": adv.get("url", v.get("url", "")),
+        "aliases": aliases,
         "paths": paths,
         "action": action.get("action"),
         "target": action.get("target"),
@@ -288,20 +307,93 @@ print_summary() {
 
   # Update timestamp and read counts
   local p1 p2
-  read -r p1 p2 < <(python3 <<PYEOF
-import json, datetime
+  local summary_counts="$TMPDIR_WORK/summary-counts.txt"
+  REPORT_PATH="$REPORT_PATH" python3 <<'PYEOF' > "$summary_counts"
+import json, datetime, os
 
-with open("$REPORT_PATH") as f:
+report_path = os.environ["REPORT_PATH"]
+
+with open(report_path) as f:
     report = json.load(f)
 
 report["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
-with open("$REPORT_PATH", "w") as f:
+exceptions = [
+    {
+        "package": "rsa",
+        "advisories": ["RUSTSEC-2023-0071"],
+        "ecosystem": "rust",
+        "severity": "medium",
+        "owner": "Engineering",
+        "reviewed_on": "2026-05-27",
+        "expires_on": "2026-06-30",
+        "rationale": "Only present through optional sqlx-mysql lockfile dependency; PostgreSQL-only workspace features do not reach rsa.",
+        "next_action": "Re-check after the next sqlx update or when feature-aware cargo-audit filtering is available.",
+    },
+    {
+        "package": "rustls-webpki",
+        "advisories": ["RUSTSEC-2026-0098", "RUSTSEC-2026-0099", "RUSTSEC-2026-0104"],
+        "ecosystem": "rust",
+        "severity": "medium",
+        "owner": "Engineering",
+        "reviewed_on": "2026-05-27",
+        "expires_on": "2026-06-30",
+        "rationale": "Remaining path is the AWS SDK TLS stack after direct reqwest usage moved to native TLS.",
+        "next_action": "Upgrade the AWS SDK/rustls stack when a stable patched chain is available.",
+    },
+]
+
+def finding_ids(finding):
+    ids = {str(finding.get("id", ""))}
+    ids.update(str(alias) for alias in finding.get("aliases", []) or [])
+    url = str(finding.get("url", ""))
+    for marker in ("GHSA-", "RUSTSEC-", "CVE-"):
+        if marker in url:
+            tail = url[url.find(marker):]
+            ids.add(tail.split("/")[0].split("#")[0])
+    return {item for item in ids if item}
+
+all_findings = []
+for ecosystem in ("rust", "node"):
+    for finding in report.get(ecosystem, {}).get("vulnerabilities", []) or []:
+        finding["ecosystem"] = ecosystem
+        all_findings.append(finding)
+
+for exception in exceptions:
+    exception_ids = set(exception["advisories"])
+    matched = 0
+    for finding in all_findings:
+        if finding.get("package") != exception["package"]:
+            continue
+        if finding.get("ecosystem") != exception["ecosystem"]:
+            continue
+        if finding_ids(finding).isdisjoint(exception_ids):
+            continue
+        matched += 1
+        finding["exception"] = {
+            "owner": exception["owner"],
+            "reviewed_on": exception["reviewed_on"],
+            "expires_on": exception["expires_on"],
+            "rationale": exception["rationale"],
+            "next_action": exception["next_action"],
+        }
+    exception["matched_findings"] = matched
+
+report["exceptions"] = exceptions
+report["summary"] = {
+    "p1_count": report["p1_count"],
+    "p2_count": report["p2_count"],
+    "total_count": report["p1_count"] + report["p2_count"],
+    "rust": report.get("rust", {}).get("summary", {}),
+    "node": report.get("node", {}).get("summary", {}),
+}
+
+with open(report_path, "w") as f:
     json.dump(report, f, indent=2)
 
 print(report["p1_count"], report["p2_count"])
 PYEOF
-)
+  read -r p1 p2 < "$summary_counts"
 
   echo "  P1 (critical/high): ${p1:-0}"
   echo "  P2 (medium):        ${p2:-0}"

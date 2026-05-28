@@ -28,8 +28,10 @@ Reviewed on May 27, 2026. Owner: Engineering. Expiry: June 30, 2026.
 |---------|----------|------|-----------|-------------|
 | `rsa` | RUSTSEC-2023-0071 | Optional `sqlx-mysql` lockfile dependency | Bill Forge enables PostgreSQL-only `sqlx` features. `cargo tree --workspace --all-features --target all -i rsa@0.9.10` reports no reachable package path, but `cargo-audit` still scans the full lockfile. | Re-check after the next `sqlx` update; remove if `cargo-audit` adds feature-aware filtering or the lockfile no longer includes `sqlx-mysql`. |
 | `rustls-webpki` | RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0104 | AWS SDK HTTP/TLS stack | Direct `reqwest` usage has been moved to native TLS. Remaining occurrences are pulled by `aws-config`, `aws-sdk-s3`, and `aws-sdk-textract`. No stable patched `rustls-webpki` release is available in the resolved AWS SDK chain at this review date. | Upgrade AWS SDK/rustls stack when a stable patched chain is available. |
-| `fast-xml-parser` | GHSA-gh4j-gqv2-49f6 | Expo/React Native CLI transitive dependency | Fixed versions require a transitive major upgrade from React Native CLI internals. This code is development/mobile tooling, not server runtime request handling. | Address in the Expo/React Native upgrade pass. |
-| `uuid` | GHSA-w5hq-g745-h8pq | Expo CLI transitive dependency | Fixed versions require transitive major overrides through Expo tooling. The affected UUID buffer APIs are not used by Bill Forge application code. | Address in the Expo/React Native upgrade pass. |
+
+## Resolved P2 Findings
+
+Reviewed on May 27, 2026. The mobile tooling P2 findings for `fast-xml-parser` (GHSA-gh4j-gqv2-49f6) and `uuid` (GHSA-w5hq-g745-h8pq) are remediated with root `pnpm.overrides`. `pnpm audit --json` now reports only workspace-name `sandbox` advisories with no concrete dependency paths, which `scripts/security-audit.sh` intentionally excludes from P1/P2 counts.
 
 ## Evidence
 

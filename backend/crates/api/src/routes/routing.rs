@@ -21,6 +21,7 @@ use billforge_core::{
 use billforge_db::routing_repository::{AvailabilityStatusInput, SetAvailabilityInput};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -123,14 +124,39 @@ async fn route_invoice(
 }
 
 /// Workload stats response
-#[derive(Debug, Serialize)]
-struct WorkloadResponse {
-    stats: WorkloadDistributionStats,
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct WorkloadResponse {
+    stats: WorkloadDistributionStatsResponse,
     approvers: Vec<ApproverWorkloadSummary>,
 }
 
-#[derive(Debug, Serialize)]
-struct ApproverWorkloadSummary {
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct WorkloadDistributionStatsResponse {
+    average_workload: f64,
+    max_workload: f64,
+    min_workload: f64,
+    std_deviation: f64,
+    variance_coefficient: f64,
+    overloaded_count: i32,
+    underloaded_count: i32,
+}
+
+impl From<WorkloadDistributionStats> for WorkloadDistributionStatsResponse {
+    fn from(stats: WorkloadDistributionStats) -> Self {
+        Self {
+            average_workload: stats.average_workload,
+            max_workload: stats.max_workload,
+            min_workload: stats.min_workload,
+            std_deviation: stats.std_deviation,
+            variance_coefficient: stats.variance_coefficient,
+            overloaded_count: stats.overloaded_count,
+            underloaded_count: stats.underloaded_count,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct ApproverWorkloadSummary {
     user_id: Uuid,
     active_approvals: i32,
     pending_approvals: i32,
@@ -140,7 +166,7 @@ struct ApproverWorkloadSummary {
 
 /// Get workload distribution statistics
 #[utoipa::path(get, path = "/api/v1/routing/workload", tag = "Routing",
-    responses((status = 200, description = "Workload stats")))]
+    responses((status = 200, description = "Workload stats", body = WorkloadResponse)))]
 async fn get_workload_stats(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -172,7 +198,10 @@ async fn get_workload_stats(
         })
         .collect();
 
-    Ok(Json(WorkloadResponse { stats, approvers }))
+    Ok(Json(WorkloadResponse {
+        stats: stats.into(),
+        approvers,
+    }))
 }
 
 /// Request body for setting availability

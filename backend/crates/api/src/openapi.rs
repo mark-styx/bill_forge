@@ -312,6 +312,9 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
             PaginationInfo,
             crate::routes::auth::MeResponse,
             crate::routes::invoices::UploadResponse,
+            crate::routes::routing::WorkloadResponse,
+            crate::routes::routing::WorkloadDistributionStatsResponse,
+            crate::routes::routing::ApproverWorkloadSummary,
         )
     )
 )]
@@ -730,8 +733,8 @@ pub struct PaginationInfo {
     pub total_pages: u32,
 }
 
-/// Create the Swagger UI router
-pub fn swagger_ui() -> Router {
+/// Generate the full OpenAPI document, including feature-gated route groups.
+pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     #[allow(unused_mut)]
     let mut openapi = ApiDoc::openapi();
 
@@ -751,6 +754,13 @@ pub fn swagger_ui() -> Router {
     openapi.merge(EdiApiDoc::openapi());
     #[cfg(feature = "payment-requests")]
     openapi.merge(PaymentRequestsApiDoc::openapi());
+
+    openapi
+}
+
+/// Create the Swagger UI router
+pub fn swagger_ui() -> Router {
+    let openapi = openapi_doc();
 
     SwaggerUi::new("/swagger-ui")
         .url("/api-docs/openapi.json", openapi)
