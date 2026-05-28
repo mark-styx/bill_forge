@@ -37,6 +37,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_rls_migrations(pool).await?;
     run_ai_conversation_migrations(pool).await?;
     run_ai_rls_migrations(pool).await?;
+    run_theme_migrations(pool).await?;
 
     Ok(())
 }
@@ -468,6 +469,50 @@ pub async fn run_ai_rls_migrations(pool: &PgPool) -> Result<()> {
         pool,
         "089_enable_rls_ai_tables.sql",
         include_str!("../../../migrations/089_enable_rls_ai_tables.sql"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Run theme storage migrations (organization themes and user theme preferences).
+pub async fn run_theme_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "inline_theme_tables.sql",
+        r#"
+        -- Organization theme (one row per tenant)
+        CREATE TABLE IF NOT EXISTS organization_themes (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL UNIQUE,
+            preset_id TEXT NOT NULL DEFAULT 'default',
+            custom_colors JSONB,
+            branding JSONB NOT NULL DEFAULT '{}',
+            enabled_for_all_users BOOLEAN NOT NULL DEFAULT false,
+            allow_user_override BOOLEAN NOT NULL DEFAULT true,
+            gradient_config JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- User theme preference (one row per user)
+        CREATE TABLE IF NOT EXISTS user_theme_preferences (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id UUID NOT NULL,
+            user_id UUID NOT NULL,
+            preset_id TEXT NOT NULL DEFAULT 'default',
+            custom_colors JSONB,
+            mode TEXT NOT NULL DEFAULT 'system',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(tenant_id, user_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_theme_prefs_tenant
+            ON user_theme_preferences(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_user_theme_prefs_user
+            ON user_theme_preferences(user_id);
+        "#,
     )
     .await?;
 

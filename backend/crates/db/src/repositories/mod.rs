@@ -13,6 +13,7 @@ mod user_repo;
 mod vendor_repo;
 mod vendor_statement_repo;
 mod workflow_repo;
+mod theme_repo;
 
 pub use ai_action_proposal_repo::{
     AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalRisk,
@@ -38,6 +39,10 @@ pub use user_repo::UserRepositoryImpl;
 pub use vendor_repo::VendorRepositoryImpl;
 pub use vendor_statement_repo::VendorStatementRepositoryImpl;
 pub use workflow_repo::WorkflowRepositoryImpl;
+pub use theme_repo::{
+    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
+    OrganizationThemeRow, ThemeRepository, UserThemePreferenceRow,
+};
 
 // Type aliases for backward compatibility with API routes
 pub type WorkQueueRepositoryImpl = WorkflowRepositoryImpl;

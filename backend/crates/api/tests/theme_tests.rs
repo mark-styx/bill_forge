@@ -4,6 +4,11 @@
 //! the JSON shape matches the frontend TypeScript interfaces.
 
 use billforge_api::routes::theme::*;
+use billforge_db::repositories::{
+    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
+    OrganizationThemeRow, ThemeRepository, UserThemePreferenceRow,
+};
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Organization theme serde round-trips
@@ -229,4 +234,50 @@ fn test_effective_theme_serialization() {
     assert!(val["effective_colors"].is_object());
     assert_eq!(val["effective_mode"], "system");
     assert!(val["can_override"].is_boolean());
+}
+
+// ---------------------------------------------------------------------------
+// Persistence-layer unit tests (no DB required)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_theme_repo_row_to_api_type_conversion() {
+    // Verify OrganizationThemeRow -> OrganizationTheme conversion preserves fields
+    let now = chrono::Utc::now();
+    let row = OrganizationThemeRow {
+        id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        preset_id: "ocean".into(),
+        custom_colors: Some(OrganizationThemeColors::default()),
+        branding: OrganizationBranding::default(),
+        enabled_for_all_users: true,
+        allow_user_override: false,
+        gradient_config: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let api: OrganizationTheme = row.into();
+    assert_eq!(api.preset_id, "ocean");
+    assert!(api.custom_colors.is_some());
+    assert!(api.enabled_for_all_users);
+    assert!(!api.allow_user_override);
+}
+
+#[test]
+fn test_user_theme_row_to_api_type_conversion() {
+    let now = chrono::Utc::now();
+    let row = UserThemePreferenceRow {
+        id: Uuid::new_v4(),
+        tenant_id: Uuid::new_v4(),
+        user_id: Uuid::new_v4(),
+        preset_id: "forest".into(),
+        custom_colors: None,
+        mode: "dark".into(),
+        created_at: now,
+        updated_at: now,
+    };
+    let api: UserThemePreference = row.into();
+    assert_eq!(api.preset_id, "forest");
+    assert_eq!(api.mode, "dark");
+    assert!(api.custom_colors.is_none());
 }
