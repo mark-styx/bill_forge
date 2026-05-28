@@ -6,7 +6,7 @@
 use billforge_api::routes::theme::*;
 use billforge_db::repositories::{
     GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
-    OrganizationThemeRow, ThemeRepository, UserThemePreferenceRow,
+    OrganizationThemeRow, UserThemePreferenceRow,
 };
 use uuid::Uuid;
 

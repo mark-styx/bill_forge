@@ -41,7 +41,7 @@ pub use vendor_statement_repo::VendorStatementRepositoryImpl;
 pub use workflow_repo::WorkflowRepositoryImpl;
 pub use theme_repo::{
     GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
-    OrganizationThemeRow, ThemeRepository, UserThemePreferenceRow,
+    OrganizationThemeRow, ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
 };
 
 // Type aliases for backward compatibility with API routes

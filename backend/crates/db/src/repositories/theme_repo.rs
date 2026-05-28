@@ -102,6 +102,17 @@ pub struct UserThemePreferenceRow {
 // Repository
 // ---------------------------------------------------------------------------
 
+/// Bundled parameters for [`ThemeRepository::upsert_org_theme`].
+pub struct UpsertOrgThemeParams<'a> {
+    pub tenant_id: Uuid,
+    pub preset_id: &'a str,
+    pub custom_colors: Option<&'a OrganizationThemeColors>,
+    pub branding: &'a OrganizationBranding,
+    pub enabled_for_all_users: bool,
+    pub allow_user_override: bool,
+    pub gradient_config: Option<&'a GradientConfig>,
+}
+
 pub struct ThemeRepository {
     pool: Arc<PgPool>,
 }
@@ -130,14 +141,17 @@ impl ThemeRepository {
 
     pub async fn upsert_org_theme(
         &self,
-        tenant_id: Uuid,
-        preset_id: &str,
-        custom_colors: Option<&OrganizationThemeColors>,
-        branding: &OrganizationBranding,
-        enabled_for_all_users: bool,
-        allow_user_override: bool,
-        gradient_config: Option<&GradientConfig>,
+        p: &UpsertOrgThemeParams<'_>,
     ) -> Result<OrganizationThemeRow, sqlx::Error> {
+        let UpsertOrgThemeParams {
+            tenant_id,
+            preset_id,
+            custom_colors,
+            branding,
+            enabled_for_all_users,
+            allow_user_override,
+            gradient_config,
+        } = p;
         let colors_json = custom_colors.map(serde_json::to_value).transpose().ok().flatten();
         let branding_json = serde_json::to_value(branding).unwrap_or_default();
         let gradient_json = gradient_config.map(serde_json::to_value).transpose().ok().flatten();

@@ -14,7 +14,7 @@ use axum::{
 use billforge_core::TenantId;
 use billforge_db::repositories::{
     GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors, OrganizationThemeRow,
-    ThemeRepository, UserThemePreferenceRow,
+    ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -216,15 +216,15 @@ async fn create_org_theme(
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let repo = theme_repo(&state, &tenant_uuid).await?;
     let row = repo
-        .upsert_org_theme(
-            tenant_uuid,
-            &input.preset_id,
-            input.custom_colors.as_ref(),
-            &input.branding,
-            input.enabled_for_all_users.unwrap_or(false),
-            input.allow_user_override.unwrap_or(true),
-            input.gradient_config.as_ref(),
-        )
+        .upsert_org_theme(&UpsertOrgThemeParams {
+            tenant_id: tenant_uuid,
+            preset_id: &input.preset_id,
+            custom_colors: input.custom_colors.as_ref(),
+            branding: &input.branding,
+            enabled_for_all_users: input.enabled_for_all_users.unwrap_or(false),
+            allow_user_override: input.allow_user_override.unwrap_or(true),
+            gradient_config: input.gradient_config.as_ref(),
+        })
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(OrganizationTheme::from(row)))
@@ -266,15 +266,15 @@ async fn update_org_theme(
     };
 
     let row = repo
-        .upsert_org_theme(
-            tenant_uuid,
-            &preset,
-            colors.as_ref(),
-            &branding,
-            enabled,
-            allow_override,
-            gradient.as_ref(),
-        )
+        .upsert_org_theme(&UpsertOrgThemeParams {
+            tenant_id: tenant_uuid,
+            preset_id: &preset,
+            custom_colors: colors.as_ref(),
+            branding: &branding,
+            enabled_for_all_users: enabled,
+            allow_user_override: allow_override,
+            gradient_config: gradient.as_ref(),
+        })
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(OrganizationTheme::from(row)))
