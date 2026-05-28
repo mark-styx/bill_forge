@@ -124,7 +124,10 @@ impl ThemeRepository {
 
     // -- Organization theme ---------------------------------------------------
 
-    pub async fn get_org_theme(&self, tenant_id: Uuid) -> Result<Option<OrganizationThemeRow>, sqlx::Error> {
+    pub async fn get_org_theme(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Option<OrganizationThemeRow>, sqlx::Error> {
         let row = sqlx::query_as::<_, OrgThemeSqlRow>(
             "SELECT id, tenant_id, preset_id, custom_colors, branding,
                     enabled_for_all_users, allow_user_override, gradient_config,
@@ -152,9 +155,17 @@ impl ThemeRepository {
             allow_user_override,
             gradient_config,
         } = p;
-        let colors_json = custom_colors.map(serde_json::to_value).transpose().ok().flatten();
+        let colors_json = custom_colors
+            .map(serde_json::to_value)
+            .transpose()
+            .ok()
+            .flatten();
         let branding_json = serde_json::to_value(branding).unwrap_or_default();
-        let gradient_json = gradient_config.map(serde_json::to_value).transpose().ok().flatten();
+        let gradient_json = gradient_config
+            .map(serde_json::to_value)
+            .transpose()
+            .ok()
+            .flatten();
 
         let row = sqlx::query_as::<_, OrgThemeSqlRow>(
             "INSERT INTO organization_themes
@@ -222,7 +233,11 @@ impl ThemeRepository {
 
     // -- User theme preference ------------------------------------------------
 
-    pub async fn get_user_theme(&self, tenant_id: Uuid, user_id: Uuid) -> Result<Option<UserThemePreferenceRow>, sqlx::Error> {
+    pub async fn get_user_theme(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<UserThemePreferenceRow>, sqlx::Error> {
         let row = sqlx::query_as::<_, UserThemeSqlRow>(
             "SELECT id, tenant_id, user_id, preset_id, custom_colors, mode,
                     created_at, updated_at
@@ -245,7 +260,11 @@ impl ThemeRepository {
         custom_colors: Option<&OrganizationThemeColors>,
         mode: &str,
     ) -> Result<UserThemePreferenceRow, sqlx::Error> {
-        let colors_json = custom_colors.map(serde_json::to_value).transpose().ok().flatten();
+        let colors_json = custom_colors
+            .map(serde_json::to_value)
+            .transpose()
+            .ok()
+            .flatten();
 
         let row = sqlx::query_as::<_, UserThemeSqlRow>(
             "INSERT INTO user_theme_preferences
@@ -270,14 +289,17 @@ impl ThemeRepository {
         Ok(row.into_domain())
     }
 
-    pub async fn delete_user_theme(&self, tenant_id: Uuid, user_id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "DELETE FROM user_theme_preferences WHERE tenant_id = $1 AND user_id = $2",
-        )
-        .bind(tenant_id)
-        .bind(user_id)
-        .execute(&*self.pool)
-        .await?;
+    pub async fn delete_user_theme(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let result =
+            sqlx::query("DELETE FROM user_theme_preferences WHERE tenant_id = $1 AND user_id = $2")
+                .bind(tenant_id)
+                .bind(user_id)
+                .execute(&*self.pool)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 }
@@ -306,11 +328,15 @@ impl OrgThemeSqlRow {
             id: self.id,
             tenant_id: self.tenant_id,
             preset_id: self.preset_id,
-            custom_colors: self.custom_colors.and_then(|v| serde_json::from_value(v).ok()),
+            custom_colors: self
+                .custom_colors
+                .and_then(|v| serde_json::from_value(v).ok()),
             branding: serde_json::from_value(self.branding).unwrap_or_default(),
             enabled_for_all_users: self.enabled_for_all_users,
             allow_user_override: self.allow_user_override,
-            gradient_config: self.gradient_config.and_then(|v| serde_json::from_value(v).ok()),
+            gradient_config: self
+                .gradient_config
+                .and_then(|v| serde_json::from_value(v).ok()),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -336,7 +362,9 @@ impl UserThemeSqlRow {
             tenant_id: self.tenant_id,
             user_id: self.user_id,
             preset_id: self.preset_id,
-            custom_colors: self.custom_colors.and_then(|v| serde_json::from_value(v).ok()),
+            custom_colors: self
+                .custom_colors
+                .and_then(|v| serde_json::from_value(v).ok()),
             mode: self.mode,
             created_at: self.created_at,
             updated_at: self.updated_at,

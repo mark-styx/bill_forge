@@ -46,22 +46,19 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Composite optional FK: when conversation_id is present it must match
-    -- a real (id, tenant_id, user_id) in ai_conversations.  ON DELETE SET NULL
-    -- preserves the usage event row by only clearing the nullable correlation
-    -- column, keeping durable telemetry even after the conversation is deleted.
-    FOREIGN KEY (conversation_id, tenant_id, user_id)
-        REFERENCES ai_conversations(id, tenant_id, user_id)
-        ON DELETE SET NULL (conversation_id),
+    -- Optional FK: when conversation_id is present it must match a real
+    -- conversation. ON DELETE SET NULL preserves durable telemetry even after
+    -- the conversation is deleted.
+    FOREIGN KEY (conversation_id)
+        REFERENCES ai_conversations(id)
+        ON DELETE SET NULL,
 
-    -- Composite optional FK: when both message_id and conversation_id are
-    -- present, the tuple must match a real (id, tenant_id, user_id,
-    -- conversation_id) in ai_messages, reusing the unique constraint
-    -- introduced by migration 083.  Only message_id is nulled when the
-    -- message is deleted so the conversation link survives if still valid.
-    FOREIGN KEY (message_id, tenant_id, user_id, conversation_id)
-        REFERENCES ai_messages(id, tenant_id, user_id, conversation_id)
-        ON DELETE SET NULL (message_id),
+    -- Optional FK: when message_id is present it must match a real message.
+    -- ON DELETE SET NULL preserves the usage event row when a message is
+    -- deleted.
+    FOREIGN KEY (message_id)
+        REFERENCES ai_messages(id)
+        ON DELETE SET NULL,
 
     -- Invariant: success rows should not carry error fields; failed rows
     -- may still have partial latency/token data if the provider returned

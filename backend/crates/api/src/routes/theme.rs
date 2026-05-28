@@ -13,8 +13,8 @@ use axum::{
 };
 use billforge_core::TenantId;
 use billforge_db::repositories::{
-    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors, OrganizationThemeRow,
-    ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
+    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
+    OrganizationThemeRow, ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -129,7 +129,10 @@ pub struct EffectiveTheme {
 // ---------------------------------------------------------------------------
 
 /// Acquire a ThemeRepository scoped to the tenant's pool.
-async fn theme_repo(state: &AppState, tenant_id: &Uuid) -> Result<ThemeRepository, (axum::http::StatusCode, String)> {
+async fn theme_repo(
+    state: &AppState,
+    tenant_id: &Uuid,
+) -> Result<ThemeRepository, (axum::http::StatusCode, String)> {
     let tid = TenantId::from_uuid(*tenant_id);
     let pool = state
         .db
@@ -154,7 +157,8 @@ fn effective_colors(
 }
 
 fn effective_mode(user: Option<&UserThemePreferenceRow>) -> String {
-    user.map(|u| u.mode.clone()).unwrap_or_else(|| "system".into())
+    user.map(|u| u.mode.clone())
+        .unwrap_or_else(|| "system".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +189,11 @@ async fn get_org_theme(
 ) -> Result<Json<OrganizationTheme>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let repo = theme_repo(&state, &tenant_uuid).await?;
-    match repo.get_org_theme(tenant_uuid).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    match repo
+        .get_org_theme(tenant_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         Some(row) => Ok(Json(OrganizationTheme::from(row))),
         None => {
             // Return default theme for tenants that haven't saved one yet
@@ -251,7 +259,9 @@ async fn update_org_theme(
             input.preset_id.unwrap_or_else(|| e.preset_id.clone()),
             input.custom_colors.or_else(|| e.custom_colors.clone()),
             input.branding.unwrap_or_else(|| e.branding.clone()),
-            input.enabled_for_all_users.unwrap_or(e.enabled_for_all_users),
+            input
+                .enabled_for_all_users
+                .unwrap_or(e.enabled_for_all_users),
             input.allow_user_override.unwrap_or(e.allow_user_override),
             input.gradient_config.or_else(|| e.gradient_config.clone()),
         ),
@@ -292,7 +302,9 @@ async fn delete_org_theme(
         .delete_org_theme(tenant_uuid)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "success": true, "deleted": deleted })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "deleted": deleted }),
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/organization/theme/logo", tag = "Theme", request_body = serde_json::Value, responses((status = 501, description = "Not implemented")))]
@@ -317,7 +329,9 @@ async fn delete_logo(
         .delete_logo(tenant_uuid, &logo_type)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "success": true, "removed": removed })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "removed": removed }),
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/organization/theme/preview", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme preview CSS")))]
@@ -328,7 +342,10 @@ async fn preview_theme(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let repo = theme_repo(&state, &tenant_uuid).await?;
-    let org = repo.get_org_theme(tenant_uuid).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let org = repo
+        .get_org_theme(tenant_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let colors = org
         .as_ref()
         .and_then(|o| o.custom_colors.clone())
@@ -354,7 +371,10 @@ async fn export_theme(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let repo = theme_repo(&state, &tenant_uuid).await?;
-    let org = repo.get_org_theme(tenant_uuid).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let org = repo
+        .get_org_theme(tenant_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     match org {
         Some(row) => Ok(Json(serde_json::json!({
@@ -404,7 +424,11 @@ async fn get_user_theme(
     let user_uuid = *user.user_id.as_uuid();
     let repo = theme_repo(&state, &tenant_id).await?;
 
-    match repo.get_user_theme(tenant_id, user_uuid).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? {
+    match repo
+        .get_user_theme(tenant_id, user_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         Some(row) => Ok(Json(UserThemePreference::from(row))),
         None => {
             let now = chrono::Utc::now();
@@ -432,7 +456,13 @@ async fn create_user_theme(
     let repo = theme_repo(&state, &tenant_id).await?;
 
     let row = repo
-        .upsert_user_theme(tenant_id, user_uuid, &input.preset_id, input.custom_colors.as_ref(), &input.mode)
+        .upsert_user_theme(
+            tenant_id,
+            user_uuid,
+            &input.preset_id,
+            input.custom_colors.as_ref(),
+            &input.mode,
+        )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(UserThemePreference::from(row)))
@@ -487,7 +517,9 @@ async fn delete_user_theme(
         .delete_user_theme(tenant_id, user_uuid)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "success": true, "deleted": deleted })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "deleted": deleted }),
+    ))
 }
 
 #[utoipa::path(get, path = "/api/v1/user/theme/effective", tag = "Theme", responses((status = 200, description = "Effective theme (org + user)")))]
@@ -499,13 +531,16 @@ async fn get_effective_theme(
     let user_uuid = *user.user_id.as_uuid();
     let repo = theme_repo(&state, &tenant_id).await?;
 
-    let org = repo.get_org_theme(tenant_id).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let usr = repo.get_user_theme(tenant_id, user_uuid).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let org = repo
+        .get_org_theme(tenant_id)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let usr = repo
+        .get_user_theme(tenant_id, user_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let can_override = org
-        .as_ref()
-        .map(|o| o.allow_user_override)
-        .unwrap_or(true);
+    let can_override = org.as_ref().map(|o| o.allow_user_override).unwrap_or(true);
 
     Ok(Json(EffectiveTheme {
         theme: org.clone().map(OrganizationTheme::from),

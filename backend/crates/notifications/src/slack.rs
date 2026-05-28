@@ -3,7 +3,9 @@
 //! Provides OAuth-based Slack integration with interactive message buttons
 //! for approval workflows.
 
-use crate::{Notification, NotificationChannel, NotificationError, NotificationProvider, NotificationResult};
+use crate::{
+    Notification, NotificationChannel, NotificationError, NotificationProvider, NotificationResult,
+};
 use async_trait::async_trait;
 use billforge_core::UserId;
 use reqwest::Client;

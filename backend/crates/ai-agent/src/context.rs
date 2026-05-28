@@ -1,7 +1,7 @@
 //! Context injection for AI agent
 //! Injects tenant context, user roles, and relevant data into agent
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -16,6 +16,8 @@ pub async fn inject_context(
     tenant_id: String,
     user_id: Uuid,
 ) -> Result<AgentContext> {
+    let tenant_uuid = Uuid::parse_str(&tenant_id).context("Invalid tenant_id UUID")?;
+
     let row = sqlx::query(
         r#"
         SELECT id, email, roles
@@ -24,7 +26,7 @@ pub async fn inject_context(
         "#,
     )
     .bind(user_id)
-    .bind(&tenant_id)
+    .bind(tenant_uuid)
     .fetch_optional(pool)
     .await?;
 

@@ -17,6 +17,20 @@ use uuid::Uuid;
 // Seed helpers (minimal rows to satisfy FK constraints)
 // ---------------------------------------------------------------------------
 
+async fn seed_tenant(pool: &PgPool, tenant_id: &TenantId) {
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(format!("Test Tenant {}", tenant_id.as_uuid()))
+    .bind(format!("test-tenant-{}", tenant_id.as_uuid()))
+    .execute(pool)
+    .await
+    .expect("seed tenant");
+}
+
 async fn seed_user(pool: &PgPool, tenant_id: &TenantId, user_id: Uuid) {
     sqlx::query(
         "INSERT INTO users (id, tenant_id, email, password_hash, name)
@@ -123,6 +137,7 @@ async fn test_invoice_count_respects_period_window() {
     let user_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
 
+    seed_tenant(&pool, &tenant_id).await;
     seed_user(&pool, &tenant_id, user_id).await;
     seed_vendor(&pool, &tenant_id, vendor_id).await;
 
@@ -173,11 +188,13 @@ async fn test_invoice_count_isolated_by_tenant() {
 
     let user_a = Uuid::new_v4();
     let vendor_a = Uuid::new_v4();
+    seed_tenant(&pool, &tenant_a).await;
     seed_user(&pool, &tenant_a, user_a).await;
     seed_vendor(&pool, &tenant_a, vendor_a).await;
 
     let user_b = Uuid::new_v4();
     let vendor_b = Uuid::new_v4();
+    seed_tenant(&pool, &tenant_b).await;
     seed_user(&pool, &tenant_b, user_b).await;
     seed_vendor(&pool, &tenant_b, vendor_b).await;
 

@@ -9,11 +9,11 @@ mod payment_request_repo;
 mod purchase_order_repo;
 mod status_config_repo;
 mod tax_document_repo;
+mod theme_repo;
 mod user_repo;
 mod vendor_repo;
 mod vendor_statement_repo;
 mod workflow_repo;
-mod theme_repo;
 
 pub use ai_action_proposal_repo::{
     AiActionProposalRecord, AiActionProposalRepositoryImpl, AiActionProposalRisk,
@@ -35,14 +35,14 @@ pub use payment_request_repo::{PaymentRequest, PaymentRequestItem, PaymentReques
 pub use purchase_order_repo::PurchaseOrderRepositoryImpl;
 pub use status_config_repo::InvoiceStatusConfigRepositoryImpl;
 pub use tax_document_repo::TaxDocumentRepositoryImpl;
-pub use user_repo::UserRepositoryImpl;
-pub use vendor_repo::VendorRepositoryImpl;
-pub use vendor_statement_repo::VendorStatementRepositoryImpl;
-pub use workflow_repo::WorkflowRepositoryImpl;
 pub use theme_repo::{
     GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
     OrganizationThemeRow, ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
 };
+pub use user_repo::UserRepositoryImpl;
+pub use vendor_repo::VendorRepositoryImpl;
+pub use vendor_statement_repo::VendorStatementRepositoryImpl;
+pub use workflow_repo::WorkflowRepositoryImpl;
 
 // Type aliases for backward compatibility with API routes
 pub type WorkQueueRepositoryImpl = WorkflowRepositoryImpl;
