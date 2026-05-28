@@ -4,7 +4,7 @@ import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FileText, Building2, ScanLine, Link2, Rocket } from 'lucide-react';
 import { useAuthStore, setupApiCallbacks } from '@/stores/auth';
-import { authApi, billingApi, api } from '@/lib/api';
+import { authApi, billingApi, api, type BillingModule } from '@/lib/api';
 import { StepperWithContent, StepContent, Step } from '@/components/ui/stepper';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -126,7 +126,7 @@ function OnboardInner() {
       });
 
       // Build add_on_modules from onboarding OCR/ERP choices
-      const addOnModules: string[] = [];
+      const addOnModules: BillingModule[] = [];
       if (selectedOcr === 'textract' || selectedOcr === 'google') {
         addOnModules.push('invoice_capture');
       }
