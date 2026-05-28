@@ -198,6 +198,7 @@ async fn test_token_cannot_be_reused() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_approve_via_valid_token_transitions_state_and_audits() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -272,6 +273,7 @@ async fn test_approve_via_valid_token_transitions_state_and_audits() {
 }
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_reject_with_reason_writes_reason_to_audit() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -333,6 +335,7 @@ async fn test_reject_with_reason_writes_reason_to_audit() {
 }
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_comment_via_link_does_not_change_status() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -415,6 +418,7 @@ async fn test_comment_via_link_does_not_change_status() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_approve_via_link_resolves_approval_request() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -472,6 +476,7 @@ async fn test_approve_via_link_resolves_approval_request() {
 }
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_reject_via_link_resolves_approval_request() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();

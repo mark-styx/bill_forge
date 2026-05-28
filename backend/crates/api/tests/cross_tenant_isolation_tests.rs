@@ -263,6 +263,7 @@ async fn valid_tenant_id_passes_middleware() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
 async fn vendor_get_cross_tenant_returns_404() {
     let pool = get_pool().await;
     let tenant_a = Uuid::new_v4();
@@ -299,6 +300,7 @@ async fn vendor_get_cross_tenant_returns_404() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
 async fn vendor_list_excludes_other_tenant() {
     let pool = get_pool().await;
     let tenant_a = Uuid::new_v4();
@@ -347,6 +349,7 @@ async fn vendor_list_excludes_other_tenant() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
 async fn invoice_get_cross_tenant_returns_404() {
     let pool = get_pool().await;
     let tenant_a = Uuid::new_v4();
@@ -381,6 +384,7 @@ async fn invoice_get_cross_tenant_returns_404() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
 async fn invoice_update_cross_tenant_returns_404_or_403() {
     let pool = get_pool().await;
     let tenant_a = Uuid::new_v4();
@@ -432,6 +436,7 @@ async fn invoice_update_cross_tenant_returns_404_or_403() {
 // ===========================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
 async fn approval_link_cross_tenant_blocked() {
     let pool = get_pool().await;
     let tenant_a = Uuid::new_v4();

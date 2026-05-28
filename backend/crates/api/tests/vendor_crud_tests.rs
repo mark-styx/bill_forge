@@ -66,6 +66,7 @@ async fn insert_test_vendor(
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test vendor_crud_tests -- --ignored
 async fn test_create_vendor_happy_path() {
     let pool = get_pool().await;
     let tenant_id = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());
@@ -104,6 +105,7 @@ async fn test_create_vendor_happy_path() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test vendor_crud_tests -- --ignored
 async fn test_list_vendors_tenant_isolation() {
     let pool = get_pool().await;
     let tenant_a = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());
@@ -179,6 +181,7 @@ async fn test_list_vendors_tenant_isolation() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test vendor_crud_tests -- --ignored
 async fn test_update_routing_rules() {
     let pool = get_pool().await;
     let tenant_id = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());
@@ -230,6 +233,7 @@ async fn test_update_routing_rules() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test vendor_crud_tests -- --ignored
 async fn test_delete_sets_inactive() {
     let pool = get_pool().await;
     let tenant_id = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());
@@ -277,6 +281,7 @@ async fn test_delete_sets_inactive() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test vendor_crud_tests -- --ignored
 async fn test_get_routing_rules_helper() {
     let pool = get_pool().await;
     let tenant_id = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());

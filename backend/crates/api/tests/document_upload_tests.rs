@@ -79,6 +79,7 @@ async fn ensure_fixture_invoice(pool: &sqlx::PgPool) -> Uuid {
 
 /// Test that inserting a document WITH tenant_id succeeds (the fixed query).
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test document_upload_tests -- --ignored
 async fn test_document_insert_with_tenant_id_succeeds() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -134,6 +135,7 @@ async fn test_document_insert_with_tenant_id_succeeds() {
 /// Test that inserting a document WITHOUT tenant_id fails with NOT NULL violation.
 /// This proves the bug existed before the fix.
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test document_upload_tests -- --ignored
 async fn test_document_insert_without_tenant_id_fails() {
     let pool = get_pool().await;
     let user_id = Uuid::parse_str(SANDBOX_USER_ID).unwrap();
@@ -170,6 +172,7 @@ async fn test_document_insert_without_tenant_id_fails() {
 
 /// Test the storage.rs document insert query also works correctly.
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test document_upload_tests -- --ignored
 async fn test_storage_document_insert_with_tenant_id() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
@@ -224,6 +227,7 @@ async fn test_storage_document_insert_with_tenant_id() {
 
 /// Test that multiple documents can be uploaded for the same invoice.
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test document_upload_tests -- --ignored
 async fn test_multiple_documents_per_invoice() {
     let pool = get_pool().await;
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();

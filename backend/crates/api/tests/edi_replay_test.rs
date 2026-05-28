@@ -105,6 +105,7 @@ mod integration {
     }
 
     #[sqlx::test]
+    #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
     async fn test_webhook_replay_rejected() {
         let pool = setup_test_pool().await;
         let tenant_id = Uuid::new_v4();
@@ -129,6 +130,7 @@ mod integration {
     }
 
     #[sqlx::test]
+    #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
     async fn test_different_tenants_same_nonce_allowed() {
         let pool = setup_test_pool().await;
         let tenant_a = Uuid::new_v4();
@@ -155,6 +157,7 @@ mod integration {
     }
 
     #[sqlx::test]
+    #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
     async fn test_no_middleware_id_uses_body_hash() {
         let pool = setup_test_pool().await;
         let tenant_id = Uuid::new_v4();

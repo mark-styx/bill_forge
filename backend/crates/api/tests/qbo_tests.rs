@@ -89,6 +89,7 @@ async fn test_connect_returns_authorize_url_with_state() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test qbo_tests -- --ignored
 async fn test_sync_vendors_upserts_and_updates_status() {
     let pool = get_pool().await;
     let tenant_id = TenantId::from_uuid(Uuid::parse_str(SANDBOX_TENANT_ID).unwrap());

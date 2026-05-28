@@ -79,7 +79,7 @@ prometheus = { version = "0.13", default-features = false }
 lazy_static = "1.4"
 
 [features]
-default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi"]
+default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi", "payment-requests"]
 quickbooks = ["dep:billforge-quickbooks"]
 xero = ["dep:billforge-xero"]
 sage-intacct = ["dep:billforge-sage-intacct"]

@@ -127,6 +127,7 @@ async fn read_latest_audit(
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
 async fn happy_path_transition_writes_audit_row(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -173,6 +174,7 @@ async fn happy_path_transition_writes_audit_row(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
 async fn invalid_transition_rejected_no_audit_row(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -213,6 +215,7 @@ async fn invalid_transition_rejected_no_audit_row(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
 async fn tenant_isolation_audit_rows_scoped(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
 
@@ -270,6 +273,7 @@ async fn tenant_isolation_audit_rows_scoped(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
 async fn transition_atomicity_on_constraint_violation(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());

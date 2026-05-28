@@ -177,6 +177,7 @@ async fn refresh_mv(pool: &sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test dashboard_report_tests -- --ignored
 async fn happy_path_kpi_counts_and_aging(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -302,6 +303,7 @@ async fn happy_path_kpi_counts_and_aging(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test dashboard_report_tests -- --ignored
 async fn tenant_isolation_kpis_scoped(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_a = TenantId::from_uuid(Uuid::new_v4());
@@ -369,6 +371,7 @@ async fn tenant_isolation_kpis_scoped(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test dashboard_report_tests -- --ignored
 async fn empty_tenant_returns_zero_defaults(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());

@@ -23,6 +23,7 @@ async fn seed_tenant(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<()> {
 /// from 'running' -> 'completed' with record counts, matching the pattern
 /// used by the worker's sync_vendors function.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn sync_log_lifecycle(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let sync_id = Uuid::new_v4();
@@ -73,6 +74,7 @@ async fn sync_log_lifecycle(pool: PgPool) -> sqlx::Result<()> {
 /// Verify that a quickbooks_sync_log row can be transitioned to 'failed'
 /// status, matching the error path in the worker's sync_vendors.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn sync_log_failed_status(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let sync_id = Uuid::new_v4();
@@ -108,6 +110,7 @@ async fn sync_log_failed_status(pool: PgPool) -> sqlx::Result<()> {
 /// returns the expected columns (company_id, access_token, refresh_token,
 /// access_token_expires_at). When no row exists, returns None.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn connection_lookup_by_tenant(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
 
@@ -158,6 +161,7 @@ async fn connection_lookup_by_tenant(pool: PgPool) -> sqlx::Result<()> {
 
 /// Verify that last_sync_at is updated on quickbooks_connections after a sync.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn connection_last_sync_updated(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -206,6 +210,7 @@ async fn connection_last_sync_updated(pool: PgPool) -> sqlx::Result<()> {
 /// Verify vendor insert + mapping insert (new vendor path).
 /// Also tests the vendor lookup query used to detect existing mappings.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn vendor_insert_and_mapping_lookup(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
@@ -272,6 +277,7 @@ async fn vendor_insert_and_mapping_lookup(pool: PgPool) -> sqlx::Result<()> {
 
 /// Verify vendor update + mapping update (existing vendor path).
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn vendor_update_and_mapping_update(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let vendor_id = Uuid::new_v4();
@@ -359,6 +365,7 @@ async fn vendor_update_and_mapping_update(pool: PgPool) -> sqlx::Result<()> {
 /// Verify that the token refresh SQL (UPDATE quickbooks_connections SET
 /// access_token, refresh_token, etc.) works correctly.
 #[sqlx::test(migrations = "../../migrations")]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test quickbooks_sync_test -- --ignored
 async fn token_refresh_persistence(pool: PgPool) -> sqlx::Result<()> {
     let tenant_id = Uuid::new_v4();
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);

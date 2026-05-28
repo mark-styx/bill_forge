@@ -120,6 +120,7 @@ async fn read_feedback(
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_feedback_test -- --ignored
 async fn test_invoice_correction_records_feedback(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -184,6 +185,7 @@ async fn test_invoice_correction_records_feedback(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_feedback_test -- --ignored
 async fn test_invoice_non_categorization_update_skips_feedback(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());

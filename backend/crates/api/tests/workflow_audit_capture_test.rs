@@ -139,6 +139,7 @@ async fn read_audit_changes(pool: &sqlx::PgPool, resource_id: &str) -> Option<se
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn update_rule_persists_old_and_new_values_to_audit_log(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -205,6 +206,7 @@ async fn update_rule_persists_old_and_new_values_to_audit_log(pool: sqlx::PgPool
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn deactivate_rule_persists_is_active_transition_to_audit_log(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -243,6 +245,7 @@ async fn deactivate_rule_persists_is_active_transition_to_audit_log(pool: sqlx::
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn approve_persists_status_transition_to_audit_log(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -305,6 +308,7 @@ async fn approve_persists_status_transition_to_audit_log(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn delete_rule_persists_old_state_only_to_audit_log(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -354,6 +358,7 @@ async fn delete_rule_persists_old_state_only_to_audit_log(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn audit_log_row_with_missing_old_value_is_detectable(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
@@ -396,6 +401,7 @@ async fn audit_log_row_with_missing_old_value_is_detectable(pool: sqlx::PgPool) 
 // ============================================================================
 
 #[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test workflow_audit_capture_test -- --ignored
 async fn audit_log_action_and_resource_type_columns_match_entry(pool: sqlx::PgPool) {
     let pool = Arc::new(pool);
     let tenant_id = TenantId::from_uuid(Uuid::new_v4());
