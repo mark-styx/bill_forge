@@ -8,8 +8,6 @@
 
 // Allow non-snake_case field names to match Xero API conventions
 #![allow(non_snake_case)]
-#![allow(unused_variables)]
-#![allow(dead_code)]
 
 pub mod client;
 pub mod oauth;

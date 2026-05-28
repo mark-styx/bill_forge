@@ -3,7 +3,6 @@
 //! Provides multi-channel notifications (Slack, Microsoft Teams, Email)
 //! with actionable buttons and user preference management.
 
-#![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
 mod notification_router;

@@ -105,7 +105,7 @@ impl VendorRepository for VendorRepositoryImpl {
     async fn list(
         &self,
         tenant_id: &TenantId,
-        filters: &VendorFilters,
+        _filters: &VendorFilters,
         pagination: &Pagination,
     ) -> Result<PaginatedResponse<Vendor>> {
         let offset = ((pagination.page - 1) * pagination.per_page) as i32;
@@ -323,6 +323,7 @@ impl VendorRepository for VendorRepositoryImpl {
 
 /// Helper struct for mapping database rows
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct VendorRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -384,6 +385,7 @@ impl VendorRow {
 
 /// Helper struct for mapping message rows
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct MessageRow {
     id: Uuid,
     vendor_id: Uuid,

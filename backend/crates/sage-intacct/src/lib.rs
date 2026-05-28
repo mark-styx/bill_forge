@@ -8,9 +8,6 @@
 //! - GL account mapping
 //! - Multi-entity/subsidiary support
 
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod auth;
 pub mod client;
 pub mod types;

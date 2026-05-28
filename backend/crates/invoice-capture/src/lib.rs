@@ -2,8 +2,6 @@
 //!
 //! OCR-powered invoice data extraction with support for multiple providers.
 
-#![allow(dead_code)]
-
 pub mod ocr;
 pub mod service;
 

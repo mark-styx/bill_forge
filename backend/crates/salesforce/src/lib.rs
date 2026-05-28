@@ -12,9 +12,6 @@
 //! - Linking PO numbers from Opportunities or custom PO objects
 //! - Pushing payment status back to Salesforce for vendor relationship tracking
 
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod client;
 pub mod oauth;
 pub mod types;

@@ -8,8 +8,6 @@
 //! models the simpler client_credentials shape to establish the crate skeleton.
 //! A follow-up ticket should add JWT signing against actual NetSuite sandbox credentials.
 
-#![allow(dead_code)]
-
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -18,6 +18,7 @@ impl InvoiceStatusConfigRepositoryImpl {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 struct StatusConfigRow {
     id: Uuid,
     tenant_id: Uuid,

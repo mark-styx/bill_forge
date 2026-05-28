@@ -8,9 +8,6 @@
 //! - Spend category sync
 //! - Multi-company support
 
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod auth;
 pub mod client;
 pub mod types;

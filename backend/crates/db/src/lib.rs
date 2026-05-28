@@ -27,10 +27,6 @@
 //! let storage = create_storage_service(config).await?;
 //! ```
 
-// Allow unused variables and dead code in stub implementations (TODOs)
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod manager;
 pub mod metadata_db;
 pub mod migrations;

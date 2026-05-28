@@ -173,9 +173,9 @@ impl StorageService for LocalStorageService {
     async fn upload(
         &self,
         tenant_id: &TenantId,
-        filename: &str,
+        _filename: &str,
         data: &[u8],
-        mime_type: &str,
+        _mime_type: &str,
     ) -> Result<Uuid> {
         let document_id = Uuid::new_v4();
         let storage_key = build_storage_key(tenant_id, document_id);
@@ -393,6 +393,7 @@ impl DocumentRepositoryImpl {
 
 /// Helper struct for mapping database rows
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct DocumentRow {
     id: Uuid,
     tenant_id: Uuid,

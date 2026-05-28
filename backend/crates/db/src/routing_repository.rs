@@ -269,6 +269,7 @@ impl RoutingDataProvider for RoutingRepository {
 // --- Row types for sqlx deserialization ---
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct RoutingConfigRow {
     tenant_id: String,
     workload_weight: sqlx::types::BigDecimal,

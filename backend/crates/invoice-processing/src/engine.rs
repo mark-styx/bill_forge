@@ -17,6 +17,7 @@ use std::sync::Arc;
 const ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD: f32 = 0.95;
 
 /// Workflow engine for processing invoices
+#[allow(dead_code)]
 pub struct WorkflowEngine {
     invoice_repo: Arc<dyn InvoiceRepository>,
     rule_repo: Arc<dyn WorkflowRuleRepository>,
@@ -146,6 +147,7 @@ impl WorkflowEngine {
     }
 
     /// Evaluate a single condition
+    #[allow(dead_code)]
     fn evaluate_condition(&self, invoice: &Invoice, condition: &RuleCondition) -> bool {
         billforge_core::workflow_evaluator::evaluate_single_condition(invoice, condition)
     }

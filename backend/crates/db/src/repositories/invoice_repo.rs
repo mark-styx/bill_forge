@@ -444,6 +444,7 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
 
 /// Helper struct for mapping database rows
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct InvoiceRow {
     id: Uuid,
     tenant_id: Uuid,

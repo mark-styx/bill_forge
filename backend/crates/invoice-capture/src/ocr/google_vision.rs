@@ -14,6 +14,7 @@ use regex::Regex;
 use std::time::Instant;
 
 /// Google Cloud Vision OCR provider
+#[allow(dead_code)]
 pub struct GoogleVisionOcr {
     /// Google Cloud project ID
     project_id: Option<String>,
@@ -423,6 +424,7 @@ struct VisionResponse {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct TextAnnotation {
     description: String,
     confidence: f32,
@@ -436,6 +438,7 @@ struct VisionFullText {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Page {
     width: i32,
     height: i32,

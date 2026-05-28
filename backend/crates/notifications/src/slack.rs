@@ -142,6 +142,7 @@ struct SlackBotProfile {
 
 /// Slack interactive message payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackInteractionPayload {
     #[serde(rename = "type")]
     pub type_: String,
@@ -160,6 +161,7 @@ pub struct SlackInteractionPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackUser {
     pub id: String,
     pub username: String,
@@ -168,6 +170,7 @@ pub struct SlackUser {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackContainer {
     #[serde(rename = "type")]
     pub type_: String,
@@ -177,6 +180,7 @@ pub struct SlackContainer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackTeamBasic {
     pub id: String,
     pub domain: String,
@@ -189,6 +193,7 @@ pub struct SlackChannel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackMessageMetadata {
     #[serde(rename = "type")]
     pub type_: String,
@@ -199,6 +204,7 @@ pub struct SlackMessageMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SlackAction {
     #[serde(rename = "type")]
     pub type_: String,

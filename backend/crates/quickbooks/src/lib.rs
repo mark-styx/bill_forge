@@ -8,8 +8,6 @@
 
 // Allow non-snake-case field names to match QuickBooks API conventions
 #![allow(non_snake_case)]
-#![allow(unused_variables)]
-#![allow(dead_code)]
 
 pub mod client;
 pub mod oauth;

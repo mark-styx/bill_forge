@@ -14,6 +14,7 @@ use regex::Regex;
 use std::time::Instant;
 
 /// AWS Textract OCR provider
+#[allow(dead_code)]
 pub struct AwsTextractOcr {
     /// AWS region (default: us-east-1)
     region: String,
@@ -492,6 +493,7 @@ struct TextractResponse {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Block {
     block_type: String,
     text: String,

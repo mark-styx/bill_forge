@@ -19,6 +19,7 @@ use serde::Serialize;
 use tokio::time::sleep;
 
 /// Workday REST API client
+#[allow(dead_code)]
 pub struct WorkdayClient {
     /// HTTP client
     http_client: reqwest::Client,

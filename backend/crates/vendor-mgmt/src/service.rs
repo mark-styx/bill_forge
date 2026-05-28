@@ -35,7 +35,7 @@ impl VendorService {
         input: CreateVendorInput,
     ) -> Result<Vendor> {
         // Check for duplicate
-        if let Some(existing) = self
+        if let Some(_existing) = self
             .vendor_repo
             .find_by_name(tenant_id, &input.name)
             .await?

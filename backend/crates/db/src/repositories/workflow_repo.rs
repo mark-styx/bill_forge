@@ -1152,6 +1152,7 @@ impl WorkflowTemplateRepository for WorkflowRepositoryImpl {
 // Helper structs for mapping database rows
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct WorkflowRuleRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1189,6 +1190,7 @@ impl WorkflowRuleRow {
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct WorkQueueRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1235,6 +1237,7 @@ impl WorkQueueRow {
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct QueueItemRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1268,6 +1271,7 @@ impl QueueItemRow {
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct AssignmentRuleRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1301,6 +1305,7 @@ impl AssignmentRuleRow {
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct ApprovalRequestRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1314,7 +1319,7 @@ struct ApprovalRequestRow {
 }
 
 impl ApprovalRequestRow {
-    fn into_approval_request(self, tenant_id: &TenantId) -> ApprovalRequest {
+    fn into_approval_request(self, _tenant_id: &TenantId) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
             tenant_id: TenantId(self.tenant_id),
@@ -1336,6 +1341,7 @@ impl ApprovalRequestRow {
         }
     }
 
+    #[allow(dead_code)]
     fn into_request(self) -> ApprovalRequest {
         ApprovalRequest {
             id: self.id,
@@ -1360,6 +1366,7 @@ impl ApprovalRequestRow {
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct WorkflowTemplateRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1393,6 +1400,7 @@ impl WorkflowTemplateRow {
 // ============================================================================
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 struct DelegationRow {
     id: Uuid,
     tenant_id: Uuid,
@@ -1550,6 +1558,7 @@ impl ApprovalDelegationRepository for WorkflowRepositoryImpl {
 // ============================================================================
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 struct ApprovalLimitRow {
     id: Uuid,
     tenant_id: Uuid,

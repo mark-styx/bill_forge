@@ -234,6 +234,7 @@ impl XeroClient {
     }
 
     /// Make a PUT request to Xero API
+    #[allow(dead_code)]
     async fn put<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
         let url = self.build_url(resource);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize PUT body")?;

@@ -3,11 +3,6 @@
 //! Workflow engine for invoice approval and routing.
 //! Sprint 13: ML-based categorization with OpenAI embeddings
 
-// Allow dead code and unused variables in stub implementations
-#![allow(warnings)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 pub mod categorization;
 pub mod categorization_ml;
 pub mod embedding_cache;

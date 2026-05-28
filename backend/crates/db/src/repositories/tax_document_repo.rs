@@ -111,6 +111,7 @@ impl TaxDocumentRepository for TaxDocumentRepositoryImpl {
 
 /// Helper struct for mapping database rows
 #[derive(sqlx::FromRow)]
+#[allow(dead_code)]
 struct TaxDocumentRow {
     id: Uuid,
     tenant_id: Uuid,

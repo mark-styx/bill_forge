@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 /// Teams webhook client
+#[allow(dead_code)]
 pub struct TeamsClient {
     config: TeamsConfig,
     http_client: Client,
@@ -152,6 +153,7 @@ struct AdaptiveCardActionButton {
 
 /// Teams webhook response
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct TeamsWebhookResponse {
     success: Option<bool>,
     error: Option<String>,
@@ -159,6 +161,7 @@ struct TeamsWebhookResponse {
 
 /// Teams user preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TeamsUserPreferences {
     pub user_id: UserId,
     pub webhook_url: String,

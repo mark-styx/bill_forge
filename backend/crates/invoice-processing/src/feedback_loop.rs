@@ -101,9 +101,9 @@ impl FeedbackLearning {
         };
 
         // Determine which suggestions were accepted
-        let accepted_gl = feedback.suggested_gl_code == feedback.accepted_gl_code;
-        let accepted_dept = feedback.suggested_department == feedback.accepted_department;
-        let accepted_cc = feedback.suggested_cost_center == feedback.accepted_cost_center;
+        let _accepted_gl = feedback.suggested_gl_code == feedback.accepted_gl_code;
+        let _accepted_dept = feedback.suggested_department == feedback.accepted_department;
+        let _accepted_cc = feedback.suggested_cost_center == feedback.accepted_cost_center;
 
         sqlx::query(
             r#"

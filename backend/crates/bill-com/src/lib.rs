@@ -8,9 +8,6 @@
 //! - Bulk payment support
 //! - Payment status tracking
 
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 pub mod auth;
 pub mod client;
 pub mod types;
