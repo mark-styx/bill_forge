@@ -25,7 +25,7 @@ const OCR_PROVIDERS = [
 ];
 
 const ERP_OPTIONS = [
-  { id: 'quickbooks', name: 'QuickBooks Online', description: 'Sync invoices and payments with QuickBooks.' },
+  { id: 'quickbooks', name: 'QuickBooks Online', description: 'Sync invoices with QuickBooks.' },
   { id: 'xero', name: 'Xero', description: 'Export approved invoices to Xero.' },
   { id: 'sage', name: 'Sage Intacct', description: 'Enterprise ERP integration with Sage.' },
   { id: 'none', name: 'Skip for now', description: 'You can connect an ERP later from Settings.' },

@@ -403,7 +403,6 @@ export interface ImplementationGoLiveChecks {
   notify_ap_team: boolean;
   set_email_forwarding: boolean;
   enable_approval_routing: boolean;
-  schedule_first_payment_run: boolean;
   confirm_cutover_date: boolean;
 }
 
@@ -1562,83 +1561,6 @@ export interface UpdateLineMatchInput {
   matched_invoice_id?: string | null;
   notes?: string;
 }
-
-// Payment Request types
-export interface PaymentRequestItem {
-  id: string;
-  invoice_id: string;
-  invoice_number: string;
-  vendor_name: string;
-  amount_cents: number;
-  currency: string;
-  due_date?: string;
-}
-
-export interface PaymentRequest {
-  id: string;
-  request_number: string;
-  status: string;
-  vendor_id?: string;
-  vendor_name?: string;
-  total_amount_cents: number;
-  currency: string;
-  invoice_count: number;
-  earliest_due_date?: string;
-  latest_due_date?: string;
-  items: PaymentRequestItem[];
-  notes?: string;
-  created_by: string;
-  submitted_at?: string;
-  created_at: string;
-}
-
-export interface PaymentRequestSummary {
-  id: string;
-  request_number: string;
-  status: string;
-  vendor_id?: string;
-  total_amount_cents: number;
-  currency: string;
-  invoice_count: number;
-  earliest_due_date?: string;
-  latest_due_date?: string;
-  notes?: string;
-  created_by: string;
-  submitted_at?: string;
-  created_at: string;
-}
-
-export interface CreatePaymentRequestInput {
-  invoice_ids: string[];
-  notes?: string;
-}
-
-// Payment Requests API
-export const paymentRequestsApi = {
-  create: (data: CreatePaymentRequestInput) =>
-    api.post<PaymentRequest>('/api/v1/payment-requests', data),
-
-  list: (params?: { page?: number; per_page?: number; status?: string; vendor_id?: string }) => {
-    const qs = new URLSearchParams();
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined) qs.set(k, String(v));
-      }
-    }
-    return api.get<{
-      data: PaymentRequestSummary[];
-      pagination: PaginationMeta;
-    }>(`/api/v1/payment-requests?${qs}`);
-  },
-
-  get: (id: string) => api.get<PaymentRequest>(`/api/v1/payment-requests/${id}`),
-
-  addInvoices: (id: string, invoiceIds: string[]) =>
-    api.post<{ success: boolean }>(`/api/v1/payment-requests/${id}/invoices`, { invoice_ids: invoiceIds }),
-
-  submit: (id: string) =>
-    api.post<PaymentRequest>(`/api/v1/payment-requests/${id}/submit`),
-};
 
 // Vendor Statements API
 export const vendorStatementsApi = {

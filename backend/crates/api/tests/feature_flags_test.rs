@@ -33,7 +33,6 @@ fn test_core_route_modules_always_accessible() {
     let _ = billforge_api::routes::notifications::routes;
     let _ = billforge_api::routes::billing::routes;
     let _ = billforge_api::routes::ai::routes;
-    let _ = billforge_api::routes::payment_requests::routes;
     let _ = billforge_api::routes::vendor_statements::routes;
     let _ = billforge_api::routes::routing::routes;
     let _ = billforge_api::routes::mobile::routes;

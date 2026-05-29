@@ -34,7 +34,6 @@ const GO_LIVE_ITEMS: { key: keyof ImplementationGoLiveChecks; label: string }[] 
   { key: 'notify_ap_team', label: 'Notify AP team of go-live date' },
   { key: 'set_email_forwarding', label: 'Set production email forwarding' },
   { key: 'enable_approval_routing', label: 'Enable approval routing' },
-  { key: 'schedule_first_payment_run', label: 'Schedule first payment run' },
   { key: 'confirm_cutover_date', label: 'Confirm cutover date' },
 ];
 

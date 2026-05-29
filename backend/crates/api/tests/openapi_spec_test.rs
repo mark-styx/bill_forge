@@ -101,26 +101,6 @@ fn test_openapi_contains_invoice_paths() {
     }
 }
 
-/// Verify the "Payment Requests" tag is declared in the OpenAPI spec.
-#[test]
-fn test_openapi_contains_payment_request_tag() {
-    let spec = openapi_doc();
-    let json = serde_json::to_string(&spec).expect("spec serializes");
-    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-
-    let tags = parsed["tags"]
-        .as_array()
-        .expect("tags should be a JSON array");
-
-    let names: Vec<&str> = tags.iter().filter_map(|t| t["name"].as_str()).collect();
-
-    assert!(
-        names.contains(&"Payment Requests"),
-        "OpenAPI spec should declare a 'Payment Requests' tag, found: {:?}",
-        names
-    );
-}
-
 /// Verify that every route group mounted in `routes/mod.rs` is either covered
 /// by the OpenAPI spec or explicitly listed in KNOWN_GAPS. This prevents
 /// future drift: if a new route group is added, this test will fail until the
@@ -216,7 +196,6 @@ fn test_openapi_covers_all_mounted_route_groups() {
             "vendor-statements",
             &["/api/v1/vendors/{vendor_id}/statements"],
         ),
-        ("payment-requests", &["/api/v1/payment-requests"]),
         ("routing", &["/api/v1/routing/workload"]),
     ];
 
@@ -266,7 +245,6 @@ fn test_openapi_covers_all_mounted_route_groups() {
         "ai",
         "billing",
         "vendor-statements",
-        "payment-requests",
         "routing",
     ];
 
