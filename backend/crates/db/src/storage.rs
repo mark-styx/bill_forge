@@ -489,7 +489,7 @@ mod s3_storage {
         async fn upload(
             &self,
             tenant_id: &TenantId,
-            filename: &str,
+            _filename: &str,
             data: &[u8],
             mime_type: &str,
         ) -> Result<Uuid> {
