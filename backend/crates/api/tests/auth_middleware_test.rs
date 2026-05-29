@@ -66,6 +66,8 @@ fn build_test_router() -> Router {
         .route("/api/v1/auth/register", post(ok_handler))
         .route("/api/v1/auth/provision", post(ok_handler))
         .route("/api/v1/auth/refresh", post(ok_handler))
+        .route("/api/v1/mobile/auth/login", post(ok_handler))
+        .route("/api/v1/mobile/auth/login/tenant", post(ok_handler))
         .route("/api/v1/actions/:token", post(ok_handler))
         .route("/api/v1/edi/webhook/test", post(ok_handler))
         .route("/api/v1/billing/plans", get(ok_handler))
@@ -106,6 +108,8 @@ async fn public_paths_allow_unauthenticated() {
         ("/api/v1/auth/register", "POST"),
         ("/api/v1/auth/provision", "POST"),
         ("/api/v1/auth/refresh", "POST"),
+        ("/api/v1/mobile/auth/login", "POST"),
+        ("/api/v1/mobile/auth/login/tenant", "POST"),
         ("/api/v1/actions/some-token", "POST"),
         ("/api/v1/edi/webhook/test", "POST"),
         ("/api/v1/billing/plans", "GET"),

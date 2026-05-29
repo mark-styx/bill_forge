@@ -220,6 +220,8 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::predictive::update_anomaly_rule,
         // Mobile
         crate::routes::mobile::register_device,
+        crate::routes::mobile::mobile_login,
+        crate::routes::mobile::mobile_login_tenant,
         crate::routes::mobile::list_devices,
         crate::routes::mobile::update_device,
         crate::routes::mobile::unregister_device,

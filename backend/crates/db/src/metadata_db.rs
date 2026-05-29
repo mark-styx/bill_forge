@@ -230,6 +230,35 @@ impl MetadataDatabase {
         Ok(result)
     }
 
+    /// List active tenant memberships for an email address across tenants.
+    pub async fn list_users_by_email(&self, email: &str) -> Result<Vec<UserTenantRecord>> {
+        let results = sqlx::query_as::<_, UserTenantRecord>(
+            r#"
+            SELECT
+                u.id,
+                u.tenant_id,
+                u.email,
+                u.password_hash,
+                u.name,
+                u.roles::jsonb,
+                u.is_active,
+                u.email_verified,
+                t.name AS tenant_name,
+                t.is_active AS tenant_is_active
+            FROM users u
+            JOIN tenants t ON t.id = u.tenant_id
+            WHERE lower(u.email) = lower($1)
+            ORDER BY t.name ASC
+            "#,
+        )
+        .bind(email)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list users by email: {}", e)))?;
+
+        Ok(results)
+    }
+
     /// Get user by ID
     pub async fn get_user_by_id(&self, user_id: &UserId) -> Result<Option<UserRecord>> {
         let result = sqlx::query_as::<_, UserRecord>(
@@ -449,6 +478,21 @@ pub struct UserRecord {
     pub roles: sqlx::types::Json<serde_json::Value>,
     pub is_active: bool,
     pub email_verified: bool,
+}
+
+/// User record plus tenant metadata for cross-tenant email discovery.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UserTenantRecord {
+    pub id: sqlx::types::Uuid,
+    pub tenant_id: sqlx::types::Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub name: String,
+    pub roles: sqlx::types::Json<serde_json::Value>,
+    pub is_active: bool,
+    pub email_verified: bool,
+    pub tenant_name: String,
+    pub tenant_is_active: bool,
 }
 
 /// Input for creating a user

@@ -196,7 +196,11 @@ fn test_openapi_covers_all_mounted_route_groups() {
         ("predictive", &["/api/v1/analytics/predictive/forecasts"]),
         (
             "mobile",
-            &["/api/v1/mobile/dashboard", "/api/v1/mobile/devices"],
+            &[
+                "/api/v1/mobile/auth/login",
+                "/api/v1/mobile/dashboard",
+                "/api/v1/mobile/devices",
+            ],
         ),
         ("settings", &["/api/v1/settings"]),
         ("feedback", &["/api/v1/feedback"]),

@@ -28,6 +28,8 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/v1/auth/register",
     "/api/v1/auth/provision",
     "/api/v1/auth/refresh",
+    "/api/v1/mobile/auth/login",
+    "/api/v1/mobile/auth/login/tenant",
     "/api/v1/actions/",
     "/api/v1/approval-links/",
     "/api/v1/edi/webhook/",

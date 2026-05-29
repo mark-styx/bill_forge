@@ -12,10 +12,14 @@ use crate::state::AppState;
 use crate::ApiResult;
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     routing::{delete, get, post, put},
     Json, Router,
 };
+use billforge_auth::{AuthResponse, MobileLoginInput, MobileLoginResult};
+use billforge_core::TenantId;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -23,6 +27,9 @@ use uuid::Uuid;
 /// Create mobile routes
 pub fn routes() -> Router<AppState> {
     Router::new()
+        // Mobile authentication
+        .route("/auth/login", post(mobile_login))
+        .route("/auth/login/tenant", post(mobile_login_tenant))
         // Device management
         .route("/devices/register", post(register_device))
         .route("/devices", get(list_devices))
@@ -39,6 +46,136 @@ pub fn routes() -> Router<AppState> {
         // Sync endpoints
         .route("/sync/invoices", get(sync_invoices))
         .route("/sync/bulk", get(sync_bulk))
+}
+
+// ===== Authentication =====
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MobileLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MobileTenantLoginRequest {
+    pub tenant_id: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MobileTenantOptionResponse {
+    #[serde(rename = "tenantId")]
+    pub tenant_id: String,
+    #[serde(rename = "tenantName")]
+    pub tenant_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MobileAuthResponse {
+    pub jwt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenants: Option<Vec<MobileTenantOptionResponse>>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/mobile/auth/login",
+    tag = "Mobile",
+    request_body = MobileLoginRequest,
+    responses(
+        (status = 200, description = "Mobile login successful or tenant selection required", body = MobileAuthResponse),
+        (status = 401, description = "Invalid credentials")
+    )
+)]
+async fn mobile_login(
+    State(state): State<AppState>,
+    Json(payload): Json<MobileLoginRequest>,
+) -> ApiResult<Json<MobileAuthResponse>> {
+    let result = state
+        .auth
+        .mobile_login(MobileLoginInput {
+            email: payload.email,
+            password: payload.password,
+        })
+        .await?;
+
+    Ok(Json(match result {
+        MobileLoginResult::LoggedIn(response) => mobile_auth_response(*response),
+        MobileLoginResult::TenantPicker {
+            jwt,
+            email,
+            tenants,
+        } => MobileAuthResponse {
+            jwt,
+            tenant_id: None,
+            user_id: None,
+            email: Some(email),
+            tenants: Some(
+                tenants
+                    .into_iter()
+                    .map(|tenant| MobileTenantOptionResponse {
+                        tenant_id: tenant.tenant_id.as_str(),
+                        tenant_name: tenant.tenant_name,
+                        role: tenant.role,
+                    })
+                    .collect(),
+            ),
+        },
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/mobile/auth/login/tenant",
+    tag = "Mobile",
+    request_body = MobileTenantLoginRequest,
+    responses(
+        (status = 200, description = "Tenant-specific mobile login successful", body = MobileAuthResponse),
+        (status = 401, description = "Invalid picker token or credentials")
+    )
+)]
+async fn mobile_login_tenant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MobileTenantLoginRequest>,
+) -> ApiResult<Json<MobileAuthResponse>> {
+    let picker_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| {
+            ApiError(billforge_core::Error::InvalidToken(
+                "Missing mobile tenant picker token".to_string(),
+            ))
+        })?;
+    let tenant_id: TenantId = payload.tenant_id.parse().map_err(|_| {
+        ApiError(billforge_core::Error::Validation(
+            "Invalid tenant ID".to_string(),
+        ))
+    })?;
+
+    let response = state
+        .auth
+        .mobile_login_with_tenant(picker_token, tenant_id)
+        .await?;
+
+    Ok(Json(mobile_auth_response(response)))
+}
+
+fn mobile_auth_response(response: AuthResponse) -> MobileAuthResponse {
+    MobileAuthResponse {
+        jwt: response.access_token,
+        tenant_id: Some(response.tenant.id.as_str()),
+        user_id: Some(response.user.id.0.to_string()),
+        email: Some(response.user.email),
+        tenants: None,
+    }
 }
 
 // ===== Device Management =====

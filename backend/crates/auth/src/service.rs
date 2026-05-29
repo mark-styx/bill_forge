@@ -3,7 +3,7 @@
 use crate::jwt::{JwtConfig, JwtService};
 use crate::password::PasswordService;
 use billforge_core::{Error, Result, Role, TenantContext, TenantId, UserContext, UserId};
-use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase};
+use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase, UserRecord};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,6 +23,91 @@ impl AuthService {
             password_service: PasswordService::new(),
             metadata_db,
         }
+    }
+
+    async fn auth_response_for_user(&self, user: UserRecord) -> Result<AuthResponse> {
+        if !user.is_active {
+            return Err(Error::Forbidden("Account is disabled".to_string()));
+        }
+
+        let user_id = UserId(user.id);
+        self.metadata_db.update_last_login(&user_id).await?;
+
+        let tenant_id = TenantId::from_uuid(user.tenant_id);
+        let tenant = self
+            .metadata_db
+            .get_tenant(&tenant_id)
+            .await?
+            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
+
+        if !tenant.is_active {
+            return Err(Error::Forbidden("Tenant is disabled".to_string()));
+        }
+
+        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0).unwrap_or_default();
+        let access_token =
+            self.jwt_service
+                .create_access_token(&user_id, &tenant_id, &user.email, &roles)?;
+        let refresh_token = self
+            .jwt_service
+            .create_refresh_token(&user_id, &tenant_id)?;
+        self.store_refresh_token_hash(&user_id, &refresh_token)
+            .await?;
+
+        Ok(AuthResponse {
+            access_token,
+            refresh_token,
+            user: UserInfo {
+                id: UserId(user.id),
+                tenant_id: TenantId::from_uuid(user.tenant_id),
+                email: user.email,
+                name: user.name,
+                roles: roles.clone(),
+            },
+            tenant: TenantInfo {
+                id: TenantId::from_uuid(tenant.id),
+                name: tenant.name,
+                enabled_modules: tenant
+                    .enabled_modules
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                settings: TenantSettingsInfo {
+                    logo_url: tenant
+                        .settings
+                        .get("logo_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    primary_color: tenant
+                        .settings
+                        .get("primary_color")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    company_name: tenant
+                        .settings
+                        .get("company_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Company")
+                        .to_string(),
+                    timezone: tenant
+                        .settings
+                        .get("timezone")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("UTC")
+                        .to_string(),
+                    default_currency: tenant
+                        .settings
+                        .get("default_currency")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("USD")
+                        .to_string(),
+                },
+            },
+        })
     }
 
     /// Hash a token (e.g. refresh token JWT) for database storage using SHA-256
@@ -284,91 +369,96 @@ impl AuthService {
             return Err(Error::InvalidCredentials);
         }
 
-        // Check if user is active
-        if !user.is_active {
-            return Err(Error::Forbidden("Account is disabled".to_string()));
+        self.auth_response_for_user(user).await
+    }
+
+    /// Mobile login with tenant discovery by email.
+    pub async fn mobile_login(&self, input: MobileLoginInput) -> Result<MobileLoginResult> {
+        let users = self.metadata_db.list_users_by_email(&input.email).await?;
+        let mut verified = Vec::new();
+
+        for user in users {
+            if !user.is_active || !user.tenant_is_active {
+                continue;
+            }
+
+            if self
+                .password_service
+                .verify(&input.password, &user.password_hash)?
+            {
+                verified.push(user);
+            }
         }
 
-        // Update last login
-        let user_id = UserId(user.id);
-        self.metadata_db.update_last_login(&user_id).await?;
+        if verified.is_empty() {
+            return Err(Error::InvalidCredentials);
+        }
 
-        // Get tenant info
-        let tenant_id: TenantId = TenantId::from_uuid(user.tenant_id);
-        let tenant = self
-            .metadata_db
-            .get_tenant(&tenant_id)
-            .await?
-            .ok_or_else(|| Error::TenantNotFound(user.tenant_id.to_string()))?;
+        if verified.len() == 1 {
+            let user = verified.remove(0);
+            let response = self
+                .auth_response_for_user(UserRecord {
+                    id: user.id,
+                    tenant_id: user.tenant_id,
+                    email: user.email,
+                    password_hash: user.password_hash,
+                    name: user.name,
+                    roles: user.roles,
+                    is_active: user.is_active,
+                    email_verified: user.email_verified,
+                })
+                .await?;
+            return Ok(MobileLoginResult::LoggedIn(Box::new(response)));
+        }
 
-        // Convert roles from JSON
-        let roles: Vec<Role> = serde_json::from_value(user.roles.clone().0).unwrap_or_default();
+        let picker_user = UserId(verified[0].id);
+        let picker_tenant = TenantId::from_uuid(uuid::Uuid::nil());
+        let picker_token = self.jwt_service.create_access_token(
+            &picker_user,
+            &picker_tenant,
+            &input.email,
+            &[],
+        )?;
+        let tenants = verified
+            .into_iter()
+            .map(|user| {
+                let roles: Vec<Role> =
+                    serde_json::from_value(user.roles.clone().0).unwrap_or_default();
+                MobileTenantOption {
+                    tenant_id: TenantId::from_uuid(user.tenant_id),
+                    tenant_name: user.tenant_name,
+                    role: mobile_role_label(&roles),
+                }
+            })
+            .collect();
 
-        // Generate tokens
-        let user_id = UserId(user.id);
-        let access_token =
-            self.jwt_service
-                .create_access_token(&user_id, &tenant_id, &user.email, &roles)?;
-        let refresh_token = self
-            .jwt_service
-            .create_refresh_token(&user_id, &tenant_id)?;
-        self.store_refresh_token_hash(&user_id, &refresh_token)
-            .await?;
-
-        Ok(AuthResponse {
-            access_token,
-            refresh_token,
-            user: UserInfo {
-                id: UserId(user.id),
-                tenant_id: TenantId::from_uuid(user.tenant_id),
-                email: user.email,
-                name: user.name,
-                roles: roles.clone(),
-            },
-            tenant: TenantInfo {
-                id: TenantId::from_uuid(tenant.id),
-                name: tenant.name,
-                enabled_modules: tenant
-                    .enabled_modules
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                settings: TenantSettingsInfo {
-                    logo_url: tenant
-                        .settings
-                        .get("logo_url")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    primary_color: tenant
-                        .settings
-                        .get("primary_color")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    company_name: tenant
-                        .settings
-                        .get("company_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Company")
-                        .to_string(),
-                    timezone: tenant
-                        .settings
-                        .get("timezone")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("UTC")
-                        .to_string(),
-                    default_currency: tenant
-                        .settings
-                        .get("default_currency")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("USD")
-                        .to_string(),
-                },
-            },
+        Ok(MobileLoginResult::TenantPicker {
+            jwt: picker_token,
+            email: input.email,
+            tenants,
         })
+    }
+
+    /// Complete a mobile multi-tenant login after the user chooses a tenant.
+    pub async fn mobile_login_with_tenant(
+        &self,
+        picker_token: &str,
+        tenant_id: TenantId,
+    ) -> Result<AuthResponse> {
+        let context = self.validate_token(picker_token).await?;
+        if !context.tenant_id.as_uuid().is_nil() {
+            return Err(Error::InvalidToken(
+                "Expected a mobile tenant picker token".to_string(),
+            ));
+        }
+
+        let user = self
+            .metadata_db
+            .get_user_by_email(&tenant_id, &context.email)
+            .await?
+            .ok_or(Error::InvalidCredentials)?;
+
+        self.auth_response_for_user(user).await
     }
 
     /// Refresh access token using refresh token
@@ -556,6 +646,43 @@ pub struct LoginInput {
     pub tenant_id: TenantId,
     pub email: String,
     pub password: String,
+}
+
+/// Mobile login input for tenant discovery by email.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MobileLoginInput {
+    pub email: String,
+    pub password: String,
+}
+
+/// Tenant choice returned to mobile users with multiple memberships.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MobileTenantOption {
+    pub tenant_id: TenantId,
+    pub tenant_name: String,
+    pub role: String,
+}
+
+/// Mobile login can either produce a full auth response or a tenant picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MobileLoginResult {
+    LoggedIn(Box<AuthResponse>),
+    TenantPicker {
+        jwt: String,
+        email: String,
+        tenants: Vec<MobileTenantOption>,
+    },
+}
+
+fn mobile_role_label(roles: &[Role]) -> String {
+    if roles.contains(&Role::Approver) {
+        return Role::Approver.as_str().to_string();
+    }
+
+    roles
+        .first()
+        .map(|role| role.as_str().to_string())
+        .unwrap_or_else(|| "user".to_string())
 }
 
 /// Authentication response
