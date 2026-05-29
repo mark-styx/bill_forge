@@ -254,8 +254,10 @@ impl WorkflowEngine {
             }
         };
 
-        let mut config = RoutingConfig::default();
-        config.tenant_id = tenant_id.clone();
+        let config = RoutingConfig {
+            tenant_id: tenant_id.clone(),
+            ..Default::default()
+        };
         let engine = IntelligentRoutingEngine::new(config);
         let decision = context.route(&engine, invoice);
         let approver_id = decision.approver_id?;

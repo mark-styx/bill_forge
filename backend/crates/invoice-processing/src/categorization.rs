@@ -376,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_line_item_analysis_software() {
-        let items = vec![LineItemInput {
+        let items = [LineItemInput {
             description: "Annual software license".to_string(),
             quantity: Some(1.0),
             amount: 1200.0,
@@ -384,9 +384,15 @@ mod tests {
 
         let engine =
             CategorizationEngine::new(PgPool::connect_lazy("postgres://localhost/test").unwrap());
+        let suggestion = engine
+            .suggest_from_line_items(&items)
+            .await
+            .unwrap()
+            .expect("software line item should produce a category suggestion");
 
-        // Can't test async easily in unit tests without runtime
-        // This would be tested in integration tests
+        assert_eq!(suggestion.category_type, CategoryType::GlCode);
+        assert_eq!(suggestion.value, "6000-Software & Subscriptions");
+        assert_eq!(suggestion.source, SuggestionSource::LineItemAnalysis);
     }
 
     #[tokio::test]
