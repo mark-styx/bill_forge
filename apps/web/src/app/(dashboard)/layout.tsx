@@ -27,6 +27,7 @@ import {
   Sparkles,
   CreditCard,
   Bell,
+  Rocket,
 } from 'lucide-react';
 
 interface NavItem {
@@ -39,6 +40,7 @@ interface NavItem {
 
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home, module: null },
+  { name: 'Getting Started', href: '/getting-started', icon: Rocket, module: null },
   {
     name: 'Invoice Capture',
     href: '/invoices',
