@@ -135,6 +135,26 @@ export async function reject(
   assertOk(res, body);
 }
 
+/** Register a device token for push notifications. */
+export async function registerDevice(
+  config: ApiConfig,
+  payload: {
+    device_id: string;
+    platform: string;
+    token: string;
+    device_name?: string;
+    os_version?: string;
+    app_version?: string;
+  },
+): Promise<void> {
+  const res = await request(config, '/devices/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  const body = await res.text();
+  assertOk(res, body);
+}
+
 /** Delta sync: fetch changes since the given timestamp. */
 export async function syncInvoices(
   config: ApiConfig,

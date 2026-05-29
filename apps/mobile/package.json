@@ -7,7 +7,7 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "lint": "eslint src/lib/api.ts src/lib/offline-queue.ts",
+    "lint": "eslint src/lib/api.ts src/lib/auth.ts src/lib/notifications.ts src/lib/offline-queue.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:coverage": "jest --coverage"

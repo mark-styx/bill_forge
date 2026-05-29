@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,19 @@ import {
   getQueuedActions,
 } from './src/lib/offline-queue';
 import * as api from './src/lib/api';
+import {
+  AuthState,
+  TenantOption,
+  login as authLogin,
+  loginWithTenant,
+  loadAuth,
+  saveAuth,
+  clearAuth,
+} from './src/lib/auth';
+import {
+  registerForPushNotifications,
+  NotificationPlatform,
+} from './src/lib/notifications';
 
 // AsyncStorage-backed KVStore
 const store: KVStore = {
@@ -36,15 +49,61 @@ const store: KVStore = {
   },
 };
 
-// Read config from Expo's extra config (set via app.json or app.config.ts)
-function getConfig(): api.ApiConfig {
-  // In a real build these come from expo-constants or secure storage.
-  // For development they can be set in app.json `extra` or environment.
-  const extra = (global as unknown as { expo?: { extra?: Record<string, string> } }).expo?.extra;
+// Base URL for the backend API. In a real build this would come from
+// expo-constants or an EAS environment variable.
+const API_BASE =
+  (global as unknown as { expo?: { extra?: Record<string, string> } }).expo?.extra?.apiBaseUrl ||
+  'http://localhost:8080';
+
+/**
+ * Build an ApiConfig from the current auth state.
+ * Returns null when not authenticated.
+ */
+function configFromAuth(auth: AuthState): api.ApiConfig {
+  return { baseUrl: API_BASE, jwt: auth.jwt, tenantId: auth.tenantId };
+}
+
+/**
+ * Production implementation of NotificationPlatform.
+ * Lazily requires expo modules so the test suite (which runs in node)
+ * does not crash on missing native modules.
+ */
+function getNotificationPlatform(): NotificationPlatform {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Notifications = require('expo-notifications');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Application = require('expo-application');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Constants = require('expo-constants');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Platform = require('react-native').Platform;
+
   return {
-    baseUrl: extra?.apiBaseUrl || 'http://localhost:8080',
-    jwt: extra?.jwt || '',
-    tenantId: extra?.tenantId || '',
+    async requestPermissions() {
+      const settings = await Notifications.requestPermissionsAsync({
+        ios: { allowAlert: true, allowBadge: true, allowSound: true },
+      });
+      return settings.granted || settings.ios?.status === 'granted' || false;
+    },
+    async getPushToken() {
+      try {
+        const { data } = await Notifications.getExpoPushTokenAsync();
+        return data;
+      } catch {
+        return null;
+      }
+    },
+    getPlatform() {
+      return Platform.OS === 'ios' ? 'ios' : 'android';
+    },
+    getDeviceInfo() {
+      return {
+        deviceId: Constants.sessionId ?? Constants.deviceId ?? 'unknown',
+        deviceName: Constants.deviceName ?? undefined,
+        osVersion: Platform.Version?.toString() ?? undefined,
+        appVersion: Constants.manifest?.version ?? Application?.nativeAppVersion ?? undefined,
+      };
+    },
   };
 }
 
@@ -52,7 +111,134 @@ function formatCents(cents: number, currency: string): string {
   return `${(cents / 100).toFixed(2)} ${currency}`;
 }
 
+// ===== Login Screen =====
+
+function LoginScreen({
+  onLogin,
+  baseUrl,
+}: {
+  onLogin: (state: AuthState) => void;
+  baseUrl: string;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  // Tenant picker state
+  const [pickerJwt, setPickerJwt] = useState('');
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    setError('');
+    try {
+      const result = await authLogin(baseUrl, { email: email.trim(), password });
+      if (result.kind === 'logged_in') {
+        onLogin(result.state);
+      } else {
+        // Show tenant picker
+        setPickerJwt(result.jwt);
+        setTenants(result.tenants);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTenantSelect = async (tenantId: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const state = await loginWithTenant(baseUrl, pickerJwt, tenantId);
+      onLogin(state);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Tenant selection failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Tenant picker UI
+  if (tenants.length > 0) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="auto" />
+        <View style={styles.header}>
+          <Text style={styles.title}>Select Organization</Text>
+        </View>
+        <ScrollView style={styles.list}>
+          {tenants.map((t) => (
+            <TouchableOpacity
+              key={t.tenantId}
+              style={styles.card}
+              onPress={() => handleTenantSelect(t.tenantId)}
+              disabled={loading}
+            >
+              <Text style={styles.vendorName}>{t.tenantName}</Text>
+              <Text style={styles.invoiceNumber}>Role: {t.role}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      </SafeAreaView>
+    );
+  }
+
+  // Login form
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="auto" />
+      <View style={styles.loginCard}>
+        <Text style={styles.title}>BillForge Approvals</Text>
+        <Text style={styles.subtitle}>Sign in to review invoices</Text>
+
+        <TextInput
+          style={styles.loginInput}
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!loading}
+        />
+        <TextInput
+          style={styles.loginInput}
+          placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          editable={!loading}
+        />
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <TouchableOpacity
+          style={[styles.button, styles.approveButton, loading && styles.buttonDisabled]}
+          onPress={handleLogin}
+          disabled={loading || !email.trim() || !password}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Sign In</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// ===== Main Approval Screen =====
+
 export default function App() {
+  const [auth, setAuth] = useState<AuthState | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [isOnline, setIsOnline] = useState(true);
@@ -63,46 +249,72 @@ export default function App() {
   const [modalItem, setModalItem] = useState<ApprovalItem | null>(null);
   const [modalText, setModalText] = useState('');
 
-  // Flush the offline queue on mount
+  // Track whether push registration was attempted this session
+  const pushRegistered = useRef(false);
+
+  // Restore persisted auth on mount
   useEffect(() => {
+    const restore = async () => {
+      const saved = await loadAuth(store);
+      if (saved && saved.jwt) {
+        setAuth(saved);
+      }
+      setAuthLoading(false);
+    };
+    restore();
+  }, []);
+
+  // When auth becomes available, register for push notifications (once)
+  useEffect(() => {
+    if (!auth || pushRegistered.current) return;
+    pushRegistered.current = true;
+
+    const config = configFromAuth(auth);
+    registerForPushNotifications(config, getNotificationPlatform()).catch(() => {
+      // Non-blocking: push registration failure does not affect the user
+    });
+  }, [auth]);
+
+  // Flush the offline queue on mount when authenticated
+  useEffect(() => {
+    if (!auth) return;
     const doFlush = async () => {
       setSyncing(true);
       try {
-        const config = getConfig();
+        const config = configFromAuth(auth);
         const offlineApi = {
           approve: (id: string, comment: string) => api.approve(config, id, comment),
           reject: (id: string, reason: string) => api.reject(config, id, reason),
         };
         await flushQueue(store, offlineApi);
       } catch {
-        // flushQueue itself handles errors; this catches unexpected issues
+        // flushQueue itself handles errors
       } finally {
         setSyncing(false);
         refreshPendingCount();
       }
     };
     doFlush();
-  }, []);
+  }, [auth]);
 
   // Subscribe to connectivity changes and flush on reconnect
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online = state.isConnected === true;
       setIsOnline(online);
 
       if (online) {
-        // Flush queued actions when coming back online
         const doFlush = async () => {
           setSyncing(true);
           try {
-            const config = getConfig();
+            const config = configFromAuth(auth);
             const offlineApi = {
               approve: (id: string, comment: string) => api.approve(config, id, comment),
               reject: (id: string, reason: string) => api.reject(config, id, reason),
             };
             const summary = await flushQueue(store, offlineApi);
             if (summary.synced > 0 || summary.conflicts > 0) {
-              // Refresh approvals after successful flush
               await refreshApprovals();
             }
           } catch {
@@ -117,10 +329,11 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [auth]);
 
   // Load cached approvals immediately, then fetch fresh if online
   useEffect(() => {
+    if (!auth) return;
     const load = async () => {
       setLoading(true);
       try {
@@ -136,27 +349,28 @@ export default function App() {
       refreshPendingCount();
     };
     load();
-  }, []);
+  }, [auth]);
 
   const refreshPendingCount = async () => {
     const queue = await getQueuedActions(store);
     setPendingCount(queue.length);
   };
 
-  const refreshApprovals = async () => {
+  const refreshApprovals = useCallback(async () => {
+    if (!auth) return;
     try {
-      const config = getConfig();
-      if (!config.jwt) return; // not configured yet
+      const config = configFromAuth(auth);
       const items = await api.listApprovals(config);
       await cacheApprovals(store, items);
       setApprovals(items);
     } catch {
       // Network error: keep showing cached data
     }
-  };
+  }, [auth]);
 
   const handleAction = useCallback(
     (approvalId: string, kind: 'approve' | 'reject', payload: string) => {
+      if (!auth) return;
       const actionFn = async () => {
         const action = await enqueueAction(store, {
           approvalId,
@@ -173,13 +387,12 @@ export default function App() {
         if (netState.isConnected) {
           setSyncing(true);
           try {
-            const config = getConfig();
+            const config = configFromAuth(auth);
             const offlineApi = {
               approve: (id: string, comment: string) => api.approve(config, id, comment),
               reject: (id: string, reason: string) => api.reject(config, id, reason),
             };
             await flushQueue(store, offlineApi);
-            // Flush succeeded, refresh the list from server
             await refreshApprovals();
           } catch {
             // Will retry on next connectivity change
@@ -191,7 +404,7 @@ export default function App() {
       };
       actionFn();
     },
-    [],
+    [auth, refreshApprovals],
   );
 
   const promptAction = (item: ApprovalItem, kind: 'approve' | 'reject') => {
@@ -219,6 +432,37 @@ export default function App() {
     setModalText('');
   };
 
+  const handleLogin = async (state: AuthState) => {
+    await saveAuth(store, state);
+    setAuth(state);
+  };
+
+  const handleSignOut = async () => {
+    await clearAuth(store);
+    setAuth(null);
+    setApprovals([]);
+    setPendingCount(0);
+    pushRegistered.current = false;
+  };
+
+  // Auth loading splash
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="auto" />
+        <View style={styles.center}>
+          <ActivityIndicator size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Not authenticated: show login screen
+  if (!auth) {
+    return <LoginScreen onLogin={handleLogin} baseUrl={API_BASE} />;
+  }
+
+  // Authenticated: show approvals
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="auto" />
@@ -234,6 +478,9 @@ export default function App() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Pending Approvals</Text>
+        <TouchableOpacity onPress={handleSignOut} style={styles.signOutButton}>
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Content */}
@@ -355,11 +602,23 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
     backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   title: {
     fontSize: 20,
     fontWeight: '700',
     color: '#111',
+  },
+  signOutButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  signOutText: {
+    fontSize: 14,
+    color: '#ef4444',
+    fontWeight: '600',
   },
   center: {
     flex: 1,
@@ -423,10 +682,39 @@ const styles = StyleSheet.create({
   rejectButton: {
     backgroundColor: '#ef4444',
   },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
   buttonText: {
     color: '#fff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  loginCard: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#555',
+    marginTop: 4,
+    marginBottom: 24,
+  },
+  loginInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
   },
   modalOverlay: {
     flex: 1,
