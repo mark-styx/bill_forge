@@ -50,7 +50,7 @@ pub struct UploadQuery {
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_document(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
@@ -134,9 +134,9 @@ async fn upload_document(
             filename.clone(),
             content_type.clone(),
             data.len() as u64,
-            billforge_db::build_storage_key(&tenant.tenant_id, document_id),
             invoice_id,
             doc_type,
+            *user.user_id.as_uuid(),
         )
         .await?;
 
@@ -158,7 +158,7 @@ async fn upload_document(
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_invoice_document(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(invoice_id): Path<String>,
     mut multipart: Multipart,
@@ -204,9 +204,9 @@ async fn upload_invoice_document(
             filename.clone(),
             content_type.clone(),
             data.len() as u64,
-            billforge_db::build_storage_key(&tenant.tenant_id, document_id),
             Some(InvoiceId(invoice_uuid)),
             DocumentType::InvoiceOriginal,
+            *user.user_id.as_uuid(),
         )
         .await?;
 
