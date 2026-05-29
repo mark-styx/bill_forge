@@ -179,7 +179,11 @@ impl SalesforceClient {
     }
 
     /// Make a POST request to Salesforce API
-    async fn _post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
+    async fn _post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        resource: &str,
+        body: &B,
+    ) -> Result<T> {
         let url = self.build_url(resource);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
