@@ -919,7 +919,7 @@ async fn fetch_recent_invoices(
             i.total_amount_cents,
             i.invoice_date
         FROM invoices i
-        JOIN vendors v ON i.vendor_id = v.id
+        JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
         WHERE i.tenant_id = $1
             AND i.created_at > NOW() - INTERVAL '90 days'
         ORDER BY i.created_at DESC

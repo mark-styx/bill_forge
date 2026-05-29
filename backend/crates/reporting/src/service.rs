@@ -201,7 +201,7 @@ impl ReportingService {
                 COALESCE(SUM(i.total_amount_cents), 0) as total_spend,
                 MAX(i.invoice_date) as last_invoice_date
             FROM invoices i
-            LEFT JOIN vendors v ON i.vendor_id = v.id
+            LEFT JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
             WHERE i.vendor_id IS NOT NULL AND i.tenant_id = $1
             "#,
         );
@@ -1016,7 +1016,7 @@ impl ReportingService {
                     -- Dispute rate (invoices with notes containing dispute keywords)
                     COUNT(*) FILTER (WHERE i.notes ILIKE '%dispute%' OR i.notes ILIKE '%discrepancy%')::float / COUNT(*) as dispute_rate
                 FROM invoices i
-                LEFT JOIN vendors v ON i.vendor_id = v.id
+                LEFT JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
                 WHERE i.vendor_id IS NOT NULL AND i.tenant_id = $1
                 GROUP BY i.vendor_id, vendor_name
             )
@@ -1506,7 +1506,7 @@ impl ReportingService {
             r#"
             SELECT v.name as vendor_name, COALESCE(SUM(i.total_amount_cents), 0) as total_spend
             FROM invoices i
-            JOIN vendors v ON i.vendor_id = v.id
+            JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
             WHERE i.tenant_id = $1 AND i.invoice_date >= $2 AND i.invoice_date <= $3
             GROUP BY v.name
             ORDER BY total_spend DESC
@@ -1612,7 +1612,7 @@ impl ReportingService {
                 i.total_amount_cents as amount_cents,
                 EXTRACT(DAY FROM NOW() - i.created_at)::bigint as age_days
             FROM invoices i
-            JOIN vendors v ON i.vendor_id = v.id
+            JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
             JOIN approval_requests ar ON ar.invoice_id = i.id
             WHERE i.tenant_id = $1
               AND ar.requested_from = $2
