@@ -281,18 +281,28 @@ impl QuickBooksClient {
         start_position: i32,
         max_results: i32,
     ) -> Result<Vec<QBVendor>> {
+        #[derive(Deserialize)]
+        struct VendorQueryResponse {
+            QueryResponse: Option<VendorQueryData>,
+        }
+
+        #[derive(Deserialize)]
+        struct VendorQueryData {
+            Vendor: Option<Vec<QBVendor>>,
+        }
+
         let query = format!(
             "SELECT * FROM Vendor STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
         );
 
-        let response: QBQueryResponse<QBVendor> = self
+        let response: VendorQueryResponse = self
             .get(&format!("query?query={}", urlencoding::encode(&query)))
             .await?;
 
         Ok(response
             .QueryResponse
-            .map(|qr| qr.results)
+            .and_then(|qr| qr.Vendor)
             .unwrap_or_default())
     }
 
@@ -307,18 +317,59 @@ impl QuickBooksClient {
         start_position: i32,
         max_results: i32,
     ) -> Result<Vec<QBAccount>> {
+        #[derive(Deserialize)]
+        struct AccountQueryResponse {
+            QueryResponse: Option<AccountQueryData>,
+        }
+
+        #[derive(Deserialize)]
+        struct AccountQueryData {
+            Account: Option<Vec<QBAccount>>,
+        }
+
         let query = format!(
             "SELECT * FROM Account STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
         );
 
-        let response: QBQueryResponse<QBAccount> = self
+        let response: AccountQueryResponse = self
             .get(&format!("query?query={}", urlencoding::encode(&query)))
             .await?;
 
         Ok(response
             .QueryResponse
-            .map(|qr| qr.results)
+            .and_then(|qr| qr.Account)
+            .unwrap_or_default())
+    }
+
+    /// Query open purchase orders.
+    pub async fn query_open_purchase_orders(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBPurchaseOrder>> {
+        #[derive(Deserialize)]
+        struct PurchaseOrderQueryResponse {
+            QueryResponse: Option<PurchaseOrderQueryData>,
+        }
+
+        #[derive(Deserialize)]
+        struct PurchaseOrderQueryData {
+            PurchaseOrder: Option<Vec<QBPurchaseOrder>>,
+        }
+
+        let query = format!(
+            "SELECT * FROM PurchaseOrder WHERE POStatus = 'Open' STARTPOSITION {} MAXRESULTS {}",
+            start_position, max_results
+        );
+
+        let response: PurchaseOrderQueryResponse = self
+            .get(&format!("query?query={}", urlencoding::encode(&query)))
+            .await?;
+
+        Ok(response
+            .QueryResponse
+            .and_then(|qr| qr.PurchaseOrder)
             .unwrap_or_default())
     }
 
@@ -337,18 +388,28 @@ impl QuickBooksClient {
 
     /// Query bills
     pub async fn query_bills(&self, start_position: i32, max_results: i32) -> Result<Vec<QBBill>> {
+        #[derive(Deserialize)]
+        struct BillQueryResponse {
+            QueryResponse: Option<BillQueryData>,
+        }
+
+        #[derive(Deserialize)]
+        struct BillQueryData {
+            Bill: Option<Vec<QBBill>>,
+        }
+
         let query = format!(
             "SELECT * FROM Bill STARTPOSITION {} MAXRESULTS {}",
             start_position, max_results
         );
 
-        let response: QBQueryResponse<QBBill> = self
+        let response: BillQueryResponse = self
             .get(&format!("query?query={}", urlencoding::encode(&query)))
             .await?;
 
         Ok(response
             .QueryResponse
-            .map(|qr| qr.results)
+            .and_then(|qr| qr.Bill)
             .unwrap_or_default())
     }
 

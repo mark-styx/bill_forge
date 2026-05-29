@@ -146,6 +146,33 @@ pub struct XeroInvoice {
     pub UpdatedDateUTC: Option<String>,
 }
 
+/// Xero purchase order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XeroPurchaseOrder {
+    #[serde(rename = "PurchaseOrderID")]
+    pub PurchaseOrderID: Option<String>,
+    #[serde(rename = "PurchaseOrderNumber")]
+    pub PurchaseOrderNumber: Option<String>,
+    pub Contact: Option<XeroPurchaseOrderContact>,
+    pub Date: Option<String>,
+    #[serde(rename = "DeliveryDate")]
+    pub DeliveryDate: Option<String>,
+    pub Status: Option<String>,
+    #[serde(rename = "LineItems")]
+    pub LineItems: Option<Vec<XeroLineItem>>,
+    #[serde(rename = "CurrencyCode")]
+    pub CurrencyCode: Option<String>,
+    pub Total: Option<f64>,
+}
+
+/// Contact shape returned on Xero purchase orders.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XeroPurchaseOrderContact {
+    #[serde(rename = "ContactID")]
+    pub ContactID: Option<String>,
+    pub Name: Option<String>,
+}
+
 /// Xero line item
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XeroLineItem {

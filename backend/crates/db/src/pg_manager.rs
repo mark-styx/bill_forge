@@ -251,6 +251,7 @@ impl PgManager {
         crate::tenant_db::run_workflow_migrations(pool).await?;
         crate::tenant_db::run_purchase_order_migrations(pool).await?;
         crate::tenant_db::run_edi_outbound_migrations(pool).await?;
+        crate::tenant_db::run_implementation_migrations(pool).await?;
 
         // Payment requests
         migration_runner

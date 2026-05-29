@@ -65,6 +65,7 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         (name = "Documents", description = "Document upload and storage"),
         (name = "Audit", description = "Audit trail and compliance logs"),
         (name = "Sandbox", description = "Sandbox persona management"),
+        (name = "Implementation", description = "Two-week implementation wizard"),
         (name = "Notifications", description = "Slack and Teams notification integrations"),
         (name = "Predictive Analytics", description = "Forecasting and anomaly detection"),
         (name = "Mobile", description = "Mobile app backend and sync"),
@@ -195,6 +196,13 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::sandbox::get_current_persona,
         crate::routes::sandbox::switch_persona,
         crate::routes::sandbox::get_tenant_context,
+        // Implementation
+        crate::routes::implementation::get_status,
+        crate::routes::implementation::sync_erp,
+        crate::routes::implementation::update_erp_sub_items,
+        crate::routes::implementation::select_approval_template,
+        crate::routes::implementation::upload_sample_invoices,
+        crate::routes::implementation::update_checklist,
         // Notifications
         crate::routes::notifications::install_slack,
         crate::routes::notifications::slack_callback,

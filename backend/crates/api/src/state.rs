@@ -159,6 +159,11 @@ impl AppState {
             billforge_db::tenant_db::run_workflow_migrations(&tenant_pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to re-run workflow migrations: {}", e))?;
+            billforge_db::tenant_db::run_implementation_migrations(&tenant_pool)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to run implementation wizard migrations: {}", e)
+                })?;
             Self::ensure_sandbox_support_tables(&tenant_pool).await?;
             audit
                 .run_migrations(&sandbox_tenant_id)
@@ -225,6 +230,11 @@ impl AppState {
         billforge_db::tenant_db::run_workflow_migrations(&tenant_pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to run workflow migrations: {}", e))?;
+        billforge_db::tenant_db::run_implementation_migrations(&tenant_pool)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to run implementation wizard migrations: {}", e)
+            })?;
 
         Self::ensure_sandbox_support_tables(&tenant_pool).await?;
 

@@ -59,6 +59,50 @@ pub struct QBAccount {
     pub SyncToken: String,
 }
 
+/// QuickBooks purchase order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QBPurchaseOrder {
+    /// QuickBooks purchase order ID.
+    pub Id: String,
+    /// Purchase order number.
+    pub DocNumber: Option<String>,
+    /// Vendor reference.
+    pub VendorRef: QBReference,
+    /// Transaction date.
+    pub TxnDate: Option<String>,
+    /// Total amount in major currency units.
+    pub TotalAmt: Option<f64>,
+    /// Purchase order status.
+    pub POStatus: Option<String>,
+    /// Currency reference.
+    pub CurrencyRef: Option<QBReference>,
+    /// Line items.
+    pub Line: Option<Vec<QBPurchaseOrderLine>>,
+    /// Sync token for updates.
+    pub SyncToken: Option<String>,
+}
+
+/// QuickBooks purchase order line item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QBPurchaseOrderLine {
+    pub Id: Option<String>,
+    pub LineNum: Option<i32>,
+    pub Description: Option<String>,
+    /// Amount in major currency units.
+    pub Amount: Option<f64>,
+    pub ItemBasedExpenseLineDetail: Option<QBItemBasedExpenseLineDetail>,
+    pub AccountBasedExpenseLineDetail: Option<QBAccountBasedExpenseLineDetail>,
+}
+
+/// Item-based expense line detail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QBItemBasedExpenseLineDetail {
+    pub ItemRef: Option<QBReference>,
+    pub Qty: Option<f64>,
+    pub UnitPrice: Option<f64>,
+    pub TaxCodeRef: Option<QBReference>,
+}
+
 /// QuickBooks bill (invoice)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QBBill {

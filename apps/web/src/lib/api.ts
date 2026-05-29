@@ -171,6 +171,10 @@ class ApiClient {
     return this.request<T>('PUT', path, body);
   }
 
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('PATCH', path, body);
+  }
+
   async delete<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
   }
@@ -346,6 +350,88 @@ export interface TenantContextResponse {
     default_currency: string;
   };
 }
+
+export type ImplementationPhaseStatus = 'not_started' | 'in_progress' | 'complete';
+export type ImplementationErpProvider = 'quickbooks' | 'xero';
+
+export interface ImplementationErpSubItems {
+  chart_of_accounts: boolean;
+  vendors: boolean;
+  open_pos: boolean;
+}
+
+export interface ImplementationErpSyncSummary {
+  provider: ImplementationErpProvider;
+  connected: boolean;
+  account_mappings: number;
+  vendor_mappings: number;
+  open_purchase_orders: number;
+  message: string;
+  synced_at: string;
+}
+
+export interface ImplementationStatus {
+  started_at: string;
+  day_number: number;
+  percent_complete: number;
+  phases: {
+    erp: {
+      status: ImplementationPhaseStatus;
+      provider?: ImplementationErpProvider | null;
+      sub_items: ImplementationErpSubItems;
+      last_sync?: ImplementationErpSyncSummary | null;
+      last_error?: string | null;
+    };
+    approvals: {
+      status: ImplementationPhaseStatus;
+      template?: string | null;
+      template_id?: string | null;
+    };
+    ocr: {
+      status: ImplementationPhaseStatus;
+      count: number;
+      sample_invoice_ids: string[];
+    };
+    go_live: {
+      status: ImplementationPhaseStatus;
+      checks: ImplementationGoLiveChecks;
+    };
+  };
+}
+
+export interface ImplementationGoLiveChecks {
+  notify_ap_team: boolean;
+  set_email_forwarding: boolean;
+  enable_approval_routing: boolean;
+  schedule_first_payment_run: boolean;
+  confirm_cutover_date: boolean;
+}
+
+export interface ImplementationSampleUploadResponse {
+  uploaded: {
+    invoice_id: string;
+    document_id: string;
+    message: string;
+  }[];
+  status: ImplementationStatus;
+}
+
+export const implementationApi = {
+  status: () => api.get<ImplementationStatus>('/api/v1/implementation/status'),
+  syncErp: (provider: ImplementationErpProvider) =>
+    api.post<ImplementationStatus>('/api/v1/implementation/erp/sync', { provider }),
+  updateErpSubItems: (subItems: ImplementationErpSubItems) =>
+    api.patch<ImplementationStatus>('/api/v1/implementation/erp/sub-items', { sub_items: subItems }),
+  selectApprovalTemplate: (template: string) =>
+    api.post<ImplementationStatus>('/api/v1/implementation/approval-template', { template }),
+  uploadSampleInvoices: (files: File[]) => {
+    const formData = new FormData();
+    for (const file of files) formData.append('files', file);
+    return api.upload<ImplementationSampleUploadResponse>('/api/v1/implementation/sample-invoices', formData);
+  },
+  updateChecklist: (checks: ImplementationGoLiveChecks) =>
+    api.patch<ImplementationStatus>('/api/v1/implementation/checklist', { checks }),
+};
 
 // Invoices API
 export const invoicesApi = {

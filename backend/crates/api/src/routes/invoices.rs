@@ -14,7 +14,7 @@ use billforge_core::{
         ExtractedLineItem, Invoice, InvoiceFilters, ProcessingStatus, QueueType, ResourceType,
     },
     traits::{AuditService, InvoiceRepository},
-    types::{Money, PaginatedResponse, Pagination, TenantSettings},
+    types::{Money, PaginatedResponse, Pagination, TenantContext, TenantSettings, UserContext},
 };
 use billforge_invoice_capture::{ocr, resolve_ocr_provider_name};
 use billforge_invoice_processing::feedback_loop::{
@@ -329,7 +329,7 @@ async fn delete_invoice(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UploadResponse {
     pub invoice_id: String,
     pub document_id: String,
@@ -402,134 +402,129 @@ async fn upload_invoice(
                 billforge_core::Error::Validation(format!("Failed to read file: {}", e))
             })?;
 
-            // Store the document via storage service
-            let file_name_for_msg = file_name.clone();
-            let document_id = state
-                .storage
-                .upload(&tenant.tenant_id, &file_name, &data, &content_type)
+            return upload_invoice_file(&state, &user, &tenant, file_name, content_type, &data)
                 .await
-                .map_err(|e| {
-                    billforge_core::Error::Database(format!("Failed to store document: {}", e))
-                })?;
+                .map(Json);
+        }
+    }
 
-            let storage_key = billforge_db::build_storage_key(&tenant.tenant_id, document_id);
+    Err(billforge_core::Error::Validation("No file provided".to_string()).into())
+}
 
-            // Create invoice with Processing status (placeholder data until OCR completes)
-            let invoice_input = CreateInvoiceInput {
-                vendor_id: None,
-                vendor_name: "Processing...".to_string(),
-                invoice_number: format!("UPLOAD-{}", document_id),
-                invoice_date: None,
-                due_date: None,
-                po_number: None,
-                subtotal: None,
-                tax_amount: None,
-                total_amount: Money::new(0, "USD".to_string()),
-                currency: "USD".to_string(),
-                line_items: vec![],
-                document_id,
-                ocr_confidence: None,
-                notes: Some(format!("Uploaded file: {}", file_name)),
-                tags: vec![],
-                department: None,
-                gl_code: None,
-                cost_center: None,
-            };
+pub(crate) async fn upload_invoice_file(
+    state: &AppState,
+    user: &UserContext,
+    tenant: &TenantContext,
+    file_name: String,
+    content_type: String,
+    data: &[u8],
+) -> ApiResult<UploadResponse> {
+    let file_name_for_msg = file_name.clone();
+    let document_id = state
+        .storage
+        .upload(&tenant.tenant_id, &file_name, data, &content_type)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to store document: {}", e)))?;
 
-            let pool = state.db.tenant(&tenant.tenant_id).await?;
-            let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-            let invoice = repo
-                .create(&tenant.tenant_id, invoice_input, Some(&user.user_id))
-                .await?;
-            record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
+    let storage_key = billforge_db::build_storage_key(&tenant.tenant_id, document_id);
 
-            // Set capture status to Processing
-            repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing)
-                .await?;
+    let invoice_input = CreateInvoiceInput {
+        vendor_id: None,
+        vendor_name: "Processing...".to_string(),
+        invoice_number: format!("UPLOAD-{}", document_id),
+        invoice_date: None,
+        due_date: None,
+        po_number: None,
+        subtotal: None,
+        tax_amount: None,
+        total_amount: Money::new(0, "USD".to_string()),
+        currency: "USD".to_string(),
+        line_items: vec![],
+        document_id,
+        ocr_confidence: None,
+        notes: Some(format!("Uploaded file: {}", file_name)),
+        tags: vec![],
+        department: None,
+        gl_code: None,
+        cost_center: None,
+    };
 
-            // Store document metadata
-            sqlx::query(
-                "INSERT INTO documents (id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'invoice_original', $8, NOW())"
-            )
-            .bind(document_id)
-            .bind(*tenant.tenant_id.as_uuid())
-            .bind(&file_name)
-            .bind(&content_type)
-            .bind(data.len() as i64)
-            .bind(&storage_key)
-            .bind(invoice.id.as_uuid())
-            .bind(user.user_id.as_uuid())
-            .execute(&*pool)
-            .await
-            .map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoice = repo
+        .create(&tenant.tenant_id, invoice_input, Some(&user.user_id))
+        .await?;
+    record_invoice_metering_usage(state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
-            // Audit: invoice created via upload
-            let audit_entry = AuditEntry::new(
-                tenant.tenant_id.clone(),
-                Some(user.user_id.clone()),
-                AuditAction::Create,
-                ResourceType::Invoice,
-                invoice.id.to_string(),
-                format!("Uploaded invoice from file '{}'", file_name),
-            )
-            .with_user_email(&user.email)
-            .with_metadata(serde_json::json!({
-                "document_id": document_id.to_string(),
-                "file_name": file_name,
-                "content_type": content_type,
-            }));
-            let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-            if let Err(e) = audit_repo.log(audit_entry).await {
-                tracing::warn!(error = %e, "Failed to log audit entry");
-            }
+    repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing)
+        .await?;
 
-            // Enqueue async OCR job if Redis is available, otherwise fall back to sync
-            let message = if let Some(ref redis_client) = state.redis {
-                match enqueue_ocr_job(
-                    redis_client,
-                    &tenant.tenant_id,
-                    &invoice.id,
-                    document_id,
-                    &content_type,
+    sqlx::query(
+        "INSERT INTO documents (id, tenant_id, filename, mime_type, size_bytes, storage_key, invoice_id, doc_type, uploaded_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'invoice_original', $8, NOW())"
+    )
+    .bind(document_id)
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(&file_name)
+    .bind(&content_type)
+    .bind(data.len() as i64)
+    .bind(&storage_key)
+    .bind(invoice.id.as_uuid())
+    .bind(user.user_id.as_uuid())
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to store document metadata: {}", e)))?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Invoice,
+        invoice.id.to_string(),
+        format!("Uploaded invoice from file '{}'", file_name),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "document_id": document_id.to_string(),
+        "file_name": file_name,
+        "content_type": content_type,
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    let message = if let Some(ref redis_client) = state.redis {
+        match enqueue_ocr_job(
+            redis_client,
+            &tenant.tenant_id,
+            &invoice.id,
+            document_id,
+            &content_type,
+        )
+        .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    invoice_id = %invoice.id,
+                    "OCR job enqueued for async processing"
+                );
+                format!(
+                    "File '{}' uploaded. OCR processing queued - poll GET /invoices/{} for status.",
+                    file_name_for_msg, invoice.id
                 )
-                .await
-                {
-                    Ok(_) => {
-                        tracing::info!(
-                            invoice_id = %invoice.id,
-                            "OCR job enqueued for async processing"
-                        );
-                        format!("File '{}' uploaded. OCR processing queued - poll GET /invoices/{} for status.", file_name_for_msg, invoice.id)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            invoice_id = %invoice.id,
-                            error = %e,
-                            "Failed to enqueue OCR job, falling back to sync"
-                        );
-                        // Fall back to synchronous OCR
-                        let status = run_sync_ocr(
-                            &state,
-                            &tenant.tenant_id,
-                            &invoice.id,
-                            &data,
-                            &content_type,
-                            &repo,
-                            &pool,
-                            &tenant.settings,
-                        )
-                        .await;
-                        sync_ocr_message(&file_name_for_msg, status)
-                    }
-                }
-            } else {
-                // No Redis configured, run OCR synchronously
+            }
+            Err(e) => {
+                tracing::warn!(
+                    invoice_id = %invoice.id,
+                    error = %e,
+                    "Failed to enqueue OCR job, falling back to sync"
+                );
                 let status = run_sync_ocr(
-                    &state,
+                    state,
                     &tenant.tenant_id,
                     &invoice.id,
-                    &data,
+                    data,
                     &content_type,
                     &repo,
                     &pool,
@@ -537,17 +532,28 @@ async fn upload_invoice(
                 )
                 .await;
                 sync_ocr_message(&file_name_for_msg, status)
-            };
-
-            return Ok(Json(UploadResponse {
-                invoice_id: invoice.id.to_string(),
-                document_id: document_id.to_string(),
-                message,
-            }));
+            }
         }
-    }
+    } else {
+        let status = run_sync_ocr(
+            state,
+            &tenant.tenant_id,
+            &invoice.id,
+            data,
+            &content_type,
+            &repo,
+            &pool,
+            &tenant.settings,
+        )
+        .await;
+        sync_ocr_message(&file_name_for_msg, status)
+    };
 
-    Err(billforge_core::Error::Validation("No file provided".to_string()).into())
+    Ok(UploadResponse {
+        invoice_id: invoice.id.to_string(),
+        document_id: document_id.to_string(),
+        message,
+    })
 }
 
 /// Enqueue an OCR processing job to the Redis job queue.

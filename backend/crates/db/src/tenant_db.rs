@@ -39,6 +39,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_ai_conversation_migrations(pool).await?;
     run_ai_rls_migrations(pool).await?;
     run_theme_migrations(pool).await?;
+    run_implementation_migrations(pool).await?;
 
     Ok(())
 }
@@ -366,6 +367,18 @@ pub async fn run_payment_request_migrations(pool: &PgPool) -> Result<()> {
         pool,
         "094_add_queue_items_updated_at.sql",
         include_str!("../../../migrations/094_add_queue_items_updated_at.sql"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Run implementation wizard state migrations.
+pub async fn run_implementation_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "095_create_implementation_wizard_state.sql",
+        include_str!("../../../migrations/095_create_implementation_wizard_state.sql"),
     )
     .await?;
 

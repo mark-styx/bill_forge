@@ -1,135 +1,57 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useAuthStore } from '@/stores/auth';
 import {
-  Rocket,
-  CheckCircle2,
-  Loader2,
-  Plus,
-  ExternalLink,
+  AlertCircle,
   Building2,
-  GitBranch,
-  ScanLine,
+  CheckCircle2,
+  ExternalLink,
   Flag,
+  GitBranch,
+  Loader2,
+  Rocket,
+  ScanLine,
+  Upload,
 } from 'lucide-react';
+import {
+  implementationApi,
+  type ImplementationErpProvider,
+  type ImplementationErpSubItems,
+  type ImplementationGoLiveChecks,
+  type ImplementationPhaseStatus,
+  type ImplementationStatus,
+} from '@/lib/api';
+import { useAuthStore } from '@/stores/auth';
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
+const APPROVAL_TEMPLATES = [
+  { id: 'amount', label: 'By amount threshold', description: 'Route invoices based on dollar value tiers.' },
+  { id: 'department', label: 'By department', description: 'Each department has its own approver chain.' },
+  { id: 'gl', label: 'By GL code', description: 'Assign approval paths by general ledger account.' },
+];
 
-type PhaseStatus = 'not_started' | 'in_progress' | 'complete';
+const GO_LIVE_ITEMS: { key: keyof ImplementationGoLiveChecks; label: string }[] = [
+  { key: 'notify_ap_team', label: 'Notify AP team of go-live date' },
+  { key: 'set_email_forwarding', label: 'Set production email forwarding' },
+  { key: 'enable_approval_routing', label: 'Enable approval routing' },
+  { key: 'schedule_first_payment_run', label: 'Schedule first payment run' },
+  { key: 'confirm_cutover_date', label: 'Confirm cutover date' },
+];
 
-interface ErpSubItems {
-  chartOfAccounts: boolean;
-  vendors: boolean;
-  openPOs: boolean;
-}
-
-interface ErpPhase {
-  status: PhaseStatus;
-  subItems: ErpSubItems;
-}
-
-interface ApprovalsPhase {
-  status: PhaseStatus;
-  template: string | null;
-}
-
-interface OcrPhase {
-  status: PhaseStatus;
-  count: number;
-}
-
-interface GoLivePhase {
-  status: PhaseStatus;
-  checks: {
-    notifyApTeam: boolean;
-    setEmailForwarding: boolean;
-    enableApprovalRouting: boolean;
-    scheduleFirstPaymentRun: boolean;
-    confirmCutoverDate: boolean;
-  };
-}
-
-interface WizardState {
-  startedAt: string;
-  phases: {
-    erp: ErpPhase;
-    approvals: ApprovalsPhase;
-    ocr: OcrPhase;
-    goLive: GoLivePhase;
-  };
-}
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-const STORAGE_KEY_PREFIX = 'billforge.implementation.v1';
-
-function getStorageKey(tenantId: string): string {
-  return `${STORAGE_KEY_PREFIX}.${tenantId}`;
-}
-
-function getDefaultState(): WizardState {
-  return {
-    startedAt: new Date().toISOString(),
-    phases: {
-      erp: {
-        status: 'not_started',
-        subItems: { chartOfAccounts: false, vendors: false, openPOs: false },
-      },
-      approvals: { status: 'not_started', template: null },
-      ocr: { status: 'not_started', count: 0 },
-      goLive: {
-        status: 'not_started',
-        checks: {
-          notifyApTeam: false,
-          setEmailForwarding: false,
-          enableApprovalRouting: false,
-          scheduleFirstPaymentRun: false,
-          confirmCutoverDate: false,
-        },
-      },
-    },
-  };
-}
-
-function loadState(tenantId: string): WizardState {
-  if (typeof window === 'undefined') return getDefaultState();
-  try {
-    const raw = window.localStorage.getItem(getStorageKey(tenantId));
-    if (raw) return JSON.parse(raw) as WizardState;
-  } catch {
-    // ignore corrupt data
+function statusLabel(status: ImplementationPhaseStatus): string {
+  switch (status) {
+    case 'not_started': return 'Not started';
+    case 'in_progress': return 'In progress';
+    case 'complete': return 'Complete';
   }
-  const fresh = getDefaultState();
-  window.localStorage.setItem(getStorageKey(tenantId), JSON.stringify(fresh));
-  return fresh;
 }
 
-function saveState(tenantId: string, state: WizardState) {
-  window.localStorage.setItem(getStorageKey(tenantId), JSON.stringify(state));
-}
-
-function computeDayNumber(startedAt: string): number {
-  const start = new Date(startedAt);
-  const now = new Date();
-  const diffMs = now.getTime() - start.getTime();
-  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
-  return Math.max(1, Math.min(days, 14));
-}
-
-function computePercentComplete(state: WizardState): number {
-  const phases = state.phases;
-  let complete = 0;
-  if (phases.erp.status === 'complete') complete++;
-  if (phases.approvals.status === 'complete') complete++;
-  if (phases.ocr.status === 'complete') complete++;
-  if (phases.goLive.status === 'complete') complete++;
-  return Math.round((complete / 4) * 100);
+function statusPillClasses(status: ImplementationPhaseStatus): string {
+  switch (status) {
+    case 'not_started': return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
+    case 'in_progress': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+    case 'complete': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+  }
 }
 
 function goLiveDate(startedAt: string): string {
@@ -138,54 +60,22 @@ function goLiveDate(startedAt: string): string {
   return target.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function statusLabel(status: PhaseStatus): string {
-  switch (status) {
-    case 'not_started': return 'Not started';
-    case 'in_progress': return 'In progress';
-    case 'complete': return 'Complete';
-  }
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Request failed';
 }
 
-function statusPillClasses(status: PhaseStatus): string {
-  switch (status) {
-    case 'not_started': return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
-    case 'in_progress': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
-    case 'complete': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/*  Approval templates                                                 */
-/* ------------------------------------------------------------------ */
-
-const APPROVAL_TEMPLATES = [
-  { id: 'amount', label: 'By amount threshold', description: 'Route invoices based on dollar value tiers.' },
-  { id: 'department', label: 'By department', description: 'Each department has its own approver chain.' },
-  { id: 'gl', label: 'By GL code', description: 'Assign approval paths by general ledger account.' },
-];
-
-/* ------------------------------------------------------------------ */
-/*  Go-live checklist items                                            */
-/* ------------------------------------------------------------------ */
-
-const GO_LIVE_ITEMS: { key: keyof GoLivePhase['checks']; label: string }[] = [
-  { key: 'notifyApTeam', label: 'Notify AP team of go-live date' },
-  { key: 'setEmailForwarding', label: 'Set production email forwarding' },
-  { key: 'enableApprovalRouting', label: 'Enable approval routing' },
-  { key: 'scheduleFirstPaymentRun', label: 'Schedule first payment run' },
-  { key: 'confirmCutoverDate', label: 'Confirm cutover date' },
-];
-
-/* ------------------------------------------------------------------ */
-/*  Sub-item toggle                                                    */
-/* ------------------------------------------------------------------ */
-
-function SubItemToggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+function SubItemToggle({ checked, label, onChange, disabled }: {
+  checked: boolean;
+  label: string;
+  onChange: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <label className="flex items-center gap-2 cursor-pointer text-sm text-foreground">
+    <label className="flex items-center gap-2 text-sm text-foreground">
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={onChange}
         className="rounded border-border"
       />
@@ -194,30 +84,24 @@ function SubItemToggle({ checked, label, onChange }: { checked: boolean; label: 
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Phase card                                                         */
-/* ------------------------------------------------------------------ */
-
 function PhaseCard({
   title,
   dayRange,
   description,
   status,
-  onMarkComplete,
   children,
 }: {
   title: string;
   dayRange: string;
   description: string;
-  status: PhaseStatus;
-  onMarkComplete: () => void;
+  status: ImplementationPhaseStatus;
   children: React.ReactNode;
 }) {
   return (
-    <div className="border border-border rounded-xl bg-card p-5 space-y-4">
+    <div className="border border-border rounded-lg bg-card p-5 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-base font-semibold text-foreground">{title}</h3>
             <span className="text-xs text-muted-foreground">{dayRange}</span>
           </div>
@@ -230,308 +114,302 @@ function PhaseCard({
         </span>
       </div>
       {children}
-      {status !== 'complete' && (
-        <button
-          type="button"
-          onClick={onMarkComplete}
-          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
-        >
-          Mark phase complete
-        </button>
-      )}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Main page                                                          */
-/* ------------------------------------------------------------------ */
-
 export default function GettingStartedPage() {
   const { tenant } = useAuthStore();
-  const tenantId = tenant?.id ?? 'anonymous';
+  const [status, setStatus] = useState<ImplementationStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
 
-  const [state, setState] = useState<WizardState>(() => getDefaultState());
-  const [hydrated, setHydrated] = useState(false);
+  const loadStatus = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setStatus(await implementationApi.status());
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const loaded = loadState(tenantId);
-    setState(loaded);
-    setHydrated(true);
-  }, [tenantId]);
+    void loadStatus();
+  }, [loadStatus, tenant?.id]);
 
-  const persist = useCallback(
-    (next: WizardState) => {
-      setState(next);
-      if (hydrated) {
-        saveState(tenantId, next);
-      }
-    },
-    [tenantId, hydrated],
-  );
-
-  const dayNumber = computeDayNumber(state.startedAt);
-  const percent = computePercentComplete(state);
-  const onTrack = percent === 100
-    || (dayNumber <= 3 && state.phases.erp.status !== 'not_started')
-    || (dayNumber <= 6 && (state.phases.erp.status === 'complete' || state.phases.approvals.status !== 'not_started'))
-    || percent >= 75;
-
-  /* ---------- ERP phase handlers ---------- */
-
-  const toggleErpSubItem = (key: keyof ErpSubItems) => {
-    const subItems = { ...state.phases.erp.subItems, [key]: !state.phases.erp.subItems[key] };
-    const allDone = subItems.chartOfAccounts && subItems.vendors && subItems.openPOs;
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        erp: { status: allDone ? 'complete' : 'in_progress', subItems },
-      },
-    });
+  const runErpSync = async (provider: ImplementationErpProvider) => {
+    try {
+      setPending(`erp-${provider}`);
+      setError(null);
+      setStatus(await implementationApi.syncErp(provider));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
   };
 
-  const markErpComplete = () => {
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        erp: { status: 'complete', subItems: { chartOfAccounts: true, vendors: true, openPOs: true } },
-      },
-    });
+  const updateErpSubItem = async (key: keyof ImplementationErpSubItems) => {
+    if (!status) return;
+    const subItems = {
+      ...status.phases.erp.sub_items,
+      [key]: !status.phases.erp.sub_items[key],
+    };
+    try {
+      setPending(`erp-${key}`);
+      setError(null);
+      setStatus(await implementationApi.updateErpSubItems(subItems));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
   };
 
-  /* ---------- Approvals phase handlers ---------- */
-
-  const selectTemplate = (id: string) => {
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        approvals: { status: 'complete', template: id },
-      },
-    });
+  const selectTemplate = async (template: string) => {
+    try {
+      setPending(`template-${template}`);
+      setError(null);
+      setStatus(await implementationApi.selectApprovalTemplate(template));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
   };
 
-  const markApprovalsComplete = () => {
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        approvals: { status: 'complete', template: state.phases.approvals.template ?? 'amount' },
-      },
-    });
+  const uploadSamples = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      setPending('samples');
+      setError(null);
+      const response = await implementationApi.uploadSampleInvoices(Array.from(files));
+      setStatus(response.status);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
   };
 
-  /* ---------- OCR phase handlers ---------- */
-
-  const incrementOcr = () => {
-    const newCount = Math.min(state.phases.ocr.count + 1, 10);
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        ocr: { status: newCount >= 10 ? 'complete' : 'in_progress', count: newCount },
-      },
-    });
+  const updateGoLiveCheck = async (key: keyof ImplementationGoLiveChecks) => {
+    if (!status) return;
+    const checks = {
+      ...status.phases.go_live.checks,
+      [key]: !status.phases.go_live.checks[key],
+    };
+    try {
+      setPending(`go-live-${key}`);
+      setError(null);
+      setStatus(await implementationApi.updateChecklist(checks));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
   };
 
-  const markOcrComplete = () => {
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        ocr: { status: 'complete', count: 10 },
-      },
-    });
-  };
+  if (loading && !status) {
+    return (
+      <div className="max-w-3xl mx-auto flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Loading implementation status
+      </div>
+    );
+  }
 
-  /* ---------- Go-live phase handlers ---------- */
+  if (!status) {
+    return (
+      <div className="max-w-3xl mx-auto border border-destructive/40 rounded-lg p-5 text-sm text-destructive">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" />
+          {error ?? 'Unable to load implementation status'}
+        </div>
+      </div>
+    );
+  }
 
-  const toggleGoLiveCheck = (key: keyof GoLivePhase['checks']) => {
-    const checks = { ...state.phases.goLive.checks, [key]: !state.phases.goLive.checks[key] };
-    const allDone = Object.values(checks).every(Boolean);
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        goLive: { status: allDone ? 'complete' : 'in_progress', checks },
-      },
-    });
-  };
-
-  const markGoLiveComplete = () => {
-    persist({
-      ...state,
-      phases: {
-        ...state.phases,
-        goLive: {
-          status: 'complete',
-          checks: {
-            notifyApTeam: true,
-            setEmailForwarding: true,
-            enableApprovalRouting: true,
-            scheduleFirstPaymentRun: true,
-            confirmCutoverDate: true,
-          },
-        },
-      },
-    });
-  };
+  const { phases } = status;
+  const onTrack = status.percent_complete === 100
+    || (status.day_number <= 3 && phases.erp.status !== 'not_started')
+    || (status.day_number <= 6 && (phases.erp.status === 'complete' || phases.approvals.status !== 'not_started'))
+    || status.percent_complete >= 75;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Header */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Rocket className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold text-foreground">Implementation Wizard</h1>
         </div>
         <p className="text-muted-foreground">
-          Day <span data-testid="day-number">{dayNumber}</span> of 14
+          Day <span data-testid="day-number">{status.day_number}</span> of 14
         </p>
-        {/* Progress bar */}
         <div className="w-full bg-secondary rounded-full h-2.5">
           <div
             data-testid="progress-bar"
             className="h-2.5 rounded-full bg-primary transition-all"
-            style={{ width: `${percent}%` }}
+            style={{ width: `${status.percent_complete}%` }}
           />
         </div>
         <p className="text-xs text-muted-foreground text-right" data-testid="progress-percent">
-          {percent}% complete
+          {status.percent_complete}% complete
         </p>
       </div>
 
-      {/* Phase 1: ERP */}
+      {error && (
+        <div className="border border-destructive/40 rounded-lg p-3 text-sm text-destructive flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" />
+          {error}
+        </div>
+      )}
+
       <PhaseCard
         title="Connect your accounting system"
         dayRange="Days 1-3"
         description="Connect QuickBooks or Xero to auto-import your chart of accounts, vendors, and open purchase orders."
-        status={state.phases.erp.status}
-        onMarkComplete={markErpComplete}
+        status={phases.erp.status}
       >
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => runErpSync('quickbooks')}
+            disabled={pending !== null}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-60"
+          >
+            {pending === 'erp-quickbooks' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Building2 className="w-4 h-4" />}
+            Sync QuickBooks
+          </button>
+          <button
+            type="button"
+            onClick={() => runErpSync('xero')}
+            disabled={pending !== null}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:border-primary/50 disabled:opacity-60"
+          >
+            {pending === 'erp-xero' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Building2 className="w-4 h-4" />}
+            Sync Xero
+          </button>
+        </div>
         <div className="space-y-2">
           <SubItemToggle
-            checked={state.phases.erp.subItems.chartOfAccounts}
+            checked={phases.erp.sub_items.chart_of_accounts}
             label="Chart of accounts imported"
-            onChange={() => toggleErpSubItem('chartOfAccounts')}
+            disabled={pending !== null}
+            onChange={() => updateErpSubItem('chart_of_accounts')}
           />
           <SubItemToggle
-            checked={state.phases.erp.subItems.vendors}
+            checked={phases.erp.sub_items.vendors}
             label="Vendors imported"
-            onChange={() => toggleErpSubItem('vendors')}
+            disabled={pending !== null}
+            onChange={() => updateErpSubItem('vendors')}
           />
           <SubItemToggle
-            checked={state.phases.erp.subItems.openPOs}
+            checked={phases.erp.sub_items.open_pos}
             label="Open POs imported"
-            onChange={() => toggleErpSubItem('openPOs')}
+            disabled={pending !== null}
+            onChange={() => updateErpSubItem('open_pos')}
           />
         </div>
-        <Link
-          href="/integrations"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-        >
+        {phases.erp.last_sync && (
+          <p className="text-xs text-muted-foreground">
+            {phases.erp.last_sync.message}
+          </p>
+        )}
+        <Link href="/integrations" className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
           <Building2 className="w-4 h-4" />
           Go to Integrations
           <ExternalLink className="w-3 h-3" />
         </Link>
       </PhaseCard>
 
-      {/* Phase 2: Approvals */}
       <PhaseCard
         title="Choose an approval-chain template"
         dayRange="Days 4-6"
         description="Select a preset approval routing strategy to get started quickly. You can customise it later."
-        status={state.phases.approvals.status}
-        onMarkComplete={markApprovalsComplete}
+        status={phases.approvals.status}
       >
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {APPROVAL_TEMPLATES.map((t) => {
-            const selected = state.phases.approvals.template === t.id;
+          {APPROVAL_TEMPLATES.map((template) => {
+            const selected = phases.approvals.template === template.id;
             return (
               <button
-                key={t.id}
+                key={template.id}
                 type="button"
-                onClick={() => selectTemplate(t.id)}
-                className={`rounded-lg border p-3 text-left transition-colors ${
-                  selected
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                    : 'border-border hover:border-primary/50'
+                disabled={pending !== null}
+                onClick={() => selectTemplate(template.id)}
+                className={`rounded-lg border p-3 text-left transition-colors disabled:opacity-60 ${
+                  selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-primary/50'
                 }`}
               >
-                <p className="text-sm font-medium text-foreground">{t.label}</p>
-                <p className="text-xs text-muted-foreground mt-1">{t.description}</p>
+                <p className="text-sm font-medium text-foreground">{template.label}</p>
+                <p className="text-xs text-muted-foreground mt-1">{template.description}</p>
               </button>
             );
           })}
         </div>
-        <Link
-          href="/processing/workflows"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-        >
+        <Link href="/processing/workflows" className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
           <GitBranch className="w-4 h-4" />
           Go to Workflows
           <ExternalLink className="w-3 h-3" />
         </Link>
       </PhaseCard>
 
-      {/* Phase 3: OCR */}
       <PhaseCard
         title="Validate OCR with 10 sample invoices"
         dayRange="Days 7-10"
         description="Upload sample invoices to validate OCR accuracy and coding suggestions before going live."
-        status={state.phases.ocr.status}
-        onMarkComplete={markOcrComplete}
+        status={phases.ocr.status}
       >
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <span className="text-sm text-foreground font-medium" data-testid="ocr-count">
-            {state.phases.ocr.count} / 10 uploaded
+            {phases.ocr.count} / 10 uploaded
           </span>
-          {state.phases.ocr.count < 10 && (
-            <button
-              type="button"
-              onClick={incrementOcr}
-              className="inline-flex items-center gap-1 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              +1 Sample
-            </button>
+          {phases.ocr.count < 10 && (
+            <label className="inline-flex items-center gap-1 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90 transition-colors cursor-pointer">
+              {pending === 'samples' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Upload Samples
+              <input
+                type="file"
+                multiple
+                className="sr-only"
+                disabled={pending !== null}
+                onChange={(event) => uploadSamples(event.currentTarget.files)}
+              />
+            </label>
           )}
         </div>
-        <Link
-          href="/invoices"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-        >
+        <Link href="/invoices" className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
           <ScanLine className="w-4 h-4" />
           Go to Invoices
           <ExternalLink className="w-3 h-3" />
         </Link>
       </PhaseCard>
 
-      {/* Phase 4: Go-live */}
       <PhaseCard
         title="Go-live checklist"
         dayRange="Days 11-14"
         description="Complete these final steps before your first production processing cycle."
-        status={state.phases.goLive.status}
-        onMarkComplete={markGoLiveComplete}
+        status={phases.go_live.status}
       >
         <div className="space-y-2">
           {GO_LIVE_ITEMS.map((item) => (
             <SubItemToggle
               key={item.key}
-              checked={state.phases.goLive.checks[item.key]}
+              checked={phases.go_live.checks[item.key]}
               label={item.label}
-              onChange={() => toggleGoLiveCheck(item.key)}
+              disabled={pending !== null}
+              onChange={() => updateGoLiveCheck(item.key)}
             />
           ))}
         </div>
       </PhaseCard>
 
-      {/* Footer */}
       <div
-        className={`rounded-xl p-4 text-sm font-medium ${
+        className={`rounded-lg p-4 text-sm font-medium ${
           onTrack
             ? 'bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-400'
             : 'bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400'
@@ -540,9 +418,9 @@ export default function GettingStartedPage() {
         <div className="flex items-center gap-2">
           <Flag className="w-4 h-4" />
           <span>
-            {percent === 100
+            {status.percent_complete === 100
               ? 'All phases complete - you are live!'
-              : `On track to go live by ${goLiveDate(state.startedAt)}`}
+              : `On track to go live by ${goLiveDate(status.started_at)}`}
           </span>
         </div>
       </div>

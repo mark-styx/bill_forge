@@ -5,7 +5,7 @@ use crate::types::*;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::RwLock;
@@ -304,6 +304,24 @@ impl XeroClient {
         let response: XeroResponse<XeroAccount> = self.get(&resource).await?;
 
         Ok(response.Items.unwrap_or_default())
+    }
+
+    /// Query purchase orders with pagination.
+    pub async fn query_purchase_orders(
+        &self,
+        page: i32,
+        page_size: i32,
+    ) -> Result<Vec<XeroPurchaseOrder>> {
+        #[derive(Deserialize)]
+        struct PurchaseOrdersResponse {
+            #[serde(rename = "PurchaseOrders")]
+            purchase_orders: Option<Vec<XeroPurchaseOrder>>,
+        }
+
+        let resource = format!("PurchaseOrders?page={}&pageSize={}", page, page_size);
+        let response: PurchaseOrdersResponse = self.get(&resource).await?;
+
+        Ok(response.purchase_orders.unwrap_or_default())
     }
 
     /// Get account by ID

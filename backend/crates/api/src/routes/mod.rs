@@ -15,6 +15,7 @@ pub mod email_actions;
 pub(crate) mod export;
 pub(crate) mod feedback;
 mod health;
+pub mod implementation;
 pub mod invoices;
 pub mod mobile;
 pub mod notifications;
@@ -110,7 +111,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Audit logs
         .nest("/audit", audit::routes())
         // Sandbox/Development persona management
-        .nest("/sandbox", sandbox::routes());
+        .nest("/sandbox", sandbox::routes())
+        // Server-backed implementation wizard
+        .nest("/implementation", implementation::routes());
     // Conditionally include ERP/integration routes
     let router = {
         #[cfg(feature = "quickbooks")]
