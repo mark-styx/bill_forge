@@ -17,6 +17,21 @@ use uuid::Uuid;
 // Seed helpers
 // ---------------------------------------------------------------------------
 
+/// Insert the tenant row required by FK constraints inside a tenant database.
+async fn seed_tenant(pool: &sqlx::PgPool, tenant_id: &TenantId, name: &str) {
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(name)
+    .bind(name.to_lowercase().replace(' ', "-"))
+    .execute(pool)
+    .await
+    .expect("seed tenant");
+}
+
 /// Insert a minimal vendor row for the given tenant.
 async fn seed_vendor(pool: &sqlx::PgPool, tenant_id: &TenantId, vendor_id: Uuid) {
     sqlx::query(
@@ -200,6 +215,8 @@ async fn setup_two_tenants(
         .run_tenant_migrations(&pool_b)
         .await
         .expect("migrate B");
+    seed_tenant(&pool_a, &tenant_a, &format!("Tenant A {}", tag)).await;
+    seed_tenant(&pool_b, &tenant_b, &format!("Tenant B {}", tag)).await;
 
     (manager, tenant_a, tenant_b, pool_a, pool_b)
 }
@@ -927,7 +944,7 @@ async fn test_reassign_item_cross_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn payment_request_items_query_is_tenant_scoped() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("pr-items-scope").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("pr-items-scope").await;
 
     let vendor_id_a = Uuid::new_v4();
     let user_id_a = Uuid::new_v4();
@@ -942,10 +959,12 @@ async fn payment_request_items_query_is_tenant_scoped() {
     seed_user(&pool_a, &tenant_a, user_id_a).await;
     seed_invoice(&pool_a, &tenant_a, invoice_id_a, vendor_id_a, user_id_a).await;
 
-    // Seed tenant B: vendor, user, invoice
-    seed_vendor(&pool_b, &tenant_b, vendor_id_b).await;
-    seed_user(&pool_b, &tenant_b, user_id_b).await;
-    seed_invoice(&pool_b, &tenant_b, invoice_id_b, vendor_id_b, user_id_b).await;
+    // Seed a tenant B row in the same physical database so the FK allows a
+    // deliberately corrupted cross-tenant payment_request_items row.
+    seed_tenant(&pool_a, &tenant_b, "Tenant B pr-items-scope shadow").await;
+    seed_vendor(&pool_a, &tenant_b, vendor_id_b).await;
+    seed_user(&pool_a, &tenant_b, user_id_b).await;
+    seed_invoice(&pool_a, &tenant_b, invoice_id_b, vendor_id_b, user_id_b).await;
 
     // Insert a payment_requests row for tenant A via raw SQL
     let request_id = Uuid::new_v4();
@@ -982,7 +1001,7 @@ async fn payment_request_items_query_is_tenant_scoped() {
 
     // Sanity check: tenant B cannot see the parent request at all
     let repo_b =
-        billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_b.clone()));
+        billforge_db::PaymentRequestRepositoryImpl::new(std::sync::Arc::new(pool_a.clone()));
     let result = repo_b.get_payment_request(&tenant_b, request_id).await;
     assert!(
         matches!(result, Ok(None)),
@@ -1033,7 +1052,8 @@ async fn payment_request_items_query_is_tenant_scoped() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn add_invoices_to_request_recompute_is_tenant_scoped() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("pr-add-inv-scope").await;
+    let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
+        setup_two_tenants("pr-add-inv-scope").await;
 
     let vendor_id_a = Uuid::new_v4();
     let user_id_a = Uuid::new_v4();
@@ -1072,9 +1092,11 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
     .await
     .expect("seed invoice A2");
 
-    // Seed tenant B: vendor, user, invoice (5000 cents)
-    seed_vendor(&pool_b, &tenant_b, vendor_id_b).await;
-    seed_user(&pool_b, &tenant_b, user_id_b).await;
+    // Seed a tenant B row in the same physical database so the FK allows a
+    // deliberately corrupted cross-tenant payment_request_items row.
+    seed_tenant(&pool_a, &tenant_b, "Tenant B pr-add-inv-scope shadow").await;
+    seed_vendor(&pool_a, &tenant_b, vendor_id_b).await;
+    seed_user(&pool_a, &tenant_b, user_id_b).await;
     sqlx::query(
         "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number,
                                 total_amount_cents, document_id, created_by)
@@ -1086,7 +1108,7 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
     .bind(format!("INV-B-{}", invoice_id_b))
     .bind(Uuid::new_v4())
     .bind(user_id_b)
-    .execute(&pool_b)
+    .execute(&pool_a)
     .await
     .expect("seed invoice B");
 
@@ -1262,17 +1284,22 @@ async fn audit_log_list_excludes_other_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("audit-list").await;
 
     let now = chrono::Utc::now();
+    let user_a = Uuid::new_v4();
+    let user_b = Uuid::new_v4();
+    seed_user(&pool_a, &tenant_a, user_a).await;
+    seed_user(&pool_b, &tenant_b, user_b).await;
 
     // Insert audit_log entry under tenant A
     sqlx::query(
         r#"INSERT INTO audit_log (
             id, tenant_id, user_id, action, resource_type, resource_id,
             changes, ip_address, user_agent, created_at
-        ) VALUES ($1, $2, NULL, 'read', 'invoice', 'test-resource',
-                  NULL, NULL, NULL, $3)"#,
+        ) VALUES ($1, $2, $3, 'read', 'invoice', 'test-resource',
+                  NULL, NULL, NULL, $4)"#,
     )
     .bind(Uuid::new_v4())
     .bind(*tenant_a.as_uuid())
+    .bind(user_a)
     .bind(now)
     .execute(&pool_a)
     .await
@@ -1283,11 +1310,12 @@ async fn audit_log_list_excludes_other_tenant() {
         r#"INSERT INTO audit_log (
             id, tenant_id, user_id, action, resource_type, resource_id,
             changes, ip_address, user_agent, created_at
-        ) VALUES ($1, $2, NULL, 'read', 'invoice', 'test-resource',
-                  NULL, NULL, NULL, $3)"#,
+        ) VALUES ($1, $2, $3, 'read', 'invoice', 'test-resource',
+                  NULL, NULL, NULL, $4)"#,
     )
     .bind(Uuid::new_v4())
     .bind(*tenant_b.as_uuid())
+    .bind(user_b)
     .bind(now)
     .execute(&pool_b)
     .await

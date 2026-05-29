@@ -6,46 +6,31 @@ on:
   pull_request:
     branches: [main, develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
-  # Backend Rust checks
-  backend-check:
-    name: Backend Check
+  # Backend Rust formatting and linting
+  backend-static:
+    name: Backend Static
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
-        working-directory: backend
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: billforge
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+        working-directory: .
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/billforge
       SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v6
-
-      - name: Run migrations
-        run: |
-          for f in migrations/*.sql; do
-            PGPASSWORD=postgres psql -h localhost -U postgres -d billforge -f "$f" || true
-          done
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -62,31 +47,48 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Run static backend checks
+        run: bash scripts/backend-static-check.sh
 
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Verify sqlx cache is committed
-        run: |
-          if [ -d ".sqlx" ] && [ "$(ls .sqlx/*.json 2>/dev/null | wc -l)" -gt 0 ]; then
-            echo "sqlx cache found with $(ls .sqlx/*.json | wc -l) query files"
-          else
-            echo "::warning::No .sqlx/ cache found — run 'cargo sqlx prepare --workspace' locally and commit .sqlx/"
-          fi
-
-  # Backend tests
-  backend-test:
-    name: Backend Tests
+  # Fast backend tests that do not require PostgreSQL.
+  backend-unit-test:
+    name: Backend Unit Tests
     runs-on: ubuntu-latest
-    needs: backend-check
+    timeout-minutes: 20
     defaults:
       run:
-        working-directory: backend
+        working-directory: .
+
+    env:
+      SQLX_OFFLINE: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Run backend unit tests
+        run: bash scripts/backend-unit-test.sh
+
+  # Backend tests that require PostgreSQL and validate migrations.
+  backend-db-test:
+    name: Backend DB Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
 
     services:
       postgres:
@@ -105,18 +107,11 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/billforge_test
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/billforge_test
       SQLX_OFFLINE: "true"
-      CARGO_INCREMENTAL: 0
-      RUSTFLAGS: "-C debuginfo=0"
 
     steps:
       - uses: actions/checkout@v6
-
-      - name: Run migrations
-        run: |
-          for f in migrations/*.sql; do
-            PGPASSWORD=postgres psql -h localhost -U postgres -d billforge_test -f "$f" || true
-          done
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -131,20 +126,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Run tests
-        run: cargo test --all-features --workspace
-        continue-on-error: true  # Some integration tests require services not provisioned in this job.
-
-      - name: Free test build artifacts before doc tests
-        run: cargo clean
-
-      - name: Run doc tests
-        run: cargo test --doc
+      - name: Run backend DB tests
+        run: bash scripts/backend-db-test.sh
 
   # Frontend checks
   frontend-check:
     name: Frontend Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -186,7 +175,7 @@ jobs:
   frontend-test:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    needs: frontend-check
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -222,6 +211,7 @@ jobs:
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -258,7 +248,8 @@ jobs:
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [backend-check, frontend-check]
+    timeout-minutes: 25
+    needs: [backend-static, backend-unit-test, frontend-check]
 
     steps:
       - uses: actions/checkout@v6

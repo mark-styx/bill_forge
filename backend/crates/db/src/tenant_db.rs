@@ -31,6 +31,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_reconciliation_migrations(pool).await?;
     run_purchase_order_migrations(pool).await?;
     run_edi_outbound_migrations(pool).await?;
+    run_payment_request_migrations(pool).await?;
     run_categorization_migrations(pool).await?;
     run_invoice_state_machine_migrations(pool).await?;
     run_dashboard_kpis_migrations(pool).await?;
@@ -54,6 +55,13 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
 
     let migration_091 = include_str!("../../../migrations/091_approval_sla_tracking.sql");
     apply_migration(pool, "091_approval_sla_tracking.sql", migration_091).await?;
+
+    apply_migration(
+        pool,
+        "093_harden_workflow_tenant_id_uuid_types.sql",
+        include_str!("../../../migrations/093_harden_workflow_tenant_id_uuid_types.sql"),
+    )
+    .await?;
 
     // Non-workflow tables that were historically bundled here
     apply_migration(
@@ -345,6 +353,25 @@ pub async fn run_edi_outbound_migrations(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+/// Run payment request migrations.
+pub async fn run_payment_request_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "069_create_payment_requests.sql",
+        include_str!("../../../migrations/069_create_payment_requests.sql"),
+    )
+    .await?;
+
+    apply_migration(
+        pool,
+        "094_add_queue_items_updated_at.sql",
+        include_str!("../../../migrations/094_add_queue_items_updated_at.sql"),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// Run categorization ML migrations (vendor embeddings, feedback, metrics)
 async fn run_categorization_migrations(pool: &PgPool) -> Result<()> {
     // Enable pgvector extension
@@ -410,6 +437,13 @@ pub async fn run_rls_migrations(pool: &PgPool) -> Result<()> {
         pool,
         "080_enable_rls_core_tables.sql",
         include_str!("../../../migrations/080_enable_rls_core_tables.sql"),
+    )
+    .await?;
+
+    apply_migration(
+        pool,
+        "092_harden_core_rls_current_tenant_setting.sql",
+        include_str!("../../../migrations/092_harden_core_rls_current_tenant_setting.sql"),
     )
     .await?;
 

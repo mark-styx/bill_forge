@@ -20,22 +20,26 @@
 
 use billforge_core::TenantId;
 use billforge_db::PgManager;
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+const RLS_TEST_ROLE: &str = "billforge_rls_test";
+const RLS_TEST_PASSWORD: &str = "billforge_rls_test";
+
 /// Set up a single tenant database with all migrations (including 080_enable_rls).
-/// Returns the manager, tenant ID, and pool.
-async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
+/// Returns the manager, tenant ID, admin pool, and app-role pool.
+async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool, sqlx::PgPool) {
     let metadata_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
         "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
     });
     let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
 
-    let manager = PgManager::new(&metadata_url, tenant_template)
+    let manager = PgManager::new(&metadata_url, tenant_template.clone())
         .await
         .expect("Failed to create PgManager");
 
@@ -52,15 +56,86 @@ async fn setup_rls_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
         .await
         .expect("create tenant");
 
-    let pool = (*manager.tenant(&tenant_id).await.expect("pool")).clone();
+    let admin_pool = (*manager.tenant(&tenant_id).await.expect("pool")).clone();
 
     // Run migrations so tables + RLS policies exist
     manager
-        .run_tenant_migrations(&pool)
+        .run_tenant_migrations(&admin_pool)
         .await
         .expect("migrate tenant");
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(format!("RLS Test Tenant {tag}"))
+    .bind(format!("rls-test-tenant-{tag}"))
+    .execute(&admin_pool)
+    .await
+    .expect("seed tenant");
 
-    (manager, tenant_id, pool)
+    grant_rls_test_role(&admin_pool).await;
+
+    let app_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&rls_app_url(&tenant_template, &tenant_id))
+        .await
+        .expect("connect as RLS test role");
+
+    (manager, tenant_id, admin_pool, app_pool)
+}
+
+async fn grant_rls_test_role(pool: &sqlx::PgPool) {
+    sqlx::query(&format!(
+        r#"
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{RLS_TEST_ROLE}') THEN
+                CREATE ROLE {RLS_TEST_ROLE} LOGIN PASSWORD '{RLS_TEST_PASSWORD}';
+            END IF;
+        END
+        $$;
+        "#
+    ))
+    .execute(pool)
+    .await
+    .expect("create RLS test role");
+
+    sqlx::raw_sql(&format!(
+        "GRANT USAGE ON SCHEMA public TO {RLS_TEST_ROLE};
+         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RLS_TEST_ROLE};
+         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {RLS_TEST_ROLE};"
+    ))
+    .execute(pool)
+    .await
+    .expect("grant RLS test role");
+}
+
+fn rls_app_url(template: &str, tenant_id: &TenantId) -> String {
+    let db_name = format!("tenant_{}", tenant_id.as_str().replace('-', "_"));
+    let admin_url = template.replace("{database}", &db_name);
+
+    let Some(rest) = admin_url.strip_prefix("postgres://") else {
+        return admin_url;
+    };
+    let Some((_, host_and_path)) = rest.split_once('@') else {
+        return admin_url;
+    };
+
+    format!("postgres://{RLS_TEST_ROLE}:{RLS_TEST_PASSWORD}@{host_and_path}")
+}
+
+async fn set_rls_tenant(pool: &sqlx::PgPool, tenant_id: Option<Uuid>) {
+    let sql = match tenant_id {
+        Some(tenant_id) => format!("SET app.current_tenant_id = '{}'", tenant_id),
+        None => "RESET app.current_tenant_id".to_string(),
+    };
+
+    sqlx::query(&sql)
+        .execute(pool)
+        .await
+        .expect("set RLS tenant");
 }
 
 /// Teardown: drop the tenant database.
@@ -132,22 +207,16 @@ async fn seed_invoice(
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_correct_tenant_sees_own_rows() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("see-own").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("see-own").await;
     let tenant_uuid = *tenant_id.as_uuid();
 
     // Set session variable to match our tenant
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        tenant_uuid
-    ))
-    .execute(&pool)
-    .await
-    .expect("set session var");
+    set_rls_tenant(&pool, Some(tenant_uuid)).await;
 
     // Seed data (superuser bypasses RLS for INSERT)
-    let vendor_id = seed_vendor(&pool, tenant_uuid).await;
-    let user_id = seed_user(&pool, tenant_uuid).await;
-    let invoice_id = seed_invoice(&pool, tenant_uuid, vendor_id, user_id).await;
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
+    let invoice_id = seed_invoice(&admin_pool, tenant_uuid, vendor_id, user_id).await;
 
     // Verify vendor is visible
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM vendors")
@@ -190,19 +259,16 @@ async fn rls_correct_tenant_sees_own_rows() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_unset_session_variable_blocks_reads() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("unset-var").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("unset-var").await;
     let tenant_uuid = *tenant_id.as_uuid();
 
     // Seed data (session var doesn't matter for superuser seed)
-    let vendor_id = seed_vendor(&pool, tenant_uuid).await;
-    let user_id = seed_user(&pool, tenant_uuid).await;
-    seed_invoice(&pool, tenant_uuid, vendor_id, user_id).await;
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
+    seed_invoice(&admin_pool, tenant_uuid, vendor_id, user_id).await;
 
     // Reset the session variable so it's empty/null
-    sqlx::query("SET LOCAL app.current_tenant_id = ''")
-        .execute(&pool)
-        .await
-        .expect("reset session var");
+    set_rls_tenant(&pool, None).await;
 
     // Verify invoices invisible
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM invoices")
@@ -244,23 +310,17 @@ async fn rls_unset_session_variable_blocks_reads() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_wrong_session_variable_blocks_reads() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("wrong-var").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("wrong-var").await;
     let tenant_uuid = *tenant_id.as_uuid();
     let wrong_tenant = Uuid::new_v4();
 
     // Seed data for our tenant
-    let vendor_id = seed_vendor(&pool, tenant_uuid).await;
-    let user_id = seed_user(&pool, tenant_uuid).await;
-    let invoice_id = seed_invoice(&pool, tenant_uuid, vendor_id, user_id).await;
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
+    let invoice_id = seed_invoice(&admin_pool, tenant_uuid, vendor_id, user_id).await;
 
     // Set session variable to WRONG tenant
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        wrong_tenant
-    ))
-    .execute(&pool)
-    .await
-    .expect("set wrong session var");
+    set_rls_tenant(&pool, Some(wrong_tenant)).await;
 
     // Verify invoices invisible
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM invoices")
@@ -313,22 +373,16 @@ async fn rls_wrong_session_variable_blocks_reads() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_insert_wrong_tenant_blocked() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("insert-block").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("insert-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
     let wrong_tenant = Uuid::new_v4();
 
     // Set session to correct tenant
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        tenant_uuid
-    ))
-    .execute(&pool)
-    .await
-    .expect("set session var");
+    set_rls_tenant(&pool, Some(tenant_uuid)).await;
 
     // Seed a vendor and user under correct tenant for FK
-    let vendor_id = seed_vendor(&pool, tenant_uuid).await;
-    let user_id = seed_user(&pool, tenant_uuid).await;
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
 
     // Attempt to INSERT a vendor with wrong tenant_id - should fail
     let result = sqlx::query(
@@ -395,21 +449,15 @@ async fn rls_insert_wrong_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_update_wrong_tenant_blocked() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("update-block").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("update-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
     let wrong_tenant = Uuid::new_v4();
 
     // Seed a vendor under correct tenant (superuser bypasses RLS)
-    let vendor_id = seed_vendor(&pool, tenant_uuid).await;
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
 
     // Set session to WRONG tenant
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        wrong_tenant
-    ))
-    .execute(&pool)
-    .await
-    .expect("set wrong session var");
+    set_rls_tenant(&pool, Some(wrong_tenant)).await;
 
     // Attempt UPDATE without WHERE tenant_id (RLS should make the row invisible)
     let result = sqlx::query("UPDATE vendors SET name = 'Hacked' WHERE id = $1")
@@ -425,13 +473,7 @@ async fn rls_update_wrong_tenant_blocked() {
     );
 
     // Set session back to correct tenant and verify vendor is untouched
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        tenant_uuid
-    ))
-    .execute(&pool)
-    .await
-    .expect("set correct session var");
+    set_rls_tenant(&pool, Some(tenant_uuid)).await;
 
     let name: (String,) = sqlx::query_as("SELECT name FROM vendors WHERE id = $1")
         .bind(vendor_id)
@@ -454,21 +496,15 @@ async fn rls_update_wrong_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_delete_wrong_tenant_blocked() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("delete-block").await;
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("delete-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
     let wrong_tenant = Uuid::new_v4();
 
     // Seed a user under correct tenant
-    let user_id = seed_user(&pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
 
     // Set session to WRONG tenant
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        wrong_tenant
-    ))
-    .execute(&pool)
-    .await
-    .expect("set wrong session var");
+    set_rls_tenant(&pool, Some(wrong_tenant)).await;
 
     // Attempt DELETE (RLS should make the row invisible)
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
@@ -484,13 +520,7 @@ async fn rls_delete_wrong_tenant_blocked() {
     );
 
     // Verify user still exists with correct session var
-    sqlx::query(&format!(
-        "SET LOCAL app.current_tenant_id = '{}'",
-        tenant_uuid
-    ))
-    .execute(&pool)
-    .await
-    .expect("set correct session var");
+    set_rls_tenant(&pool, Some(tenant_uuid)).await;
 
     let found: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
         .bind(user_id)
@@ -513,7 +543,7 @@ async fn rls_delete_wrong_tenant_blocked() {
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_policies_exist_on_core_tables() {
-    let (manager, tenant_id, pool) = setup_rls_tenant("meta-check").await;
+    let (manager, tenant_id, pool, _app_pool) = setup_rls_tenant("meta-check").await;
 
     // Check RLS is enabled on invoices
     let rls_enabled: (String,) =

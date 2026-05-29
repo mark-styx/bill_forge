@@ -150,8 +150,8 @@ async fn assert_column_default_contains(
 async fn test_queue_items_has_tenant_id_and_status() {
     let (_manager, _tenant_id, pool) = setup_tenant("qi-cols").await;
 
-    // queue_items must have tenant_id (VARCHAR) and status (VARCHAR) columns
-    assert_column(&pool, "queue_items", "tenant_id", "character varying").await;
+    // queue_items must have tenant_id (UUID) and status (VARCHAR) columns
+    assert_column(&pool, "queue_items", "tenant_id", "uuid").await;
     assert_column(&pool, "queue_items", "status", "character varying").await;
     assert_column_default_contains(&pool, "queue_items", "status", "pending").await;
 }
@@ -184,7 +184,7 @@ async fn test_approval_requests_has_tenant_id_jsonb_requested_from_and_updated_a
     let (_manager, _tenant_id, pool) = setup_tenant("ar-cols").await;
 
     // approval_requests must have tenant_id, requested_from (JSONB), and updated_at
-    assert_column(&pool, "approval_requests", "tenant_id", "character varying").await;
+    assert_column(&pool, "approval_requests", "tenant_id", "uuid").await;
     assert_column(&pool, "approval_requests", "requested_from", "jsonb").await;
     assert_column(
         &pool,
@@ -201,13 +201,7 @@ async fn test_email_action_tokens_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("eat").await;
 
     assert_table_exists(&pool, "email_action_tokens").await;
-    assert_column(
-        &pool,
-        "email_action_tokens",
-        "tenant_id",
-        "character varying",
-    )
-    .await;
+    assert_column(&pool, "email_action_tokens", "tenant_id", "uuid").await;
     assert_column(
         &pool,
         "email_action_tokens",

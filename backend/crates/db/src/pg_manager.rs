@@ -252,6 +252,15 @@ impl PgManager {
         crate::tenant_db::run_purchase_order_migrations(pool).await?;
         crate::tenant_db::run_edi_outbound_migrations(pool).await?;
 
+        // Payment requests
+        migration_runner
+            .apply(
+                pool,
+                "069_create_payment_requests.sql",
+                include_str!("../../../migrations/069_create_payment_requests.sql"),
+            )
+            .await?;
+
         // Intelligent routing tables (idempotent, uses IF NOT EXISTS)
         migration_runner
             .apply(
@@ -303,6 +312,32 @@ impl PgManager {
                 pool,
                 "080_enable_rls_core_tables.sql",
                 include_str!("../../../migrations/080_enable_rls_core_tables.sql"),
+            )
+            .await?;
+
+        // Harden RLS policies for unset/reset app.current_tenant_id values.
+        migration_runner
+            .apply(
+                pool,
+                "092_harden_core_rls_current_tenant_setting.sql",
+                include_str!("../../../migrations/092_harden_core_rls_current_tenant_setting.sql"),
+            )
+            .await?;
+
+        // Keep tenant DBs created by PgManager aligned with canonical tenant_id UUID types.
+        migration_runner
+            .apply(
+                pool,
+                "093_harden_workflow_tenant_id_uuid_types.sql",
+                include_str!("../../../migrations/093_harden_workflow_tenant_id_uuid_types.sql"),
+            )
+            .await?;
+
+        migration_runner
+            .apply(
+                pool,
+                "094_add_queue_items_updated_at.sql",
+                include_str!("../../../migrations/094_add_queue_items_updated_at.sql"),
             )
             .await?;
 

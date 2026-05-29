@@ -11,7 +11,11 @@ use billforge_billing::get_tenant_usage;
 use billforge_core::TenantId;
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use uuid::Uuid;
+
+static MIGRATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Seed helpers (minimal rows to satisfy FK constraints)
@@ -100,6 +104,7 @@ async fn setup_pool() -> PgPool {
     let pool = PgPool::connect(&db_url).await.expect("connect to test DB");
 
     // Run migrations so invoices/vendors tables exist
+    let _migration_guard = MIGRATION_LOCK.get_or_init(|| Mutex::new(())).lock().await;
     sqlx::migrate!("../../migrations")
         .run(&pool)
         .await

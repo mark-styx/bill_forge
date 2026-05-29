@@ -68,6 +68,17 @@ async fn setup_single_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
 
     let pool = (*manager.tenant(&tenant_id).await.expect("pool")).clone();
     manager.run_tenant_migrations(&pool).await.expect("migrate");
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(format!("AI Conversation Test Tenant {}", tag))
+    .bind(format!("ai-conversation-test-tenant-{}", tag))
+    .execute(&pool)
+    .await
+    .expect("seed tenant");
 
     (manager, tenant_id, pool)
 }
