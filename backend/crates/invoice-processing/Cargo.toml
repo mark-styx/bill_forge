@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
+billforge-invoice-capture = { path = "../invoice-capture" }
 
 tokio = { workspace = true }
 async-trait = { workspace = true }
