@@ -7,11 +7,13 @@
 -- connection after auth resolves the tenant.  RLS policies then filter all
 -- reads (USING) and writes (WITH CHECK) to rows matching that session value.
 --
--- NOTE: FORCE ROW LEVEL SECURITY is intentionally NOT used here.  Until the
--- connection-pool plumbing that issues SET app.current_tenant_id per request
--- is landed, FORCE RLS would block the app role entirely (the session var is
--- NULL, so tenant_id = NULL is never true).  Once that plumbing ships, add
--- FORCE ROW LEVEL SECURITY back as a separate migration.
+-- NOTE: FORCE ROW LEVEL SECURITY is intentionally NOT used here.  The
+-- connection-pool plumbing now lands in PgManager::tenant(), which sets
+-- app.current_tenant_id on every pooled connection via the after_connect hook.
+-- Connections that bypass the pool (e.g. raw acquire) should use
+-- PgManager::set_tenant_context().  FORCE RLS is still deferred because the
+-- default Docker role is a superuser, which bypasses RLS regardless; adding
+-- FORCE ROW LEVEL SECURITY is a separate step that requires a dedicated app role.
 --
 -- Uses DROP IF EXISTS / CREATE POLICY for idempotency across re-runs.
 

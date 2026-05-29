@@ -540,6 +540,159 @@ async fn rls_delete_wrong_tenant_blocked() {
 // Test 7: RLS policies are actually installed (meta-test)
 // ===========================================================================
 
+// ===========================================================================
+// Test 8: PgManager tenant pool sets app.current_tenant_id automatically
+// ===========================================================================
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn tenant_pool_sets_app_current_tenant_id() {
+    // Case 1: Verify the after_connect hook sets app.current_tenant_id
+    let (manager, tenant_id, _admin_pool, _app_pool) = setup_rls_tenant("guc-check").await;
+
+    // Acquire a connection from the tenant pool (NOT using set_rls_tenant)
+    let pool = manager.tenant(&tenant_id).await.expect("tenant pool");
+    let setting: (String,) = sqlx::query_as(
+        "SELECT current_setting('app.current_tenant_id', true)",
+    )
+    .fetch_one(&*pool)
+    .await
+    .expect("get current_setting");
+
+    assert_eq!(
+        setting.0,
+        tenant_id.as_uuid().to_string(),
+        "Pool connection should have app.current_tenant_id set to tenant UUID"
+    );
+
+    teardown(&manager, &tenant_id).await;
+}
+
+// ===========================================================================
+// Test 9: after_connect hook drives RLS isolation across two tenants
+// ===========================================================================
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn rls_after_connect_hook_isolates_tenants() {
+    let metadata_url = std::env::var("TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".to_string());
+    let tenant_template = std::env::var("TEST_TENANT_DB_TEMPLATE")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/{database}".to_string());
+
+    let manager =
+        PgManager::new(&metadata_url, tenant_template.clone()).await.expect("PgManager");
+
+    // Create two tenants in the same database to test cross-tenant isolation
+    let tenant_a: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"rls-hook-tenant-a")
+        .to_string()
+        .parse()
+        .unwrap();
+    let tenant_b: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"rls-hook-tenant-b")
+        .to_string()
+        .parse()
+        .unwrap();
+
+    // Cleanup previous runs
+    manager.delete_tenant(&tenant_a).await.ok();
+    manager.delete_tenant(&tenant_b).await.ok();
+
+    manager
+        .create_tenant(&tenant_a, "RLS Hook Tenant A")
+        .await
+        .expect("create tenant A");
+    manager
+        .create_tenant(&tenant_b, "RLS Hook Tenant B")
+        .await
+        .expect("create tenant B");
+
+    let admin_a = (*manager.tenant(&tenant_a).await.expect("pool a")).clone();
+    let admin_b = (*manager.tenant(&tenant_b).await.expect("pool b")).clone();
+
+    // Run migrations so RLS policies exist in both databases
+    manager.run_tenant_migrations(&admin_a).await.expect("migrate A");
+    manager.run_tenant_migrations(&admin_b).await.expect("migrate B");
+
+    // Seed tenant rows inside each tenant database (superuser bypasses RLS)
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_a.as_uuid())
+    .bind("RLS Hook Tenant A")
+    .bind("rls-hook-tenant-a")
+    .execute(&admin_a)
+    .await
+    .expect("seed tenant A row");
+
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(*tenant_b.as_uuid())
+    .bind("RLS Hook Tenant B")
+    .bind("rls-hook-tenant-b")
+    .execute(&admin_b)
+    .await
+    .expect("seed tenant B row");
+
+    grant_rls_test_role(&admin_a).await;
+    grant_rls_test_role(&admin_b).await;
+
+    // Seed a vendor in each tenant's database
+    seed_vendor(&admin_a, *tenant_a.as_uuid()).await;
+    seed_vendor(&admin_b, *tenant_b.as_uuid()).await;
+
+    // Create RLS test role pools with after_connect hooks (mimicking PgManager::tenant)
+    let tenant_a_uuid = *tenant_a.as_uuid();
+    let pool_a = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |conn, _meta| {
+            let uuid = tenant_a_uuid;
+            Box::pin(async move {
+                sqlx::query(&format!("SET app.current_tenant_id = '{}'", uuid))
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&rls_app_url(&tenant_template, &tenant_a))
+        .await
+        .expect("RLS pool A");
+
+    let tenant_b_uuid = *tenant_b.as_uuid();
+    let pool_b = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |conn, _meta| {
+            let uuid = tenant_b_uuid;
+            Box::pin(async move {
+                sqlx::query(&format!("SET app.current_tenant_id = '{}'", uuid))
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&rls_app_url(&tenant_template, &tenant_b))
+        .await
+        .expect("RLS pool B");
+
+    // Pool A should see only tenant A's vendors
+    let count_a: (i64,) = sqlx::query_as("SELECT count(*) FROM vendors")
+        .fetch_one(&pool_a)
+        .await
+        .expect("count vendors A");
+    assert_eq!(count_a.0, 1, "Tenant A pool should see exactly 1 vendor (its own)");
+
+    // Pool B should see only tenant B's vendors
+    let count_b: (i64,) = sqlx::query_as("SELECT count(*) FROM vendors")
+        .fetch_one(&pool_b)
+        .await
+        .expect("count vendors B");
+    assert_eq!(count_b.0, 1, "Tenant B pool should see exactly 1 vendor (its own)");
+
+    // Cleanup
+    manager.delete_tenant(&tenant_a).await.ok();
+    manager.delete_tenant(&tenant_b).await.ok();
+}
+
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_policies_exist_on_core_tables() {

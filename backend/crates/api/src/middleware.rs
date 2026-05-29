@@ -110,6 +110,14 @@ pub async fn require_auth(
 /// - If `UserContext` is missing, returns 500 (`tenant_context_missing`) - auth should have set it.
 /// - If `tenant_id` is nil (all-zero UUID), returns 401 (`tenant_unresolved`).
 /// - Otherwise, inserts [`TenantGuard`] and emits an audit log line.
+///
+/// ## RLS Tenant Context
+///
+/// The [`TenantGuard`] inserted by this middleware is the contract that the tenant pool
+/// returned by `state.db.tenant(&TenantGuard)` already has `app.current_tenant_id` bound
+/// to the authenticated tenant's UUID (via `PgManager::tenant`'s `after_connect` hook).
+/// RLS policies on core tables (invoices, users, vendors) evaluate correctly without
+/// per-query `SET` statements.
 pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body> {
     let path = request.uri().path();
 
@@ -141,6 +149,7 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
     info!(
         tenant_id = %tenant_uuid,
         path = %path,
+        rls_binding = "app.current_tenant_id",
         "tenant_scoped_request"
     );
 
