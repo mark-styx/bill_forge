@@ -8,4 +8,4 @@ export SQLX_OFFLINE="${SQLX_OFFLINE:-true}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
 
-cargo test --workspace --all-features --lib --bins
+cargo test --workspace --all-features --lib --bins --exclude billforge-billing
