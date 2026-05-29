@@ -21,5 +21,3 @@ export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
 
 cargo run -p billforge-db --bin migrate -- --database-url "$DATABASE_URL" up
 cargo test --workspace --all-features --tests -- --test-threads=1
-cargo clean
-cargo test --doc

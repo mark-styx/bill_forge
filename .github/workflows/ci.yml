@@ -2,9 +2,27 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'release/**']
+    tags: ['v*']
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, 'release/**']
+  workflow_dispatch:
+    inputs:
+      run_db_tests:
+        description: 'Run backend DB tests'
+        required: false
+        default: false
+        type: boolean
+      run_docker_build:
+        description: 'Run Docker image builds'
+        required: false
+        default: false
+        type: boolean
+      run_full:
+        description: 'Run all fast and heavy validation'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,9 +35,56 @@ env:
   RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      db: ${{ steps.filter.outputs.db }}
+      docker: ${{ steps.filter.outputs.docker }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'scripts/backend-*.sh'
+              - 'backend/Cargo.lock'
+            frontend:
+              - 'apps/web/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+            db:
+              - 'backend/migrations/**'
+              - 'backend/crates/db/**'
+              - 'backend/crates/api/src/routes/**'
+              - 'backend/crates/api/src/state.rs'
+              - 'backend/crates/api/src/openapi.rs'
+              - 'backend/crates/api/tests/**'
+              - 'scripts/backend-db-test.sh'
+              - 'scripts/backend-doc-test.sh'
+              - 'scripts/verify-db.sh'
+            docker:
+              - 'docker/**'
+              - 'docker/Dockerfile.*'
+              - 'backend/Cargo.toml'
+              - 'backend/Cargo.lock'
+              - 'backend/crates/**/Cargo.toml'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'apps/web/package.json'
+
   # Backend Rust formatting and linting
   backend-static:
-    name: Backend Static
+    name: Fast / Backend Static
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -52,7 +117,7 @@ jobs:
 
   # Fast backend tests that do not require PostgreSQL.
   backend-unit-test:
-    name: Backend Unit Tests
+    name: Fast / Backend Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -83,9 +148,16 @@ jobs:
 
   # Backend tests that require PostgreSQL and validate migrations.
   backend-db-test:
-    name: Backend DB Tests
+    name: Heavy / Backend DB Tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: [changes]
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_full == 'true' || github.event.inputs.run_db_tests == 'true')) ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')) ||
+        needs.changes.outputs.db == 'true'
+      }}
     defaults:
       run:
         working-directory: .
@@ -129,9 +201,12 @@ jobs:
       - name: Run backend DB tests
         run: bash scripts/backend-db-test.sh
 
+      - name: Run backend doc tests
+        run: bash scripts/backend-doc-test.sh
+
   # Frontend checks
   frontend-check:
-    name: Frontend Check
+    name: Fast / Frontend Check
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -173,7 +248,7 @@ jobs:
 
   # Frontend tests
   frontend-test:
-    name: Frontend Tests
+    name: Fast / Frontend Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -209,7 +284,7 @@ jobs:
 
   # Security audit - blocks CI on P1 (critical/high) findings
   security-audit:
-    name: Security Audit
+    name: Fast / Security Audit
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -246,10 +321,16 @@ jobs:
 
   # Docker build test
   docker-build:
-    name: Docker Build
+    name: Heavy / Docker Build
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    needs: [backend-static, backend-unit-test, frontend-check]
+    needs: [changes]
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_full == 'true' || github.event.inputs.run_docker_build == 'true')) ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/v'))) ||
+        needs.changes.outputs.docker == 'true'
+      }}
 
     steps:
       - uses: actions/checkout@v6
