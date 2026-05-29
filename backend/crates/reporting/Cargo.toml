@@ -19,3 +19,15 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+default = []
+integration = []
+
+[dev-dependencies]
+billforge-db = { path = "../db" }
+billforge-core = { path = "../core" }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

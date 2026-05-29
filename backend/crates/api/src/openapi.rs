@@ -59,7 +59,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         (name = "Bill.com", description = "Bill.com AP payments integration"),
         (name = "EDI", description = "Electronic Data Interchange"),
         (name = "Purchase Orders", description = "Purchase order management and 3-way matching"),
-        (name = "Payment Requests", description = "Payment request batching and submission"),
         (name = "Vendor Statements", description = "Vendor statement reconciliation"),
         (name = "Export", description = "Data export (CSV, JSON)"),
         (name = "Documents", description = "Document upload and storage"),
@@ -444,17 +443,6 @@ struct BillComApiDoc;
 ))]
 struct EdiApiDoc;
 
-#[cfg(feature = "payment-requests")]
-#[derive(OpenApi)]
-#[openapi(paths(
-    crate::routes::payment_requests::create_payment_request,
-    crate::routes::payment_requests::list_payment_requests,
-    crate::routes::payment_requests::get_payment_request,
-    crate::routes::payment_requests::add_invoices,
-    crate::routes::payment_requests::submit_request,
-))]
-struct PaymentRequestsApiDoc;
-
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -762,8 +750,6 @@ pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     openapi.merge(BillComApiDoc::openapi());
     #[cfg(feature = "edi")]
     openapi.merge(EdiApiDoc::openapi());
-    #[cfg(feature = "payment-requests")]
-    openapi.merge(PaymentRequestsApiDoc::openapi());
 
     openapi
 }

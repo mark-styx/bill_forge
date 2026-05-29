@@ -19,7 +19,6 @@ pub mod implementation;
 pub mod invoices;
 pub mod mobile;
 pub mod notifications;
-pub mod payment_requests;
 pub mod predictive;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
@@ -167,20 +166,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/qbo", qbo::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
-        // Payment execution surfaces are deferred from MVP scope and must be
-        // enabled explicitly for builds that ship payment batching.
-        .merge(payment_request_routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
         .layer(middleware::from_fn(require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
-}
-
-#[cfg(feature = "payment-requests")]
-fn payment_request_routes() -> Router<AppState> {
-    Router::new().nest("/payment-requests", payment_requests::routes())
-}
-
-#[cfg(not(feature = "payment-requests"))]
-fn payment_request_routes() -> Router<AppState> {
-    Router::new()
 }

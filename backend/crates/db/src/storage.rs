@@ -269,7 +269,11 @@ impl DocumentRepositoryImpl {
         Self { pool }
     }
 
-    /// Create a new document record
+    /// Create a new document record.
+    ///
+    /// The `storage_key` is derived internally from `(tenant_id, document_id)` so
+    /// metadata can never disagree with the canonical on-disk / S3 object path.
+    /// `uploaded_by` captures the authenticated user for audit purposes.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
@@ -278,10 +282,11 @@ impl DocumentRepositoryImpl {
         filename: String,
         mime_type: String,
         size_bytes: u64,
-        storage_key: String,
         invoice_id: Option<billforge_core::domain::InvoiceId>,
         doc_type: DocumentType,
+        uploaded_by: Uuid,
     ) -> Result<DocumentRef> {
+        let storage_key = build_storage_key(tenant_id, document_id);
         let now = Utc::now();
         let doc_type_str = match doc_type {
             DocumentType::InvoiceOriginal => "invoice_original",
@@ -304,7 +309,7 @@ impl DocumentRepositoryImpl {
         .bind(&storage_key)
         .bind(invoice_id.as_ref().map(|id| id.0))
         .bind(doc_type_str)
-        .bind(Uuid::nil()) // uploaded_by - would need to be passed in
+        .bind(uploaded_by)
         .bind(now)
         .execute(&*self.pool)
         .await
@@ -692,6 +697,21 @@ mod tests {
             key.matches('/').count(),
             1,
             "key must have exactly one '/' separator"
+        );
+    }
+
+    #[test]
+    fn build_storage_key_produces_canonical_format() {
+        // Fixed UUIDs to lock in the canonical-key contract that create() now depends on.
+        let tenant_id =
+            TenantId::from_uuid(Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap());
+        let doc_id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+
+        let key = build_storage_key(&tenant_id, doc_id);
+
+        assert_eq!(
+            key, "11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222",
+            "storage key must be exactly {{tenant_uuid}}/{{document_uuid}}"
         );
     }
 

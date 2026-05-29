@@ -70,7 +70,6 @@ function makeStatus(overrides: Partial<ImplementationStatus> = {}): Implementati
           notify_ap_team: false,
           set_email_forwarding: false,
           enable_approval_routing: false,
-          schedule_first_payment_run: false,
           confirm_cutover_date: false,
         },
       },
@@ -99,6 +98,19 @@ describe('GettingStartedPage', () => {
     expect(screen.getByText('Go-live checklist')).toBeInTheDocument();
     expect(screen.getByTestId('progress-percent')).toHaveTextContent('0% complete');
     expect(apiMocks.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render any payment-related checklist items', async () => {
+    render(<GettingStartedPage />);
+
+    const card = await screen.findByText('Go-live checklist');
+    const checklist = card.closest('.border')!;
+    // Regression guard: no label containing "payment" should appear
+    const allLabels = within(checklist as HTMLElement).getAllByRole('checkbox');
+    for (const label of allLabels) {
+      const labelText = (label.closest('label') || label).textContent || '';
+      expect(labelText.toLowerCase()).not.toContain('payment');
+    }
   });
 
   it('runs backend ERP sync and updates progress', async () => {
@@ -176,7 +188,6 @@ describe('GettingStartedPage', () => {
             notify_ap_team: true,
             set_email_forwarding: false,
             enable_approval_routing: false,
-            schedule_first_payment_run: false,
             confirm_cutover_date: false,
           },
         },

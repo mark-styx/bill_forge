@@ -10,6 +10,7 @@ use billforge_core::{
     types::{TenantId, UserId},
     Result,
 };
+use billforge_invoice_capture::OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD;
 use chrono::Duration;
 use std::sync::Arc;
 
@@ -63,22 +64,31 @@ impl WorkflowEngine {
             .await?;
 
         // Check ML categorization auto-approval threshold
-        // If categorization confidence >= threshold and all required fields are present, auto-approve
-        if let Some(confidence) = invoice.categorization_confidence {
-            if confidence >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD {
-                // Check that all required categorization fields are populated
-                let has_complete_categorization = invoice.gl_code.is_some()
-                    && invoice.department.is_some()
-                    && invoice.cost_center.is_some();
+        // Both OCR confidence and categorization confidence must meet their thresholds,
+        // and all required fields must be present, to auto-approve
+        let ocr_ok = invoice
+            .ocr_confidence
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let categorization_ok = invoice
+            .categorization_confidence
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
 
-                if has_complete_categorization {
-                    tracing::info!(
-                        invoice_id = %invoice.id.as_uuid(),
-                        confidence = confidence,
-                        "Auto-approving invoice due to high ML categorization confidence"
-                    );
-                    return Ok(ProcessingStatus::Approved);
-                }
+        if ocr_ok && categorization_ok {
+            // Check that all required categorization fields are populated
+            let has_complete_categorization = invoice.gl_code.is_some()
+                && invoice.department.is_some()
+                && invoice.cost_center.is_some();
+
+            if has_complete_categorization {
+                tracing::info!(
+                    invoice_id = %invoice.id.as_uuid(),
+                    ocr_confidence = ?invoice.ocr_confidence,
+                    categorization_confidence = ?invoice.categorization_confidence,
+                    "Auto-approving invoice due to high OCR and ML categorization confidence"
+                );
+                return Ok(ProcessingStatus::Approved);
             }
         }
 
@@ -404,5 +414,79 @@ mod tests {
         }]);
 
         assert_eq!(WorkflowEngine::approval_sla_hours(&rule), 24);
+    }
+
+    // -- OCR + categorization auto-approval threshold tests --
+
+    #[test]
+    fn auto_approval_blocked_by_low_ocr_confidence() {
+        // Low OCR confidence (0.80) with high categorization confidence (0.99)
+        // should NOT satisfy the auto-approval predicate.
+        let ocr_ok = Some(0.80f32)
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let cat_ok = Some(0.99f32)
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        assert!(!ocr_ok, "OCR 0.80 should not pass the 0.90 threshold");
+        assert!(cat_ok, "Categorization 0.99 should pass the 0.95 threshold");
+        assert!(
+            !(ocr_ok && cat_ok),
+            "Should not auto-approve when OCR confidence is below threshold"
+        );
+    }
+
+    #[test]
+    fn auto_approval_requires_both_thresholds() {
+        // Both confidences above their thresholds should pass.
+        let ocr_ok = Some(0.95f32)
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let cat_ok = Some(0.99f32)
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        assert!(ocr_ok, "OCR 0.95 should pass the 0.90 threshold");
+        assert!(cat_ok, "Categorization 0.99 should pass the 0.95 threshold");
+        assert!(
+            ocr_ok && cat_ok,
+            "Should auto-approve when both confidences meet their thresholds"
+        );
+    }
+
+    #[test]
+    fn auto_approval_blocked_by_missing_ocr_confidence() {
+        // Missing OCR confidence (None) should block auto-approval even with
+        // high categorization confidence.
+        let ocr_ok = None::<f32>
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let cat_ok = Some(0.99f32)
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        assert!(!ocr_ok, "Missing OCR confidence should not pass");
+        assert!(
+            !(ocr_ok && cat_ok),
+            "Should not auto-approve when OCR confidence is missing"
+        );
+    }
+
+    #[test]
+    fn auto_approval_blocked_by_low_categorization_confidence() {
+        // High OCR confidence but low categorization confidence should block.
+        let ocr_ok = Some(0.95f32)
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let cat_ok = Some(0.80f32)
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        assert!(ocr_ok, "OCR 0.95 should pass the 0.90 threshold");
+        assert!(
+            !cat_ok,
+            "Categorization 0.80 should not pass the 0.95 threshold"
+        );
+        assert!(
+            !(ocr_ok && cat_ok),
+            "Should not auto-approve when categorization confidence is below threshold"
+        );
     }
 }

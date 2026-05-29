@@ -16,7 +16,9 @@ use billforge_core::{
     traits::{AuditService, InvoiceRepository},
     types::{Money, PaginatedResponse, Pagination, TenantContext, TenantSettings, UserContext},
 };
-use billforge_invoice_capture::{ocr, resolve_ocr_provider_name};
+use billforge_invoice_capture::{
+    ocr, resolve_ocr_provider_name, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+};
 use billforge_invoice_processing::feedback_loop::{
     CategorizationFeedback, FeedbackLearning, FeedbackType,
 };
@@ -913,6 +915,16 @@ async fn submit_for_processing(
         return Err(billforge_core::Error::Validation(
             "Invoice is still being processed by OCR. Please wait for processing to complete before submitting.".to_string(),
         ).into());
+    }
+
+    // Block submission when OCR confidence is below the review threshold
+    match invoice.ocr_confidence {
+        Some(conf) if conf >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD => {}
+        _ => {
+            return Err(billforge_core::Error::Validation(
+                "Invoice requires manual OCR review before submission (low or missing OCR confidence)".into(),
+            ).into());
+        }
     }
 
     // Update status to Submitted

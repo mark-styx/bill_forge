@@ -5,7 +5,7 @@
 
 use crate::migrations::MigrationRunner;
 use billforge_core::{Error, Result, TenantId};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgConnection, PgPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -76,10 +76,21 @@ impl PgManager {
         // Check if tenant database exists, create if not
         self.ensure_tenant_database(&db_name).await?;
 
-        // Create connection pool for tenant database
+        // Create connection pool for tenant database with RLS tenant context
         let tenant_url = self.database_url_template.replace("{database}", &db_name);
+        let tenant_uuid = *tenant_id.as_uuid();
         let pool = PgPoolOptions::new()
             .max_connections(10)
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    let set_sql = format!("SET app.current_tenant_id = '{}'", tenant_uuid);
+                    tracing::debug!(tenant_id = %tenant_uuid, "Setting RLS app.current_tenant_id on new pool connection");
+                    sqlx::query(&set_sql)
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect(&tenant_url)
             .await
             .map_err(|e| {
@@ -98,6 +109,28 @@ impl PgManager {
         }
 
         Ok(pool)
+    }
+
+    /// Explicitly set `app.current_tenant_id` on a raw connection.
+    ///
+    /// Use this as an escape hatch when acquiring connections via `pool.acquire()`
+    /// or beginning transactions on the metadata pool, to re-affirm the tenant
+    /// binding inside a `BEGIN` block. Connections obtained through [`PgManager::tenant`]
+    /// already have the variable set via the pool's `after_connect` hook.
+    pub async fn set_tenant_context(conn: &mut PgConnection, tenant_id: &TenantId) -> Result<()> {
+        let tenant_uuid = tenant_id.as_uuid();
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_uuid.to_string())
+            .execute(conn)
+            .await
+            .map_err(|e| {
+                Error::Database(format!(
+                    "Failed to set app.current_tenant_id to {}: {}",
+                    tenant_uuid, e
+                ))
+            })?;
+        tracing::debug!(tenant_id = %tenant_uuid, "set_tenant_context: RLS app.current_tenant_id bound");
+        Ok(())
     }
 
     /// Create a new tenant with its dedicated database

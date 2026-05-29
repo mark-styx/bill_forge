@@ -287,7 +287,7 @@ impl Tool for VendorInvoicesTool {
                 i.currency,
                 i.created_at
             FROM invoices i
-            JOIN vendors v ON i.vendor_id = v.id
+            JOIN vendors v ON i.vendor_id = v.id AND v.tenant_id = i.tenant_id
             WHERE v.name ILIKE $1 AND i.tenant_id = $2
             ORDER BY i.created_at DESC
             LIMIT 20

@@ -100,7 +100,6 @@ pub struct GoLiveChecks {
     pub notify_ap_team: bool,
     pub set_email_forwarding: bool,
     pub enable_approval_routing: bool,
-    pub schedule_first_payment_run: bool,
     pub confirm_cutover_date: bool,
 }
 
@@ -1526,7 +1525,6 @@ fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
                     notify_ap_team: false,
                     set_email_forwarding: false,
                     enable_approval_routing: false,
-                    schedule_first_payment_run: false,
                     confirm_cutover_date: false,
                 },
             },
@@ -1606,7 +1604,6 @@ fn go_live_started(checks: &GoLiveChecks) -> bool {
     checks.notify_ap_team
         || checks.set_email_forwarding
         || checks.enable_approval_routing
-        || checks.schedule_first_payment_run
         || checks.confirm_cutover_date
 }
 
@@ -1614,7 +1611,6 @@ fn go_live_complete(checks: &GoLiveChecks) -> bool {
     checks.notify_ap_team
         && checks.set_email_forwarding
         && checks.enable_approval_routing
-        && checks.schedule_first_payment_run
         && checks.confirm_cutover_date
 }
 
