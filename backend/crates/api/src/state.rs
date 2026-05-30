@@ -340,19 +340,20 @@ impl AppState {
     async fn seed_sandbox_data(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Result<()> {
         let tenant_uuid = *tenant_id.as_uuid();
         let admin_id = "17b66d9b-6da5-4cfb-93ad-f8d2f1aefe8f";
-        let admin_uuid = uuid::Uuid::parse_str(admin_id)?;
+        let requested_admin_uuid = uuid::Uuid::parse_str(admin_id)?;
 
-        sqlx::query(
+        let admin_uuid = sqlx::query_scalar::<_, uuid::Uuid>(
             r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles, settings, created_at, updated_at)
                VALUES ($1, $2, 'admin@sandbox.local', 'sandbox-metadata-auth', 'Sarah Chen', '["tenant_admin"]'::jsonb, '{}'::jsonb, NOW(), NOW())
                ON CONFLICT (tenant_id, email) DO UPDATE
                SET name = EXCLUDED.name,
                    roles = EXCLUDED.roles,
-                   updated_at = NOW()"#,
+                   updated_at = NOW()
+               RETURNING id"#,
         )
-        .bind(admin_uuid)
+        .bind(requested_admin_uuid)
         .bind(tenant_uuid)
-        .execute(pool)
+        .fetch_one(pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to seed sandbox tenant user: {}", e))?;
 
