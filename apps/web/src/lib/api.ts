@@ -2776,3 +2776,58 @@ export const duplicateApi = {
       `/api/v1/invoices/${invoiceId}/reject-duplicate`,
     ),
 };
+
+// ---------------------------------------------------------------------------
+// Early-Payment Discount Optimizer
+// ---------------------------------------------------------------------------
+
+export interface DiscountWorklistRow {
+  invoice_id: string;
+  vendor_name: string;
+  invoice_number: string;
+  amount_cents: number;
+  currency: string;
+  discount_percent: number;
+  discount_days: number;
+  net_days: number;
+  discount_deadline: string;
+  days_remaining: number;
+  net_savings_cents: number;
+  effective_apr_bps: number;
+  recommended: boolean;
+}
+
+export interface DiscountWorklistResponse {
+  total_potential_savings_cents: number;
+  count_recommended: number;
+  items: DiscountWorklistRow[];
+}
+
+export interface DiscountKpi {
+  captured_count_30d: number;
+  captured_savings_cents_30d: number;
+  missed_count_30d: number;
+  missed_savings_cents_30d: number;
+  capture_rate_pct: number;
+  captured_count_90d: number;
+  captured_savings_cents_90d: number;
+  missed_count_90d: number;
+  missed_savings_cents_90d: number;
+}
+
+export interface DiscountCaptureResponse {
+  payment_request_id: string;
+  invoice_id: string;
+  discounted_amount_cents: number;
+}
+
+export const discountsApi = {
+  worklist: () =>
+    api.get<DiscountWorklistResponse>('/api/v1/discounts/worklist'),
+
+  kpi: () =>
+    api.get<DiscountKpi>('/api/v1/discounts/kpi'),
+
+  capture: (invoiceId: string) =>
+    api.post<DiscountCaptureResponse>(`/api/v1/discounts/${invoiceId}/capture`),
+};

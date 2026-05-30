@@ -398,6 +398,14 @@ pub async fn run_implementation_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // Early-payment discount optimizer columns + tenant settings
+    apply_migration(
+        pool,
+        "100_early_payment_discounts.sql",
+        include_str!("../../../migrations/100_early_payment_discounts.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

@@ -235,6 +235,19 @@ async fn create_invoice(
             .await?;
     }
 
+    // Populate early-payment discount columns from vendor payment_terms
+    if let Err(e) = crate::routes::discounts::populate_discount_columns(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        invoice.id.as_uuid(),
+        input.vendor_id.as_ref(),
+        input.invoice_date.as_ref(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "Failed to populate discount columns for invoice");
+    }
+
     Ok(Json(CreateInvoiceResponse {
         invoice,
         potential_duplicates,

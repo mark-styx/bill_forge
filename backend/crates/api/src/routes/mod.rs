@@ -9,6 +9,7 @@ pub mod bill_com;
 pub mod billing;
 pub mod close_periods;
 pub mod dashboard;
+pub mod discounts;
 pub(crate) mod documents;
 #[cfg(feature = "edi")]
 pub mod edi;
@@ -216,6 +217,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/qbo", qbo::routes())
         // Month-end close periods
         .nest("/close-periods", close_periods::routes())
+        // Early-payment discount optimizer
+        .nest("/discounts", discounts::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
