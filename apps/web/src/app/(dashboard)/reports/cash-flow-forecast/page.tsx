@@ -47,11 +47,14 @@ export default function CashFlowForecastPage() {
     [forecast],
   );
   const peakWeek = useMemo(
-    () =>
-      forecast?.weekly.reduce(
+    () => {
+      const emptyWeek = { expected_amount: 0, week_start: '', week_end: '', low_band: 0, high_band: 0 };
+      if (!forecast) return emptyWeek;
+      return forecast.weekly.reduce(
         (max, w) => (w.expected_amount > max.expected_amount ? w : max),
-        { expected_amount: 0, week_start: '', week_end: '', low_band: 0, high_band: 0 },
-      ),
+        emptyWeek,
+      );
+    },
     [forecast],
   );
   const fundingAlertDays = useMemo(
@@ -237,9 +240,9 @@ export default function CashFlowForecastPage() {
               </div>
             </div>
             <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
-              {fundingAlertDays.slice(0, 20).map((day) => (
+              {fundingAlertDays.slice(0, 20).map((day, index) => (
                 <div
-                  key={day.date}
+                  key={`${day.date}-${index}`}
                   className="flex items-center justify-between gap-3 p-3 hover:bg-secondary/40 transition-colors"
                 >
                   <div className="min-w-0">
@@ -331,9 +334,9 @@ export default function CashFlowForecastPage() {
             <div className="space-y-2">
               {epdWindows
                 .filter((d) => d.expected_amount > 0)
-                .map((day) => (
+                .map((day, index) => (
                   <div
-                    key={day.date}
+                    key={`${day.date}-${index}`}
                     className="flex items-center justify-between text-sm"
                   >
                     <span className="text-muted-foreground">{day.date}</span>
