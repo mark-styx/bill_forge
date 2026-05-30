@@ -26,8 +26,8 @@ use uuid::Uuid;
 pub struct NotificationRouter {
     slack_client: Option<Arc<SlackClient>>,
     teams_client: Option<Arc<TeamsClient>>,
-    fcm_client: Option<Arc<FcmClient>>,
-    apns_client: Option<Arc<ApnsClient>>,
+    fcm_client: Option<Arc<dyn PushNotificationProvider>>,
+    apns_client: Option<Arc<dyn PushNotificationProvider>>,
     push_token_store: Option<Arc<dyn PushDeviceTokenStore>>,
     in_app_store: Option<Arc<dyn InAppNotificationStore>>,
     providers: HashMap<String, Arc<dyn NotificationProvider>>,
@@ -112,17 +112,35 @@ impl NotificationRouter {
     }
 
     /// Configure FCM (Firebase Cloud Messaging) integration
-    pub fn with_fcm(mut self, config: FcmConfig) -> Result<Self, FcmError> {
-        let client = Arc::new(FcmClient::new(config)?);
-        self.fcm_client = Some(client);
-        Ok(self)
+    pub fn with_fcm(self, config: FcmConfig) -> Result<Self, FcmError> {
+        let client: Arc<dyn PushNotificationProvider> =
+            Arc::new(FcmClient::new(config)?);
+        Ok(self.with_fcm_provider(client))
     }
 
     /// Configure APNS (Apple Push Notification Service) integration
-    pub fn with_apns(mut self, config: ApnsConfig) -> Result<Self, ApnsError> {
-        let client = Arc::new(ApnsClient::new(config)?);
-        self.apns_client = Some(client);
-        Ok(self)
+    pub fn with_apns(self, config: ApnsConfig) -> Result<Self, ApnsError> {
+        let client: Arc<dyn PushNotificationProvider> =
+            Arc::new(ApnsClient::new(config)?);
+        Ok(self.with_apns_provider(client))
+    }
+
+    /// Configure FCM using a custom push provider (for testing)
+    pub fn with_fcm_provider(
+        mut self,
+        provider: Arc<dyn PushNotificationProvider>,
+    ) -> Self {
+        self.fcm_client = Some(provider);
+        self
+    }
+
+    /// Configure APNS using a custom push provider (for testing)
+    pub fn with_apns_provider(
+        mut self,
+        provider: Arc<dyn PushNotificationProvider>,
+    ) -> Self {
+        self.apns_client = Some(provider);
+        self
     }
 
     pub fn with_push_token_store(mut self, store: Arc<dyn PushDeviceTokenStore>) -> Self {

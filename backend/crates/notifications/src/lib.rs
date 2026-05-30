@@ -10,8 +10,8 @@ mod slack;
 mod teams;
 
 pub use notification_router::{
-    InAppNotificationStore, NotificationPreference, NotificationRouter, PushDeviceToken,
-    PushDeviceTokenStore,
+    ChannelPreference, DeliveryResult, InAppNotificationStore, NotificationPreference,
+    NotificationRouter, PushDeviceToken, PushDeviceTokenStore,
 };
 pub use slack::{
     InMemorySlackUserStore, SlackClient, SlackConfig, SlackError, SlackUserConfig, SlackUserStore,
