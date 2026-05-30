@@ -14,8 +14,8 @@ fn main() {
         .unwrap_or_else(|| default_path.to_owned());
 
     let openapi = billforge_api::openapi::openapi_doc();
-    let json = serde_json::to_string_pretty(&openapi)
-        .expect("failed to serialize OpenAPI doc to JSON");
+    let json =
+        serde_json::to_string_pretty(&openapi).expect("failed to serialize OpenAPI doc to JSON");
 
     let path = Path::new(&output_path);
     if let Some(parent) = path.parent() {
