@@ -189,7 +189,7 @@ async fn push_routes_android_token_to_fcm_only() {
     let apns_handle = apns.clone();
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "android-token-1".to_string(),
+        token: "test-android-token-1".to_string(),
         platform: DevicePlatform::Android,
     }]);
 
@@ -225,7 +225,7 @@ async fn push_routes_ios_token_to_apns_only() {
     let apns_handle = apns.clone();
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "ios-token-1".to_string(),
+        token: "test-ios-token-1".to_string(),
         platform: DevicePlatform::Ios,
     }]);
 
@@ -261,11 +261,11 @@ async fn push_fans_out_to_both_platforms() {
 
     let store = MockTokenStore::new(vec![
         PushDeviceToken {
-            token: "android-token-1".to_string(),
+            token: "test-android-token-1".to_string(),
             platform: DevicePlatform::Android,
         },
         PushDeviceToken {
-            token: "ios-token-1".to_string(),
+            token: "test-ios-token-1".to_string(),
             platform: DevicePlatform::Ios,
         },
     ]);
@@ -308,11 +308,11 @@ async fn push_partial_success_aggregates_as_success() {
 
     let store = MockTokenStore::new(vec![
         PushDeviceToken {
-            token: "android-1".to_string(),
+            token: "test-android-1".to_string(),
             platform: DevicePlatform::Android,
         },
         PushDeviceToken {
-            token: "android-2".to_string(),
+            token: "test-android-2".to_string(),
             platform: DevicePlatform::Android,
         },
     ]);
@@ -348,11 +348,11 @@ async fn push_all_failures_aggregate_as_failure_with_combined_messages() {
 
     let store = MockTokenStore::new(vec![
         PushDeviceToken {
-            token: "android-1".to_string(),
+            token: "test-android-1".to_string(),
             platform: DevicePlatform::Android,
         },
         PushDeviceToken {
-            token: "android-2".to_string(),
+            token: "test-android-2".to_string(),
             platform: DevicePlatform::Android,
         },
     ]);
@@ -386,7 +386,7 @@ async fn push_missing_fcm_provider_with_android_token_records_error() {
     let apns = Arc::new(MockPushProvider::new("apns", vec![]));
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "android-1".to_string(),
+        token: "test-android-1".to_string(),
         platform: DevicePlatform::Android,
     }]);
 
@@ -415,7 +415,7 @@ async fn push_missing_apns_provider_with_ios_token_records_error() {
     let fcm = Arc::new(MockPushProvider::new("fcm", vec![]));
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "ios-1".to_string(),
+        token: "test-ios-1".to_string(),
         platform: DevicePlatform::Ios,
     }]);
 
@@ -442,7 +442,7 @@ async fn push_missing_apns_provider_with_ios_token_records_error() {
 #[tokio::test]
 async fn push_no_providers_configured_returns_explicit_error() {
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "android-1".to_string(),
+        token: "test-android-1".to_string(),
         platform: DevicePlatform::Android,
     }]);
 
@@ -525,7 +525,7 @@ async fn push_blocked_by_quiet_hours() {
     let fcm_handle = fcm.clone();
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "android-1".to_string(),
+        token: "test-android-1".to_string(),
         platform: DevicePlatform::Android,
     }]);
 
@@ -573,7 +573,7 @@ async fn push_channel_disabled_in_prefs_skips_push() {
     let in_app_handle = in_app.clone();
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
-        token: "android-1".to_string(),
+        token: "test-android-1".to_string(),
         platform: DevicePlatform::Android,
     }]);
 
