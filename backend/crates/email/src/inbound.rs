@@ -536,7 +536,8 @@ mod tests {
             ]
         }"#;
 
-        let payload: InboundEmailPayload = serde_json::from_str(json).expect("postmark payload should deserialize");
+        let payload: InboundEmailPayload =
+            serde_json::from_str(json).expect("postmark payload should deserialize");
         assert_eq!(payload.from, "\"Jane Doe\" <jane@acme.com>");
         assert_eq!(payload.to, "ap@meridian.billforge.com");
         assert_eq!(payload.subject.as_deref(), Some("Invoice #1042"));
@@ -544,10 +545,15 @@ mod tests {
         assert_eq!(payload.attachments.len(), 1);
         assert_eq!(payload.attachments[0].name, "invoice.pdf");
         assert_eq!(payload.attachments[0].content_type, "application/pdf");
-        assert_eq!(payload.attachments[0].content, "JVBERi0xLjUKMSAwIG9iago8PAo=");
+        assert_eq!(
+            payload.attachments[0].content,
+            "JVBERi0xLjUKMSAwIG9iago8PAo="
+        );
 
         // Verify the base64 attachment body round-trips through decode.
-        let decoded = BASE64.decode(&payload.attachments[0].content).expect("base64 should decode");
+        let decoded = BASE64
+            .decode(&payload.attachments[0].content)
+            .expect("base64 should decode");
         assert!(!decoded.is_empty());
     }
 
@@ -572,7 +578,8 @@ mod tests {
             ]
         }"#;
 
-        let payload: InboundEmailPayload = serde_json::from_str(json).expect("sendgrid payload should deserialize");
+        let payload: InboundEmailPayload =
+            serde_json::from_str(json).expect("sendgrid payload should deserialize");
         assert_eq!(payload.from, "billing@techsupplies.com");
         assert_eq!(payload.to, "ap@meridian.billforge.com");
         assert_eq!(payload.subject.as_deref(), Some("March Statement"));
@@ -590,7 +597,8 @@ mod tests {
             "attachments": []
         }"#;
 
-        let payload: InboundEmailPayload = serde_json::from_str(json).expect("payload without message_id should deserialize");
+        let payload: InboundEmailPayload =
+            serde_json::from_str(json).expect("payload without message_id should deserialize");
         assert!(payload.message_id.is_none());
     }
 
@@ -601,7 +609,8 @@ mod tests {
             "to": "ap@tenant.billforge.com"
         }"#;
 
-        let payload: InboundEmailPayload = serde_json::from_str(json).expect("payload without attachments should deserialize");
+        let payload: InboundEmailPayload =
+            serde_json::from_str(json).expect("payload without attachments should deserialize");
         assert!(payload.attachments.is_empty());
         assert!(payload.subject.is_none());
     }
@@ -654,7 +663,10 @@ mod tests {
 
         // Missing closing '>'
         assert_eq!(extract_email("user@example.com"), "user@example.com");
-        assert_eq!(extract_email("Display <user@example.com"), "Display <user@example.com");
+        assert_eq!(
+            extract_email("Display <user@example.com"),
+            "Display <user@example.com"
+        );
 
         // Multiple '@' in display name portion (before '<')
         assert_eq!(
@@ -671,14 +683,8 @@ mod tests {
 
     #[test]
     fn test_extract_domain_normalizes_case_and_trims() {
-        assert_eq!(
-            extract_domain("\"Vendor\" <Billing@ACME.COM>"),
-            "acme.com"
-        );
-        assert_eq!(
-            extract_domain("INVOICES@Sub.Domain.COM"),
-            "sub.domain.com"
-        );
+        assert_eq!(extract_domain("\"Vendor\" <Billing@ACME.COM>"), "acme.com");
+        assert_eq!(extract_domain("INVOICES@Sub.Domain.COM"), "sub.domain.com");
     }
 
     // -----------------------------------------------------------------------
@@ -690,6 +696,9 @@ mod tests {
         // A clearly invalid base64 string must produce an error, confirming
         // the handler's `?` propagation path is reachable.
         let result = BASE64.decode("!!!not_base64!!!");
-        assert!(result.is_err(), "malformed base64 content must fail to decode");
+        assert!(
+            result.is_err(),
+            "malformed base64 content must fail to decode"
+        );
     }
 }
