@@ -20,10 +20,12 @@ use tower::util::ServiceExt;
 async fn create_test_state() -> AppState {
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
-    std::env::set_var(
-        "DATABASE_URL",
-        "postgres://postgres@localhost:5432/billforge_test",
-    );
+    if std::env::var("DATABASE_URL").is_err() {
+        std::env::set_var(
+            "DATABASE_URL",
+            "postgres://postgres:postgres@localhost:5432/billforge_test",
+        );
+    }
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants_ie");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files_ie");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
