@@ -17,6 +17,9 @@ tracing = { workspace = true }
 billforge-core = { path = "../core" }
 billforge-mobile-push = { path = "../mobile-push" }
 urlencoding = "2.1"
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true }

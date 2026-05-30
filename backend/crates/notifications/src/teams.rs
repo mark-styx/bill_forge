@@ -4,12 +4,15 @@
 //! for rich formatting and actionable buttons.
 
 use crate::{
-    ActionType, Notification, NotificationError, NotificationProvider, NotificationResult,
+    ActionType, InvoiceContext, InvoiceLineItem, Notification, NotificationChannel,
+    NotificationError, NotificationProvider, NotificationResult,
 };
 use async_trait::async_trait;
 use billforge_core::UserId;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::warn;
 
 /// Teams webhook client
@@ -17,6 +20,42 @@ use tracing::warn;
 pub struct TeamsClient {
     config: TeamsConfig,
     http_client: Client,
+    /// Per-user webhook URL store. In production this is a database-backed store.
+    webhook_store: Arc<dyn TeamsWebhookStore + Send + Sync>,
+}
+
+/// Abstraction over per-user Teams webhook URL storage.
+pub trait TeamsWebhookStore: Send + Sync {
+    fn get(&self, user_id: &UserId) -> Option<String>;
+}
+
+/// Simple in-memory store used by default and in tests.
+pub struct InMemoryTeamsWebhookStore {
+    webhooks: HashMap<UserId, String>,
+}
+
+impl InMemoryTeamsWebhookStore {
+    pub fn new() -> Self {
+        Self {
+            webhooks: HashMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, user_id: UserId, webhook_url: String) {
+        self.webhooks.insert(user_id, webhook_url);
+    }
+}
+
+impl Default for InMemoryTeamsWebhookStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TeamsWebhookStore for InMemoryTeamsWebhookStore {
+    fn get(&self, user_id: &UserId) -> Option<String> {
+        self.webhooks.get(user_id).cloned()
+    }
 }
 
 /// Teams configuration
@@ -193,11 +232,24 @@ pub enum TeamsError {
 }
 
 impl TeamsClient {
-    /// Create a new Teams client
+    /// Create a new Teams client with default in-memory webhook store
     pub fn new(config: TeamsConfig) -> Self {
         Self {
             config,
             http_client: Client::new(),
+            webhook_store: Arc::new(InMemoryTeamsWebhookStore::new()),
+        }
+    }
+
+    /// Create a new Teams client with a custom webhook store (e.g. database-backed)
+    pub fn new_with_store(
+        config: TeamsConfig,
+        store: Arc<dyn TeamsWebhookStore + Send + Sync>,
+    ) -> Self {
+        Self {
+            config,
+            http_client: Client::new(),
+            webhook_store: store,
         }
     }
 
@@ -231,26 +283,36 @@ impl TeamsClient {
         Ok(notification.id.to_string())
     }
 
-    /// Send Adaptive Card (richer format)
+    /// Send Adaptive Card (richer format).
+    /// When the notification carries an `InvoiceContext` in metadata, the rich
+    /// approval card with five action verbs is rendered instead of the legacy
+    /// generic card builder.
     pub async fn send_adaptive_card(
         &self,
         webhook_url: &str,
         notification: &Notification,
     ) -> Result<String, TeamsError> {
-        let card = self.build_adaptive_card(notification);
+        let payload = match notification.invoice_context() {
+            Some(ctx) => build_teams_approval_card(&ctx),
+            None => {
+                // Legacy path
+                let card = self.build_adaptive_card(notification);
+                serde_json::json!({
+                    "type": "message",
+                    "attachments": [{
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "contentUrl": null,
+                        "content": card
+                    }]
+                })
+            }
+        };
 
         let response = self
             .http_client
             .post(webhook_url)
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "type": "message",
-                "attachments": [{
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "contentUrl": null,
-                    "content": card
-                }]
-            }))
+            .json(&payload)
             .send()
             .await?;
 
@@ -335,6 +397,11 @@ impl TeamsClient {
                             }]),
                         })
                     }
+                    ActionType::RequestChanges | ActionType::Reassign | ActionType::Comment => {
+                        // Additional approval actions — handled via dedicated
+                        // chat approval endpoints, not legacy webhook payload.
+                        None
+                    }
                     _ => None,
                 }
             })
@@ -405,6 +472,11 @@ impl TeamsClient {
                         }),
                     })
                 }
+                ActionType::RequestChanges | ActionType::Reassign | ActionType::Comment => {
+                    // Additional approval actions — handled via dedicated
+                    // chat approval endpoints, not legacy adaptive card.
+                    None
+                }
                 _ => None,
             })
             .collect();
@@ -426,20 +498,226 @@ impl TeamsClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rich approval Adaptive Card builder for Teams
+// ---------------------------------------------------------------------------
+
+/// Base URL for the Teams action callback endpoint. Override via
+/// `TEAMS_ACTIONS_URL` env var in production.
+fn teams_actions_base_url() -> String {
+    std::env::var("TEAMS_ACTIONS_URL")
+        .unwrap_or_else(|_| "https://api.billforge.io/integrations/teams/actions".to_string())
+}
+
+/// Build a rich Teams Adaptive Card for invoice approval with five action verbs.
+/// Returns the outer message envelope (type + attachment) ready to POST to the webhook.
+pub fn build_teams_approval_card(ctx: &InvoiceContext) -> serde_json::Value {
+    let mut body: Vec<serde_json::Value> = Vec::new();
+
+    // Header
+    let amount_dollars = ctx.total_amount_cents as f64 / 100.0;
+    body.push(serde_json::json!({
+        "type": "TextBlock",
+        "text": format!("Invoice Approval Request"),
+        "size": "Medium",
+        "weight": "Bolder",
+        "wrap": true
+    }));
+    body.push(serde_json::json!({
+        "type": "TextBlock",
+        "text": format!("**{}** — {} {:.*}", ctx.vendor_name, ctx.currency, 2, amount_dollars),
+        "wrap": true
+    }));
+
+    // Fact set: invoice details
+    let mut facts: Vec<serde_json::Value> = Vec::new();
+    facts.push(serde_json::json!({
+        "title": "Invoice #",
+        "value": ctx.invoice_number
+    }));
+    if let Some(ref due) = ctx.due_date {
+        facts.push(serde_json::json!({ "title": "Due Date", "value": due }));
+    }
+    if let Some(ref gl) = ctx.gl_code {
+        facts.push(serde_json::json!({ "title": "GL Code", "value": gl }));
+    }
+    if let Some(ref cc) = ctx.cost_center {
+        facts.push(serde_json::json!({ "title": "Cost Center", "value": cc }));
+    }
+    if !facts.is_empty() {
+        body.push(serde_json::json!({ "type": "FactSet", "facts": facts }));
+    }
+
+    // Line items
+    if !ctx.line_items.is_empty() {
+        let display: Vec<&InvoiceLineItem> = ctx.line_items.iter().take(5).collect();
+        let overflow = ctx.line_items.len().saturating_sub(5);
+        let mut li_text = String::from("**Line Items:**\n");
+        for item in &display {
+            let qty_str = item
+                .quantity
+                .map(|q| format!(" x{}", q))
+                .unwrap_or_default();
+            let total_str = item
+                .total_cents
+                .map(|c| format!(" ${:.2}", c as f64 / 100.0))
+                .unwrap_or_default();
+            li_text.push_str(&format!("• {}{}{}\n", item.description, qty_str, total_str));
+        }
+        if overflow > 0 {
+            li_text.push_str(&format!("… and {} more", overflow));
+        }
+        body.push(serde_json::json!({
+            "type": "TextBlock",
+            "text": li_text.trim_end(),
+            "wrap": true
+        }));
+    }
+
+    // PDF link
+    if let Some(ref pdf_url) = ctx.pdf_preview_url {
+        body.push(serde_json::json!({
+            "type": "TextBlock",
+            "text": format!("[View PDF]({})", pdf_url),
+            "wrap": true
+        }));
+    }
+
+    // Actions
+    let base = teams_actions_base_url();
+    let inv_id = ctx.invoice_id.to_string();
+    let tenant_id = ctx.tenant_id.to_string();
+    let actions = serde_json::json!({
+        "type": "ActionSet",
+        "actions": [
+            {
+                "type": "Action.Http",
+                "title": "Approve",
+                "method": "POST",
+                "url": base,
+                "body": serde_json::to_string(&serde_json::json!({
+                    "action": "approve",
+                    "invoice_id": inv_id,
+                    "tenant_id": tenant_id
+                })).unwrap()
+            },
+            {
+                "type": "Action.Http",
+                "title": "Reject",
+                "method": "POST",
+                "url": base,
+                "body": serde_json::to_string(&serde_json::json!({
+                    "action": "reject",
+                    "invoice_id": inv_id,
+                    "tenant_id": tenant_id
+                })).unwrap()
+            },
+            {
+                "type": "Action.Http",
+                "title": "Request Changes",
+                "method": "POST",
+                "url": base,
+                "body": serde_json::to_string(&serde_json::json!({
+                    "action": "request_changes",
+                    "invoice_id": inv_id,
+                    "tenant_id": tenant_id
+                })).unwrap()
+            },
+            {
+                "type": "Action.ShowCard",
+                "title": "Reassign",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "version": "1.2",
+                    "body": [
+                        {
+                            "type": "Input.Text",
+                            "id": "reassign_to_user_id",
+                            "placeholder": "User ID to reassign to"
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Http",
+                            "title": "Submit",
+                            "method": "POST",
+                            "url": base,
+                            "body": format!("{{\"action\":\"reassign\",\"invoice_id\":\"{}\",\"tenant_id\":\"{}\",\"reassign_to_user_id\":\"{{{{reassign_to_user_id.value}}}}\"}}", inv_id, tenant_id)
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "Action.ShowCard",
+                "title": "Comment",
+                "card": {
+                    "type": "AdaptiveCard",
+                    "version": "1.2",
+                    "body": [
+                        {
+                            "type": "Input.Text",
+                            "id": "comment_body",
+                            "isMultiline": true,
+                            "placeholder": "Enter your comment"
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "type": "Action.Http",
+                            "title": "Submit",
+                            "method": "POST",
+                            "url": base,
+                            "body": format!("{{\"action\":\"comment\",\"invoice_id\":\"{}\",\"tenant_id\":\"{}\",\"comment_body\":\"{{{{comment_body.value}}}}\"}}", inv_id, tenant_id)
+                        }
+                    ]
+                }
+            }
+        ]
+    });
+
+    let card = serde_json::json!({
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+        "actions": [actions]
+    });
+
+    // Outer envelope
+    serde_json::json!({
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": null,
+            "content": card
+        }]
+    })
+}
+
 #[async_trait]
 impl NotificationProvider for TeamsClient {
     async fn send(
         &self,
         notification: &Notification,
     ) -> Result<NotificationResult, NotificationError> {
-        // Placeholder - actual implementation would:
-        // 1. Fetch user's Teams webhook URL from database
-        // 2. Send using send_adaptive_card()
-        // 3. Return result
+        let webhook_url = self
+            .webhook_store
+            .get(&notification.user_id)
+            .ok_or_else(|| NotificationError::NotConfigured(notification.user_id.clone()))?;
 
-        Err(NotificationError::NotConfigured(
-            notification.user_id.clone(),
-        ))
+        match self.send_adaptive_card(&webhook_url, notification).await {
+            Ok(msg_id) => Ok(NotificationResult {
+                success: true,
+                channel: NotificationChannel::Teams,
+                external_id: Some(msg_id),
+                error_message: None,
+            }),
+            Err(e) => Ok(NotificationResult {
+                success: false,
+                channel: NotificationChannel::Teams,
+                external_id: None,
+                error_message: Some(e.to_string()),
+            }),
+        }
     }
 
     fn provider_name(&self) -> &'static str {

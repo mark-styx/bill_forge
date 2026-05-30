@@ -125,7 +125,10 @@ async fn test_teams_actions_enabled_when_flag_set() {
     // Temporarily set the flag
     std::env::set_var("TEAMS_ACTIONS_ENABLED", "true");
     let enabled = std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true");
-    assert!(enabled, "TEAMS_ACTIONS_ENABLED=true should enable the route");
+    assert!(
+        enabled,
+        "TEAMS_ACTIONS_ENABLED=true should enable the route"
+    );
     // Clean up
     std::env::remove_var("TEAMS_ACTIONS_ENABLED");
 }
@@ -204,5 +207,26 @@ fn test_teams_disabled_handler_returns_error() {
     assert!(
         source.contains("Teams actions endpoint is disabled"),
         "Disabled handler must return a clear error message about TEAMS_ACTIONS_ENABLED"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue 2 (signing secret): SLACK_SIGNING_SECRET must not fall back to a hardcoded constant
+// ---------------------------------------------------------------------------
+
+/// Ensure there is no hardcoded fallback for the Slack signing secret.
+/// The function must return an error when the env var is absent, not a
+/// constant string that an attacker could guess.
+#[test]
+fn test_slack_signing_secret_no_hardcoded_fallback() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        !source.contains("development-signing-secret"),
+        "slack_signing_secret() must not contain a hardcoded fallback string. \
+         It should return an error when SLACK_SIGNING_SECRET is not set."
+    );
+    assert!(
+        source.contains("SLACK_SIGNING_SECRET is not configured"),
+        "slack_signing_secret() must return a clear error when the env var is missing."
     );
 }

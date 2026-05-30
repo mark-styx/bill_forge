@@ -14,9 +14,13 @@ pub use notification_router::{
     NotificationRouter, PushDeviceToken, PushDeviceTokenStore,
 };
 pub use slack::{
-    InMemorySlackUserStore, SlackClient, SlackConfig, SlackError, SlackUserConfig, SlackUserStore,
+    build_invoice_approval_blocks, verify_slack_signature, InMemorySlackUserStore, SlackClient,
+    SlackConfig, SlackError, SlackInteractionPayload, SlackUserConfig, SlackUserStore,
 };
-pub use teams::{TeamsClient, TeamsConfig, TeamsError};
+pub use teams::{
+    build_teams_approval_card, InMemoryTeamsWebhookStore, TeamsClient, TeamsConfig, TeamsError,
+    TeamsWebhookStore,
+};
 
 use async_trait::async_trait;
 use billforge_core::UserId;
@@ -76,6 +80,16 @@ impl Notification {
         self.priority = priority;
         self
     }
+
+    /// Extract an `InvoiceContext` from the notification metadata, if present.
+    /// Callers that build rich approval messages (Slack Block Kit, Teams Adaptive
+    /// Card) use this to decide whether to render the full invoice surface or the
+    /// legacy notification format.
+    pub fn invoice_context(&self) -> Option<InvoiceContext> {
+        self.metadata
+            .get("invoice_context")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
 }
 
 /// Types of notifications
@@ -129,10 +143,50 @@ impl NotificationAction {
 pub enum ActionType {
     Approve,
     Reject,
+    RequestChanges,
+    Reassign,
+    Comment,
     View,
     Snooze,
     Delegate,
     Dismiss,
+}
+
+/// Context payload for a rich approval message sent to Slack or Teams.
+/// Carries full invoice details so the approver can act without opening the app.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceContext {
+    pub invoice_id: Uuid,
+    pub tenant_id: Uuid,
+    pub vendor_name: String,
+    pub invoice_number: String,
+    pub total_amount_cents: i64,
+    pub currency: String,
+    pub due_date: Option<String>,
+    pub gl_code: Option<String>,
+    pub cost_center: Option<String>,
+    pub line_items: Vec<InvoiceLineItem>,
+    pub pdf_preview_url: Option<String>,
+}
+
+/// A single line item displayed in the approval message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvoiceLineItem {
+    pub description: String,
+    pub quantity: Option<f64>,
+    pub unit_price_cents: Option<i64>,
+    pub total_cents: Option<i64>,
+}
+
+/// Actions that can be taken on an invoice from a chat approval surface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ApprovalAction {
+    Approve,
+    Reject { reason: Option<String> },
+    RequestChanges { comment: String },
+    Reassign { to_user_id: Uuid },
+    Comment { body: String },
 }
 
 /// Priority levels

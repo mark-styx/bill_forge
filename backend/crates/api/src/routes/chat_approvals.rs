@@ -77,9 +77,19 @@ async fn teams_actions_disabled() -> Result<StatusCode, ApiError> {
 // ---------------------------------------------------------------------------
 
 /// Read the Slack signing secret from env (set during Slack app installation).
-fn slack_signing_secret() -> String {
-    std::env::var("SLACK_SIGNING_SECRET")
-        .unwrap_or_else(|_| "development-signing-secret".to_string())
+///
+/// **Security:** Returns an error if the variable is not set. There is no
+/// hardcoded fallback — a missing secret means the interaction/event/command
+/// routes cannot verify request authenticity and must reject all calls.
+fn slack_signing_secret() -> Result<String, ApiError> {
+    std::env::var("SLACK_SIGNING_SECRET").map_err(|_| {
+        tracing::error!(
+            "SLACK_SIGNING_SECRET env var is not set. Slack interaction routes will reject all requests."
+        );
+        ApiError(billforge_core::Error::Validation(
+            "SLACK_SIGNING_SECRET is not configured. Refusing to process Slack requests.".to_string(),
+        ))
+    })
 }
 
 /// Look up the BillForge user_id for a Slack user via `slack_connections`.
@@ -271,7 +281,7 @@ async fn slack_interactions(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let secret = slack_signing_secret();
+    let secret = slack_signing_secret()?;
     let ts = headers
         .get("X-Slack-Request-Timestamp")
         .and_then(|v| v.to_str().ok())
@@ -451,7 +461,7 @@ async fn slack_events(
     raw_body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify Slack signature on the raw body bytes before any parsing.
-    let secret = slack_signing_secret();
+    let secret = slack_signing_secret()?;
     let ts = headers
         .get("X-Slack-Request-Timestamp")
         .and_then(|v| v.to_str().ok())
@@ -578,7 +588,7 @@ async fn slack_commands(
     headers: HeaderMap,
     raw_body: axum::body::Bytes,
 ) -> Result<Json<SlackCommandResponse>, ApiError> {
-    let secret = slack_signing_secret();
+    let secret = slack_signing_secret()?;
     let ts = headers
         .get("X-Slack-Request-Timestamp")
         .and_then(|v| v.to_str().ok())

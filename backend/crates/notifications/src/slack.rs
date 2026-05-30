@@ -4,12 +4,15 @@
 //! for approval workflows.
 
 use crate::{
-    Notification, NotificationChannel, NotificationError, NotificationProvider, NotificationResult,
+    InvoiceContext, InvoiceLineItem, Notification, NotificationChannel, NotificationError,
+    NotificationProvider, NotificationResult,
 };
 use async_trait::async_trait;
 use billforge_core::UserId;
+use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
@@ -216,6 +219,7 @@ pub struct SlackAction {
 
 /// Slack Block Kit message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct SlackBlockMessage {
     channel: String,
     text: String,
@@ -230,6 +234,16 @@ enum SlackBlock {
         text: SlackTextObject,
         #[serde(skip_serializing_if = "Option::is_none")]
         accessory: Option<SlackAccessory>,
+    },
+    Fields {
+        #[serde(rename = "type")]
+        type_: String,
+        fields: Vec<SlackTextObject>,
+    },
+    Context {
+        #[serde(rename = "type")]
+        type_: String,
+        elements: Vec<SlackTextObject>,
     },
     Actions {
         #[serde(rename = "type")]
@@ -354,18 +368,35 @@ impl SlackClient {
         channel: &str,
         notification: &Notification,
     ) -> Result<(String, String), SlackError> {
-        let message = self.build_block_message(notification);
+        // Use rich approval blocks when the notification carries invoice context.
+        let fallback_text = notification.message.clone();
+        let blocks_json: Vec<serde_json::Value> = notification
+            .invoice_context()
+            .map(|ctx| build_invoice_approval_blocks(&ctx))
+            .unwrap_or_default();
+
+        let body = if blocks_json.is_empty() {
+            // Legacy path: use the typed SlackBlock builder
+            serde_json::json!({
+                "channel": channel,
+                "text": fallback_text,
+                "blocks": self.build_block_message(notification),
+            })
+        } else {
+            // Rich approval surface: raw JSON blocks from build_invoice_approval_blocks
+            serde_json::json!({
+                "channel": channel,
+                "text": fallback_text,
+                "blocks": blocks_json,
+            })
+        };
 
         let response = self
             .http_client
             .post("https://slack.com/api/chat.postMessage")
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Content-Type", "application/json")
-            .json(&SlackBlockMessage {
-                channel: channel.to_string(),
-                text: notification.message.clone(),
-                blocks: message,
-            })
+            .json(&body)
             .send()
             .await?;
 
@@ -485,6 +516,209 @@ impl SlackClient {
 
         Ok(im_response.channel.id)
     }
+
+    /// Expose the configured signing secret for HMAC verification in the
+    /// interactions endpoint.
+    pub fn slack_signing_secret(&self) -> &str {
+        &self.config.signing_secret
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slack request-signature verification
+// ---------------------------------------------------------------------------
+
+/// Maximum age (seconds) for a Slack request timestamp before we reject it.
+const SLACK_MAX_TIMESTAMP_AGE_SECS: i64 = 300; // 5 minutes
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Verify that a Slack request carries a valid HMAC-SHA256 signature.
+///
+/// `timestamp` comes from the `X-Slack-Request-Timestamp` header and `signature`
+/// from `X-Slack-Signature`.  `body` is the raw request body bytes.
+///
+/// The signature base string is `v0:{timestamp}:{body}`.
+pub fn verify_slack_signature(
+    signing_secret: &str,
+    timestamp: &str,
+    signature: &str,
+    body: &[u8],
+) -> Result<(), SlackError> {
+    // Reject stale timestamps to prevent replay attacks.
+    let ts: i64 = timestamp
+        .parse()
+        .map_err(|_| SlackError::InvalidSignature)?;
+    let now = chrono::Utc::now().timestamp();
+    if (now - ts).abs() > SLACK_MAX_TIMESTAMP_AGE_SECS {
+        return Err(SlackError::InvalidSignature);
+    }
+
+    let basestring = format!("v0:{}", timestamp);
+    let mut mac =
+        HmacSha256::new_from_slice(signing_secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(basestring.as_bytes());
+    mac.update(body);
+    let result = mac.finalize().into_bytes();
+    let computed = format!("v0={}", hex::encode(result));
+
+    // Constant-time comparison.
+    use std::time::Instant;
+    let _ = Instant::now(); // ensure constant-time via hmac comparison
+    if computed.len() != signature.len()
+        || !crypto_common_eq(computed.as_bytes(), signature.as_bytes())
+    {
+        return Err(SlackError::InvalidSignature);
+    }
+
+    Ok(())
+}
+
+/// Constant-time byte equality check.
+fn crypto_common_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut eq = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        eq |= x ^ y;
+    }
+    eq == 0
+}
+
+// ---------------------------------------------------------------------------
+// Rich approval Block Kit builder
+// ---------------------------------------------------------------------------
+
+/// Build a rich Slack Block Kit message for an invoice approval. Returns the
+/// list of Block Kit blocks that should be wrapped in a `chat.postMessage`
+/// call.  Each action button carries `action_id = bf_{verb}:{invoice_id}` and
+/// `value = {invoice_id}` so the interactions handler can route them.
+pub fn build_invoice_approval_blocks(ctx: &InvoiceContext) -> Vec<serde_json::Value> {
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+
+    // Header: vendor + amount
+    let amount_dollars = ctx.total_amount_cents as f64 / 100.0;
+    blocks.push(serde_json::json!({
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": format!("*Invoice Approval Request*\n*{}* — {} {:.*}",
+                ctx.vendor_name, ctx.currency, 2, amount_dollars)
+        }
+    }));
+
+    // Divider
+    blocks.push(serde_json::json!({ "type": "divider" }));
+
+    // Fields section: invoice #, due date, GL code, cost center
+    let mut fields: Vec<serde_json::Value> = Vec::new();
+    fields.push(serde_json::json!({
+        "type": "mrkdwn",
+        "text": format!("*Invoice #:*\n{}", ctx.invoice_number)
+    }));
+    if let Some(ref due) = ctx.due_date {
+        fields.push(serde_json::json!({
+            "type": "mrkdwn",
+            "text": format!("*Due Date:*\n{}", due)
+        }));
+    }
+    if let Some(ref gl) = ctx.gl_code {
+        fields.push(serde_json::json!({
+            "type": "mrkdwn",
+            "text": format!("*GL Code:*\n{}", gl)
+        }));
+    }
+    if let Some(ref cc) = ctx.cost_center {
+        fields.push(serde_json::json!({
+            "type": "mrkdwn",
+            "text": format!("*Cost Center:*\n{}", cc)
+        }));
+    }
+    if !fields.is_empty() {
+        blocks.push(serde_json::json!({
+            "type": "section",
+            "fields": fields
+        }));
+    }
+
+    // Line items table (up to 5 rows + overflow indicator)
+    if !ctx.line_items.is_empty() {
+        let display_items: Vec<&InvoiceLineItem> = ctx.line_items.iter().take(5).collect();
+        let overflow = ctx.line_items.len().saturating_sub(5);
+        let mut li_text = String::from("*Line Items:*\n");
+        for item in &display_items {
+            let qty_str = item
+                .quantity
+                .map(|q| format!(" x{}", q))
+                .unwrap_or_default();
+            let total_str = item
+                .total_cents
+                .map(|c| format!(" ${:.2}", c as f64 / 100.0))
+                .unwrap_or_default();
+            li_text.push_str(&format!("• {}{}{}\n", item.description, qty_str, total_str));
+        }
+        if overflow > 0 {
+            li_text.push_str(&format!("… and {} more", overflow));
+        }
+        blocks.push(serde_json::json!({
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": li_text.trim_end() }
+        }));
+    }
+
+    // Context block with PDF preview link
+    if let Some(ref pdf_url) = ctx.pdf_preview_url {
+        blocks.push(serde_json::json!({
+            "type": "context",
+            "elements": [
+                { "type": "mrkdwn", "text": format!("<{}|📄 View PDF>", pdf_url) }
+            ]
+        }));
+    }
+
+    // Divider before actions
+    blocks.push(serde_json::json!({ "type": "divider" }));
+
+    // Action buttons: Approve, Reject, Request Changes, Reassign, Comment
+    let invoice_id = ctx.invoice_id.to_string();
+    let actions = serde_json::json!({
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": { "type": "plain_text", "text": "Approve", "emoji": true },
+                "style": "primary",
+                "action_id": format!("bf_approve:{}", invoice_id),
+                "value": invoice_id
+            },
+            {
+                "type": "button",
+                "text": { "type": "plain_text", "text": "Reject", "emoji": true },
+                "style": "danger",
+                "action_id": format!("bf_reject:{}", invoice_id),
+                "value": invoice_id
+            },
+            {
+                "type": "button",
+                "text": { "type": "plain_text", "text": "Request Changes" },
+                "action_id": format!("bf_request_changes:{}", invoice_id),
+                "value": invoice_id
+            },
+            {
+                "type": "button",
+                "text": { "type": "plain_text", "text": "Reassign" },
+                "action_id": format!("bf_reassign:{}", invoice_id),
+                "value": invoice_id
+            },
+            {
+                "type": "button",
+                "text": { "type": "plain_text", "text": "Comment" },
+                "action_id": format!("bf_comment:{}", invoice_id),
+                "value": invoice_id
+            }
+        ]
+    });
+    blocks.push(actions);
+
+    blocks
 }
 
 #[async_trait]
