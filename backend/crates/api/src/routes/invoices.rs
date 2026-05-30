@@ -97,6 +97,8 @@ pub struct ListInvoicesQuery {
     pub capture_status: Option<String>,
     pub processing_status: Option<String>,
     pub search: Option<String>,
+    pub min_ocr_confidence: Option<f32>,
+    pub max_ocr_confidence: Option<f32>,
 }
 
 #[utoipa::path(
@@ -109,7 +111,9 @@ pub struct ListInvoicesQuery {
         ("vendor_id" = Option<String>, Query, description = "Filter by vendor ID"),
         ("capture_status" = Option<String>, Query, description = "Filter by capture status"),
         ("processing_status" = Option<String>, Query, description = "Filter by processing status"),
-        ("search" = Option<String>, Query, description = "Search term")
+        ("search" = Option<String>, Query, description = "Search term"),
+        ("min_ocr_confidence" = Option<f32>, Query, description = "Minimum OCR confidence (0.0-1.0)"),
+        ("max_ocr_confidence" = Option<f32>, Query, description = "Maximum OCR confidence (0.0-1.0)")
     ),
     responses(
         (status = 200, description = "List of invoices", body = crate::openapi::InvoiceList),
@@ -136,6 +140,8 @@ async fn list_invoices(
         processing_status: query
             .processing_status
             .and_then(|s| ProcessingStatus::from_str(&s)),
+        min_ocr_confidence: query.min_ocr_confidence,
+        max_ocr_confidence: query.max_ocr_confidence,
         ..Default::default()
     };
 

@@ -544,4 +544,6 @@ pub struct InvoiceFilters {
     pub amount_max: Option<f64>,
     pub search: Option<String>,
     pub tags: Vec<String>,
+    pub min_ocr_confidence: Option<f32>,
+    pub max_ocr_confidence: Option<f32>,
 }

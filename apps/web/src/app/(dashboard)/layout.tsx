@@ -30,6 +30,7 @@ import {
   Rocket,
   Percent,
   CalendarClock,
+  Eye,
 } from 'lucide-react';
 
 interface NavItem {
@@ -50,6 +51,7 @@ const navigation: NavItem[] = [
     module: 'invoice_capture',
     children: [
       { name: 'Invoices', href: '/invoices', icon: FileText, module: 'invoice_capture' },
+      { name: 'OCR Exceptions', href: '/invoices/exceptions', icon: Eye, module: 'invoice_capture' },
       { name: 'Errors', href: '/processing/queues?type=exception', icon: AlertTriangle, module: 'invoice_capture' },
     ]
   },

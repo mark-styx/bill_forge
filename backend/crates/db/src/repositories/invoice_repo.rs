@@ -154,6 +154,14 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             query_str.push_str(&format!(" AND processing_status = ${}", param_count));
             param_count += 1;
         }
+        if filters.max_ocr_confidence.is_some() {
+            query_str.push_str(&format!(" AND ocr_confidence <= ${}", param_count));
+            param_count += 1;
+        }
+        if filters.min_ocr_confidence.is_some() {
+            query_str.push_str(&format!(" AND ocr_confidence >= ${}", param_count));
+            param_count += 1;
+        }
 
         query_str.push_str(&format!(
             " ORDER BY created_at DESC LIMIT ${} OFFSET ${}",
@@ -172,6 +180,12 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         }
         if let Some(ref processing_status) = filters.processing_status {
             query = query.bind(processing_status.as_str());
+        }
+        if let Some(max_ocr) = filters.max_ocr_confidence {
+            query = query.bind(max_ocr);
+        }
+        if let Some(min_ocr) = filters.min_ocr_confidence {
+            query = query.bind(min_ocr);
         }
 
         query = query.bind(pagination.per_page as i32).bind(offset);
@@ -200,6 +214,12 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         }
         if let Some(ref processing_status) = filters.processing_status {
             count_query = count_query.bind(processing_status.as_str());
+        }
+        if let Some(max_ocr) = filters.max_ocr_confidence {
+            count_query = count_query.bind(max_ocr);
+        }
+        if let Some(min_ocr) = filters.min_ocr_confidence {
+            count_query = count_query.bind(min_ocr);
         }
 
         let total = count_query

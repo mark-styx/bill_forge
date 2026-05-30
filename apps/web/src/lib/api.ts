@@ -452,6 +452,8 @@ export const invoicesApi = {
     processing_status?: string;
     vendor_id?: string;
     search?: string;
+    min_ocr_confidence?: number;
+    max_ocr_confidence?: number;
   }) => {
     const qs = new URLSearchParams();
     if (params) {

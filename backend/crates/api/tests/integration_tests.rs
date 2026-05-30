@@ -159,6 +159,51 @@ fn test_list_invoices_query_defaults() {
     assert!(query.capture_status.is_none());
     assert!(query.processing_status.is_none());
     assert!(query.search.is_none());
+    assert!(query.min_ocr_confidence.is_none());
+    assert!(query.max_ocr_confidence.is_none());
+}
+
+#[test]
+fn test_list_invoices_query_ocr_confidence_filters() {
+    use billforge_api::routes::invoices::ListInvoicesQuery;
+
+    // Parse max_ocr_confidence from query string
+    let query: ListInvoicesQuery = serde_json::from_str(r#"{"max_ocr_confidence": 0.85}"#)
+        .expect("should deserialize max_ocr_confidence");
+    assert_eq!(query.max_ocr_confidence, Some(0.85));
+    assert!(query.min_ocr_confidence.is_none());
+
+    // Parse min_ocr_confidence from query string
+    let query: ListInvoicesQuery = serde_json::from_str(r#"{"min_ocr_confidence": 0.5}"#)
+        .expect("should deserialize min_ocr_confidence");
+    assert!(query.max_ocr_confidence.is_none());
+    assert_eq!(query.min_ocr_confidence, Some(0.5));
+
+    // Parse both together
+    let query: ListInvoicesQuery =
+        serde_json::from_str(r#"{"min_ocr_confidence": 0.3, "max_ocr_confidence": 0.85}"#)
+            .expect("should deserialize both confidence bounds");
+    assert_eq!(query.min_ocr_confidence, Some(0.3));
+    assert_eq!(query.max_ocr_confidence, Some(0.85));
+}
+
+#[test]
+fn test_invoice_filters_ocr_confidence_propagated() {
+    use billforge_core::domain::InvoiceFilters;
+
+    // Verify the new fields exist on InvoiceFilters and default to None
+    let filters = InvoiceFilters::default();
+    assert!(filters.min_ocr_confidence.is_none());
+    assert!(filters.max_ocr_confidence.is_none());
+
+    // Verify they can be set
+    let filters = InvoiceFilters {
+        max_ocr_confidence: Some(0.85),
+        min_ocr_confidence: Some(0.3),
+        ..Default::default()
+    };
+    assert_eq!(filters.max_ocr_confidence, Some(0.85));
+    assert_eq!(filters.min_ocr_confidence, Some(0.3));
 }
 
 // ============================================================================
