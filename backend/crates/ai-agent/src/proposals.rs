@@ -192,6 +192,7 @@ fn permission_to_persisted_string(permission: AiToolPermission) -> &'static str 
         AiToolPermission::InvoiceRead => "invoice.read",
         AiToolPermission::VendorRead => "vendor.read",
         AiToolPermission::ApprovalRead => "approval.read",
+        AiToolPermission::ApprovalRespond => "approval.respond",
         AiToolPermission::TenantModuleRead => "tenant.module.read",
         AiToolPermission::ProductKnowledgeRead => "product.knowledge.read",
         AiToolPermission::WorkflowRead => "workflow.read",
@@ -237,6 +238,7 @@ fn role_grants_tool_permission(role: Role, permission: AiToolPermission) -> bool
             permission,
             AiToolPermission::InvoiceRead
                 | AiToolPermission::ApprovalRead
+                | AiToolPermission::ApprovalRespond
                 | AiToolPermission::WorkflowRead
                 | AiToolPermission::IssueRequest
         ),
@@ -244,6 +246,7 @@ fn role_grants_tool_permission(role: Role, permission: AiToolPermission) -> bool
             permission,
             AiToolPermission::InvoiceRead
                 | AiToolPermission::ApprovalRead
+                | AiToolPermission::ApprovalRespond
                 | AiToolPermission::WorkflowRead
         ),
         Role::VendorManager => matches!(permission, AiToolPermission::VendorRead),

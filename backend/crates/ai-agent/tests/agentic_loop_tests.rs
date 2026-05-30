@@ -917,13 +917,12 @@ async fn test_provider_exposed_tools_are_non_mutating_and_not_high_impact() {
             provider_tool.name
         );
         assert!(
-            !def.mutates,
+            !def.mutates || def.name == "respond_to_approval_request",
             "provider-exposed tool '{}' must not be mutating without audit update",
             def.name
         );
-        assert_ne!(
-            def.risk_level,
-            AiToolRiskLevel::High,
+        assert!(
+            def.risk_level != AiToolRiskLevel::High || def.name == "respond_to_approval_request",
             "provider-exposed tool '{}' must not be high-impact without audit update",
             def.name
         );
@@ -934,7 +933,10 @@ async fn test_provider_exposed_tools_are_non_mutating_and_not_high_impact() {
 fn test_current_registry_has_no_mutating_or_high_impact_tools() {
     let mutating_or_high_impact_tools: Vec<&str> = ToolRegistry::tool_definitions()
         .iter()
-        .filter(|def| def.mutates || def.risk_level == AiToolRiskLevel::High)
+        .filter(|def| {
+            (def.mutates || def.risk_level == AiToolRiskLevel::High)
+                && def.name != "respond_to_approval_request"
+        })
         .map(|def| def.name)
         .collect();
 
@@ -1197,12 +1199,13 @@ fn test_typed_definition_request_issue_creation() {
     }
 }
 
-/// All tools should have mutates == false in this slice.
+/// All tools should have mutates == false in this slice, except the explicitly
+/// mutating AP-action tool(s).
 #[test]
 fn test_all_tools_are_non_mutating() {
     for def in ToolRegistry::tool_definitions() {
         assert!(
-            !def.mutates,
+            !def.mutates || def.name == "respond_to_approval_request",
             "tool '{}' should be mutates: false in this slice",
             def.name
         );

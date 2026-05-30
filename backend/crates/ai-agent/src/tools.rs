@@ -102,6 +102,7 @@ pub enum AiToolPermission {
     InvoiceRead,
     VendorRead,
     ApprovalRead,
+    ApprovalRespond,
     TenantModuleRead,
     ProductKnowledgeRead,
     WorkflowRead,
@@ -2902,6 +2903,115 @@ impl Tool for SpendAnalysisTool {
     }
 }
 
+// ── Respond-to-approval-request tool (first mutating AP-action tool) ─────────
+
+/// Arguments for responding to an approval request.
+#[derive(serde::Deserialize)]
+struct RespondToApprovalRequestArgs {
+    approval_request_id: Uuid,
+    decision: String,
+    comments: Option<String>,
+}
+
+/// Tool that approves or rejects a pending approval request on an invoice.
+pub struct RespondToApprovalRequestTool {
+    pool: PgPool,
+}
+
+impl RespondToApprovalRequestTool {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Tool for RespondToApprovalRequestTool {
+    fn name(&self) -> &str {
+        "respond_to_approval_request"
+    }
+
+    fn description(&self) -> &str {
+        "Approve or reject a pending approval request on an invoice. \
+         Args: JSON { \"approval_request_id\": \"<uuid>\", \"decision\": \"approve\"|\"reject\", \"comments\": \"...optional...\" }"
+    }
+
+    async fn execute(&self, context: &AgentContext, args: &str) -> Result<String> {
+        let parsed: RespondToApprovalRequestArgs = serde_json::from_str(args.trim()).context(
+            "Invalid JSON for respond_to_approval_request. \
+             Expected: {\"approval_request_id\":\"<uuid>\",\"decision\":\"approve\"|\"reject\",\"comments\":\"...\"}",
+        )?;
+
+        let approval_status = match parsed.decision.to_lowercase().as_str() {
+            "approve" => ApprovalStatus::Approved,
+            "reject" => ApprovalStatus::Rejected,
+            other => {
+                anyhow::bail!(
+                    "Unknown decision '{}'. Must be 'approve' or 'reject'.",
+                    other
+                )
+            }
+        };
+
+        let tenant_id: TenantId = context
+            .tenant_id
+            .parse()
+            .context("Invalid tenant_id in agent context. Expected UUID tenant id.")?;
+        let user_id = billforge_core::UserId::from_uuid(context.user_id);
+
+        let pool = Arc::new(self.pool.clone());
+        let approval_repo = WorkflowRepositoryImpl::new(pool);
+
+        // Verify the request exists and belongs to this tenant
+        let existing = ApprovalRepository::get_by_id(
+            &approval_repo,
+            &tenant_id,
+            parsed.approval_request_id,
+        )
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Approval request {} not found in your organization.",
+                    parsed.approval_request_id
+                )
+            })?;
+
+        if existing.status != ApprovalStatus::Pending {
+            anyhow::bail!(
+                "Approval request {} is already {}, not Pending. Only pending requests can be responded to.",
+                parsed.approval_request_id,
+                match existing.status {
+                    ApprovalStatus::Approved => "Approved",
+                    ApprovalStatus::Rejected => "Rejected",
+                    ApprovalStatus::Expired => "Expired",
+                    ApprovalStatus::Cancelled => "Cancelled",
+                    ApprovalStatus::Pending => unreachable!(),
+                }
+            );
+        }
+
+        let updated = ApprovalRepository::respond(
+            &approval_repo,
+            &tenant_id,
+            parsed.approval_request_id,
+            approval_status,
+            parsed.comments,
+            &user_id,
+        )
+            .await?;
+
+        let status_str = match updated.status {
+            ApprovalStatus::Approved => "Approved",
+            ApprovalStatus::Rejected => "Rejected",
+            _ => unreachable!(),
+        };
+
+        Ok(format!(
+            "Approval request {} has been {}. Invoice: {}.",
+            parsed.approval_request_id, status_str, updated.invoice_id.0
+        ))
+    }
+}
+
 /// Collection of available tools
 #[derive(Clone)]
 pub struct ToolRegistry {
@@ -3492,6 +3602,32 @@ impl ToolRegistry {
                 }),
                 mutates: false,
             },
+            AiToolDefinition {
+                name: "respond_to_approval_request",
+                description: "Approve or reject a pending approval request on an invoice. Args: JSON { \"approval_request_id\": \"<uuid>\", \"decision\": \"approve\"|\"reject\", \"comments\": \"...optional...\" }",
+                class: AiToolClass::Approval,
+                required_permission: AiToolPermission::ApprovalRespond,
+                risk_level: AiToolRiskLevel::High,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "approval_request_id": { "type": "string", "format": "uuid" },
+                        "decision": { "type": "string", "enum": ["approve", "reject"] },
+                        "comments": { "type": "string" }
+                    },
+                    "required": ["approval_request_id", "decision"]
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "enum": ["Approved", "Rejected"] },
+                        "approval_request_id": { "type": "string", "format": "uuid" },
+                        "invoice_id": { "type": "string", "format": "uuid" },
+                        "message": { "type": "string" }
+                    }
+                }),
+                mutates: true,
+            },
         ];
 
         #[cfg(test)]
@@ -3669,6 +3805,11 @@ impl ToolRegistry {
             }
             "get_vendor_summary" => {
                 VendorSummaryTool::new(self.pool.clone())
+                    .execute(context, args)
+                    .await
+            }
+            "respond_to_approval_request" => {
+                RespondToApprovalRequestTool::new(self.pool.clone())
                     .execute(context, args)
                     .await
             }
