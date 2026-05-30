@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id", put(update_invoice))
         .route("/:id", delete(delete_invoice))
         .route("/:id/ocr", post(rerun_ocr))
+        .route("/:id/ocr-corrections", post(record_ocr_correction))
         .route("/:id/submit", post(submit_for_processing))
         .route("/:id/suggest-categories", post(suggest_categories))
         .route("/:id/merge-duplicate", post(merge_duplicate))
@@ -1955,6 +1956,99 @@ async fn reject_duplicate(
         "success": true,
         "action": "not_duplicate",
         "invoice_id": invoice_id.to_string(),
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// OCR field correction endpoint
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct OcrCorrectionRequest {
+    pub field_name: String,
+    #[allow(dead_code)]
+    pub corrected_value: serde_json::Value,
+}
+
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/ocr-corrections",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    request_body = OcrCorrectionRequest,
+    responses(
+        (status = 200, description = "OCR correction recorded"),
+        (status = 400, description = "Invalid field name"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn record_ocr_correction(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Path(id): Path<String>,
+    Json(body): Json<OcrCorrectionRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    // Verify invoice exists and belongs to this tenant
+    let _invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Build a capture service with the calibration store to record the correction.
+    let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
+    let invoice_repo: Arc<dyn billforge_core::traits::InvoiceRepository> =
+        Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone()));
+    let calibration_store: Arc<dyn billforge_invoice_capture::OcrCalibrationStore> =
+        Arc::new(billforge_invoice_capture::PgOcrCalibrationStore::new(pool));
+
+    let capture_service =
+        billforge_invoice_capture::InvoiceCaptureService::new(
+            &provider_name,
+            invoice_repo,
+            state.storage.clone(),
+        )
+        .with_calibration(calibration_store);
+
+    capture_service
+        .record_field_correction(&tenant.tenant_id, &invoice_id, &body.field_name)
+        .await?;
+
+    // Audit log
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Invoice,
+        id.clone(),
+        format!("Recorded OCR field correction: {}", body.field_name),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "ocr_field_correction",
+        "field_name": body.field_name,
+    }));
+    let audit_pool = state.db.tenant(&tenant.tenant_id).await?;
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(audit_pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log OCR correction audit entry");
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "field_name": body.field_name,
     })))
 }
 

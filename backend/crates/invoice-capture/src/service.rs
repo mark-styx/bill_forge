@@ -1,5 +1,6 @@
 //! Invoice capture service
 
+use crate::calibration::{calibrated_confidence, OcrCalibrationStore};
 use crate::ocr;
 use billforge_core::{
     domain::{
@@ -16,6 +17,22 @@ use uuid::Uuid;
 pub const OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD: f32 = 0.90;
 pub const OCR_HARD_FAIL_CONFIDENCE_THRESHOLD: f32 = 0.30;
 pub const LOCAL_OCR_PROVIDER: &str = "tesseract";
+
+/// Field names tracked for OCR confidence calibration.
+pub const OCR_CALIBRATED_FIELDS: &[&str] = &[
+    "invoice_number",
+    "invoice_date",
+    "vendor_name",
+    "total_amount",
+];
+
+/// Whitelist of field names accepted by the correction endpoint.
+const VALID_CORRECTION_FIELDS: &[&str] = &[
+    "invoice_number",
+    "invoice_date",
+    "vendor_name",
+    "total_amount",
+];
 
 /// Resolve the OCR provider for a tenant, enforcing local-only privacy settings.
 pub fn resolve_ocr_provider_name(global_provider: &str, settings: &TenantSettings) -> String {
@@ -55,6 +72,7 @@ pub struct InvoiceCaptureService {
     ocr_provider: Box<dyn OcrService>,
     invoice_repo: Arc<dyn InvoiceRepository>,
     storage: Arc<dyn StorageService>,
+    calibration: Option<Arc<dyn OcrCalibrationStore>>,
 }
 
 impl InvoiceCaptureService {
@@ -67,6 +85,7 @@ impl InvoiceCaptureService {
             ocr_provider: ocr::create_provider(ocr_provider_name),
             invoice_repo,
             storage,
+            calibration: None,
         }
     }
 
@@ -80,7 +99,14 @@ impl InvoiceCaptureService {
             ocr_provider,
             invoice_repo,
             storage,
+            calibration: None,
         }
+    }
+
+    /// Attach a calibration store for weighted confidence scoring.
+    pub fn with_calibration(mut self, store: Arc<dyn OcrCalibrationStore>) -> Self {
+        self.calibration = Some(store);
+        self
     }
 
     /// Upload and process a new invoice document
@@ -117,8 +143,8 @@ impl InvoiceCaptureService {
         document_id: Uuid,
         ocr_result: &OcrExtractionResult,
     ) -> Result<Invoice> {
-        // Calculate overall confidence
-        let confidence = self.calculate_confidence(ocr_result);
+        // Calculate overall confidence (calibrated if store is available)
+        let confidence = self.calculate_confidence_with_calibration(tenant_id, ocr_result).await;
 
         let input = CreateInvoiceInput {
             document_id,
@@ -170,7 +196,7 @@ impl InvoiceCaptureService {
             .await
     }
 
-    /// Calculate overall confidence score from OCR result
+    /// Calculate overall confidence score from OCR result (unweighted, for backwards compat)
     fn calculate_confidence(&self, ocr_result: &OcrExtractionResult) -> f32 {
         let fields = [
             ocr_result.invoice_number.confidence,
@@ -181,6 +207,75 @@ impl InvoiceCaptureService {
 
         let sum: f32 = fields.iter().sum();
         sum / fields.len() as f32
+    }
+
+    /// Calculate calibrated confidence using persisted field-level accuracy weights.
+    ///
+    /// Falls back to the unweighted mean when the calibration store is absent
+    /// or has insufficient data for all four tracked fields.
+    async fn calculate_confidence_with_calibration(
+        &self,
+        tenant_id: &TenantId,
+        ocr_result: &OcrExtractionResult,
+    ) -> f32 {
+        let raw: &[(&str, f32)] = &[
+            ("invoice_number", ocr_result.invoice_number.confidence),
+            ("invoice_date", ocr_result.invoice_date.confidence),
+            ("vendor_name", ocr_result.vendor_name.confidence),
+            ("total_amount", ocr_result.total_amount.confidence),
+        ];
+
+        if let Some(ref store) = self.calibration {
+            // Record this extraction event so the calibration data grows.
+            if let Err(e) = store
+                .record_extraction(tenant_id, self.ocr_provider.provider_name(), OCR_CALIBRATED_FIELDS)
+                .await
+            {
+                tracing::warn!(error = %e, "Failed to record extraction for calibration");
+            }
+
+            match store
+                .get_field_weights(tenant_id, self.ocr_provider.provider_name())
+                .await
+            {
+                Ok(weights) => return calibrated_confidence(raw, &weights),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to fetch calibration weights, falling back to unweighted");
+                }
+            }
+        }
+
+        // Fallback: unweighted arithmetic mean.
+        let sum: f32 = raw.iter().map(|(_, c)| *c).sum();
+        sum / raw.len() as f32
+    }
+
+    /// Record that a user corrected an OCR-extracted field.
+    ///
+    /// Persists the correction signal into the calibration store so that future
+    /// confidence calculations reflect the provider's empirical accuracy.
+    pub async fn record_field_correction(
+        &self,
+        tenant_id: &TenantId,
+        _invoice_id: &billforge_core::domain::InvoiceId,
+        field_name: &str,
+    ) -> Result<()> {
+        // Whitelist the field name.
+        if !VALID_CORRECTION_FIELDS.contains(&field_name) {
+            return Err(billforge_core::Error::Validation(format!(
+                "Invalid OCR field name '{}'. Must be one of: {}",
+                field_name,
+                VALID_CORRECTION_FIELDS.join(", ")
+            )));
+        }
+
+        if let Some(ref store) = self.calibration {
+            store
+                .record_correction(tenant_id, self.ocr_provider.provider_name(), field_name)
+                .await?;
+        }
+
+        Ok(())
     }
 
     /// Reprocess OCR for an existing invoice
@@ -216,7 +311,9 @@ impl InvoiceCaptureService {
             .extract(&document_bytes, "application/pdf")
             .await?;
 
-        let confidence = self.calculate_confidence(&ocr_result);
+        let confidence = self
+            .calculate_confidence_with_calibration(tenant_id, &ocr_result)
+            .await;
         let status = if confidence < 0.3 {
             CaptureStatus::Failed
         } else {

@@ -64,6 +64,14 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // OCR field calibration table for confidence scoring
+    apply_migration(
+        pool,
+        "102_create_ocr_field_calibration.sql",
+        include_str!("../../../migrations/102_create_ocr_field_calibration.sql"),
+    )
+    .await?;
+
     // Non-workflow tables that were historically bundled here
     apply_migration(
         pool,
