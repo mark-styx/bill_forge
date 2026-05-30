@@ -27,8 +27,15 @@ lazy_static! {
     ).unwrap();
 }
 
+fn ensure_metrics_registered() {
+    OCR_PROVIDER_OUTCOME_TOTAL.with_label_values(&["unknown", "success"]);
+    OCR_PROVIDER_OUTCOME_TOTAL.with_label_values(&["unknown", "failure"]);
+    OCR_FIRST_PASS_FIELD_CONFIDENCE.with_label_values(&["unknown"]);
+}
+
 /// Export metrics in Prometheus text format.
 pub fn export_metrics() -> String {
+    ensure_metrics_registered();
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
