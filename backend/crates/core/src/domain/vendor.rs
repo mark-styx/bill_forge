@@ -190,8 +190,30 @@ pub enum CallbackMethod {
 #[serde(rename_all = "snake_case")]
 pub enum BankingVerificationStatus {
     Pending,
+    PendingSecondApproval,
     Verified,
     Rejected,
+}
+
+/// Screening results from OFAC, AVS, and Plaid checks.
+/// Stored as JSONB on the verification row. Fields are optional so the
+/// struct can be built incrementally as each screening provider responds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ScreeningResults {
+    pub ofac: Option<ScreeningCheck>,
+    pub avs: Option<ScreeningCheck>,
+    pub plaid: Option<ScreeningCheck>,
+}
+
+/// A single screening check result (OFAC / AVS / Plaid).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ScreeningCheck {
+    pub status: String,
+    pub checked_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_detail: Option<String>,
 }
 
 /// A banking-change verification record, created when vendor banking details change.
@@ -211,6 +233,12 @@ pub struct BankingVerification {
     pub requested_at: DateTime<Utc>,
     pub verified_by: Option<Uuid>,
     pub verified_at: Option<DateTime<Utc>>,
+    // Dual-approval fields (migration 098, refs #266)
+    pub first_approver_id: Option<Uuid>,
+    pub first_approved_at: Option<DateTime<Utc>>,
+    pub second_approver_id: Option<Uuid>,
+    pub second_approved_at: Option<DateTime<Utc>>,
+    pub screening_results: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
