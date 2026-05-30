@@ -165,6 +165,7 @@ pub enum AuditAction {
     VendorActivated,
     VendorDeactivated,
     VendorBankingChanged,
+    VendorBankingFirstApproved,
     VendorBankingVerified,
 
     // Export operations
@@ -214,6 +215,9 @@ impl AuditAction {
             AuditAction::VendorActivated => "Activated vendor",
             AuditAction::VendorDeactivated => "Deactivated vendor",
             AuditAction::VendorBankingChanged => "Vendor banking details changed",
+            AuditAction::VendorBankingFirstApproved => {
+                "Vendor banking change first approval recorded"
+            }
             AuditAction::VendorBankingVerified => "Vendor banking details verified",
             AuditAction::DataExported => "Exported data",
             AuditAction::SettingsChanged => "Changed settings",

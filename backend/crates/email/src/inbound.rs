@@ -136,6 +136,44 @@ impl<'a> InboundEmailHandler<'a> {
             .suggest_vendor_by_domain(&tenant_uuid, &from_domain)
             .await?;
 
+        // 5b. Classify email as statement vs invoice
+        let attachment_names: Vec<&str> = usable.iter().map(|a| a.name.as_str()).collect();
+        let inbound_kind = crate::statement_ingest::classify(
+            payload.subject.as_deref().unwrap_or(""),
+            &attachment_names,
+        );
+
+        if inbound_kind == crate::statement_ingest::InboundKind::Statement {
+            if let Some(vendor_id) = suggested_vendor_id {
+                match self
+                    .try_ingest_statement(tenant_uuid, vendor_id, email_id, &usable)
+                    .await
+                {
+                    Ok(statement_id) => {
+                        return Ok(InboundEmailResult {
+                            capture_ids: vec![statement_id],
+                            triaged: false,
+                            triage_reason: None,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            tenant_id = %tenant_uuid,
+                            vendor_id = %vendor_id,
+                            error = %e,
+                            "Statement ingest failed; falling through to invoice path"
+                        );
+                        // Fall through to invoice path below
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    tenant_id = %tenant_uuid,
+                    "Statement detected but no vendor resolved from sender domain; falling through to invoice path"
+                );
+            }
+        }
+
         // 6. For each usable attachment: create invoice capture row + enqueue OCR job (TENANT DB)
         let mut capture_ids = Vec::new();
         for attachment in &usable {
@@ -226,6 +264,76 @@ impl<'a> InboundEmailHandler<'a> {
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Attempt to ingest a vendor statement from the first usable attachment.
+    async fn try_ingest_statement(
+        &self,
+        tenant_uuid: Uuid,
+        vendor_id: Uuid,
+        email_id: Uuid,
+        attachments: &[&InboundAttachment],
+    ) -> Result<Uuid, String> {
+        use crate::statement_ingest::{extract_attachment_text, parse_statement_lines};
+
+        // Try each attachment until one yields parseable lines.
+        for attachment in attachments {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&attachment.content)
+                .map_err(|e| format!("Failed to decode attachment '{}': {}", attachment.name, e))?;
+
+            if let Some(text) = extract_attachment_text(&bytes, &attachment.content_type) {
+                let parsed = parse_statement_lines(&text);
+                if !parsed.is_empty() {
+                    let created_by = self.find_system_user(tenant_uuid).await?;
+
+                    let tenant_id = billforge_core::types::TenantId::from_uuid(tenant_uuid);
+                    return crate::statement_ingest::ingest_statement(
+                        self.tenant_pool,
+                        &tenant_id,
+                        vendor_id,
+                        &parsed,
+                        email_id,
+                        created_by,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        Err("No attachment yielded parseable statement lines".to_string())
+    }
+
+    /// Find a system user ID for automated operations within a tenant.
+    /// Falls back to the first admin user, then the first user in the tenant.
+    async fn find_system_user(&self, tenant_uuid: Uuid) -> Result<Uuid, String> {
+        // Try to find an admin user first.
+        let admin_id: Option<Uuid> = sqlx::query_scalar(
+            r#"SELECT id FROM users
+               WHERE tenant_id = $1 AND role = 'admin'
+               ORDER BY created_at LIMIT 1"#,
+        )
+        .bind(tenant_uuid)
+        .fetch_optional(self.tenant_pool)
+        .await
+        .map_err(|e| format!("Failed to find admin user: {}", e))?;
+
+        if let Some(id) = admin_id {
+            return Ok(id);
+        }
+
+        // Fall back to any user in the tenant.
+        let any_id: Option<Uuid> = sqlx::query_scalar(
+            r#"SELECT id FROM users
+               WHERE tenant_id = $1
+               ORDER BY created_at LIMIT 1"#,
+        )
+        .bind(tenant_uuid)
+        .fetch_optional(self.tenant_pool)
+        .await
+        .map_err(|e| format!("Failed to find user: {}", e))?;
+
+        any_id.ok_or_else(|| "No users found for tenant - cannot create statement".to_string())
+    }
 
     /// Look up which tenant owns the given recipient address.
     async fn resolve_tenant(&self, to_address: &str) -> Result<Option<Uuid>, String> {

@@ -8,24 +8,32 @@ const apiLatency = new Trend('api_latency');
 const invoiceUploadTime = new Trend('invoice_upload_time');
 const approvalTime = new Trend('approval_time');
 const dashboardLoadTime = new Trend('dashboard_load_time');
+const ocrToApprovalE2e = new Trend('ocr_to_approval_e2e');
 
 // ---------------------------------------------------------------------------
 // Scenario helpers - shared thresholds applied across all scenarios
+//
+// API response thresholds aligned with docs/northstar.md:57 sub-200ms promise.
+// Do not silently regress these numbers — see northstar for rationale.
+// Upload and dashboard thresholds are intentionally higher: file I/O and
+// analytics aggregation are explicitly outside the sub-200ms commitment.
 // ---------------------------------------------------------------------------
 const sharedThresholds = {
     // Overall error rate must be < 1%
     errors: ['rate<0.01'],
-    // P95 read latency < 300ms, P99 < 800ms
-    api_latency: ['p(95)<300', 'p(99)<800'],
-    // Invoice upload P95 < 1.5s
+    // API reads — sub-200ms northstar commitment (docs/northstar.md:57)
+    api_latency: ['p(95)<200', 'p(99)<500'],
+    // Invoice upload P95 < 1.5s (file I/O, outside sub-200ms commitment)
     invoice_upload_time: ['p(95)<1500'],
-    // Approval actions P95 < 300ms
-    approval_time: ['p(95)<300'],
-    // Dashboard load P95 < 800ms
+    // Approval actions — read/write API covered by sub-200ms commitment
+    approval_time: ['p(95)<200'],
+    // Dashboard load P95 < 800ms (aggregated analytics, outside sub-200ms commitment)
     dashboard_load_time: ['p(95)<800'],
-    // HTTP requests
-    http_req_duration: ['p(95)<500', 'p(99)<1000'],
+    // Generic HTTP — aligned to sub-200ms API commitment
+    http_req_duration: ['p(95)<200', 'p(99)<500'],
     http_req_failed: ['rate<0.01'],
+    // End-to-end OCR-to-approval pipeline budget (async, separate from sub-200ms API budget)
+    ocr_to_approval_e2e: ['p(95)<30000'],
 };
 
 // ---------------------------------------------------------------------------
@@ -124,9 +132,72 @@ export function sustainedTraffic() {
     }
 }
 
-// OCR pipeline stress - uploads only at 2x peak rate
+// OCR pipeline stress - uploads then traces through OCR to approval queue
 export function ocrPipelineStress() {
-    testInvoiceUpload();
+    const startTime = Date.now();
+
+    // Upload invoice
+    const testPdf = 'JVBERi0xLjQKJcfsj6IKNSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDEKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgovUmVzb3VyY2VzIDw8Pj4KL0NvbnRlbnRzIDQgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9MZW5ndGggMjMKPj4Kc3RyZWFtCkJUIFRlc3QgSW52b2ljZSBFbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA1CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOCAwMDAwMCBuIAowMDAwMDAwMDM0IDAwMDAwIG4gCjAwMDAwMDAxMDcgMDAwMDAgbiAKMDAwMDAwMDE3OCAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDUKL1Jvb3QgMSAwIFIKPj4Kc3RhcnR4cmVmCjIyNQolJUVPRgo=';
+
+    const payload = JSON.stringify({
+        file_name: `ocr_stress_${Date.now()}.pdf`,
+        file_content: testPdf,
+        vendor_id: 'test-vendor-123',
+    });
+
+    const uploadRes = http.post(`${BASE_URL}/api/v1/invoices/upload`, payload, { headers });
+
+    check(uploadRes, {
+        'ocr stress upload status': (r) => r.status === 201 || r.status === 202,
+    });
+
+    invoiceUploadTime.add(uploadRes.timings.duration);
+    errorRate.add(uploadRes.status !== 201 && uploadRes.status !== 202);
+
+    const body = uploadRes.json();
+    const invoiceId = body.invoice_id || body.id;
+
+    if (!invoiceId) {
+        errorRate.add(true);
+        return;
+    }
+
+    // Poll until status reaches ready_for_approval or needs_review (max 30s)
+    const maxWaitMs = 30000;
+    const pollIntervalMs = 500;
+    const pollStart = Date.now();
+    let finalStatus = '';
+
+    while (Date.now() - pollStart < maxWaitMs) {
+        const pollRes = http.get(`${BASE_URL}/api/v1/invoices/${invoiceId}`, { headers });
+        if (pollRes.status === 200) {
+            const invoice = pollRes.json();
+            finalStatus = invoice.status || '';
+            if (finalStatus === 'ready_for_approval' || finalStatus === 'needs_review') {
+                apiLatency.add(pollRes.timings.duration);
+                break;
+            }
+        }
+        sleep(pollIntervalMs / 1000);
+    }
+
+    // Verify invoice appears in the workflow queue
+    const queueRes = http.get(`${BASE_URL}/api/v1/workflow/queue`, { headers });
+
+    check(queueRes, {
+        'ocr stress queue status is 200': (r) => r.status === 200,
+    });
+
+    apiLatency.add(queueRes.timings.duration);
+
+    const queue = queueRes.json('queue') || [];
+    const foundInQueue = queue.some((item) => item.invoice_id === invoiceId || item.id === invoiceId);
+
+    check(queueRes, {
+        'ocr stress invoice appeared in queue': (r) => foundInQueue,
+    });
+
+    ocrToApprovalE2e.add(Date.now() - startTime);
 }
 
 // ---------------------------------------------------------------------------

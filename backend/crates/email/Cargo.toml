@@ -24,6 +24,9 @@ sqlx = { workspace = true }
 # Encoding (base64 attachment decoding)
 base64 = "0.22"
 
+# Date/time
+chrono = { workspace = true }
+
 # Utilities
 uuid = { workspace = true }
 thiserror = { workspace = true }

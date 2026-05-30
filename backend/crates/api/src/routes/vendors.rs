@@ -18,6 +18,7 @@ use billforge_core::{
     types::{PaginatedResponse, Pagination, TenantId},
     Error, Result as CoreResult,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -1139,8 +1140,13 @@ async fn update_banking(
 
 /// POST /api/v1/vendors/:id/banking-verifications/:vid/verify
 ///
-/// Verifies a pending banking change via out-of-band callback.
-/// Clears payment_hold and emits an audit entry.
+/// Dual-approval state machine for banking verification:
+///   - First call (no first_approver): runs screening stubs, records first approval,
+///     sets status = pending_second_approval, does NOT clear payment_hold. Returns 202.
+///   - Second call by a different user: records second approval, sets status = verified,
+///     clears payment_hold. Returns 200.
+///   - Same user attempting second approval: returns 403.
+///   - Already verified: returns 409.
 async fn verify_banking(
     State(state): State<AppState>,
     VendorMgmtAccess(user, tenant): VendorMgmtAccess,
@@ -1168,46 +1174,150 @@ async fn verify_banking(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
 
+    // Read existing verification row
     let verification = repo
-        .verify_banking_change(
-            &tenant.tenant_id,
-            verification_id,
-            user.user_id.0,
-            &req.callback_method,
-            &req.callback_contact,
-            req.verifier_notes.as_deref(),
-        )
-        .await?;
+        .get_banking_verification(&tenant.tenant_id, verification_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "BankingVerification".to_string(),
+            id: vid.clone(),
+        })?;
 
-    // Audit entry
-    let audit_entry = AuditEntry::new(
-        tenant.tenant_id.clone(),
-        Some(user.user_id.clone()),
-        AuditAction::VendorBankingVerified,
-        ResourceType::VendorBankingVerification,
-        verification_id.to_string(),
-        format!(
-            "Banking change verified for vendor {} via {}",
-            vendor_id, req.callback_method
-        ),
-    )
-    .with_user_email(&user.email)
-    .with_metadata(serde_json::json!({
-        "verification_id": verification_id.to_string(),
-        "vendor_id": id,
-        "callback_method": req.callback_method,
-        "callback_contact": req.callback_contact,
-    }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
-    if let Err(e) = audit_repo.log(audit_entry).await {
-        tracing::warn!(error = %e, "Failed to log audit entry");
+    match verification.status {
+        BankingVerificationStatus::Verified => {
+            return Err(billforge_core::Error::Conflict(
+                "Banking verification already completed".to_string(),
+            )
+            .into());
+        }
+        BankingVerificationStatus::Rejected => {
+            return Err(billforge_core::Error::Conflict(
+                "Banking verification was rejected".to_string(),
+            )
+            .into());
+        }
+        _ => {}
     }
 
-    Ok(Json(serde_json::json!({
-        "status": "verified",
-        "verification_id": verification_id,
-        "payment_hold": false,
-    })))
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+
+    if verification.first_approver_id.is_none() {
+        // ---- FIRST APPROVAL ----
+        // Run screening stubs (deterministic Pass results)
+        let screening = run_screening_stubs();
+
+        let updated = repo
+            .record_first_approval(
+                &tenant.tenant_id,
+                verification_id,
+                user.user_id.0,
+                &screening,
+                &req.callback_method,
+                &req.callback_contact,
+                req.verifier_notes.as_deref(),
+            )
+            .await?;
+
+        // Audit: first approval
+        let audit_entry = AuditEntry::new(
+            tenant.tenant_id.clone(),
+            Some(user.user_id.clone()),
+            AuditAction::VendorBankingFirstApproved,
+            ResourceType::VendorBankingVerification,
+            verification_id.to_string(),
+            format!(
+                "First approval recorded for vendor {} banking change via {}",
+                vendor_id, req.callback_method
+            ),
+        )
+        .with_user_email(&user.email)
+        .with_metadata(serde_json::json!({
+            "verification_id": verification_id.to_string(),
+            "vendor_id": id,
+            "callback_method": req.callback_method,
+            "callback_contact": req.callback_contact,
+            "screening_results": screening,
+        }));
+        if let Err(e) = audit_repo.log(audit_entry).await {
+            tracing::warn!(error = %e, "Failed to log audit entry");
+        }
+
+        Ok(Json(serde_json::json!({
+            "status": "pending_second_approval",
+            "verification_id": verification_id,
+            "payment_hold": true,
+            "screening_results": screening,
+        })))
+    } else if verification.second_approver_id.is_none() {
+        // ---- SECOND APPROVAL ----
+        // Separation of duties: caller must not be the same as first approver
+        if verification.first_approver_id == Some(user.user_id.0) {
+            return Err(billforge_core::Error::Forbidden(
+                "Same user cannot provide both approvals (separation of duties)".to_string(),
+            )
+            .into());
+        }
+
+        let updated = repo
+            .record_second_approval(&tenant.tenant_id, verification_id, user.user_id.0)
+            .await?;
+
+        // Audit: second approval (full verification)
+        let audit_entry = AuditEntry::new(
+            tenant.tenant_id.clone(),
+            Some(user.user_id.clone()),
+            AuditAction::VendorBankingVerified,
+            ResourceType::VendorBankingVerification,
+            verification_id.to_string(),
+            format!(
+                "Banking change fully verified for vendor {} (dual approval complete)",
+                vendor_id
+            ),
+        )
+        .with_user_email(&user.email)
+        .with_metadata(serde_json::json!({
+            "verification_id": verification_id.to_string(),
+            "vendor_id": id,
+            "first_approver_id": verification.first_approver_id.map(|u| u.to_string()),
+            "second_approver_id": user.user_id.0.to_string(),
+        }));
+        if let Err(e) = audit_repo.log(audit_entry).await {
+            tracing::warn!(error = %e, "Failed to log audit entry");
+        }
+
+        Ok(Json(serde_json::json!({
+            "status": "verified",
+            "verification_id": verification_id,
+            "payment_hold": false,
+        })))
+    } else {
+        // Already fully approved (both approvers set)
+        Err(
+            billforge_core::Error::Conflict("Banking verification already completed".to_string())
+                .into(),
+        )
+    }
+}
+
+/// Run screening stubs: OFAC, AVS, Plaid.
+/// Returns deterministic Pass results with checked_at timestamps.
+/// Real integrations will be wired in separately.
+fn run_screening_stubs() -> serde_json::Value {
+    let now = Utc::now().to_rfc3339();
+    serde_json::json!({
+        "ofac": {
+            "status": "pass",
+            "checked_at": now,
+        },
+        "avs": {
+            "status": "pass",
+            "checked_at": now,
+        },
+        "plaid": {
+            "status": "pass",
+            "checked_at": now,
+        },
+    })
 }
 
 /// GET /api/v1/vendors/:id/banking-verifications

@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use billforge_reporting::DashboardSummary;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -33,6 +34,7 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/analytics", get(approval_analytics))
         .route("/approvals/sla", get(approval_sla))
         .route("/cash-flow/obligations", get(cash_flow_obligations))
+        .route("/cash-flow/forecast", get(ap_cash_flow_forecast))
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
         .route("/digests/:id", delete(delete_digest))
@@ -868,6 +870,349 @@ async fn cash_flow_obligations(
         .collect();
 
     Ok(Json(obligations))
+}
+
+// ---------------------------------------------------------------------------
+// AP-driven cash flow forecast (13-week CFO view)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ForecastBreakdownEntry {
+    pub name: String,
+    pub amount_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ForecastDay {
+    pub date: chrono::NaiveDate,
+    pub expected_amount: i64,
+    pub low_band: i64,
+    pub high_band: i64,
+    pub vendor_breakdown: Vec<ForecastBreakdownEntry>,
+    pub gl_breakdown: Vec<ForecastBreakdownEntry>,
+    pub funding_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ForecastWeek {
+    pub week_start: chrono::NaiveDate,
+    pub week_end: chrono::NaiveDate,
+    pub expected_amount: i64,
+    pub low_band: i64,
+    pub high_band: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ForecastMonth {
+    pub month: String,
+    pub expected_amount: i64,
+    pub low_band: i64,
+    pub high_band: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApCashFlowForecast {
+    pub as_of_date: chrono::NaiveDate,
+    pub horizon_weeks: i32,
+    pub daily: Vec<ForecastDay>,
+    pub weekly: Vec<ForecastWeek>,
+    pub monthly: Vec<ForecastMonth>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForecastQuery {
+    horizon_weeks: Option<i32>,
+    as_of_date: Option<chrono::NaiveDate>,
+    min_daily_funding_threshold: Option<i64>,
+}
+
+#[derive(Debug)]
+struct InvoiceForecastRow {
+    invoice_id: Uuid,
+    vendor_name: String,
+    amount_cents: i64,
+    processing_status: String,
+    due_date: Option<chrono::NaiveDate>,
+    discount_deadline: Option<chrono::NaiveDate>,
+    discount_percent: Option<f64>,
+    discount_captured_at: Option<chrono::DateTime<chrono::Utc>>,
+    discount_missed_at: Option<chrono::DateTime<chrono::Utc>>,
+    gl_code: Option<String>,
+}
+
+/// Return the confidence factor for a given approval status.
+/// Returns (low_factor, high_factor) relative to the expected amount.
+fn confidence_band(status: &str) -> (f64, f64) {
+    match status {
+        "approved" | "ready_for_payment" => (1.0, 1.0),
+        "pending_approval" => (0.85, 1.15),
+        "submitted" => (0.70, 1.30),
+        _ => (0.70, 1.30),
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/reports/cash-flow/forecast", tag = "Reports", responses((status = 200, description = "AP cash flow forecast")))]
+async fn ap_cash_flow_forecast(
+    State(state): State<AppState>,
+    ReportingAccess(_user, tenant): ReportingAccess,
+    Query(params): Query<ForecastQuery>,
+) -> ApiResult<Json<ApCashFlowForecast>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let horizon_weeks = params.horizon_weeks.unwrap_or(13).clamp(1, 52);
+    let as_of_date = params
+        .as_of_date
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let horizon_end = as_of_date + chrono::Duration::weeks(horizon_weeks as i64);
+
+    // Fetch active invoices with their EPD data and GL codes
+    let rows = sqlx::query_as::<_, (
+        Uuid,
+        String,
+        i64,
+        String,
+        Option<chrono::NaiveDate>,
+        Option<chrono::NaiveDate>,
+        Option<f64>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+    )>(
+        r#"
+        SELECT
+            i.id,
+            i.vendor_name,
+            i.total_amount_cents,
+            i.processing_status,
+            i.due_date,
+            i.discount_deadline,
+            CAST(i.discount_percent AS DOUBLE PRECISION),
+            i.discount_captured_at,
+            i.discount_missed_at,
+            cs.suggested_gl_code
+        FROM invoices i
+        LEFT JOIN LATERAL (
+            SELECT suggested_gl_code
+            FROM category_suggestions
+            WHERE invoice_id = i.id
+              AND accepted_gl_code IS TRUE
+              AND suggested_gl_code IS NOT NULL
+            LIMIT 1
+        ) cs ON TRUE
+        WHERE i.tenant_id = $1
+          AND i.processing_status IN ('submitted', 'pending_approval', 'approved', 'ready_for_payment')
+          AND i.due_date IS NOT NULL
+        ORDER BY i.due_date ASC
+        LIMIT 1000
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query forecast data: {}", e)))?;
+
+    let today = chrono::Utc::now().date_naive();
+
+    // Build per-invoice forecast rows with effective pay date
+    let invoice_rows: Vec<InvoiceForecastRow> = rows
+        .into_iter()
+        .map(|row| InvoiceForecastRow {
+            invoice_id: row.0,
+            vendor_name: row.1,
+            amount_cents: row.2,
+            processing_status: row.3,
+            due_date: row.4,
+            discount_deadline: row.5,
+            discount_percent: row.6,
+            discount_captured_at: row.7,
+            discount_missed_at: row.8,
+            gl_code: row.9,
+        })
+        .collect();
+
+    // For each invoice, compute effective_pay_date
+    // Returns (effective_date, effective_amount_cents)
+    let invoice_contributions: Vec<(chrono::NaiveDate, i64, f64, f64, &InvoiceForecastRow)> =
+        invoice_rows
+            .iter()
+            .filter_map(|inv| {
+                let due = inv.due_date?;
+                let mut effective_date = due;
+                let mut effective_amount = inv.amount_cents as f64;
+
+                // Projected payment date adjustment (same logic as cash_flow_obligations)
+                match inv.processing_status.as_str() {
+                    "approved" | "ready_for_payment" => {}
+                    "pending_approval" => {
+                        effective_date = due.max(today + chrono::Duration::days(1));
+                    }
+                    _ => {}
+                }
+
+                // EPD: if discount deadline is still active and in the future, consider it
+                let epd_active = inv.discount_captured_at.is_none()
+                    && inv.discount_missed_at.is_none()
+                    && inv.discount_deadline.is_some()
+                    && inv.discount_percent.map_or(false, |p| p > 0.0);
+
+                if epd_active {
+                    if let Some(dd) = inv.discount_deadline {
+                        if dd >= today && dd <= effective_date {
+                            // Economically beneficial: pay early to get discount
+                            effective_date = dd;
+                            if let Some(pct) = inv.discount_percent {
+                                effective_amount = inv.amount_cents as f64 * (1.0 - pct / 100.0);
+                            }
+                        }
+                    }
+                }
+
+                // Only include invoices within the forecast horizon
+                if effective_date < as_of_date || effective_date > horizon_end {
+                    return None;
+                }
+
+                let (low_f, high_f) = confidence_band(&inv.processing_status);
+                Some((effective_date, effective_amount as i64, low_f, high_f, inv))
+            })
+            .collect();
+
+    // Build daily buckets
+    let num_days = (horizon_end - as_of_date).num_days() as usize;
+    let mut daily_expected: Vec<i64> = vec![0; num_days];
+    let mut daily_low: Vec<i64> = vec![0; num_days];
+    let mut daily_high: Vec<i64> = vec![0; num_days];
+    let mut daily_vendors: Vec<std::collections::HashMap<String, i64>> =
+        vec![std::collections::HashMap::new(); num_days];
+    let mut daily_gl: Vec<std::collections::HashMap<String, i64>> =
+        vec![std::collections::HashMap::new(); num_days];
+
+    for (date, amount, low_f, high_f, _inv) in &invoice_contributions {
+        let offset = (*date - as_of_date).num_days() as usize;
+        if offset < num_days {
+            daily_expected[offset] += amount;
+            daily_low[offset] += (*amount as f64 * low_f) as i64;
+            daily_high[offset] += (*amount as f64 * high_f) as i64;
+        }
+    }
+
+    // Aggregate vendor and GL breakdowns per day
+    for (date, amount, _low_f, _high_f, inv) in &invoice_contributions {
+        let offset = (*date - as_of_date).num_days() as usize;
+        if offset < num_days {
+            *daily_vendors[offset]
+                .entry(inv.vendor_name.clone())
+                .or_insert(0) += amount;
+            if let Some(ref gl) = inv.gl_code {
+                *daily_gl[offset].entry(gl.clone()).or_insert(0) += amount;
+            } else {
+                *daily_gl[offset]
+                    .entry("Uncategorized".to_string())
+                    .or_insert(0) += amount;
+            }
+        }
+    }
+
+    // Compute funding threshold: if provided use it, otherwise compute median
+    let nonzero_amounts: Vec<i64> = daily_expected.iter().copied().filter(|&a| a > 0).collect();
+    let median_amount = if nonzero_amounts.is_empty() {
+        0i64
+    } else {
+        let mut sorted = nonzero_amounts.clone();
+        sorted.sort();
+        sorted[sorted.len() / 2]
+    };
+    let funding_threshold = params
+        .min_daily_funding_threshold
+        .unwrap_or_else(|| (median_amount as f64 * 1.5) as i64);
+
+    // Build daily forecast
+    let daily: Vec<ForecastDay> = (0..num_days)
+        .map(|i| {
+            let date = as_of_date + chrono::Duration::days(i as i64);
+            let expected = daily_expected[i];
+            let mut vendor_breakdown: Vec<ForecastBreakdownEntry> = daily_vendors[i]
+                .iter()
+                .map(|(k, &v)| ForecastBreakdownEntry {
+                    name: k.clone(),
+                    amount_cents: v,
+                })
+                .collect();
+            vendor_breakdown.sort_by(|a, b| b.amount_cents.cmp(&a.amount_cents));
+            let mut gl_breakdown: Vec<ForecastBreakdownEntry> = daily_gl[i]
+                .iter()
+                .map(|(k, &v)| ForecastBreakdownEntry {
+                    name: k.clone(),
+                    amount_cents: v,
+                })
+                .collect();
+            gl_breakdown.sort_by(|a, b| b.amount_cents.cmp(&a.amount_cents));
+            ForecastDay {
+                date,
+                expected_amount: expected,
+                low_band: daily_low[i],
+                high_band: daily_high[i],
+                vendor_breakdown,
+                gl_breakdown,
+                funding_required: funding_threshold > 0 && expected > funding_threshold,
+            }
+        })
+        .collect();
+
+    // Build weekly buckets
+    let num_weeks = horizon_weeks as usize;
+    let weekly: Vec<ForecastWeek> = (0..num_weeks)
+        .map(|w| {
+            let week_start = as_of_date + chrono::Duration::weeks(w as i64);
+            let week_end = (week_start + chrono::Duration::days(6)).min(horizon_end);
+            let start_offset = (week_start - as_of_date).num_days() as usize;
+            let end_offset = ((week_end - as_of_date).num_days() as usize).min(num_days);
+            let mut expected = 0i64;
+            let mut low = 0i64;
+            let mut high = 0i64;
+            for d in start_offset..=end_offset {
+                if d < num_days {
+                    expected += daily_expected[d];
+                    low += daily_low[d];
+                    high += daily_high[d];
+                }
+            }
+            ForecastWeek {
+                week_start,
+                week_end,
+                expected_amount: expected,
+                low_band: low,
+                high_band: high,
+            }
+        })
+        .collect();
+
+    // Build monthly buckets
+    let mut month_map: std::collections::BTreeMap<String, (i64, i64, i64)> =
+        std::collections::BTreeMap::new();
+    for day in &daily {
+        let month_label = format!("{}-{:02}", day.date.year(), day.date.month());
+        let entry = month_map.entry(month_label).or_insert((0, 0, 0));
+        entry.0 += day.expected_amount;
+        entry.1 += day.low_band;
+        entry.2 += day.high_band;
+    }
+    let monthly: Vec<ForecastMonth> = month_map
+        .into_iter()
+        .map(|(month, (expected, low, high))| ForecastMonth {
+            month,
+            expected_amount: expected,
+            low_band: low,
+            high_band: high,
+        })
+        .collect();
+
+    Ok(Json(ApCashFlowForecast {
+        as_of_date,
+        horizon_weeks,
+        daily,
+        weekly,
+        monthly,
+    }))
 }
 
 #[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]

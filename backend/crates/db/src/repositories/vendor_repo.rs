@@ -495,7 +495,143 @@ impl VendorRepositoryImpl {
             requested_at: now,
             verified_by: None,
             verified_at: None,
+            first_approver_id: None,
+            first_approved_at: None,
+            second_approver_id: None,
+            second_approved_at: None,
+            screening_results: serde_json::Value::Object(serde_json::Map::new()),
         })
+    }
+
+    /// Record the first approval: writes screening results, sets first_approver,
+    /// changes status to pending_second_approval. Does NOT clear payment_hold.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_first_approval(
+        &self,
+        tenant_id: &TenantId,
+        verification_id: Uuid,
+        approver_id: Uuid,
+        screening_results: &serde_json::Value,
+        callback_method: &str,
+        callback_contact: &str,
+        notes: Option<&str>,
+    ) -> Result<BankingVerification> {
+        let now = chrono::Utc::now();
+
+        let result = sqlx::query_as::<_, VerificationRow>(
+            r#"UPDATE vendor_banking_verifications SET
+                status = 'pending_second_approval',
+                first_approver_id = $3,
+                first_approved_at = $4,
+                screening_results = $5,
+                callback_method = $6,
+                callback_contact = $7,
+                verifier_notes = $8
+            WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
+            RETURNING id, vendor_id, previous_account_last_four, new_account_last_four,
+                      status, requested_by, requested_at, verified_by, verified_at,
+                      callback_method, callback_contact, verifier_notes,
+                      first_approver_id, first_approved_at,
+                      second_approver_id, second_approved_at,
+                      screening_results"#,
+        )
+        .bind(verification_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(approver_id)
+        .bind(now)
+        .bind(serde_json::to_value(screening_results).unwrap_or_default())
+        .bind(callback_method)
+        .bind(callback_contact)
+        .bind(notes)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to record first approval: {}", e)))?;
+
+        let row = result.ok_or_else(|| Error::NotFound {
+            resource_type: "BankingVerification".to_string(),
+            id: verification_id.to_string(),
+        })?;
+
+        Ok(self.verification_row_to_domain(&row, tenant_id))
+    }
+
+    /// Record the second approval: verifies approver differs from first,
+    /// sets status = verified, clears payment_hold on the vendor.
+    pub async fn record_second_approval(
+        &self,
+        tenant_id: &TenantId,
+        verification_id: Uuid,
+        approver_id: Uuid,
+    ) -> Result<BankingVerification> {
+        let now = chrono::Utc::now();
+
+        // Update verification row with second approver
+        let result = sqlx::query_as::<_, VerificationRow>(
+            r#"UPDATE vendor_banking_verifications SET
+                status = 'verified',
+                verified_by = $3,
+                verified_at = $4,
+                second_approver_id = $3,
+                second_approved_at = $4
+            WHERE id = $1 AND tenant_id = $2 AND status = 'pending_second_approval'
+            RETURNING id, vendor_id, previous_account_last_four, new_account_last_four,
+                      status, requested_by, requested_at, verified_by, verified_at,
+                      callback_method, callback_contact, verifier_notes,
+                      first_approver_id, first_approved_at,
+                      second_approver_id, second_approved_at,
+                      screening_results"#,
+        )
+        .bind(verification_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(approver_id)
+        .bind(now)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to record second approval: {}", e)))?;
+
+        let row = result.ok_or_else(|| Error::NotFound {
+            resource_type: "BankingVerification".to_string(),
+            id: verification_id.to_string(),
+        })?;
+
+        // Clear payment hold on the vendor
+        sqlx::query(
+            "UPDATE vendors SET payment_hold = false, payment_hold_reason = NULL, updated_at = $3 \
+             WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(row.vendor_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to clear payment hold: {}", e)))?;
+
+        Ok(self.verification_row_to_domain(&row, tenant_id))
+    }
+
+    /// Fetch a single banking verification by ID.
+    pub async fn get_banking_verification(
+        &self,
+        tenant_id: &TenantId,
+        verification_id: Uuid,
+    ) -> Result<Option<BankingVerification>> {
+        let result = sqlx::query_as::<_, VerificationRow>(
+            r#"SELECT id, vendor_id, previous_account_last_four, new_account_last_four,
+                      status, requested_by, requested_at, verified_by, verified_at,
+                      callback_method, callback_contact, verifier_notes,
+                      first_approver_id, first_approved_at,
+                      second_approver_id, second_approved_at,
+                      screening_results
+               FROM vendor_banking_verifications
+               WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(verification_id)
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get banking verification: {}", e)))?;
+
+        Ok(result.map(|r| self.verification_row_to_domain(&r, tenant_id)))
     }
 
     /// Verify a pending banking change: sets status = verified, clears payment_hold.
@@ -522,7 +658,10 @@ impl VendorRepositoryImpl {
             WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
             RETURNING id, vendor_id, previous_account_last_four, new_account_last_four,
                       status, requested_by, requested_at, verified_by, verified_at,
-                      callback_method, callback_contact, verifier_notes"#,
+                      callback_method, callback_contact, verifier_notes,
+                      first_approver_id, first_approved_at,
+                      second_approver_id, second_approved_at,
+                      screening_results"#,
         )
         .bind(verification_id)
         .bind(*tenant_id.as_uuid())
@@ -552,29 +691,11 @@ impl VendorRepositoryImpl {
         .await
         .map_err(|e| Error::Database(format!("Failed to clear payment hold: {}", e)))?;
 
-        Ok(BankingVerification {
-            id: row.id,
-            tenant_id: tenant_id.clone(),
-            vendor_id: VendorId(row.vendor_id),
-            previous_account_last_four: row.previous_account_last_four,
-            new_account_last_four: row.new_account_last_four,
-            status: BankingVerificationStatus::Verified,
-            callback_method: match row.callback_method.as_deref() {
-                Some("phone") => Some(billforge_core::domain::CallbackMethod::Phone),
-                Some("in_person") => Some(billforge_core::domain::CallbackMethod::InPerson),
-                Some("known_email") => Some(billforge_core::domain::CallbackMethod::KnownEmail),
-                _ => None,
-            },
-            callback_contact: row.callback_contact,
-            verifier_notes: row.verifier_notes,
-            requested_by: row.requested_by,
-            requested_at: row.requested_at,
-            verified_by: row.verified_by,
-            verified_at: row.verified_at,
-        })
+        Ok(self.verification_row_to_domain(&row, tenant_id))
     }
 
     /// Check if a vendor has a pending banking verification (used by ERP sync guard).
+    /// Also considers pending_second_approval as blocking.
     pub async fn has_pending_banking_verification(
         &self,
         tenant_id: &TenantId,
@@ -582,7 +703,7 @@ impl VendorRepositoryImpl {
     ) -> Result<bool> {
         let row: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM vendor_banking_verifications \
-             WHERE tenant_id = $1 AND vendor_id = $2 AND status = 'pending'",
+             WHERE tenant_id = $1 AND vendor_id = $2 AND status IN ('pending', 'pending_second_approval')",
         )
         .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
@@ -600,12 +721,15 @@ impl VendorRepositoryImpl {
         vendor_id: &VendorId,
     ) -> Result<Vec<BankingVerification>> {
         let rows = sqlx::query_as::<_, VerificationRow>(
-            "SELECT id, vendor_id, previous_account_last_four, new_account_last_four, \
-                    status, requested_by, requested_at, verified_by, verified_at, \
-                    callback_method, callback_contact, verifier_notes \
-             FROM vendor_banking_verifications \
-             WHERE tenant_id = $1 AND vendor_id = $2 \
-             ORDER BY requested_at DESC",
+            r#"SELECT id, vendor_id, previous_account_last_four, new_account_last_four,
+                      status, requested_by, requested_at, verified_by, verified_at,
+                      callback_method, callback_contact, verifier_notes,
+                      first_approver_id, first_approved_at,
+                      second_approver_id, second_approved_at,
+                      screening_results
+               FROM vendor_banking_verifications
+               WHERE tenant_id = $1 AND vendor_id = $2
+               ORDER BY requested_at DESC"#,
         )
         .bind(*tenant_id.as_uuid())
         .bind(vendor_id.0)
@@ -615,31 +739,46 @@ impl VendorRepositoryImpl {
 
         Ok(rows
             .into_iter()
-            .map(|r| BankingVerification {
-                id: r.id,
-                tenant_id: tenant_id.clone(),
-                vendor_id: VendorId(r.vendor_id),
-                previous_account_last_four: r.previous_account_last_four,
-                new_account_last_four: r.new_account_last_four,
-                status: match r.status.as_str() {
-                    "verified" => BankingVerificationStatus::Verified,
-                    "rejected" => BankingVerificationStatus::Rejected,
-                    _ => BankingVerificationStatus::Pending,
-                },
-                callback_method: match r.callback_method.as_deref() {
-                    Some("phone") => Some(billforge_core::domain::CallbackMethod::Phone),
-                    Some("in_person") => Some(billforge_core::domain::CallbackMethod::InPerson),
-                    Some("known_email") => Some(billforge_core::domain::CallbackMethod::KnownEmail),
-                    _ => None,
-                },
-                callback_contact: r.callback_contact,
-                verifier_notes: r.verifier_notes,
-                requested_by: r.requested_by,
-                requested_at: r.requested_at,
-                verified_by: r.verified_by,
-                verified_at: r.verified_at,
-            })
+            .map(|r| self.verification_row_to_domain(&r, tenant_id))
             .collect())
+    }
+
+    /// Convert a VerificationRow into the domain BankingVerification type.
+    fn verification_row_to_domain(
+        &self,
+        r: &VerificationRow,
+        tenant_id: &TenantId,
+    ) -> BankingVerification {
+        BankingVerification {
+            id: r.id,
+            tenant_id: tenant_id.clone(),
+            vendor_id: VendorId(r.vendor_id),
+            previous_account_last_four: r.previous_account_last_four.clone(),
+            new_account_last_four: r.new_account_last_four.clone(),
+            status: match r.status.as_str() {
+                "pending_second_approval" => BankingVerificationStatus::PendingSecondApproval,
+                "verified" => BankingVerificationStatus::Verified,
+                "rejected" => BankingVerificationStatus::Rejected,
+                _ => BankingVerificationStatus::Pending,
+            },
+            callback_method: match r.callback_method.as_deref() {
+                Some("phone") => Some(billforge_core::domain::CallbackMethod::Phone),
+                Some("in_person") => Some(billforge_core::domain::CallbackMethod::InPerson),
+                Some("known_email") => Some(billforge_core::domain::CallbackMethod::KnownEmail),
+                _ => None,
+            },
+            callback_contact: r.callback_contact.clone(),
+            verifier_notes: r.verifier_notes.clone(),
+            requested_by: r.requested_by,
+            requested_at: r.requested_at,
+            verified_by: r.verified_by,
+            verified_at: r.verified_at,
+            first_approver_id: r.first_approver_id,
+            first_approved_at: r.first_approved_at,
+            second_approver_id: r.second_approver_id,
+            second_approved_at: r.second_approved_at,
+            screening_results: r.screening_results.clone(),
+        }
     }
 }
 
@@ -658,6 +797,12 @@ struct VerificationRow {
     callback_method: Option<String>,
     callback_contact: Option<String>,
     verifier_notes: Option<String>,
+    // Dual-approval columns (migration 098)
+    first_approver_id: Option<Uuid>,
+    first_approved_at: Option<chrono::DateTime<Utc>>,
+    second_approver_id: Option<Uuid>,
+    second_approved_at: Option<chrono::DateTime<Utc>>,
+    screening_results: serde_json::Value,
 }
 
 /// Helper struct for mapping message rows
