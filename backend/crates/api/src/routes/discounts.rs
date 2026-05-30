@@ -412,8 +412,8 @@ async fn get_kpi(
 ) -> ApiResult<Json<KpiResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let stats_30d = fetch_kpi_stats(&pool, *tenant.tenant_id.as_uuid(), "30 days").await?;
-    let stats_90d = fetch_kpi_stats(&pool, *tenant.tenant_id.as_uuid(), "90 days").await?;
+    let stats_30d = fetch_kpi_stats(&pool, *tenant.tenant_id.as_uuid(), 30).await?;
+    let stats_90d = fetch_kpi_stats(&pool, *tenant.tenant_id.as_uuid(), 90).await?;
 
     let total_30d = stats_30d.captured_count + stats_30d.missed_count;
     let capture_rate = if total_30d > 0 {
@@ -438,30 +438,28 @@ async fn get_kpi(
 async fn fetch_kpi_stats(
     pool: &sqlx::PgPool,
     tenant_id: Uuid,
-    interval: &str,
+    interval_days: i32,
 ) -> Result<KpiStatRow, billforge_core::Error> {
-    let sql = format!(
-        r#"SELECT
-             COUNT(*) FILTER (WHERE discount_captured_at >= NOW() - INTERVAL '{interval}') AS captured_count,
+    let sql = r#"SELECT
+             COUNT(*) FILTER (WHERE discount_captured_at >= NOW() - make_interval(days => $2)) AS captured_count,
              COALESCE(SUM(
-               CASE WHEN discount_captured_at >= NOW() - INTERVAL '{interval}'
+               CASE WHEN discount_captured_at >= NOW() - make_interval(days => $2)
                     THEN ROUND(total_amount_cents * discount_percent / 100.0)
                     ELSE 0 END
              ), 0) AS captured_savings_cents,
-             COUNT(*) FILTER (WHERE discount_missed_at >= NOW() - INTERVAL '{interval}') AS missed_count,
+             COUNT(*) FILTER (WHERE discount_missed_at >= NOW() - make_interval(days => $2)) AS missed_count,
              COALESCE(SUM(
-               CASE WHEN discount_missed_at >= NOW() - INTERVAL '{interval}'
+               CASE WHEN discount_missed_at >= NOW() - make_interval(days => $2)
                     THEN ROUND(total_amount_cents * discount_percent / 100.0)
                     ELSE 0 END
              ), 0) AS missed_savings_cents
            FROM invoices
            WHERE tenant_id = $1
-             AND (discount_captured_at IS NOT NULL OR discount_missed_at IS NOT NULL)"#,
-        interval = interval
-    );
+             AND (discount_captured_at IS NOT NULL OR discount_missed_at IS NOT NULL)"#;
 
-    sqlx::query_as::<_, KpiStatRow>(&sql)
+    sqlx::query_as::<_, KpiStatRow>(sql)
         .bind(tenant_id)
+        .bind(interval_days)
         .fetch_one(pool)
         .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch KPI stats: {}", e)))
