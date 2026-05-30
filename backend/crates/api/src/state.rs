@@ -296,6 +296,7 @@ impl AppState {
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS unit_price_amount BIGINT;
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_amount BIGINT;
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_currency TEXT NOT NULL DEFAULT 'USD';
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS notes TEXT;
         "#,
         )
         .execute(pool)
