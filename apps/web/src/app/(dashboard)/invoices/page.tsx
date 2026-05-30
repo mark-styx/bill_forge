@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { invoicesApi } from '@/lib/api';
@@ -8,14 +8,11 @@ import { useAuthStore } from '@/stores/auth';
 import { useStatusConfig } from '@/hooks/useStatusConfig';
 import InvoicePanel from '@/components/InvoicePanel';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
+import { AdvancedDataTable, ColumnDef } from '@/components/ui/advanced-data-table';
 import {
   Plus,
-  Search,
-  Filter,
   Download,
   FileText,
-  ChevronLeft,
-  ChevronRight,
   AlertTriangle,
 } from 'lucide-react';
 
@@ -24,14 +21,20 @@ export default function InvoicesPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { hasModule } = useAuthStore();
   const { getStatusDisplay, getProcessingStatuses } = useStatusConfig();
   const processingStatuses = getProcessingStatuses();
 
+  // Reset bulk selection when page, search, or status filter changes
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [page, search, statusFilter]);
+
   const { data, isLoading } = useQuery({
     queryKey: ['invoices', page, search, statusFilter],
-    queryFn: () => invoicesApi.list({ 
-      page, 
+    queryFn: () => invoicesApi.list({
+      page,
       per_page: 25,
       ...(statusFilter && { processing_status: statusFilter }),
     }),
@@ -42,6 +45,116 @@ export default function InvoicesPage() {
 
   // Check if invoice capture module is enabled for upload functionality
   const canUpload = hasModule('invoice_capture');
+
+  const columns: ColumnDef<Record<string, any>>[] = useMemo(() => [
+    {
+      id: 'invoice',
+      header: 'Invoice',
+      cell: (invoice) => {
+        const isError = invoice.capture_status === 'failed';
+        return (
+          <div className="flex items-center gap-2">
+            {isError && (
+              <AlertTriangle className="w-4 h-4 text-error flex-shrink-0" />
+            )}
+            <div>
+              <p className="font-medium text-foreground">{invoice.invoice_number}</p>
+              <p className="text-xs text-muted-foreground">
+                {invoice.id.slice(0, 8)}...
+              </p>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'vendor',
+      header: 'Vendor',
+      cell: (invoice) => <span className="text-foreground">{invoice.vendor_name}</span>,
+    },
+    {
+      id: 'amount',
+      header: 'Amount',
+      cell: (invoice) => (
+        <>
+          <span className="font-medium text-foreground">
+            ${(invoice.total_amount.amount / 100).toLocaleString()}
+          </span>
+          <span className="text-muted-foreground ml-1 text-xs">
+            {invoice.total_amount.currency}
+          </span>
+        </>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      cell: (invoice) => {
+        const statusDisplay = getStatusDisplay(invoice.processing_status);
+        return (
+          <div className="flex flex-col gap-1">
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusDisplay.bg} ${statusDisplay.text}`}>
+              {statusDisplay.label}
+            </span>
+            {invoice.ocr_confidence !== undefined &&
+             invoice.ocr_confidence !== null &&
+             invoice.ocr_confidence < 0.85 && (
+              <ConfidenceBadge confidence={invoice.ocr_confidence} size="sm" showLabel={false} />
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: 'date',
+      header: 'Date',
+      cell: (invoice) => (
+        <span className="text-muted-foreground">{invoice.invoice_date || '—'}</span>
+      ),
+    },
+    {
+      id: 'department',
+      header: 'Department',
+      cell: (invoice) => (
+        <span className="text-muted-foreground">{invoice.department || '—'}</span>
+      ),
+    },
+  ], [getStatusDisplay]);
+
+  const emptyState = (
+    <div className="flex flex-col items-center">
+      <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center mb-3">
+        <FileText className="w-6 h-6 text-muted-foreground" />
+      </div>
+      <p className="text-foreground font-medium mb-1">No invoices found</p>
+      <p className="text-sm text-muted-foreground mb-4">
+        {statusFilter ? 'Try adjusting your filters' : 'Get started by uploading your first invoice'}
+      </p>
+      {canUpload && !statusFilter && (
+        <Link href="/invoices/upload" className="btn btn-primary btn-sm">
+          <Plus className="w-4 h-4 mr-1.5" />
+          Upload Invoice
+        </Link>
+      )}
+    </div>
+  );
+
+  const toolbarActions = selectedIds.length > 0 ? (
+    <div className="flex items-center gap-2 text-sm">
+      <button className="btn btn-secondary btn-sm" disabled>
+        Bulk Approve
+      </button>
+      <button className="btn btn-secondary btn-sm" disabled>
+        Bulk Export
+      </button>
+      <button
+        className="text-sm text-muted-foreground hover:text-foreground"
+        onClick={() => setSelectedIds([])}
+      >
+        Clear
+      </button>
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -67,168 +180,52 @@ export default function InvoicesPage() {
         </div>
       </div>
 
-      {/* Search & Filters */}
-      <div className="card p-4">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
-              type="text"
-              placeholder="Search invoices..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="input pl-9"
-            />
-          </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="input w-auto"
-          >
-            <option value="">All Statuses</option>
-            {processingStatuses.map(s => (
-              <option key={s.key} value={s.key}>{s.label}</option>
-            ))}
-          </select>
-          <button className="btn btn-secondary btn-sm">
-            <Filter className="w-4 h-4 mr-1.5" />
-            More Filters
-          </button>
-        </div>
+      {/* Status filter (above table) */}
+      <div className="flex items-center gap-3">
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="input w-auto"
+        >
+          <option value="">All Statuses</option>
+          {processingStatuses.map(s => (
+            <option key={s.key} value={s.key}>{s.label}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Table */}
-      <div className="table-container bg-card">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Invoice</th>
-              <th>Vendor</th>
-              <th>Amount</th>
-              <th>Status</th>
-              <th>Date</th>
-              <th>Department</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              <tr>
-                <td colSpan={6} className="text-center py-12 text-muted-foreground">
-                  <div className="flex items-center justify-center gap-2">
-                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                    Loading invoices...
-                  </div>
-                </td>
-              </tr>
-            ) : invoices.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-center py-12">
-                  <div className="flex flex-col items-center">
-                    <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center mb-3">
-                      <FileText className="w-6 h-6 text-muted-foreground" />
-                    </div>
-                    <p className="text-foreground font-medium mb-1">No invoices found</p>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      {statusFilter ? 'Try adjusting your filters' : 'Get started by uploading your first invoice'}
-                    </p>
-                    {canUpload && !statusFilter && (
-                      <Link href="/invoices/upload" className="btn btn-primary btn-sm">
-                        <Plus className="w-4 h-4 mr-1.5" />
-                        Upload Invoice
-                      </Link>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ) : (
-              invoices.map((invoice) => {
-                const statusDisplay = getStatusDisplay(invoice.processing_status);
-                const isError = invoice.capture_status === 'failed';
-
-                return (
-                  <tr
-                    key={invoice.id}
-                    onClick={() => setSelectedInvoiceId(invoice.id)}
-                    className="cursor-pointer hover:bg-secondary/50 transition-colors"
-                  >
-                    <td>
-                      <div className="flex items-center gap-2">
-                        {isError && (
-                          <AlertTriangle className="w-4 h-4 text-error flex-shrink-0" />
-                        )}
-                        <div>
-                          <p className="font-medium text-foreground">{invoice.invoice_number}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {invoice.id.slice(0, 8)}...
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="text-foreground">{invoice.vendor_name}</td>
-                    <td>
-                      <span className="font-medium text-foreground">
-                        ${(invoice.total_amount.amount / 100).toLocaleString()}
-                      </span>
-                      <span className="text-muted-foreground ml-1 text-xs">
-                        {invoice.total_amount.currency}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="flex flex-col gap-1">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusDisplay.bg} ${statusDisplay.text}`}>
-                          {statusDisplay.label}
-                        </span>
-                        {/* Show OCR confidence if available and not high (Sprint 3) */}
-                        {invoice.ocr_confidence !== undefined &&
-                         invoice.ocr_confidence !== null &&
-                         invoice.ocr_confidence < 0.85 && (
-                          <ConfidenceBadge confidence={invoice.ocr_confidence} size="sm" showLabel={false} />
-                        )}
-                      </div>
-                    </td>
-                    <td className="text-muted-foreground">
-                      {invoice.invoice_date || '—'}
-                    </td>
-                    <td className="text-muted-foreground">
-                      {(invoice as any).department || '—'}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-
-        {/* Pagination */}
-        {pagination && pagination.total_pages > 1 && (
-          <div className="px-4 py-3 border-t border-border flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              Showing {((pagination.page - 1) * pagination.per_page) + 1} to {Math.min(pagination.page * pagination.per_page, pagination.total_items)} of {pagination.total_items} invoices
-            </p>
-            <div className="flex gap-1">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 1}
-                className="btn btn-ghost btn-sm disabled:opacity-50"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page >= pagination.total_pages}
-                className="btn btn-ghost btn-sm disabled:opacity-50"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Advanced Data Table */}
+      <AdvancedDataTable
+        columns={columns}
+        data={invoices}
+        isLoading={isLoading}
+        getRowKey={(invoice) => invoice.id}
+        onRowClick={(invoice) => setSelectedInvoiceId(invoice.id)}
+        selectable
+        selectedRows={selectedIds}
+        onSelectionChange={setSelectedIds}
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search invoices..."
+        pagination={
+          pagination
+            ? {
+                page: pagination.page,
+                perPage: pagination.per_page,
+                totalItems: pagination.total_items,
+                totalPages: pagination.total_pages,
+                onPageChange: setPage,
+              }
+            : undefined
+        }
+        toolbarActions={toolbarActions}
+        emptyState={emptyState}
+      />
 
       {/* Invoice Panel */}
-      <InvoicePanel 
-        invoiceId={selectedInvoiceId} 
-        onClose={() => setSelectedInvoiceId(null)} 
+      <InvoicePanel
+        invoiceId={selectedInvoiceId}
+        onClose={() => setSelectedInvoiceId(null)}
       />
     </div>
   );
