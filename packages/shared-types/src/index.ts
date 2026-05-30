@@ -5,6 +5,15 @@
  * Migrated: ApiErrorBody, PaginationMeta, Money, InvoiceLineItem, Invoice,
  * CreateInvoiceInput.
  */
+
+// ---------------------------------------------------------------------------
+// Generated types from backend OpenAPI spec (utoipa → openapi-typescript)
+// ---------------------------------------------------------------------------
+import type { components as GeneratedComponents, paths as GeneratedPaths } from './generated';
+export type { components as ApiComponents, paths as ApiPaths } from './generated';
+
+/** Convenience alias for all generated schema types. */
+export type Schemas = GeneratedComponents['schemas'];
 export interface ApiErrorBody {
   error: {
     code: string;

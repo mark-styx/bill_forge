@@ -2,7 +2,7 @@
 // This ensures LAN/remote access works (browser won't try to hit localhost:8080).
 const API_BASE_URL = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
 
-import type { ApiErrorBody, PaginationMeta, DashboardKpis, Money, Invoice, InvoiceLineItem, CreateInvoiceInput } from '@billforge/shared-types';
+import type { ApiErrorBody, PaginationMeta, DashboardKpis, Money, Invoice, InvoiceLineItem, CreateInvoiceInput, Schemas } from '@billforge/shared-types';
 export type { ApiErrorBody, PaginationMeta, DashboardKpis, Money, Invoice, InvoiceLineItem, CreateInvoiceInput } from '@billforge/shared-types';
 
 export class ApiClientError extends Error {
@@ -2569,25 +2569,11 @@ export interface RouteInvoiceResponse {
   decision: RoutingDecision;
 }
 
-/** Workload distribution stats (mirrors WorkloadDistributionStats) */
-export interface WorkloadDistributionStats {
-  average_workload: number;
-  max_workload: number;
-  min_workload: number;
-  std_deviation: number;
-  variance_coefficient: number;
-  overloaded_count: number;
-  underloaded_count: number;
-}
+/** Workload distribution stats (mirrors WorkloadDistributionStatsResponse from OpenAPI) */
+export type WorkloadDistributionStats = Schemas['WorkloadDistributionStatsResponse'];
 
-/** Summary for a single approver's workload */
-export interface ApproverWorkloadSummary {
-  user_id: string;
-  active_approvals: number;
-  pending_approvals: number;
-  completed_this_week: number;
-  workload_score: number;
-}
+/** Summary for a single approver's workload (from OpenAPI) */
+export type ApproverWorkloadSummary = Schemas['ApproverWorkloadSummary'];
 
 /** Response from the workload endpoint */
 export interface WorkloadResponse {

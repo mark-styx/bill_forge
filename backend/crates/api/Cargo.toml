@@ -8,6 +8,10 @@ rust-version.workspace = true
 name = "billforge-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "export-openapi"
+path = "src/bin/export_openapi.rs"
+
 [dependencies]
 billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
