@@ -4,6 +4,11 @@
 //! resolves the recipient to a tenant, extracts PDF/image attachments, and
 //! enqueues OCR jobs. Unrecognised senders and emails with no usable
 //! attachments are routed to the triage queue.
+//!
+//! Database routing:
+//! - `inbound_email_messages`, `email_triage_queue`, `tenant_forwarding_addresses`
+//!   live in the **metadata** DB (they FK to `tenants(id)`).
+//! - `vendors`, `invoice_captures`, `invoices` live in the **tenant** DB.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -46,7 +51,7 @@ pub struct InboundAttachment {
 /// Outcome of processing a single inbound email.
 #[derive(Debug)]
 pub struct InboundEmailResult {
-    /// IDs of invoice capture rows created (one per usable attachment).
+    /// IDs of invoice rows created (one per usable attachment).
     pub capture_ids: Vec<Uuid>,
     /// True if the message was routed to triage instead of normal processing.
     pub triaged: bool,
@@ -61,10 +66,11 @@ pub struct InboundEmailResult {
 /// Processes an inbound email payload: resolve tenant, persist the message,
 /// extract attachments, match vendor by sender domain, enqueue OCR.
 pub struct InboundEmailHandler<'a> {
-    /// Metadata-level PgPool (contains `tenants`, `tenant_forwarding_addresses`).
+    /// Metadata-level PgPool (contains `tenants`, `tenant_forwarding_addresses`,
+    /// `inbound_email_messages`, `email_triage_queue`).
     pub metadata_pool: &'a PgPool,
-    /// Base domain for forwarding addresses (e.g. `billforge.com`).
-    pub email_domain: &'a str,
+    /// Tenant-level PgPool (contains `vendors`, `invoice_captures`, `invoices`).
+    pub tenant_pool: &'a PgPool,
 }
 
 impl<'a> InboundEmailHandler<'a> {
@@ -82,10 +88,7 @@ impl<'a> InboundEmailHandler<'a> {
         // 2. Extract sender domain
         let from_domain = extract_domain(&payload.from);
 
-        // 3. Get tenant pool
-        let tenant_pool = self.tenant_pool(tenant_uuid).await?;
-
-        // 4. Persist inbound_email_messages row
+        // 3. Persist inbound_email_messages row in METADATA DB
         let email_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO inbound_email_messages
                    (tenant_id, message_id, from_address, from_domain, subject, status, raw_payload)
@@ -98,11 +101,11 @@ impl<'a> InboundEmailHandler<'a> {
         .bind(&from_domain)
         .bind(&payload.subject)
         .bind(serde_json::to_value(payload).ok())
-        .fetch_one(&tenant_pool)
+        .fetch_one(self.metadata_pool)
         .await
         .map_err(|e| format!("Failed to persist inbound email message: {}", e))?;
 
-        // 5. Filter usable attachments (PDF or image)
+        // 4. Filter usable attachments (PDF or image)
         let usable: Vec<&InboundAttachment> = payload
             .attachments
             .iter()
@@ -110,19 +113,14 @@ impl<'a> InboundEmailHandler<'a> {
             .collect();
 
         if usable.is_empty() {
-            // No usable attachments → triage
-            self.create_triage_entry(
-                &tenant_pool,
-                email_id,
-                "No usable PDF/image attachments found",
-            )
-            .await?;
+            // No usable attachments → triage in METADATA DB
+            self.create_triage_entry(email_id, "No usable PDF/image attachments found")
+                .await?;
 
-            // Update status to triage
             sqlx::query("UPDATE inbound_email_messages SET status = 'triage', triage_reason = $2 WHERE id = $1")
                 .bind(email_id)
                 .bind("No usable PDF/image attachments found")
-                .execute(&tenant_pool)
+                .execute(self.metadata_pool)
                 .await
                 .map_err(|e| format!("Failed to update email status: {}", e))?;
 
@@ -133,12 +131,12 @@ impl<'a> InboundEmailHandler<'a> {
             });
         }
 
-        // 6. Suggest vendor from sender domain
+        // 5. Suggest vendor from sender domain (TENANT DB)
         let suggested_vendor_id = self
-            .suggest_vendor_by_domain(&tenant_pool, &tenant_uuid, &from_domain)
+            .suggest_vendor_by_domain(&tenant_uuid, &from_domain)
             .await?;
 
-        // 7. For each usable attachment: create invoice capture row + enqueue OCR job
+        // 6. For each usable attachment: create invoice capture row + enqueue OCR job (TENANT DB)
         let mut capture_ids = Vec::new();
         for attachment in &usable {
             let bytes = BASE64
@@ -147,8 +145,7 @@ impl<'a> InboundEmailHandler<'a> {
 
             let document_id = Uuid::new_v4();
 
-            // Write to object storage via the invoices table (reusing existing OCR pipeline).
-            // Create an invoice capture row with source_email_id.
+            // Create invoice capture row (TENANT DB)
             let _capture_id: Uuid = sqlx::query_scalar(
                 r#"INSERT INTO invoice_captures
                        (id, tenant_id, original_filename, mime_type, provider, status, uploaded_by)
@@ -159,11 +156,11 @@ impl<'a> InboundEmailHandler<'a> {
             .bind(tenant_uuid)
             .bind(&attachment.name)
             .bind(&attachment.content_type)
-            .fetch_one(&tenant_pool)
+            .fetch_one(self.tenant_pool)
             .await
             .map_err(|e| format!("Failed to create invoice capture: {}", e))?;
 
-            // Create invoice row linking back to the source email, with suggested vendor.
+            // Create invoice row linking back to the source email, with suggested vendor (TENANT DB).
             let invoice_id: Uuid = sqlx::query_scalar(
                 r#"INSERT INTO invoices
                        (id, tenant_id, vendor_id, vendor_name, invoice_number,
@@ -183,12 +180,11 @@ impl<'a> InboundEmailHandler<'a> {
             .bind(format!("EMAIL-{}", Uuid::new_v4().as_simple()))
             .bind(document_id)
             .bind(email_id)
-            .fetch_one(&tenant_pool)
+            .fetch_one(self.tenant_pool)
             .await
             .map_err(|e| format!("Failed to create invoice from email: {}", e))?;
 
-            // Store the attachment bytes via the storage service (or direct file write).
-            // In the MVP we store raw bytes in a simple local path.
+            // Store the attachment bytes to local object storage.
             if let Err(e) = self
                 .store_attachment(tenant_uuid, document_id, &bytes)
                 .await
@@ -233,7 +229,6 @@ impl<'a> InboundEmailHandler<'a> {
 
     /// Look up which tenant owns the given recipient address.
     async fn resolve_tenant(&self, to_address: &str) -> Result<Option<Uuid>, String> {
-        // Extract the email from a potentially formatted "Name <email>" string.
         let email = extract_email(to_address);
 
         let tenant_uuid: Option<Uuid> = sqlx::query_scalar(
@@ -254,7 +249,6 @@ impl<'a> InboundEmailHandler<'a> {
         tenant_uuid: Uuid,
         email_domain: &str,
     ) -> Result<String, String> {
-        // Check if one already exists
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT full_address FROM tenant_forwarding_addresses WHERE tenant_id = $1",
         )
@@ -267,15 +261,12 @@ impl<'a> InboundEmailHandler<'a> {
             return Ok(addr);
         }
 
-        // Look up the tenant slug
         let slug: String = sqlx::query_scalar("SELECT slug FROM tenants WHERE id = $1")
             .bind(tenant_uuid)
             .fetch_one(metadata_pool)
             .await
             .map_err(|e| format!("Failed to get tenant slug: {}", e))?;
 
-        // Handle the case where the format should be ap@slug.billforge.com
-        // (local_part is "ap", subdomain-style)
         let local_part_clean = "ap".to_string();
         let full_address = format!(
             "{}@{}.{}",
@@ -299,23 +290,12 @@ impl<'a> InboundEmailHandler<'a> {
         Ok(full_address)
     }
 
-    /// Get the tenant-scoped database pool.
-    async fn tenant_pool(&self, _tenant_uuid: Uuid) -> Result<sqlx::PgPool, String> {
-        // In production this goes through DatabaseManager; for the handler
-        // unit we accept a direct pool. The API route layer passes the
-        // resolved pool via the handler constructor.
-        // This method is a placeholder -- the real pool resolution happens in the route.
-        Err("tenant_pool must be provided by the caller".to_string())
-    }
-
-    /// Suggest a vendor by matching the sender domain against vendor email/website fields.
+    /// Suggest a vendor by matching the sender domain against vendor email/website fields (TENANT DB).
     async fn suggest_vendor_by_domain(
         &self,
-        tenant_pool: &PgPool,
         tenant_uuid: &Uuid,
         from_domain: &str,
     ) -> Result<Option<Uuid>, String> {
-        // Match vendors whose email ends with the sender domain.
         let vendor_id: Option<Uuid> = sqlx::query_scalar(
             r#"SELECT id FROM vendors
                WHERE tenant_id = $1
@@ -326,17 +306,16 @@ impl<'a> InboundEmailHandler<'a> {
         .bind(tenant_uuid)
         .bind(format!("%@{}", from_domain))
         .bind(format!("%@%.{}", from_domain))
-        .fetch_optional(tenant_pool)
+        .fetch_optional(self.tenant_pool)
         .await
         .map_err(|e| format!("Failed to match vendor by domain: {}", e))?;
 
         Ok(vendor_id)
     }
 
-    /// Insert a triage queue entry.
+    /// Insert a triage queue entry in the METADATA DB.
     async fn create_triage_entry(
         &self,
-        tenant_pool: &PgPool,
         inbound_email_id: Uuid,
         reason: &str,
     ) -> Result<(), String> {
@@ -346,7 +325,7 @@ impl<'a> InboundEmailHandler<'a> {
         )
         .bind(inbound_email_id)
         .bind(reason)
-        .execute(tenant_pool)
+        .execute(self.metadata_pool)
         .await
         .map_err(|e| format!("Failed to create triage entry: {}", e))?;
         Ok(())
@@ -412,8 +391,6 @@ impl<'a> InboundEmailHandler<'a> {
                 );
             }
         }
-        // When Redis is unavailable the OCR job is not enqueued; the invoice
-        // stays in 'processing' status and can be manually retried.
         Ok(())
     }
 }
@@ -467,7 +444,6 @@ mod tests {
 
     #[test]
     fn test_resolves_tenant_from_recipient() {
-        // extract_email + extract_domain should correctly parse formatted addresses
         let email = extract_email("\"AP Forwarding\" <ap@meridian.billforge.com>");
         assert_eq!(email, "ap@meridian.billforge.com");
 
@@ -483,7 +459,6 @@ mod tests {
 
     #[test]
     fn test_vendor_suggestion_from_sender_domain() {
-        // Domain extraction matches what the query would look for
         let domain = extract_domain("invoices@techsupplies.com");
         assert_eq!(domain, "techsupplies.com");
 

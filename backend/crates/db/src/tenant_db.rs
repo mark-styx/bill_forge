@@ -382,6 +382,22 @@ pub async fn run_implementation_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // Invoice capture table (idempotent IF NOT EXISTS)
+    apply_migration(
+        pool,
+        "075_create_invoice_capture.sql",
+        include_str!("../../../migrations/075_create_invoice_capture.sql"),
+    )
+    .await?;
+
+    // source_email_id column on invoices — traces OCR jobs back to inbound email
+    apply_migration(
+        pool,
+        "099_add_source_email_to_invoices.sql",
+        include_str!("../../../migrations/099_add_source_email_to_invoices.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

@@ -60,6 +60,9 @@ sha2 = "0.10"
 hex = "0.4"
 jsonwebtoken = { workspace = true }
 
+# Encoding (base64 attachment decoding)
+base64 = "0.22"
+
 # Redis job queue (for enqueuing OCR jobs)
 redis = { version = "0.24", features = ["tokio-comp"] }
 

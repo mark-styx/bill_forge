@@ -66,6 +66,19 @@ impl MetadataDatabase {
             ))
         })?;
 
+        // Per-tenant forwarding addresses, inbound email log, triage queue
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/098_create_inbound_email.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run inbound email metadata migration: {}",
+                e
+            ))
+        })?;
+
         Ok(())
     }
 

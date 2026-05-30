@@ -355,6 +355,23 @@ pub async fn update_checklist(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
     wizard.phases.go_live.checks = request.checks;
+
+    // Auto-provision forwarding address when the checkbox is toggled on
+    if wizard.phases.go_live.checks.set_email_forwarding {
+        let email_domain =
+            std::env::var("INBOUND_EMAIL_DOMAIN").unwrap_or_else(|_| "billforge.com".to_string());
+        let metadata_pool = state.db.metadata();
+        let _ = billforge_email::InboundEmailHandler::ensure_forwarding_address(
+            &metadata_pool,
+            *tenant.tenant_id.as_uuid(),
+            &email_domain,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to auto-provision forwarding address");
+        });
+    }
+
     recompute_statuses(&mut wizard);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
     Ok(Json(status_response(wizard)))

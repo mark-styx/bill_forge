@@ -15,8 +15,9 @@ pub mod edi;
 pub mod email_actions;
 pub(crate) mod export;
 pub(crate) mod feedback;
-mod health;
+pub mod health;
 pub mod implementation;
+pub mod inbound_email;
 pub mod invoices;
 pub mod mobile;
 pub mod notifications;
@@ -66,6 +67,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health/ocr", get(health::ocr_health))
         // Prometheus metrics endpoint
         .route("/metrics", get(metrics_handler))
+        // Inbound email webhook (no auth — uses shared secret header)
+        .nest("/webhooks", inbound_email::routes())
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
         .with_state(state)

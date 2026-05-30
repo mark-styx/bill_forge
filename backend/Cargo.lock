@@ -911,6 +911,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-extra",
+ "base64 0.22.1",
  "billforge-ai-agent",
  "billforge-analytics",
  "billforge-auth",
@@ -1094,13 +1095,17 @@ name = "billforge-email"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "billforge-core",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
  "wiremock",
 ]
 
