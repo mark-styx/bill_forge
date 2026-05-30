@@ -6,7 +6,7 @@
 //! - Setting approver availability
 //! - Updating routing configuration
 
-use crate::extractors::AuthUser;
+use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
@@ -53,7 +53,7 @@ struct RouteInvoiceResponse {
     responses((status = 200, description = "Routing decision"), (status = 404, description = "Invoice not found")))]
 async fn route_invoice(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Path(invoice_id): Path<Uuid>,
     Json(body): Json<RouteInvoiceRequest>,
 ) -> Result<Json<RouteInvoiceResponse>, StatusCode> {
@@ -169,7 +169,7 @@ pub(crate) struct ApproverWorkloadSummary {
     responses((status = 200, description = "Workload stats", body = WorkloadResponse)))]
 async fn get_workload_stats(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
 ) -> Result<Json<WorkloadResponse>, StatusCode> {
     let tenant_id = &user.tenant_id;
 
@@ -220,7 +220,7 @@ struct SetAvailabilityRequest {
     responses((status = 204, description = "Availability set"), (status = 403, description = "Forbidden")))]
 async fn set_availability(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Json(body): Json<SetAvailabilityRequest>,
 ) -> Result<StatusCode, StatusCode> {
     // Users can set their own availability; admins can set anyone's
@@ -279,7 +279,7 @@ struct RoutingConfigResponse {
     responses((status = 200, description = "Routing configuration")))]
 async fn get_routing_config(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
 ) -> Result<Json<RoutingConfigResponse>, StatusCode> {
     let tenant_id = &user.tenant_id;
 
@@ -335,7 +335,7 @@ struct UpdateRoutingConfigRequest {
     responses((status = 200, description = "Configuration updated"), (status = 403, description = "Admin only")))]
 async fn update_routing_config(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Json(body): Json<UpdateRoutingConfigRequest>,
 ) -> Result<Json<RoutingConfigResponse>, StatusCode> {
     if !user.is_admin() {

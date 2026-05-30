@@ -7,7 +7,7 @@
 //! - Notification delivery tracking
 
 use crate::error::{ApiError, ApiResult};
-use crate::extractors::AuthUser;
+use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
     extract::{Query, State},
@@ -50,7 +50,7 @@ pub struct SlackInstallResponse {
     params(("redirect_url" = Option<String>, Query, description = "Custom redirect URL")),
     responses((status = 200, description = "Slack OAuth URL generated")))]
 async fn install_slack(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
     Query(query): Query<SlackInstallRequest>,
 ) -> ApiResult<Json<SlackInstallResponse>> {
@@ -63,8 +63,8 @@ async fn install_slack(
         INSERT INTO slack_oauth_states (tenant_id, user_id, state_nonce, redirect_url, expires_at)
         VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')
         "#,
-        &auth_user.0.tenant_id.0,
-        &auth_user.0.user_id.0,
+        &user.tenant_id.0,
+        &user.user_id.0,
         state_nonce,
         query.redirect_url,
     )
@@ -265,7 +265,7 @@ pub struct ConfigureTeamsResponse {
 #[utoipa::path(post, path = "/api/v1/notifications/teams/configure", tag = "Notifications", request_body = serde_json::Value,
     responses((status = 200, description = "Teams webhook configured")))]
 async fn configure_teams(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
     Json(json): Json<ConfigureTeamsRequest>,
 ) -> ApiResult<Json<ConfigureTeamsResponse>> {
@@ -294,8 +294,8 @@ async fn configure_teams(
             is_active = true
         "#,
         webhook_id,
-        &auth_user.0.tenant_id.0,
-        &auth_user.0.user_id.0,
+        &user.tenant_id.0,
+        &user.user_id.0,
         json.webhook_url,
         json.channel_name,
     )
@@ -313,7 +313,7 @@ async fn configure_teams(
 #[utoipa::path(get, path = "/api/v1/notifications/preferences", tag = "Notifications",
     responses((status = 200, description = "User notification preferences")))]
 async fn get_notification_preferences(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     let rows = sqlx::query!(
@@ -323,7 +323,7 @@ async fn get_notification_preferences(
         FROM user_notification_preferences
         WHERE user_id = $1
         "#,
-        &auth_user.0.user_id.0,
+        &user.user_id.0,
     )
     .fetch_all(&*state.db.metadata())
     .await
@@ -362,7 +362,7 @@ pub struct UpdatePreferencesRequest {
 #[utoipa::path(put, path = "/api/v1/notifications/preferences", tag = "Notifications", request_body = serde_json::Value,
     responses((status = 200, description = "Preferences updated")))]
 async fn update_notification_preferences(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
     Json(json): Json<UpdatePreferencesRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -382,8 +382,8 @@ async fn update_notification_preferences(
             quiet_hours_timezone = $9,
             updated_at = NOW()
         "#,
-        &auth_user.0.tenant_id.0,
-        &auth_user.0.user_id.0,
+        &user.tenant_id.0,
+        &user.user_id.0,
         json.channel,
         json.enabled,
         json.notification_types.as_deref().unwrap_or(&[]),
@@ -405,7 +405,7 @@ async fn update_notification_preferences(
 #[utoipa::path(get, path = "/api/v1/notifications/slack/status", tag = "Notifications",
     responses((status = 200, description = "Slack connection status")))]
 async fn get_slack_status(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Option<serde_json::Value>>> {
     let connection = sqlx::query!(
@@ -415,7 +415,7 @@ async fn get_slack_status(
         WHERE tenant_id = $1 AND is_active = true
         LIMIT 1
         "#,
-        &auth_user.0.tenant_id.0,
+        &user.tenant_id.0,
     )
     .fetch_optional(&*state.db.metadata())
     .await
@@ -437,7 +437,7 @@ async fn get_slack_status(
 #[utoipa::path(get, path = "/api/v1/notifications/teams/status", tag = "Notifications",
     responses((status = 200, description = "Teams connection status")))]
 async fn get_teams_status(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Option<serde_json::Value>>> {
     let webhook = sqlx::query!(
@@ -447,7 +447,7 @@ async fn get_teams_status(
         WHERE user_id = $1 AND is_active = true
         LIMIT 1
         "#,
-        &auth_user.0.user_id.0,
+        &user.user_id.0,
     )
     .fetch_optional(&*state.db.metadata())
     .await
@@ -469,7 +469,7 @@ async fn get_teams_status(
 #[utoipa::path(post, path = "/api/v1/notifications/slack/disconnect", tag = "Notifications", request_body = serde_json::Value,
     responses((status = 200, description = "Slack disconnected")))]
 async fn disconnect_slack(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
 ) -> ApiResult<Json<serde_json::Value>> {
     sqlx::query!(
@@ -478,7 +478,7 @@ async fn disconnect_slack(
         SET is_active = false, updated_at = NOW()
         WHERE tenant_id = $1
         "#,
-        &auth_user.0.tenant_id.0,
+        &user.tenant_id.0,
     )
     .execute(&*state.db.metadata())
     .await
@@ -491,7 +491,7 @@ async fn disconnect_slack(
 #[utoipa::path(post, path = "/api/v1/notifications/teams/disconnect", tag = "Notifications", request_body = serde_json::Value,
     responses((status = 200, description = "Teams disconnected")))]
 async fn disconnect_teams(
-    auth_user: AuthUser,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     State(state): State<AppState>,
 ) -> ApiResult<Json<serde_json::Value>> {
     sqlx::query!(
@@ -500,7 +500,7 @@ async fn disconnect_teams(
         SET is_active = false, updated_at = NOW()
         WHERE user_id = $1
         "#,
-        &auth_user.0.user_id.0,
+        &user.user_id.0,
     )
     .execute(&*state.db.metadata())
     .await
