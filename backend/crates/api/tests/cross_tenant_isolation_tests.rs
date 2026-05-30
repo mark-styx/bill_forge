@@ -2,7 +2,7 @@
 //!
 //! Verifies that:
 //! 1. The `require_tenant` middleware enforces a non-nil `tenant_id` on every request
-//! 2. SQL queries for vendors, invoices, and approval links are tenant-scoped
+//! 2. SQL queries for vendors, invoices, approval links, close periods, and discounts are tenant-scoped
 //! 3. Cross-tenant access returns 404/403; a 200 on cross-tenant read is a hard failure
 //!
 //! Run: `cargo test -p billforge-api --test cross_tenant_isolation_tests`
@@ -489,4 +489,295 @@ async fn approval_link_cross_tenant_blocked() {
     // Cleanup
     cleanup_test_data(&pool, tenant_a, "CT-APPROVAL").await;
     cleanup_test_data(&pool, tenant_b, "CT-APPROVAL").await;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers: close_periods & discounts
+// ---------------------------------------------------------------------------
+
+/// Insert a test close period and return its ID.
+async fn insert_close_period(pool: &sqlx::PgPool, tenant_id: Uuid, period_label: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO close_periods (id, tenant_id, period_label, period_start, period_end, cutoff_date)
+           VALUES ($1, $2, $3, '2026-05-01'::date, '2026-05-31'::date, '2026-05-25'::date)"#,
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .bind(period_label)
+    .execute(pool)
+    .await
+    .expect("Failed to insert test close period");
+    id
+}
+
+/// Insert a test invoice with discount columns populated, then return its ID.
+async fn insert_discount_invoice(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    vendor_id: Uuid,
+    invoice_number: &str,
+) -> Uuid {
+    let id = insert_invoice(pool, tenant_id, vendor_id, invoice_number).await;
+
+    // Patch invoice_date + discount columns so the worklist query finds the row
+    sqlx::query(
+        r#"UPDATE invoices
+           SET invoice_date = CURRENT_DATE,
+               discount_percent = 2.0,
+               discount_days = 10,
+               discount_deadline = CURRENT_DATE + 5
+           WHERE id = $1"#,
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("Failed to patch discount columns");
+
+    id
+}
+
+/// Cleanup helper for close_periods.
+async fn cleanup_close_periods(pool: &sqlx::PgPool, tenant_id: Uuid, prefix: &str) {
+    sqlx::query("DELETE FROM close_periods WHERE tenant_id = $1 AND period_label LIKE $2")
+        .bind(tenant_id)
+        .bind(format!("{}%", prefix))
+        .execute(pool)
+        .await
+        .ok();
+}
+
+// ===========================================================================
+// Test 8: close_period_get_cross_tenant_returns_404
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
+async fn close_period_get_cross_tenant_returns_404() {
+    let pool = get_pool().await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Insert period in tenant A
+    let period_a = insert_close_period(&pool, tenant_a, "CT-PERIOD-A-2026-05").await;
+
+    // Mirrors routes/close_periods.rs:325-332 (update_period fetch) and :84-90 (find_locked_period_for_date)
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM close_periods WHERE id = $1 AND tenant_id = $2")
+            .bind(period_a)
+            .bind(tenant_b)
+            .fetch_optional(&pool)
+            .await
+            .expect("Query should succeed");
+
+    assert!(
+        row.is_none(),
+        "Cross-tenant close_period GET must return no rows — got {:?}",
+        row
+    );
+
+    // Cleanup
+    cleanup_close_periods(&pool, tenant_a, "CT-PERIOD-A").await;
+    cleanup_close_periods(&pool, tenant_b, "CT-PERIOD-A").await;
+}
+
+// ===========================================================================
+// Test 9: close_period_list_excludes_other_tenant
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
+async fn close_period_list_excludes_other_tenant() {
+    let pool = get_pool().await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Insert one period per tenant
+    let period_a = insert_close_period(&pool, tenant_a, "CT-LIST-A-2026-05").await;
+    let _period_b = insert_close_period(&pool, tenant_b, "CT-LIST-B-2026-05").await;
+
+    // Mirrors routes/close_periods.rs:184-192 (list_periods)
+    let tenant_a_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM close_periods WHERE tenant_id = $1 AND period_label LIKE 'CT-LIST%'",
+    )
+    .bind(tenant_a)
+    .fetch_all(&pool)
+    .await
+    .expect("Query should succeed");
+
+    assert!(
+        tenant_a_ids.contains(&period_a),
+        "Tenant A should see its own period"
+    );
+    assert_eq!(
+        tenant_a_ids.len(),
+        1,
+        "Tenant A should see exactly 1 period"
+    );
+
+    // Cleanup
+    cleanup_close_periods(&pool, tenant_a, "CT-LIST").await;
+    cleanup_close_periods(&pool, tenant_b, "CT-LIST").await;
+}
+
+// ===========================================================================
+// Test 10: close_period_update_cutoff_cross_tenant_affects_zero_rows
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
+async fn close_period_update_cutoff_cross_tenant_affects_zero_rows() {
+    let pool = get_pool().await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    let period_a = insert_close_period(&pool, tenant_a, "CT-UPD-A-2026-05").await;
+
+    // Capture original cutoff_date
+    let (original_cutoff,): (String,) = sqlx::query_as(
+        "SELECT cutoff_date::text FROM close_periods WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(period_a)
+    .bind(tenant_a)
+    .fetch_one(&pool)
+    .await
+    .expect("Should fetch original period");
+
+    // Mirrors routes/close_periods.rs:287-297 (update_period UPDATE) and run_close locking UPDATE
+    let result = sqlx::query(
+        "UPDATE close_periods SET cutoff_date = '2099-01-01'::date, status = 'open', updated_at = NOW() \
+         WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(period_a)
+    .bind(tenant_b) // wrong tenant
+    .execute(&pool)
+    .await
+    .expect("Query should succeed");
+
+    assert_eq!(
+        result.rows_affected(),
+        0,
+        "Cross-tenant close_period UPDATE must affect 0 rows"
+    );
+
+    // Verify original cutoff_date unchanged
+    let (current_cutoff,): (String,) = sqlx::query_as(
+        "SELECT cutoff_date::text FROM close_periods WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(period_a)
+    .bind(tenant_a)
+    .fetch_one(&pool)
+    .await
+    .expect("Should re-fetch original period");
+
+    assert_eq!(
+        current_cutoff, original_cutoff,
+        "Cross-tenant UPDATE must not change cutoff_date"
+    );
+
+    // Cleanup
+    cleanup_close_periods(&pool, tenant_a, "CT-UPD").await;
+    cleanup_close_periods(&pool, tenant_b, "CT-UPD").await;
+}
+
+// ===========================================================================
+// Test 11: discount_worklist_excludes_other_tenant
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
+async fn discount_worklist_excludes_other_tenant() {
+    let pool = get_pool().await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Create vendor + discount-eligible invoice in each tenant
+    let vendor_a = insert_vendor(&pool, tenant_a, "CT-DISC Vendor A").await;
+    let vendor_b = insert_vendor(&pool, tenant_b, "CT-DISC Vendor B").await;
+    let invoice_a = insert_discount_invoice(&pool, tenant_a, vendor_a, "CT-DISC-INV-A").await;
+    let invoice_b = insert_discount_invoice(&pool, tenant_b, vendor_b, "CT-DISC-INV-B").await;
+
+    // Mirrors routes/discounts.rs:205-222 (get_worklist SELECT)
+    let worklist_ids: Vec<Uuid> = sqlx::query_scalar(
+        r#"SELECT i.id FROM invoices i
+           WHERE i.tenant_id = $1
+             AND i.discount_percent IS NOT NULL
+             AND i.discount_captured_at IS NULL
+             AND i.discount_missed_at IS NULL
+             AND i.discount_deadline >= CURRENT_DATE"#,
+    )
+    .bind(tenant_a)
+    .fetch_all(&pool)
+    .await
+    .expect("Query should succeed");
+
+    assert!(
+        worklist_ids.contains(&invoice_a),
+        "Tenant A worklist should contain its own invoice"
+    );
+    assert!(
+        !worklist_ids.contains(&invoice_b),
+        "Tenant A worklist must NOT contain tenant B's invoice"
+    );
+    assert_eq!(
+        worklist_ids.len(),
+        1,
+        "Tenant A worklist should contain exactly 1 invoice"
+    );
+
+    // Cleanup
+    cleanup_test_data(&pool, tenant_a, "CT-DISC").await;
+    cleanup_test_data(&pool, tenant_b, "CT-DISC").await;
+}
+
+// ===========================================================================
+// Test 12: discount_capture_cross_tenant_affects_zero_rows
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test cross_tenant_isolation_tests -- --ignored
+async fn discount_capture_cross_tenant_affects_zero_rows() {
+    let pool = get_pool().await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    let vendor_a = insert_vendor(&pool, tenant_a, "CT-CAPTURE Vendor A").await;
+    let invoice_a = insert_discount_invoice(&pool, tenant_a, vendor_a, "CT-CAPTURE-INV-A").await;
+
+    // Mirrors routes/discounts.rs:334-341 (capture_discount UPDATE)
+    let result = sqlx::query(
+        "UPDATE invoices SET discount_captured_at = NOW(), updated_at = NOW() \
+         WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_a)
+    .bind(tenant_b) // wrong tenant
+    .execute(&pool)
+    .await
+    .expect("Query should succeed");
+
+    assert_eq!(
+        result.rows_affected(),
+        0,
+        "Cross-tenant discount capture UPDATE must affect 0 rows"
+    );
+
+    // Verify discount_captured_at is still NULL
+    let (captured_at,): (Option<String>,) = sqlx::query_as(
+        "SELECT discount_captured_at::text FROM invoices WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_a)
+    .bind(tenant_a)
+    .fetch_one(&pool)
+    .await
+    .expect("Should re-fetch invoice");
+
+    assert!(
+        captured_at.is_none(),
+        "Cross-tenant capture must not set discount_captured_at — got {:?}",
+        captured_at
+    );
+
+    // Cleanup
+    cleanup_test_data(&pool, tenant_a, "CT-CAPTURE").await;
+    cleanup_test_data(&pool, tenant_b, "CT-CAPTURE").await;
 }
