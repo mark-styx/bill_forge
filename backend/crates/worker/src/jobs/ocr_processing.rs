@@ -20,7 +20,8 @@ use billforge_db::{
 };
 use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
 use billforge_invoice_capture::{
-    ocr, ocr_routing_decision, resolve_ocr_provider_name, OcrRoutingDecision,
+    calibrated_confidence, ocr, ocr_routing_decision, resolve_ocr_provider_name,
+    OcrCalibrationStore, OcrRoutingDecision, PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
@@ -144,7 +145,8 @@ pub async fn process_ocr(
             observe_field_confidence(result);
 
             // Build update payload — rejects missing or zero totals
-            let (updates, confidence) = match build_invoice_update_from_ocr(result, document_id) {
+            let (updates, raw_confidence) = match build_invoice_update_from_ocr(result, document_id)
+            {
                 Ok(v) => v,
                 Err(reason) => {
                     if retry_count + 1 >= MAX_RETRIES {
@@ -170,6 +172,33 @@ pub async fn process_ocr(
                         );
                     }
                     return Err(anyhow::anyhow!("OCR extraction rejected: {}", reason));
+                }
+            };
+
+            // Apply calibrated confidence from persisted field-level accuracy data.
+            let calibration_store = PgOcrCalibrationStore::new(pool.clone());
+            if let Err(e) = calibration_store
+                .record_extraction(&tenant_id, &effective_ocr_provider, OCR_CALIBRATED_FIELDS)
+                .await
+            {
+                warn!(error = %e, "Failed to record extraction for calibration");
+            }
+            let confidence = match calibration_store
+                .get_field_weights(&tenant_id, &effective_ocr_provider)
+                .await
+            {
+                Ok(weights) => {
+                    let raw: &[(&str, f32)] = &[
+                        ("invoice_number", result.invoice_number.confidence),
+                        ("invoice_date", result.invoice_date.confidence),
+                        ("vendor_name", result.vendor_name.confidence),
+                        ("total_amount", result.total_amount.confidence),
+                    ];
+                    calibrated_confidence(raw, &weights)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to fetch calibration weights, using unweighted mean");
+                    raw_confidence
                 }
             };
 

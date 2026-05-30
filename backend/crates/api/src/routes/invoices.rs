@@ -1359,11 +1359,15 @@ async fn rerun_ocr(
     // Synchronous fallback
     let invoice_repo = std::sync::Arc::new(repo);
     let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
+    let calibration_store: Arc<dyn billforge_invoice_capture::OcrCalibrationStore> = Arc::new(
+        billforge_invoice_capture::PgOcrCalibrationStore::new(pool.clone()),
+    );
     let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
         &provider_name,
         invoice_repo,
         state.storage.clone(),
-    );
+    )
+    .with_calibration(calibration_store);
 
     let ocr_result = capture_service
         .reprocess_ocr(&tenant.tenant_id, &invoice_id)
