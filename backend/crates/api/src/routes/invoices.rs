@@ -39,6 +39,50 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/ocr", post(rerun_ocr))
         .route("/:id/submit", post(submit_for_processing))
         .route("/:id/suggest-categories", post(suggest_categories))
+        .route("/:id/merge-duplicate", post(merge_duplicate))
+        .route("/:id/reject-duplicate", post(reject_duplicate))
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate detection types
+// ---------------------------------------------------------------------------
+
+/// Query parameters for invoice creation with duplicate-detection bypass.
+#[derive(Debug, Deserialize)]
+pub struct CreateInvoiceQuery {
+    pub force: Option<bool>,
+}
+
+/// Per-signal breakdown for a duplicate match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateSignalBreakdown {
+    pub vendor: f64,
+    pub invoice_number: f64,
+    pub amount: f64,
+    pub date: f64,
+    pub line_item_fingerprint: f64,
+}
+
+/// A single potential duplicate match returned during invoice creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateMatch {
+    pub existing_invoice_id: String,
+    pub score: f64,
+    pub severity: String,
+    pub signal_breakdown: DuplicateSignalBreakdown,
+}
+
+/// Response body for invoice creation with potential duplicate warnings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateInvoiceResponse {
+    pub invoice: Invoice,
+    pub potential_duplicates: Vec<DuplicateMatch>,
+}
+
+/// Request body for merging a duplicate invoice into an existing one.
+#[derive(Debug, Deserialize)]
+pub struct MergeDuplicateRequest {
+    pub keep_invoice_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,8 +182,11 @@ async fn get_invoice(
     path = "/invoices",
     tag = "Invoices",
     request_body = String,
+    params(
+        ("force" = Option<bool>, Query, description = "Skip duplicate detection and force create")
+    ),
     responses(
-        (status = 200, description = "Invoice created", body = crate::openapi::Invoice),
+        (status = 200, description = "Invoice created with potential duplicate warnings"),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Unauthorized")
     )
@@ -147,12 +194,13 @@ async fn get_invoice(
 async fn create_invoice(
     State(state): State<AppState>,
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Query(query): Query<CreateInvoiceQuery>,
     Json(input): Json<CreateInvoiceInput>,
-) -> ApiResult<Json<Invoice>> {
+) -> ApiResult<Json<CreateInvoiceResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     let invoice = repo
-        .create(&tenant.tenant_id, input, Some(&user.user_id))
+        .create(&tenant.tenant_id, input.clone(), Some(&user.user_id))
         .await?;
     record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
@@ -166,12 +214,145 @@ async fn create_invoice(
     )
     .with_user_email(&user.email)
     .with_new_value(serde_json::to_value(&invoice).unwrap_or_default());
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
     }
 
-    Ok(Json(invoice))
+    // Duplicate detection: check against recent tenant invoices unless force=true
+    let potential_duplicates = if query.force == Some(true) {
+        vec![]
+    } else {
+        detect_duplicates_for_invoice(&pool, &tenant.tenant_id, &invoice).await
+    };
+
+    Ok(Json(CreateInvoiceResponse {
+        invoice,
+        potential_duplicates,
+    }))
+}
+
+/// Load recent (90-day) invoices for the tenant and score the new invoice against each.
+/// Returns matches with severity >= Medium (score > 0.8).
+async fn detect_duplicates_for_invoice(
+    pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    new_invoice: &Invoice,
+) -> Vec<DuplicateMatch> {
+    let rows = match sqlx::query_as::<_, (Uuid, Option<String>, Option<i64>, Option<chrono::NaiveDate>, Option<serde_json::Value>)>(
+        r#"SELECT id, invoice_number, total_amount_cents, invoice_date, line_items
+           FROM invoices
+           WHERE tenant_id = $1
+             AND id != $2
+             AND created_at > NOW() - INTERVAL '90 days'
+           ORDER BY created_at DESC
+           LIMIT 100"#,
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(new_invoice.id.as_uuid())
+    .fetch_all(&**pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to load recent invoices for duplicate detection");
+            return vec![];
+        }
+    };
+
+    // Build fingerprint for the new invoice from its line items
+    let new_li_items: Vec<(String, Option<f64>, Option<f64>)> = new_invoice
+        .line_items
+        .iter()
+        .map(|li| {
+            (
+                li.description.clone(),
+                li.quantity,
+                li.unit_price.as_ref().map(|m| m.amount as f64 / 100.0),
+            )
+        })
+        .collect();
+    let new_fp = billforge_analytics::anomaly_detection::InvoiceRecord::compute_line_item_fingerprint(&new_li_items);
+
+    let new_date = new_invoice
+        .invoice_date
+        .and_then(|d| d.and_hms_opt(12, 0, 0).map(|ndt| ndt.and_utc()))
+        .unwrap_or_else(chrono::Utc::now);
+
+    let new_record = billforge_analytics::anomaly_detection::InvoiceRecord {
+        invoice_id: new_invoice.id.to_string(),
+        vendor_name: new_invoice.vendor_name.clone(),
+        amount: new_invoice.total_amount.amount as f64 / 100.0,
+        invoice_date: new_date,
+        invoice_number: Some(new_invoice.invoice_number.clone()),
+        line_item_fingerprint: if new_fp.is_empty() { None } else { Some(new_fp) },
+    };
+
+    let detector = billforge_analytics::anomaly_detection::DuplicateDetector::new(*tenant_id.as_uuid());
+
+    let mut matches = Vec::new();
+    for (id, inv_num, amount_cents, inv_date, line_items_json) in rows {
+        // Build fingerprint from stored line items JSON
+        let fp = line_items_json
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                let items: Vec<(String, Option<f64>, Option<f64>)> = arr
+                    .iter()
+                    .filter_map(|item| {
+                        let desc = item.get("description")?.as_str()?.to_string();
+                        let qty = item.get("quantity").and_then(|v| v.as_f64());
+                        let up = item
+                            .get("unit_price_cents")
+                            .and_then(|v| v.as_i64())
+                            .map(|c| c as f64 / 100.0);
+                        Some((desc, qty, up))
+                    })
+                    .collect();
+                billforge_analytics::anomaly_detection::InvoiceRecord::compute_line_item_fingerprint(&items)
+            })
+            .unwrap_or_default();
+
+        let existing_date = inv_date
+            .and_then(|d| d.and_hms_opt(12, 0, 0).map(|ndt| ndt.and_utc()))
+            .unwrap_or_else(chrono::Utc::now);
+
+        let existing_record = billforge_analytics::anomaly_detection::InvoiceRecord {
+            invoice_id: id.to_string(),
+            vendor_name: new_invoice.vendor_name.clone(), // We don't have vendor_name from this query; approximate
+            amount: amount_cents.unwrap_or(0) as f64 / 100.0,
+            invoice_date: existing_date,
+            invoice_number: inv_num,
+            line_item_fingerprint: if fp.is_empty() { None } else { Some(fp) },
+        };
+
+        let (score, breakdown) = detector.score_pair(&new_record, &existing_record);
+        if score > 0.8 {
+            let severity = if score > 0.95 {
+                "Critical"
+            } else if score > 0.9 {
+                "High"
+            } else {
+                "Medium"
+            };
+            matches.push(DuplicateMatch {
+                existing_invoice_id: id.to_string(),
+                score,
+                severity: severity.to_string(),
+                signal_breakdown: DuplicateSignalBreakdown {
+                    vendor: *breakdown.get("vendor").unwrap_or(&0.0),
+                    invoice_number: *breakdown.get("invoice_number").unwrap_or(&0.0),
+                    amount: *breakdown.get("amount").unwrap_or(&0.0),
+                    date: *breakdown.get("date").unwrap_or(&0.0),
+                    line_item_fingerprint: *breakdown.get("line_item_fingerprint").unwrap_or(&0.0),
+                },
+            });
+        }
+    }
+
+    // Sort by score descending
+    matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    matches
 }
 
 #[utoipa::path(
@@ -1512,6 +1693,170 @@ async fn suggest_categories(
     };
 
     Ok(Json(categorization))
+}
+
+// ---------------------------------------------------------------------------
+// Merge / Reject duplicate endpoints
+// ---------------------------------------------------------------------------
+
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/merge-duplicate",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID to discard (the duplicate)")
+    ),
+    request_body = String,
+    responses(
+        (status = 200, description = "Duplicate merged into kept invoice"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn merge_duplicate(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Path(id): Path<String>,
+    Json(body): Json<MergeDuplicateRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let dup_invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+    let keep_invoice_id: billforge_core::domain::InvoiceId = body
+        .keep_invoice_id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid keep invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    // Verify both invoices exist and belong to this tenant
+    let dup_inv = repo
+        .get_by_id(&tenant.tenant_id, &dup_invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: dup_invoice_id.to_string(),
+        })?;
+    let keep_inv = repo
+        .get_by_id(&tenant.tenant_id, &keep_invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: keep_invoice_id.to_string(),
+        })?;
+
+    // Copy missing fields from the duplicate onto the kept invoice
+    let mut updates = serde_json::json!({});
+    if keep_inv.vendor_name.is_empty() || keep_inv.vendor_name == "Processing..." {
+        updates["vendor_name"] = serde_json::json!(dup_inv.vendor_name);
+    }
+    if keep_inv.invoice_number.starts_with("UPLOAD-") && !dup_inv.invoice_number.starts_with("UPLOAD-") {
+        updates["invoice_number"] = serde_json::json!(dup_inv.invoice_number);
+    }
+    if keep_inv.invoice_date.is_none() && dup_inv.invoice_date.is_some() {
+        updates["invoice_date"] = serde_json::json!(dup_inv.invoice_date.map(|d| d.format("%Y-%m-%d").to_string()));
+    }
+    if keep_inv.notes.is_none() && dup_inv.notes.is_some() {
+        updates["notes"] = serde_json::json!(dup_inv.notes);
+    }
+
+    if updates.as_object().map_or(false, |o| !o.is_empty()) {
+        repo.update(&tenant.tenant_id, &keep_invoice_id, updates).await?;
+    }
+
+    // Soft-delete the duplicate
+    repo.delete(&tenant.tenant_id, &dup_invoice_id).await?;
+
+    // Record anomaly audit row with resolution='merged'
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Invoice,
+        keep_invoice_id.to_string(),
+        format!(
+            "Merged duplicate invoice {} into {}",
+            dup_inv.invoice_number, keep_inv.invoice_number
+        ),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "merge_duplicate",
+        "discarded_invoice_id": dup_invoice_id.to_string(),
+        "discarded_invoice_number": dup_inv.invoice_number,
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log merge audit entry");
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "action": "merged",
+        "kept_invoice_id": keep_invoice_id.to_string(),
+        "discarded_invoice_id": dup_invoice_id.to_string(),
+    })))
+}
+
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/reject-duplicate",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID flagged as duplicate")
+    ),
+    responses(
+        (status = 200, description = "Duplicate flag rejected, both invoices kept"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn reject_duplicate(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    // Verify invoice exists
+    let invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Record anomaly audit row with resolution='not_duplicate'
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Invoice,
+        invoice_id.to_string(),
+        format!("Rejected duplicate flag for invoice {}", invoice.invoice_number),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "reject_duplicate",
+        "resolution": "not_duplicate",
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log reject-duplicate audit entry");
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "action": "not_duplicate",
+        "invoice_id": invoice_id.to_string(),
+    })))
 }
 
 /// Build response message based on sync OCR result status.

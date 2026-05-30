@@ -459,8 +459,10 @@ export const invoicesApi = {
 
   get: (id: string) => api.get<Invoice>(`/api/v1/invoices/${id}`),
 
-  create: (data: CreateInvoiceInput) =>
-    api.post<Invoice>('/api/v1/invoices', data),
+  create: (data: CreateInvoiceInput, options?: { force?: boolean }) => {
+    const params = options?.force ? '?force=true' : '';
+    return api.post<CreateInvoiceResponse>(`/api/v1/invoices${params}`, data);
+  },
 
   update: (id: string, data: Partial<Invoice>) =>
     api.put<Invoice>(`/api/v1/invoices/${id}`, data),
@@ -2691,4 +2693,44 @@ export const closePeriodsApi = {
 
   runClose: (id: string) =>
     api.post<RunCloseResponse>(`/api/v1/close-periods/${id}/close`, {}),
+};
+
+// ---------------------------------------------------------------------------
+// Duplicate Detection Types
+// ---------------------------------------------------------------------------
+
+export interface DuplicateSignalBreakdown {
+  vendor: number;
+  invoice_number: number;
+  amount: number;
+  date: number;
+  line_item_fingerprint: number;
+}
+
+export interface DuplicateMatch {
+  existing_invoice_id: string;
+  score: number;
+  severity: string;
+  signal_breakdown: DuplicateSignalBreakdown;
+}
+
+export interface CreateInvoiceResponse {
+  invoice: Invoice;
+  potential_duplicates: DuplicateMatch[];
+}
+
+// Extend invoicesApi with duplicate detection methods
+export const duplicateApi = {
+  /** Merge a duplicate invoice into an existing one (soft-deletes the dup). */
+  mergeDuplicate: (duplicateInvoiceId: string, keepInvoiceId: string) =>
+    api.post<{ success: boolean; action: string; kept_invoice_id: string; discarded_invoice_id: string }>(
+      `/api/v1/invoices/${duplicateInvoiceId}/merge-duplicate`,
+      { keep_invoice_id: keepInvoiceId },
+    ),
+
+  /** Reject the duplicate flag, keeping both invoices. */
+  rejectDuplicate: (invoiceId: string) =>
+    api.post<{ success: boolean; action: string; invoice_id: string }>(
+      `/api/v1/invoices/${invoiceId}/reject-duplicate`,
+    ),
 };
