@@ -36,6 +36,7 @@ struct SettingsResponse {
     company_name: String,
     timezone: String,
     default_currency: String,
+    ocr_provider: Option<String>,
     logo_url: Option<String>,
     primary_color: Option<String>,
     features: TenantFeatures,
@@ -46,6 +47,7 @@ struct UpdateSettingsInput {
     company_name: Option<String>,
     timezone: Option<String>,
     default_currency: Option<String>,
+    ocr_provider: Option<Option<String>>,
     features: Option<TenantFeatures>,
 }
 
@@ -60,6 +62,7 @@ async fn get_settings(
         company_name: tenant.settings.company_name,
         timezone: tenant.settings.timezone,
         default_currency: tenant.settings.default_currency,
+        ocr_provider: tenant.settings.ocr_provider,
         logo_url: tenant.settings.logo_url,
         primary_color: tenant.settings.primary_color,
         features: tenant.settings.features,
@@ -91,6 +94,9 @@ async fn update_settings(
     if let Some(cur) = input.default_currency {
         settings.default_currency = cur;
     }
+    if let Some(provider) = input.ocr_provider {
+        settings.ocr_provider = provider;
+    }
     if let Some(features) = input.features {
         settings.features = features;
     }
@@ -104,6 +110,7 @@ async fn update_settings(
         company_name: settings.company_name,
         timezone: settings.timezone,
         default_currency: settings.default_currency,
+        ocr_provider: settings.ocr_provider,
         logo_url: settings.logo_url,
         primary_color: settings.primary_color,
         features: settings.features,

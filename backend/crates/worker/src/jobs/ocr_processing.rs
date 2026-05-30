@@ -20,7 +20,7 @@ use billforge_db::{
 };
 use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
 use billforge_invoice_capture::{
-    ocr, resolve_ocr_provider_name, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+    ocr, ocr_routing_decision, resolve_ocr_provider_name, OcrRoutingDecision,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
@@ -39,7 +39,6 @@ struct OcrJobPayload {
 
 /// Max retries before marking an OCR job as permanently failed.
 const MAX_RETRIES: u32 = 3;
-const OCR_HARD_FAIL_CONFIDENCE_THRESHOLD: f32 = 0.30;
 
 /// Process an OCR extraction job for an uploaded invoice document.
 pub async fn process_ocr(
@@ -170,10 +169,11 @@ pub async fn process_ocr(
 
             ocr_confidence = Some(confidence);
 
-            let status = if confidence < OCR_HARD_FAIL_CONFIDENCE_THRESHOLD {
-                CaptureStatus::Failed
-            } else {
-                CaptureStatus::ReadyForReview
+            let status = match ocr_routing_decision(Some(confidence)) {
+                OcrRoutingDecision::Error => CaptureStatus::Failed,
+                OcrRoutingDecision::ExceptionReview | OcrRoutingDecision::StraightThrough => {
+                    CaptureStatus::ReadyForReview
+                }
             };
 
             if let Err(e) = repo.update(&tenant_id, &invoice_id, updates).await {
@@ -271,22 +271,26 @@ pub async fn process_ocr(
         .map_err(|e| anyhow::anyhow!("Failed to update capture status: {}", e))?;
 
     // If OCR produced low confidence, route to error queue
-    if capture_status == CaptureStatus::Failed {
-        route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
-    } else if ocr_confidence
-        .map(|confidence| confidence < OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
-        .unwrap_or(true)
-    {
-        route_to_ocr_exception_queue(&pool, &tenant_id, &invoice_id).await;
-    } else if let Ok(result) = &ocr_result {
-        if let Err(e) =
-            run_straight_through_processing(&repo, &pool, &tenant_id, &invoice_id, result).await
-        {
-            warn!(
-                invoice_id = %invoice_id,
-                error = %e,
-                "Straight-through categorization/workflow failed; invoice remains ready for review"
-            );
+    match ocr_routing_decision(ocr_confidence) {
+        OcrRoutingDecision::Error => {
+            route_to_ocr_error_queue(&repo, &pool, &tenant_id, &invoice_id).await;
+        }
+        OcrRoutingDecision::ExceptionReview => {
+            route_to_ocr_exception_queue(&pool, &tenant_id, &invoice_id).await;
+        }
+        OcrRoutingDecision::StraightThrough => {
+            if let Ok(result) = &ocr_result {
+                if let Err(e) =
+                    run_straight_through_processing(&repo, &pool, &tenant_id, &invoice_id, result)
+                        .await
+                {
+                    warn!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        "Straight-through categorization/workflow failed; invoice remains ready for review"
+                    );
+                }
+            }
         }
     }
 

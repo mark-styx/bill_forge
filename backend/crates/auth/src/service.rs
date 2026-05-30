@@ -105,6 +105,11 @@ impl AuthService {
                         .and_then(|v| v.as_str())
                         .unwrap_or("USD")
                         .to_string(),
+                    ocr_provider: tenant
+                        .settings
+                        .get("ocr_provider")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 },
             },
         })
@@ -238,6 +243,11 @@ impl AuthService {
                         .and_then(|v| v.as_str())
                         .unwrap_or("USD")
                         .to_string(),
+                    ocr_provider: tenant
+                        .settings
+                        .get("ocr_provider")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 },
             },
         })
@@ -262,7 +272,15 @@ impl AuthService {
             company_name: input.company_name.clone(),
             timezone: input.timezone.unwrap_or_else(|| "UTC".to_string()),
             default_currency: input.default_currency.unwrap_or_else(|| "USD".to_string()),
-            features: Default::default(),
+            ocr_provider: input.ocr_provider.clone(),
+            features: billforge_core::TenantFeatures {
+                advanced_ocr: matches!(
+                    input.ocr_provider.as_deref(),
+                    Some("aws_textract" | "textract" | "google_vision" | "google")
+                ),
+                local_ocr_required: input.local_ocr_required.unwrap_or(false),
+                ..Default::default()
+            },
         };
         self.metadata_db
             .update_tenant_settings(&tenant_id, &settings)
@@ -347,6 +365,7 @@ impl AuthService {
                     company_name: input.company_name,
                     timezone: settings.timezone,
                     default_currency: settings.default_currency,
+                    ocr_provider: settings.ocr_provider,
                 },
             },
         })
@@ -572,6 +591,11 @@ impl AuthService {
                         .and_then(|v| v.as_str())
                         .unwrap_or("USD")
                         .to_string(),
+                    ocr_provider: tenant
+                        .settings
+                        .get("ocr_provider")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 },
             },
         })
@@ -628,6 +652,8 @@ pub struct ProvisionInput {
     pub admin_name: String,
     pub timezone: Option<String>,
     pub default_currency: Option<String>,
+    pub ocr_provider: Option<String>,
+    pub local_ocr_required: Option<bool>,
 }
 
 /// Registration input
@@ -721,6 +747,7 @@ pub struct TenantSettingsInfo {
     pub company_name: String,
     pub timezone: String,
     pub default_currency: String,
+    pub ocr_provider: Option<String>,
 }
 
 // =============================================================================

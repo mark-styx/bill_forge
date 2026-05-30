@@ -17,7 +17,8 @@ use billforge_core::{
     types::{Money, PaginatedResponse, Pagination, TenantContext, TenantSettings, UserContext},
 };
 use billforge_invoice_capture::{
-    ocr, resolve_ocr_provider_name, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+    ocr, ocr_routing_decision, resolve_ocr_provider_name, OcrRoutingDecision,
+    OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
 };
 use billforge_invoice_processing::feedback_loop::{
     CategorizationFeedback, FeedbackLearning, FeedbackType,
@@ -625,10 +626,11 @@ async fn run_sync_ocr(
             .sum::<f32>()
                 / 3.0;
 
-            let status = if confidence < 0.3 {
-                CaptureStatus::Failed
-            } else {
-                CaptureStatus::ReadyForReview
+            let status = match ocr_routing_decision(Some(confidence)) {
+                OcrRoutingDecision::Error => CaptureStatus::Failed,
+                OcrRoutingDecision::ExceptionReview | OcrRoutingDecision::StraightThrough => {
+                    CaptureStatus::ReadyForReview
+                }
             };
 
             let vendor_name = result
@@ -729,35 +731,263 @@ async fn run_sync_ocr(
         tracing::error!(invoice_id = %invoice_id, error = %e, "Failed to update capture status");
     }
 
-    // Move to error queue if OCR failed
-    if capture_status == CaptureStatus::Failed {
-        let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
-        if let Ok(Some(error_queue)) = billforge_core::traits::WorkQueueRepository::get_by_type(
-            &queue_repo,
-            tenant_id,
-            QueueType::OcrError,
-        )
-        .await
-        {
-            let _ = billforge_core::traits::WorkQueueRepository::move_item(
-                &queue_repo,
-                tenant_id,
-                invoice_id,
-                &error_queue.id,
-                None,
-            )
-            .await;
-            let _ = sqlx::query(
-                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
-            )
-            .bind(error_queue.id.0)
-            .bind(invoice_id.as_uuid())
-            .execute(&**pool)
-            .await;
+    let ocr_confidence = match &ocr_result {
+        Ok(result) => Some(
+            [
+                result.invoice_number.confidence,
+                result.vendor_name.confidence,
+                result.total_amount.confidence,
+            ]
+            .iter()
+            .sum::<f32>()
+                / 3.0,
+        ),
+        Err(_) => Some(0.0),
+    };
+
+    match ocr_routing_decision(ocr_confidence) {
+        OcrRoutingDecision::Error => {
+            route_sync_ocr_queue(pool, tenant_id, invoice_id, QueueType::OcrError).await;
+        }
+        OcrRoutingDecision::ExceptionReview => {
+            route_sync_ocr_queue(pool, tenant_id, invoice_id, QueueType::Exception).await;
+        }
+        OcrRoutingDecision::StraightThrough => {
+            if let Ok(result) = &ocr_result {
+                if let Err(e) =
+                    run_sync_straight_through_processing(repo, pool, tenant_id, invoice_id, result)
+                        .await
+                {
+                    tracing::warn!(
+                        invoice_id = %invoice_id,
+                        error = %e,
+                        "Sync straight-through processing failed; invoice remains ready for review"
+                    );
+                    route_sync_ocr_queue(pool, tenant_id, invoice_id, QueueType::Review).await;
+                }
+            }
         }
     }
 
     capture_status
+}
+
+async fn route_sync_ocr_queue(
+    pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    queue_type: QueueType,
+) {
+    let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    match billforge_core::traits::WorkQueueRepository::get_by_type(
+        &queue_repo,
+        tenant_id,
+        queue_type,
+    )
+    .await
+    {
+        Ok(Some(queue)) => {
+            if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(
+                &queue_repo,
+                tenant_id,
+                invoice_id,
+                &queue.id,
+                None,
+            )
+            .await
+            {
+                tracing::warn!(invoice_id = %invoice_id, queue_type = ?queue_type, error = %e, "Failed to create sync OCR queue item");
+            }
+            if let Err(e) = sqlx::query(
+                "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
+            )
+            .bind(queue.id.0)
+            .bind(invoice_id.as_uuid())
+            .execute(&**pool)
+            .await
+            {
+                tracing::warn!(invoice_id = %invoice_id, queue_type = ?queue_type, error = %e, "Failed to update sync OCR invoice queue");
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(invoice_id = %invoice_id, queue_type = ?queue_type, "No queue found for sync OCR route");
+        }
+        Err(e) => {
+            tracing::warn!(invoice_id = %invoice_id, queue_type = ?queue_type, error = %e, "Failed to look up sync OCR queue");
+        }
+    }
+}
+
+async fn run_sync_straight_through_processing(
+    repo: &billforge_db::repositories::InvoiceRepositoryImpl,
+    pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    ocr_result: &billforge_core::domain::OcrExtractionResult,
+) -> Result<(), billforge_core::Error> {
+    let mut invoice = repo
+        .get_by_id(tenant_id, invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: invoice_id.to_string(),
+        })?;
+
+    if invoice.gl_code.is_none() || invoice.department.is_none() || invoice.cost_center.is_none() {
+        let had_gl_code = invoice.gl_code.is_some();
+        let had_department = invoice.department.is_some();
+        let had_cost_center = invoice.cost_center.is_some();
+        let line_items = sync_ocr_line_items(ocr_result, &invoice);
+        let total = ocr_result
+            .total_amount
+            .value
+            .unwrap_or(invoice.total_amount.amount as f64 / 100.0);
+        let tenant_id_str = tenant_id.to_string();
+        let cat_engine = billforge_invoice_processing::CategorizationEngine::new((**pool).clone());
+
+        let cat_result = if let Ok(openai_api_key) = std::env::var("OPENAI_API_KEY") {
+            let ml_categorizer =
+                billforge_invoice_processing::MLCategorizer::new((**pool).clone(), openai_api_key);
+            match ml_categorizer
+                .suggest_categories_ml(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
+            {
+                Ok(ml_result) => Ok(ml_result),
+                Err(e) => {
+                    tracing::warn!(invoice_id = %invoice_id, error = %e, "Sync OCR ML categorization failed, falling back to rule-based");
+                    cat_engine
+                        .suggest_categories(
+                            &tenant_id_str,
+                            invoice.vendor_id,
+                            &invoice.vendor_name,
+                            &line_items,
+                            total,
+                        )
+                        .await
+                }
+            }
+        } else {
+            cat_engine
+                .suggest_categories(
+                    &tenant_id_str,
+                    invoice.vendor_id,
+                    &invoice.vendor_name,
+                    &line_items,
+                    total,
+                )
+                .await
+        };
+
+        match cat_result {
+            Ok(categorization) => {
+                let mut updates = serde_json::json!({
+                    "categorization_confidence": categorization.overall_confidence,
+                });
+
+                if !had_gl_code {
+                    updates["gl_code"] =
+                        serde_json::json!(categorization.gl_code.as_ref().map(|s| &s.value));
+                }
+                if !had_department {
+                    updates["department"] =
+                        serde_json::json!(categorization.department.as_ref().map(|s| &s.value));
+                }
+                if !had_cost_center {
+                    updates["cost_center"] =
+                        serde_json::json!(categorization.cost_center.as_ref().map(|s| &s.value));
+                }
+
+                repo.update(tenant_id, invoice_id, updates).await?;
+                if let Some(refetched) = repo.get_by_id(tenant_id, invoice_id).await? {
+                    invoice = refetched;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(invoice_id = %invoice_id, error = %e, "Sync OCR auto-categorization failed");
+            }
+        }
+    }
+
+    repo.update_processing_status(tenant_id, invoice_id, ProcessingStatus::Submitted)
+        .await?;
+
+    let workflow_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    let engine = billforge_invoice_processing::WorkflowEngine::new(
+        std::sync::Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(
+            pool.clone(),
+        )) as std::sync::Arc<dyn billforge_core::traits::InvoiceRepository>,
+        std::sync::Arc::new(workflow_repo)
+            as std::sync::Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
+        std::sync::Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+            pool.clone(),
+        )) as std::sync::Arc<dyn billforge_core::traits::ApprovalRepository>,
+    )
+    .with_routing(std::sync::Arc::new(billforge_db::RoutingRepository::new(
+        pool.as_ref().clone(),
+    )));
+    let final_status = engine.process_invoice(tenant_id, &invoice).await?;
+
+    repo.update_processing_status(tenant_id, invoice_id, final_status)
+        .await?;
+    route_sync_processing_queue(pool, tenant_id, invoice_id, final_status).await;
+
+    Ok(())
+}
+
+fn sync_ocr_line_items(
+    result: &billforge_core::domain::OcrExtractionResult,
+    invoice: &billforge_core::domain::Invoice,
+) -> Vec<billforge_invoice_processing::categorization::LineItemInput> {
+    let extracted = result
+        .line_items
+        .iter()
+        .map(
+            |item| billforge_invoice_processing::categorization::LineItemInput {
+                description: item.description.value.clone().unwrap_or_default(),
+                quantity: item.quantity.value,
+                amount: item.amount.value.unwrap_or(0.0),
+            },
+        )
+        .filter(|item| !item.description.is_empty() || item.amount > 0.0)
+        .collect::<Vec<_>>();
+
+    if !extracted.is_empty() {
+        return extracted;
+    }
+
+    invoice
+        .line_items
+        .iter()
+        .map(
+            |item| billforge_invoice_processing::categorization::LineItemInput {
+                description: item.description.clone(),
+                quantity: item.quantity,
+                amount: item.amount.amount as f64 / 100.0,
+            },
+        )
+        .collect()
+}
+
+async fn route_sync_processing_queue(
+    pool: &std::sync::Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    status: ProcessingStatus,
+) {
+    let queue_type = match status {
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment => QueueType::Payment,
+        ProcessingStatus::PendingApproval => QueueType::Approval,
+        ProcessingStatus::Rejected | ProcessingStatus::Voided | ProcessingStatus::Paid => return,
+        _ => QueueType::Review,
+    };
+
+    route_sync_ocr_queue(pool, tenant_id, invoice_id, queue_type).await;
 }
 
 #[utoipa::path(

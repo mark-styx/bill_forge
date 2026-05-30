@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 /// OCR confidence required before an invoice can continue through straight-through processing.
 pub const OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD: f32 = 0.90;
+pub const OCR_HARD_FAIL_CONFIDENCE_THRESHOLD: f32 = 0.30;
 pub const LOCAL_OCR_PROVIDER: &str = "tesseract";
 
 /// Resolve the OCR provider for a tenant, enforcing local-only privacy settings.
@@ -21,7 +22,31 @@ pub fn resolve_ocr_provider_name(global_provider: &str, settings: &TenantSetting
     if settings.features.local_ocr_required {
         LOCAL_OCR_PROVIDER.to_string()
     } else {
-        global_provider.to_string()
+        settings
+            .ocr_provider
+            .as_deref()
+            .filter(|provider| !provider.trim().is_empty())
+            .unwrap_or(global_provider)
+            .to_string()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OcrRoutingDecision {
+    Error,
+    ExceptionReview,
+    StraightThrough,
+}
+
+pub fn ocr_routing_decision(confidence: Option<f32>) -> OcrRoutingDecision {
+    match confidence {
+        Some(confidence) if confidence < OCR_HARD_FAIL_CONFIDENCE_THRESHOLD => {
+            OcrRoutingDecision::Error
+        }
+        Some(confidence) if confidence >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD => {
+            OcrRoutingDecision::StraightThrough
+        }
+        _ => OcrRoutingDecision::ExceptionReview,
     }
 }
 

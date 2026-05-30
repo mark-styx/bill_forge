@@ -292,6 +292,7 @@ fn test_login_response_schema_matches_auth_response_shape() {
                 company_name: "Test Corp".to_string(),
                 timezone: "UTC".to_string(),
                 default_currency: "USD".to_string(),
+                ocr_provider: None,
             },
         },
     };

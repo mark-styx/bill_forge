@@ -480,6 +480,7 @@ mod tenant_settings_tests {
             company_name: "Test Corp".to_string(),
             timezone: "America/New_York".to_string(),
             default_currency: "USD".to_string(),
+            ocr_provider: Some("aws_textract".to_string()),
             features: TenantFeatures {
                 advanced_ocr: true,
                 api_access: true,
@@ -496,6 +497,7 @@ mod tenant_settings_tests {
         assert_eq!(deserialized.logo_url, settings.logo_url);
         assert_eq!(deserialized.primary_color, settings.primary_color);
         assert_eq!(deserialized.company_name, settings.company_name);
+        assert_eq!(deserialized.ocr_provider, settings.ocr_provider);
         assert!(deserialized.features.advanced_ocr);
         assert!(!deserialized.features.sso_enabled);
     }
@@ -520,6 +522,7 @@ mod tenant_settings_tests {
         let settings: TenantSettings = serde_json::from_value(json).unwrap();
         assert_eq!(settings.company_name, "Legacy Corp");
         assert_eq!(settings.default_currency, "EUR");
+        assert_eq!(settings.ocr_provider, None);
     }
 
     #[test]

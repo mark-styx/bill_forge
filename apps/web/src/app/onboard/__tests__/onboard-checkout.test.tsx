@@ -97,7 +97,10 @@ describe('OnboardPage checkout wiring', () => {
     await user.click(screen.getByText('Launch BillForge'));
 
     await waitFor(() => {
-      expect(mockProvision).toHaveBeenCalled();
+      expect(mockProvision).toHaveBeenCalledWith(expect.objectContaining({
+        ocr_provider: 'tesseract',
+        local_ocr_required: true,
+      }));
     });
 
     await waitFor(() => {
@@ -200,7 +203,10 @@ describe('OnboardPage checkout wiring', () => {
     await user.click(screen.getByText('Launch BillForge'));
 
     await waitFor(() => {
-      expect(mockProvision).toHaveBeenCalled();
+      expect(mockProvision).toHaveBeenCalledWith(expect.objectContaining({
+        ocr_provider: 'aws_textract',
+        local_ocr_required: false,
+      }));
     });
 
     await waitFor(() => {

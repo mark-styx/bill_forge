@@ -538,6 +538,8 @@ pub struct TenantSettingsInfo {
     pub timezone: String,
     /// Default currency code (e.g., "USD", "EUR")
     pub default_currency: String,
+    /// Tenant-selected OCR provider, if configured
+    pub ocr_provider: Option<String>,
 }
 
 // ============================================================================

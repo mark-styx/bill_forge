@@ -80,6 +80,8 @@ pub struct ProvisionRequest {
     pub admin_name: String,
     pub timezone: Option<String>,
     pub default_currency: Option<String>,
+    pub ocr_provider: Option<String>,
+    pub local_ocr_required: Option<bool>,
 }
 
 #[utoipa::path(
@@ -105,6 +107,8 @@ async fn provision(
             admin_name: req.admin_name,
             timezone: req.timezone,
             default_currency: req.default_currency,
+            ocr_provider: req.ocr_provider,
+            local_ocr_required: req.local_ocr_required,
         })
         .await
         .map_err(|e| {

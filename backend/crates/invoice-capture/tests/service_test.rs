@@ -10,10 +10,65 @@ use billforge_core::domain::{
     InvoiceId, InvoiceLineItem, OcrExtractionResult, ProcessingStatus,
 };
 use billforge_core::traits::{InvoiceRepository, OcrService, StorageService};
-use billforge_core::types::{Money, PaginatedResponse, Pagination, TenantId, UserId};
+use billforge_core::types::{
+    Money, PaginatedResponse, Pagination, TenantFeatures, TenantId, TenantSettings, UserId,
+};
 use billforge_core::Result;
-use billforge_invoice_capture::service::InvoiceCaptureService;
+use billforge_invoice_capture::{
+    ocr_routing_decision, resolve_ocr_provider_name, InvoiceCaptureService, OcrRoutingDecision,
+};
 use uuid::Uuid;
+
+#[test]
+fn resolves_tenant_ocr_provider_before_global_default() {
+    let settings = TenantSettings {
+        ocr_provider: Some("aws_textract".to_string()),
+        ..TenantSettings::default()
+    };
+
+    assert_eq!(
+        resolve_ocr_provider_name("tesseract", &settings),
+        "aws_textract"
+    );
+}
+
+#[test]
+fn local_ocr_requirement_forces_tesseract() {
+    let settings = TenantSettings {
+        ocr_provider: Some("google_vision".to_string()),
+        features: TenantFeatures {
+            local_ocr_required: true,
+            ..TenantFeatures::default()
+        },
+        ..TenantSettings::default()
+    };
+
+    assert_eq!(
+        resolve_ocr_provider_name("aws_textract", &settings),
+        "tesseract"
+    );
+}
+
+#[test]
+fn ocr_routing_decision_matches_thresholds() {
+    assert_eq!(ocr_routing_decision(Some(0.29)), OcrRoutingDecision::Error);
+    assert_eq!(
+        ocr_routing_decision(Some(0.30)),
+        OcrRoutingDecision::ExceptionReview
+    );
+    assert_eq!(
+        ocr_routing_decision(Some(0.89)),
+        OcrRoutingDecision::ExceptionReview
+    );
+    assert_eq!(
+        ocr_routing_decision(Some(0.90)),
+        OcrRoutingDecision::StraightThrough
+    );
+    assert_eq!(
+        ocr_routing_decision(None),
+        OcrRoutingDecision::ExceptionReview
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Fakes

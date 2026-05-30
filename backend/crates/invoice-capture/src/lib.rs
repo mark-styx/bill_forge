@@ -6,6 +6,7 @@ pub mod ocr;
 pub mod service;
 
 pub use service::{
-    resolve_ocr_provider_name, InvoiceCaptureService, LOCAL_OCR_PROVIDER,
-    OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+    ocr_routing_decision, resolve_ocr_provider_name, InvoiceCaptureService, OcrRoutingDecision,
+    LOCAL_OCR_PROVIDER, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,
+    OCR_HARD_FAIL_CONFIDENCE_THRESHOLD,
 };

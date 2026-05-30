@@ -243,6 +243,8 @@ export const authApi = {
     admin_name: string;
     timezone?: string;
     default_currency?: string;
+    ocr_provider?: string;
+    local_ocr_required?: boolean;
   }) =>
     api.post<AuthResponseData>('/api/v1/auth/provision', data),
 
@@ -281,6 +283,7 @@ export interface AuthResponseData {
       company_name: string;
       timezone: string;
       default_currency: string;
+      ocr_provider?: string | null;
     };
   };
 }
@@ -2071,6 +2074,7 @@ export interface TenantSettings {
   company_name: string;
   timezone: string;
   default_currency: string;
+  ocr_provider: string | null;
   logo_url: string | null;
   primary_color: string | null;
   features: {
@@ -2087,6 +2091,7 @@ export interface UpdateTenantSettingsInput {
   company_name?: string;
   timezone?: string;
   default_currency?: string;
+  ocr_provider?: string | null;
   features?: TenantSettings['features'];
 }
 

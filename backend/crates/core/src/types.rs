@@ -186,6 +186,10 @@ pub struct TenantSettings {
     /// Currency settings
     pub default_currency: String,
 
+    /// Tenant-selected OCR provider. When unset, the process-wide provider is used.
+    #[serde(default)]
+    pub ocr_provider: Option<String>,
+
     /// Feature flags
     pub features: TenantFeatures,
 }
@@ -198,6 +202,7 @@ impl Default for TenantSettings {
             company_name: String::new(),
             timezone: "UTC".to_string(),
             default_currency: "USD".to_string(),
+            ocr_provider: None,
             features: TenantFeatures::default(),
         }
     }

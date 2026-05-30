@@ -31,6 +31,7 @@ fn tenant_context(enabled_modules: Vec<Module>) -> TenantContext {
             company_name: "Test Tenant".to_string(),
             timezone: "UTC".to_string(),
             default_currency: "USD".to_string(),
+            ocr_provider: None,
             features: TenantFeatures::default(),
         },
     }

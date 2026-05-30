@@ -31,6 +31,12 @@ const ERP_OPTIONS = [
   { id: 'none', name: 'Skip for now', description: 'You can connect an ERP later from Settings.' },
 ];
 
+const OCR_PROVIDER_BY_SELECTION: Record<string, string> = {
+  builtin: 'tesseract',
+  textract: 'aws_textract',
+  google: 'google_vision',
+};
+
 export default function OnboardPage() {
   return (
     <Suspense fallback={null}>
@@ -105,6 +111,8 @@ function OnboardInner() {
         admin_name: adminName,
         timezone,
         default_currency: currency,
+        ocr_provider: OCR_PROVIDER_BY_SELECTION[selectedOcr] ?? 'tesseract',
+        local_ocr_required: selectedOcr === 'builtin',
       });
 
       // Set full auth state (tokens, user, tenant, isAuthenticated)
