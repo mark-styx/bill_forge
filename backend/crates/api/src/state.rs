@@ -297,6 +297,27 @@ impl AppState {
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_amount BIGINT;
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_currency TEXT NOT NULL DEFAULT 'USD';
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS notes TEXT;
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'invoice_line_items' AND column_name = 'capture_id'
+                ) THEN
+                    ALTER TABLE invoice_line_items ALTER COLUMN capture_id DROP NOT NULL;
+                END IF;
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'invoice_line_items' AND column_name = 'tenant_id'
+                ) THEN
+                    ALTER TABLE invoice_line_items ALTER COLUMN tenant_id DROP NOT NULL;
+                END IF;
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'invoice_line_items' AND column_name = 'line_no'
+                ) THEN
+                    ALTER TABLE invoice_line_items ALTER COLUMN line_no DROP NOT NULL;
+                END IF;
+            END $$;
         "#,
         )
         .execute(pool)
