@@ -41,8 +41,24 @@ impl TesseractOcr {
     }
 
     /// Check if tesseract is available on the system
-    pub fn is_available() -> bool {
-        Command::new("tesseract")
+    ///
+    /// This probes the configured `tesseract_path` (from `TESSERACT_PATH` env or default
+    /// `"tesseract"`). For a convenience check using the default path without constructing
+    /// an instance, see [`is_available_default`].
+    pub fn is_available(&self) -> bool {
+        Command::new(&self.tesseract_path)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Check if tesseract is available using default path (no instance needed).
+    ///
+    /// Convenience wrapper used by provider-discovery code.
+    pub fn is_available_default() -> bool {
+        let path = std::env::var("TESSERACT_PATH").unwrap_or_else(|_| "tesseract".to_string());
+        Command::new(&path)
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -422,25 +438,14 @@ impl OcrService for TesseractOcr {
         let start = Instant::now();
 
         // Check if tesseract is available
-        if !Self::is_available() {
-            tracing::warn!("Tesseract not available, using mock extraction");
-            // Return mock data for development when tesseract isn't installed
-            let result = OcrExtractionResult {
-                invoice_number: ExtractedField::with_value(format!("MOCK-{}", uuid::Uuid::new_v4().to_string()[..8].to_uppercase()), 0.5),
-                invoice_date: ExtractedField::empty(),
-                due_date: ExtractedField::empty(),
-                vendor_name: ExtractedField::with_value("Mock Vendor (Tesseract not installed)".to_string(), 0.3),
-                vendor_address: ExtractedField::empty(),
-                subtotal: ExtractedField::empty(),
-                tax_amount: ExtractedField::empty(),
-                total_amount: ExtractedField::with_value(0.0, 0.1),
-                currency: ExtractedField::with_value("USD".to_string(), 0.9),
-                po_number: ExtractedField::empty(),
-                line_items: Vec::new(),
-                raw_text: "Tesseract OCR is not installed. Install with: brew install tesseract (macOS) or apt-get install tesseract-ocr (Ubuntu)".to_string(),
-                processing_time_ms: start.elapsed().as_millis() as u64,
-            };
-            return Ok(result);
+        if !self.is_available() {
+            tracing::error!("Tesseract binary not found at configured path '{}'", self.tesseract_path);
+            return Err(Error::Ocr(
+                "Tesseract not found. Please install tesseract-ocr. \
+                 On macOS: brew install tesseract. \
+                 On Ubuntu: apt-get install tesseract-ocr"
+                    .to_string(),
+            ));
         }
 
         // Run OCR
@@ -516,5 +521,21 @@ mod tests {
         let text = "Purchase Order Number: ABC123";
         let result = ocr.extract_po_number(text);
         assert_eq!(result.value, Some("ABC123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn extract_returns_error_when_tesseract_missing() {
+        let mut ocr = TesseractOcr::new();
+        // Point at a guaranteed-nonexistent binary
+        ocr.tesseract_path = "/nonexistent/tesseract-binary-xyz".to_string();
+
+        let result = ocr.extract(b"", "image/png").await;
+        assert!(result.is_err(), "expected error when tesseract binary is missing");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Tesseract not found"),
+            "error should mention 'Tesseract not found', got: {}",
+            err_msg,
+        );
     }
 }

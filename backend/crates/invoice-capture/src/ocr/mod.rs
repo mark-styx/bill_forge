@@ -53,7 +53,7 @@ pub fn create_provider(provider_name: &str) -> Box<dyn OcrService> {
 /// Get list of available OCR providers
 pub fn available_providers() -> Vec<(&'static str, bool)> {
     vec![
-        ("tesseract", tesseract::TesseractOcr::is_available()),
+        ("tesseract", tesseract::TesseractOcr::is_available_default()),
         (
             "aws_textract",
             aws_textract::AwsTextractOcr::is_configured(),
