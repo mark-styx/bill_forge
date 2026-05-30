@@ -1735,7 +1735,48 @@ export const dashboardApi = {
 
   getTeamMetrics: () =>
     api.get<DashboardTeamMetrics>('/api/v1/dashboard/metrics/team'),
+
+  /** Stage dwell-time bottleneck heat map */
+  getStageDwell: () =>
+    api.get<StageDwellRow[]>('/api/v1/dashboard/stage-dwell'),
+
+  /** Per-approver workload distribution */
+  getApproverWorkload: () =>
+    api.get<ApproverWorkloadRow[]>('/api/v1/dashboard/approver-workload'),
+
+  /** Exception rate trend over N days (default 14) */
+  getExceptionTrend: (days?: number) => {
+    const qs = days ? `?days=${days}` : '';
+    return api.get<ExceptionTrendPoint[]>(`/api/v1/dashboard/exception-trend${qs}`);
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Dashboard SLA / Bottleneck Types
+// ---------------------------------------------------------------------------
+
+export interface StageDwellRow {
+  stage: string;
+  median_minutes: number;
+  p90_minutes: number;
+  count: number;
+}
+
+export interface ApproverWorkloadRow {
+  approver_id: string;
+  approver_name: string;
+  pending_count: number;
+  near_breach_count: number;
+  breached_count: number;
+  avg_response_hours: number;
+}
+
+export interface ExceptionTrendPoint {
+  date: string;
+  total_invoices: number;
+  exception_count: number;
+  exception_rate: number;
+}
 
 // ---------------------------------------------------------------------------
 // Audit Log Types

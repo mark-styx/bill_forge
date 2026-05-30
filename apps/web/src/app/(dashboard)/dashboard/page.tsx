@@ -30,6 +30,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
+import { SlaBottleneckSection } from '@/components/dashboard/sla-bottleneck-section';
 
 export default function DashboardPage() {
   const { hasModule, user } = useAuthStore();
@@ -621,6 +622,11 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* SLA Timers & Bottleneck Visualization */}
+      {hasModule('invoice_processing') && (
+        <SlaBottleneckSection />
       )}
 
       {/* Module Overview Cards */}
