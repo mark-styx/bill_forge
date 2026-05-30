@@ -2,6 +2,7 @@
 
 use crate::error::ApiResult;
 use crate::extractors::InvoiceCaptureAccess;
+use crate::metrics;
 use crate::state::AppState;
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -25,6 +26,7 @@ use billforge_invoice_processing::feedback_loop::{
 };
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -576,6 +578,7 @@ async fn upload_invoice(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     mut multipart: Multipart,
 ) -> ApiResult<Json<UploadResponse>> {
+    let capture_started = Instant::now();
     // Process multipart upload
     while let Some(field) = multipart
         .next_field()
@@ -594,7 +597,7 @@ async fn upload_invoice(
                 billforge_core::Error::Validation(format!("Failed to read file: {}", e))
             })?;
 
-            return upload_invoice_file(&state, &user, &tenant, file_name, content_type, &data)
+            return upload_invoice_file(&state, &user, &tenant, file_name, content_type, &data, capture_started)
                 .await
                 .map(Json);
         }
@@ -610,6 +613,7 @@ pub(crate) async fn upload_invoice_file(
     file_name: String,
     content_type: String,
     data: &[u8],
+    capture_started: Instant,
 ) -> ApiResult<UploadResponse> {
     let file_name_for_msg = file_name.clone();
     let document_id = state
@@ -693,6 +697,7 @@ pub(crate) async fn upload_invoice_file(
             &invoice.id,
             document_id,
             &content_type,
+            capture_started,
         )
         .await
         {
@@ -768,6 +773,7 @@ async fn enqueue_ocr_job(
     invoice_id: &billforge_core::domain::InvoiceId,
     document_id: Uuid,
     content_type: &str,
+    capture_started: Instant,
 ) -> Result<(), billforge_core::Error> {
     let job = serde_json::json!({
         "id": Uuid::new_v4().to_string(),
@@ -797,6 +803,9 @@ async fn enqueue_ocr_job(
             billforge_core::Error::Database(format!("Failed to enqueue OCR job: {}", e))
         })?;
 
+    // Record capture-to-queue latency
+    metrics::CAPTURE_TO_QUEUE_DURATION_SECONDS.observe(capture_started.elapsed().as_secs_f64());
+
     Ok(())
 }
 
@@ -819,6 +828,12 @@ async fn run_sync_ocr(
 
     let capture_status = match &ocr_result {
         Ok(result) => {
+            // Emit OCR provider success + per-field confidence metrics
+            metrics::OCR_PROVIDER_OUTCOME_TOTAL
+                .with_label_values(&[&provider_name, "success"])
+                .inc();
+            observe_field_confidence(result);
+
             let confidence = [
                 result.invoice_number.confidence,
                 result.vendor_name.confidence,
@@ -914,6 +929,10 @@ async fn run_sync_ocr(
             status
         }
         Err(e) => {
+            // Emit OCR provider failure metric
+            metrics::OCR_PROVIDER_OUTCOME_TOTAL
+                .with_label_values(&[&provider_name, "failure"])
+                .inc();
             tracing::warn!(invoice_id = %invoice_id, error = %e, "Sync OCR failed");
             let _ = repo
                 .update(
@@ -1267,6 +1286,7 @@ async fn rerun_ocr(
             &invoice_id,
             invoice.document_id,
             &mime_type,
+            Instant::now(),
         )
         .await
         {
@@ -1910,4 +1930,20 @@ fn ocr_line_items_to_input(items: &[ExtractedLineItem]) -> Vec<CreateLineItemInp
             project: None,
         })
         .collect()
+}
+
+/// Observe per-field confidence from an OCR result into the first-pass confidence histogram.
+fn observe_field_confidence(result: &billforge_core::domain::OcrExtractionResult) {
+    let fields: &[(&str, f32)] = &[
+        ("invoice_number", result.invoice_number.confidence),
+        ("vendor_name", result.vendor_name.confidence),
+        ("total_amount", result.total_amount.confidence),
+        ("invoice_date", result.invoice_date.confidence),
+        ("po_number", result.po_number.confidence),
+    ];
+    for (field, conf) in fields {
+        metrics::OCR_FIRST_PASS_FIELD_CONFIDENCE
+            .with_label_values(&[field])
+            .observe(*conf as f64);
+    }
 }
