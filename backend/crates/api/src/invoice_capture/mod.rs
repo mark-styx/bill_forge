@@ -53,6 +53,7 @@ pub struct CaptureResponse {
     pub capture_id: String,
     pub provider: String,
     pub overall_confidence: f32,
+    pub privacy_mode: String,
     pub line_items: Vec<LineItemResponse>,
 }
 
@@ -126,6 +127,11 @@ async fn upload_capture(
     let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
     let ocr_provider = ocr::create_provider(&provider_name);
     let effective_provider = ocr_provider.provider_name().to_string();
+    let privacy_mode = if tenant.settings.features.local_ocr_required {
+        "local_only"
+    } else {
+        "cloud_allowed"
+    };
 
     // Run OCR
     let ocr_result = ocr_provider.extract(&data, &mime).await.map_err(|e| {
@@ -142,8 +148,8 @@ async fn upload_capture(
 
     sqlx::query(
         r#"INSERT INTO invoice_captures
-               (id, tenant_id, original_filename, mime_type, provider, overall_confidence, status, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7)"#,
+               (id, tenant_id, original_filename, mime_type, provider, overall_confidence, status, uploaded_by, privacy_mode)
+           VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8)"#,
     )
     .bind(capture_id)
     .bind(*tenant.tenant_id.as_uuid())
@@ -152,6 +158,7 @@ async fn upload_capture(
     .bind(&effective_provider)
     .bind(overall_confidence)
     .bind(user.user_id.as_uuid())
+    .bind(privacy_mode)
     .execute(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to insert capture: {}", e)))?;
@@ -203,6 +210,7 @@ async fn upload_capture(
         capture_id: capture_id.to_string(),
         provider: effective_provider,
         overall_confidence,
+        privacy_mode: privacy_mode.to_string(),
         line_items: line_items_resp,
     };
 

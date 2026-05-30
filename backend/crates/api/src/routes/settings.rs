@@ -1,22 +1,24 @@
 //! Settings routes for updating tenant configuration
 
+use crate::error::{ApiError, ApiResult};
 use crate::extractors::{AuthUser, TenantCtx};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get, put},
+    routing::{delete, get, patch, put},
     Json, Router,
 };
 use billforge_core::{
     domain::{InvoiceStatusConfig, InvoiceStatusConfigInput},
     traits::InvoiceStatusConfigRepository,
-    TenantFeatures,
+    Error, Role, TenantFeatures,
 };
 use serde::{Deserialize, Serialize};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_settings).put(update_settings))
+        .route("/privacy", patch(update_privacy_settings))
         .route(
             "/invoice-statuses",
             get(list_invoice_statuses).put(update_invoice_statuses),
@@ -105,6 +107,59 @@ async fn update_settings(
         .update_tenant_settings(&tenant.tenant_id, &settings)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SettingsResponse {
+        company_name: settings.company_name,
+        timezone: settings.timezone,
+        default_currency: settings.default_currency,
+        ocr_provider: settings.ocr_provider,
+        logo_url: settings.logo_url,
+        primary_color: settings.primary_color,
+        features: settings.features,
+    }))
+}
+
+// -- Privacy settings (admin-only toggle for local OCR) --
+
+#[derive(Debug, Deserialize)]
+struct UpdatePrivacyInput {
+    local_ocr_required: bool,
+}
+
+#[utoipa::path(patch, path = "/api/v1/settings/privacy", tag = "Settings",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Privacy settings updated"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — admin only"),
+    ))]
+async fn update_privacy_settings(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(input): Json<UpdatePrivacyInput>,
+) -> ApiResult<Json<SettingsResponse>> {
+    // Only tenant admins may change the privacy toggle
+    if !user.has_role(Role::TenantAdmin) {
+        return Err(ApiError(Error::Forbidden(
+            "Only administrators can change privacy settings".to_string(),
+        )));
+    }
+
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| Error::Internal("DATABASE_URL missing".into()))?;
+
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to connect to metadata DB: {}", e)))?;
+
+    let mut settings = tenant.settings.clone();
+    settings.features.local_ocr_required = input.local_ocr_required;
+
+    metadata_db
+        .update_tenant_settings(&tenant.tenant_id, &settings)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to persist privacy settings: {}", e)))?;
 
     Ok(Json(SettingsResponse {
         company_name: settings.company_name,

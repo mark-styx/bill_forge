@@ -70,6 +70,11 @@ pub async fn process_ocr(
     let repo = InvoiceRepositoryImpl::new(pool.clone());
     let tenant_settings = load_tenant_settings(config, &tenant_id).await?;
     let effective_ocr_provider = resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
+    let privacy_mode = if tenant_settings.features.local_ocr_required {
+        "local_only"
+    } else {
+        "cloud_allowed"
+    };
 
     // Download and run OCR - if anything fails before we can update the
     // invoice, mark it as Failed so it doesn't stay stuck in Processing.
@@ -239,13 +244,15 @@ pub async fn process_ocr(
                        subtotal_cents = COALESCE($2, subtotal_cents),
                        tax_amount_cents = COALESCE($3, tax_amount_cents),
                        line_items = $4,
+                       privacy_mode = $5,
                        updated_at = NOW()
-                   WHERE id = $5 AND tenant_id = $6"#,
+                   WHERE id = $6 AND tenant_id = $7"#,
             )
             .bind(confidence)
             .bind(subtotal_cents)
             .bind(tax_cents)
             .bind(&line_items_json)
+            .bind(privacy_mode)
             .bind(invoice_id.as_uuid())
             .bind(*tenant_id.as_uuid())
             .execute(&*pool)
