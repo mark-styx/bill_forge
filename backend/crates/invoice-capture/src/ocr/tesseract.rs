@@ -439,7 +439,10 @@ impl OcrService for TesseractOcr {
 
         // Check if tesseract is available
         if !self.is_available() {
-            tracing::error!("Tesseract binary not found at configured path '{}'", self.tesseract_path);
+            tracing::error!(
+                "Tesseract binary not found at configured path '{}'",
+                self.tesseract_path
+            );
             return Err(Error::Ocr(
                 "Tesseract not found. Please install tesseract-ocr. \
                  On macOS: brew install tesseract. \
@@ -530,7 +533,10 @@ mod tests {
         ocr.tesseract_path = "/nonexistent/tesseract-binary-xyz".to_string();
 
         let result = ocr.extract(b"", "image/png").await;
-        assert!(result.is_err(), "expected error when tesseract binary is missing");
+        assert!(
+            result.is_err(),
+            "expected error when tesseract binary is missing"
+        );
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("Tesseract not found"),

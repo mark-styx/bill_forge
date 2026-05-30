@@ -463,7 +463,7 @@ async fn test_ocr_processing_time_under_5_seconds() {
     use billforge_invoice_capture::ocr::TesseractOcr;
     use std::time::Instant;
 
-    if !TesseractOcr::is_available() {
+    if !TesseractOcr::is_available_default() {
         eprintln!("Skipping OCR performance test - tesseract not installed");
         return;
     }
@@ -503,7 +503,7 @@ async fn test_ocr_handles_corrupted_file_gracefully() {
     use billforge_core::traits::OcrService;
     use billforge_invoice_capture::ocr::TesseractOcr;
 
-    if !TesseractOcr::is_available() {
+    if !TesseractOcr::is_available_default() {
         eprintln!("Skipping OCR error handling test - tesseract not installed");
         return;
     }
@@ -541,7 +541,7 @@ async fn test_ocr_supported_formats() {
     use billforge_core::traits::OcrService;
     use billforge_invoice_capture::ocr::TesseractOcr;
 
-    if !TesseractOcr::is_available() {
+    if !TesseractOcr::is_available_default() {
         eprintln!("Skipping OCR formats test - tesseract not installed");
         return;
     }
