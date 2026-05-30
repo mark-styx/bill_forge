@@ -113,32 +113,24 @@ impl NotificationRouter {
 
     /// Configure FCM (Firebase Cloud Messaging) integration
     pub fn with_fcm(self, config: FcmConfig) -> Result<Self, FcmError> {
-        let client: Arc<dyn PushNotificationProvider> =
-            Arc::new(FcmClient::new(config)?);
+        let client: Arc<dyn PushNotificationProvider> = Arc::new(FcmClient::new(config)?);
         Ok(self.with_fcm_provider(client))
     }
 
     /// Configure APNS (Apple Push Notification Service) integration
     pub fn with_apns(self, config: ApnsConfig) -> Result<Self, ApnsError> {
-        let client: Arc<dyn PushNotificationProvider> =
-            Arc::new(ApnsClient::new(config)?);
+        let client: Arc<dyn PushNotificationProvider> = Arc::new(ApnsClient::new(config)?);
         Ok(self.with_apns_provider(client))
     }
 
     /// Configure FCM using a custom push provider (for testing)
-    pub fn with_fcm_provider(
-        mut self,
-        provider: Arc<dyn PushNotificationProvider>,
-    ) -> Self {
+    pub fn with_fcm_provider(mut self, provider: Arc<dyn PushNotificationProvider>) -> Self {
         self.fcm_client = Some(provider);
         self
     }
 
     /// Configure APNS using a custom push provider (for testing)
-    pub fn with_apns_provider(
-        mut self,
-        provider: Arc<dyn PushNotificationProvider>,
-    ) -> Self {
+    pub fn with_apns_provider(mut self, provider: Arc<dyn PushNotificationProvider>) -> Self {
         self.apns_client = Some(provider);
         self
     }

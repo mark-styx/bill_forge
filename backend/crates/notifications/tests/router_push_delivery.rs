@@ -200,7 +200,10 @@ async fn push_routes_android_token_to_fcm_only() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -233,7 +236,10 @@ async fn push_routes_ios_token_to_apns_only() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -271,7 +277,10 @@ async fn push_fans_out_to_both_platforms() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -314,7 +323,10 @@ async fn push_partial_success_aggregates_as_success() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -351,7 +363,10 @@ async fn push_all_failures_aggregate_as_failure_with_combined_messages() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -381,7 +396,10 @@ async fn push_missing_fcm_provider_with_android_token_records_error() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -407,7 +425,10 @@ async fn push_missing_apns_provider_with_ios_token_records_error() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -429,7 +450,10 @@ async fn push_no_providers_configured_returns_explicit_error() {
     let router = NotificationRouter::new().with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -448,7 +472,10 @@ async fn push_no_token_store_returns_explicit_error() {
     let router = NotificationRouter::new().with_fcm_provider(fcm);
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -472,7 +499,10 @@ async fn push_empty_tokens_returns_explicit_error() {
         .with_push_token_store(Arc::new(store));
 
     let result = router
-        .route(&test_notification(user_id.clone()), &enabled_prefs(user_id, push_channel_prefs()))
+        .route(
+            &test_notification(user_id.clone()),
+            &enabled_prefs(user_id, push_channel_prefs()),
+        )
         .await
         .unwrap();
 
@@ -488,7 +518,10 @@ async fn push_empty_tokens_returns_explicit_error() {
 
 #[tokio::test]
 async fn push_blocked_by_quiet_hours() {
-    let fcm = Arc::new(MockPushProvider::new("fcm", vec![fcm_ok("should_not_be_called")]));
+    let fcm = Arc::new(MockPushProvider::new(
+        "fcm",
+        vec![fcm_ok("should_not_be_called")],
+    ));
     let fcm_handle = fcm.clone();
 
     let store = MockTokenStore::new(vec![PushDeviceToken {
@@ -517,7 +550,10 @@ async fn push_blocked_by_quiet_hours() {
         quiet_hours_timezone: Some("UTC".to_string()),
     };
 
-    let result = router.route(&test_notification(user_id), &prefs).await.unwrap();
+    let result = router
+        .route(&test_notification(user_id), &prefs)
+        .await
+        .unwrap();
 
     assert!(!result.delivered);
     assert!(result.results.is_empty());
@@ -528,7 +564,10 @@ async fn push_blocked_by_quiet_hours() {
 
 #[tokio::test]
 async fn push_channel_disabled_in_prefs_skips_push() {
-    let fcm = Arc::new(MockPushProvider::new("fcm", vec![fcm_ok("should_not_be_called")]));
+    let fcm = Arc::new(MockPushProvider::new(
+        "fcm",
+        vec![fcm_ok("should_not_be_called")],
+    ));
     let fcm_handle = fcm.clone();
     let in_app = Arc::new(MockInAppStore::new());
     let in_app_handle = in_app.clone();
@@ -563,7 +602,10 @@ async fn push_channel_disabled_in_prefs_skips_push() {
         ],
     );
 
-    let result = router.route(&test_notification(user_id), &prefs).await.unwrap();
+    let result = router
+        .route(&test_notification(user_id), &prefs)
+        .await
+        .unwrap();
 
     // In-App delivers successfully
     assert!(result.delivered);
