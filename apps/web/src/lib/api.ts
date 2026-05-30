@@ -2648,3 +2648,47 @@ export const routingApi = {
   updateConfig: (body: UpdateRoutingConfigRequest) =>
     api.put<RoutingConfig>('/api/v1/routing/config', body),
 };
+
+// ---------------------------------------------------------------------------
+// Month-End Close Periods
+// ---------------------------------------------------------------------------
+
+export interface ClosePeriod {
+  id: string;
+  tenant_id: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  cutoff_date: string;
+  status: 'open' | 'cutoff_passed' | 'locked';
+  locked_at: string | null;
+  locked_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunCloseResponse {
+  period_id: string;
+  accrual_entries_created: number;
+  erp_post_status: string;
+  erp_post_error: string | null;
+}
+
+export const closePeriodsApi = {
+  list: () =>
+    api.get<ClosePeriod[]>('/api/v1/close-periods'),
+
+  create: (body: {
+    period_label: string;
+    period_start: string;
+    period_end: string;
+    cutoff_date: string;
+  }) =>
+    api.post<ClosePeriod>('/api/v1/close-periods', body),
+
+  update: (id: string, body: { cutoff_date?: string }) =>
+    api.patch<ClosePeriod>(`/api/v1/close-periods/${id}`, body),
+
+  runClose: (id: string) =>
+    api.post<RunCloseResponse>(`/api/v1/close-periods/${id}/close`, {}),
+};

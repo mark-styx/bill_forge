@@ -4,6 +4,7 @@ pub mod ai;
 pub mod approval_links;
 pub(crate) mod audit;
 pub mod auth;
+pub mod close_periods;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
 pub mod billing;
@@ -164,6 +165,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/vendor-portal", vendor_portal::routes())
         // Lightweight QBO integration (OAuth + vendor pull)
         .nest("/qbo", qbo::routes())
+        // Month-end close periods
+        .nest("/close-periods", close_periods::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)

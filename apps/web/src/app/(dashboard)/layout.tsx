@@ -28,6 +28,7 @@ import {
   CreditCard,
   Bell,
   Rocket,
+  CalendarClock,
 } from 'lucide-react';
 
 interface NavItem {
@@ -65,6 +66,7 @@ const navigation: NavItem[] = [
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
+  { name: 'Month-End Close', href: '/close', icon: CalendarClock, module: null },
   { name: 'Winston AI Assistant', href: '/ai-assistant', icon: Sparkles, module: 'ai_assistant' },
   {
     name: 'Integrations',
