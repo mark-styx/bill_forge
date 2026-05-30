@@ -8,7 +8,14 @@ import { invoicesApi } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   invoicesApi: {
     upload: vi.fn(),
+    get: vi.fn(() => Promise.resolve(null)),
+    submitForProcessing: vi.fn(() => Promise.resolve()),
   },
+}));
+
+// Mock @tanstack/react-query (PostUploadTracker uses useQueries)
+vi.mock('@tanstack/react-query', () => ({
+  useQueries: () => [],
 }));
 
 // Mock next/navigation

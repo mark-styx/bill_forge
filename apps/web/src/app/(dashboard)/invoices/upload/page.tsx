@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
+import { useQueries } from '@tanstack/react-query';
 import { invoicesApi } from '@/lib/api';
+import type { Invoice } from '@billforge/shared-types';
 import { toast } from 'sonner';
 import {
   Upload,
@@ -13,9 +15,10 @@ import {
   Loader2,
   CheckCircle,
   AlertCircle,
-  Image,
+  Image as ImageIcon,
   File,
   ArrowLeft,
+  ArrowRight,
   Sparkles,
   ScanLine,
   Clock,
@@ -52,6 +55,219 @@ async function runBatch(
     }
   );
   await Promise.all(workers);
+}
+
+const TERMINAL_STATUSES = new Set(['extracted', 'needs_review', 'failed']);
+const POLL_INTERVAL = 3000;
+const MAX_POLLS = 20;
+
+function PostUploadTracker({ invoiceIds }: { invoiceIds: string[] }) {
+  const router = useRouter();
+  const [pollCounts, setPollCounts] = useState<Record<string, number>>({});
+  const [submitted, setSubmitted] = useState<Record<string, boolean>>({});
+
+  // Pause polling when tab is hidden
+  const [isVisible, setIsVisible] = useState(true);
+  useEffect(() => {
+    const onVisibility = () => setIsVisible(!document.hidden);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  const queries = useQueries({
+    queries: invoiceIds.map((id) => {
+      const count = pollCounts[id] ?? 0;
+      const isTerminal =
+        count >= MAX_POLLS;
+      return {
+        queryKey: ['invoice', id],
+        queryFn: () => invoicesApi.get(id),
+        refetchInterval: (_query: any) => {
+          const data = _query?.state?.data as Invoice | undefined;
+          if (data && TERMINAL_STATUSES.has(data.capture_status)) return false;
+          if (!isVisible) return false;
+          return POLL_INTERVAL;
+        },
+        enabled: !isTerminal,
+      };
+    }),
+  });
+
+  // Track poll counts to enforce the 60s cap
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setPollCounts((prev) => {
+        const next = { ...prev };
+        for (const id of invoiceIds) {
+          const q = queries.find((q) => q.data?.id === id);
+          if (q?.data && TERMINAL_STATUSES.has((q.data as Invoice).capture_status)) continue;
+          next[id] = (prev[id] ?? 0) + 1;
+        }
+        return next;
+      });
+    }, POLL_INTERVAL);
+    return () => clearInterval(timer);
+  }, [invoiceIds, queries]);
+
+  const handleSubmit = async (invoiceId: string) => {
+    try {
+      await invoicesApi.submitForProcessing(invoiceId);
+      setSubmitted((prev) => ({ ...prev, [invoiceId]: true }));
+      // Refetch the query to pick up current_queue_id
+      const q = queries.find((_, i) => invoiceIds[i] === invoiceId);
+      if (q) await q.refetch();
+    } catch {
+      toast.error('Failed to submit for processing');
+    }
+  };
+
+  const processedCount = queries.filter((q) => {
+    const inv = q.data as Invoice | undefined;
+    return inv && (TERMINAL_STATUSES.has(inv.capture_status) || (pollCounts[inv.id] ?? 0) >= MAX_POLLS);
+  }).length;
+
+  return (
+    <div className="card p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold text-foreground">Processing</h2>
+          <p className="text-sm text-muted-foreground">
+            {processedCount} of {invoiceIds.length} processed
+          </p>
+        </div>
+        <Link
+          href="/invoices"
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          View all uploaded invoices
+        </Link>
+      </div>
+
+      <div className="space-y-2">
+        {invoiceIds.map((id, idx) => {
+          const query = queries[idx];
+          const invoice = query?.data as Invoice | undefined;
+          const error = query?.error;
+          const timedOut = (pollCounts[id] ?? 0) >= MAX_POLLS;
+
+          if (error || !invoice) {
+            return (
+              <div key={id} className="flex items-center gap-3 p-3 bg-secondary/50 rounded-xl border border-border">
+                <Loader2 className="w-4 h-4 text-capture animate-spin" />
+                <span className="text-sm text-muted-foreground">Extracting data…</span>
+              </div>
+            );
+          }
+
+          const { capture_status, ocr_confidence, current_queue_id } = invoice;
+          const isTerminal = TERMINAL_STATUSES.has(capture_status) || timedOut;
+
+          // State: extracting / pending
+          if (!isTerminal) {
+            return (
+              <div key={id} className="flex items-center gap-3 p-3 bg-secondary/50 rounded-xl border border-border">
+                <Loader2 className="w-4 h-4 text-capture animate-spin" />
+                <span className="text-sm text-muted-foreground">Extracting data…</span>
+              </div>
+            );
+          }
+
+          // State: failed
+          if (capture_status === 'failed') {
+            return (
+              <div key={id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-border">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="w-4 h-4 text-error" />
+                  <span className="text-sm text-error">Processing failed</span>
+                </div>
+                <button
+                  onClick={() => router.push(`/invoices/${id}`)}
+                  className="btn btn-secondary text-xs"
+                >
+                  Open invoice
+                  <ArrowRight className="w-3 h-3 ml-1" />
+                </button>
+              </div>
+            );
+          }
+
+          // State: needs review or low confidence
+          if (capture_status === 'needs_review' || (ocr_confidence != null && ocr_confidence < 0.8)) {
+            return (
+              <div key={id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-warning/30">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="w-4 h-4 text-warning" />
+                  <span className="text-sm text-warning">Low confidence — review required</span>
+                </div>
+                <button
+                  onClick={() => router.push(`/invoices/${id}`)}
+                  className="btn btn-primary text-xs"
+                >
+                  Review &amp; Submit
+                  <ArrowRight className="w-3 h-3 ml-1" />
+                </button>
+              </div>
+            );
+          }
+
+          // State: extracted (high confidence)
+          if (capture_status === 'extracted') {
+            if (submitted[id] || current_queue_id) {
+              const queueHref = current_queue_id ? `/processing/queues/${current_queue_id}` : '/processing/approvals';
+              return (
+                <div key={id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-success/30">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-4 h-4 text-success" />
+                    <span className="text-sm text-success">Submitted to approval queue</span>
+                  </div>
+                  <Link
+                    href={queueHref}
+                    className="btn btn-primary text-xs"
+                  >
+                    Go to Approval Queue
+                    <ArrowRight className="w-3 h-3 ml-1" />
+                  </Link>
+                </div>
+              );
+            }
+
+            return (
+              <div key={id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-success/30">
+                <div className="flex items-center gap-3">
+                  <CheckCircle className="w-4 h-4 text-success" />
+                  <span className="text-sm text-success">Extraction complete</span>
+                </div>
+                <button
+                  onClick={() => handleSubmit(id)}
+                  className="btn btn-primary text-xs"
+                >
+                  Submit to Approval Queue
+                  <ArrowRight className="w-3 h-3 ml-1" />
+                </button>
+              </div>
+            );
+          }
+
+          // Timeout fallback
+          return (
+            <div key={id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-xl border border-border">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Processing is taking longer than expected</span>
+              </div>
+              <button
+                onClick={() => router.push(`/invoices/${id}`)}
+                className="btn btn-secondary text-xs"
+              >
+                Open invoice
+                <ArrowRight className="w-3 h-3 ml-1" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function UploadInvoicePage() {
@@ -119,11 +335,6 @@ export default function UploadInvoicePage() {
     } else {
       toast.error(`${succeeded.length} of ${succeeded.length + failed.length} uploaded, ${failed.length} failed`);
     }
-
-    // Single file success → redirect (preserves existing UX)
-    if (finalEntries.length === 1 && succeeded.length === 1) {
-      router.push(`/invoices/${succeeded[0].invoiceId}`);
-    }
   };
 
   const getFileIcon = (file: File) => {
@@ -131,7 +342,7 @@ export default function UploadInvoicePage() {
       return <FileText className="w-6 h-6 text-error" />;
     }
     if (file.type.startsWith('image/')) {
-      return <Image className="w-6 h-6 text-capture" />;
+      return <ImageIcon className="w-6 h-6 text-capture" />;
     }
     return <File className="w-6 h-6 text-muted-foreground" />;
   };
@@ -291,12 +502,6 @@ export default function UploadInvoicePage() {
                       {failedCount > 0 && `, ${failedCount} failed`}
                     </span>
                   </div>
-                  <Link
-                    href="/invoices"
-                    className="text-sm text-capture hover:text-capture/80 transition-colors font-medium"
-                  >
-                    View Invoices
-                  </Link>
                 </div>
               )}
 
@@ -332,7 +537,15 @@ export default function UploadInvoicePage() {
         </div>
       </div>
 
-      {/* Process Steps */}
+      {/* Post-upload processing tracker (shown after successful upload) */}
+      {isDone && succeededCount > 0 && (
+        <PostUploadTracker
+          invoiceIds={entries.filter((e) => e.status === 'success' && e.invoiceId).map((e) => e.invoiceId!)}
+        />
+      )}
+
+      {/* Process Steps (shown only before upload, replaced by live tracker after) */}
+      {entries.length === 0 && (
       <div className="card p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 rounded-lg bg-capture/10">
@@ -383,6 +596,7 @@ export default function UploadInvoicePage() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Tips */}
       <div className="p-4 bg-capture/5 border border-capture/20 rounded-xl">
