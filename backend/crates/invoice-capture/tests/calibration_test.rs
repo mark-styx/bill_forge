@@ -36,11 +36,12 @@ fn calibrated_confidence_equals_unweighted_mean_when_no_weights() {
 /// the same raw input.
 #[test]
 fn calibrated_score_lower_when_vendor_name_weight_drops() {
-    // All raw confidences are equal at 0.90
+    // vendor_name has the highest raw confidence, so lowering its empirical
+    // weight should pull the calibrated score below the unweighted mean.
     let raw: &[(&str, f32)] = &[
         ("invoice_number", 0.90),
         ("invoice_date", 0.90),
-        ("vendor_name", 0.90),
+        ("vendor_name", 0.95),
         ("total_amount", 0.90),
     ];
 
@@ -52,7 +53,7 @@ fn calibrated_score_lower_when_vendor_name_weight_drops() {
     weights.insert("total_amount".to_string(), 0.86);
 
     let calibrated = calibrated_confidence(raw, &weights);
-    let unweighted = 0.90f32;
+    let unweighted = (0.90 + 0.90 + 0.95 + 0.90) / 4.0f32;
 
     assert!(
         calibrated < unweighted,
