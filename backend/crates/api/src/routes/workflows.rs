@@ -13,15 +13,15 @@ use billforge_core::{
         detect_delegation_cycle, ApprovalDelegation, ApprovalLimit, AssignmentRule, AuditAction,
         AuditEntry, BulkOperationError, BulkOperationInput, BulkOperationResult, BulkOperationType,
         CreateApprovalDelegationInput, CreateApprovalLimitInput, CreateAssignmentRuleInput,
-        CreateWorkQueueInput, CreateWorkflowRuleInput, CreateWorkflowTemplateInput, QueueItem,
-        ResourceType, WorkQueue, WorkflowRule, WorkflowTemplate,
+        CreateWorkQueueInput, CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InboxItem,
+        QueueItem, ResourceType, WorkQueue, WorkflowRule, WorkflowTemplate,
     },
     traits::{
         ApprovalDelegationRepository, ApprovalLimitRepository, AssignmentRuleRepository,
         AuditService, InvoiceRepository, WorkQueueRepository, WorkflowRuleRepository,
         WorkflowTemplateRepository,
     },
-    types::Pagination,
+    types::{PaginatedResponse, Pagination},
 };
 use billforge_email::EmailTemplates;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,8 @@ pub fn routes() -> Router<AppState> {
         .route("/queues/:id/items", get(list_queue_items))
         .route("/queues/:id/items/:item_id/claim", post(claim_item))
         .route("/queues/:id/items/:item_id/complete", post(complete_item))
+        // Inbox
+        .route("/inbox", get(list_inbox))
         // Assignment rules
         .route("/assignment-rules", get(list_assignment_rules))
         .route("/assignment-rules", post(create_assignment_rule))
@@ -565,6 +567,29 @@ async fn complete_item(
     }
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ============================================================================
+// Inbox Handler
+// ============================================================================
+
+#[utoipa::path(get, path = "/api/v1/workflows/inbox", tag = "Workflows", responses((status = 200, description = "Inbox items assigned to current user")))]
+async fn list_inbox(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Query(query): Query<QueueItemsQuery>,
+) -> ApiResult<Json<PaginatedResponse<InboxItem>>> {
+    let pagination = Pagination {
+        page: query.page.unwrap_or(1),
+        per_page: query.per_page.unwrap_or(50),
+    };
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool.clone());
+    let result = repo
+        .get_assigned_items_across_queues(&tenant.tenant_id, &user.user_id, &pagination)
+        .await?;
+    Ok(Json(result))
 }
 
 // ============================================================================

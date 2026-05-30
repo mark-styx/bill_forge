@@ -1296,6 +1296,23 @@ mod tests {
                 completed_at: None,
             })
         }
+
+        async fn get_assigned_items_across_queues(
+            &self,
+            _tenant_id: &TenantId,
+            _user_id: &UserId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::InboxItem>> {
+            Ok(crate::types::PaginatedResponse {
+                data: vec![],
+                pagination: crate::types::PaginationMeta {
+                    page: 1,
+                    per_page: 50,
+                    total_items: 0,
+                    total_pages: 0,
+                },
+            })
+        }
     }
 
     // Mock ApprovalRepository for testing
@@ -2311,6 +2328,23 @@ mod tests {
                 due_at: None,
                 claimed_at: None,
                 completed_at: None,
+            })
+        }
+
+        async fn get_assigned_items_across_queues(
+            &self,
+            _tenant_id: &TenantId,
+            _user_id: &UserId,
+            _pagination: &crate::types::Pagination,
+        ) -> Result<crate::types::PaginatedResponse<crate::domain::InboxItem>> {
+            Ok(crate::types::PaginatedResponse {
+                data: vec![],
+                pagination: crate::types::PaginationMeta {
+                    page: 1,
+                    per_page: 50,
+                    total_items: 0,
+                    total_pages: 0,
+                },
             })
         }
     }

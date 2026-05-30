@@ -245,6 +245,31 @@ pub struct QueueItem {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+/// Inbox item: a queue item enriched with queue and invoice details for the unified inbox view
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxItem {
+    // QueueItem fields
+    pub id: Uuid,
+    pub queue_id: WorkQueueId,
+    pub invoice_id: InvoiceId,
+    pub tenant_id: TenantId,
+    pub assigned_to: Option<UserId>,
+    pub priority: i32,
+    pub entered_at: DateTime<Utc>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    // Enrichment from work_queues join
+    pub queue_name: String,
+    pub queue_type: QueueType,
+    // Enrichment from invoices join (nullable when invoice missing)
+    pub invoice_number: Option<String>,
+    pub vendor_name: Option<String>,
+    pub total_amount_cents: Option<i64>,
+    pub currency: Option<String>,
+    pub invoice_status: Option<String>,
+}
+
 /// Approval request for an invoice
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {

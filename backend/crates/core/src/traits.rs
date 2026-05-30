@@ -224,6 +224,13 @@ pub trait WorkQueueRepository: Send + Sync {
         item_id: Uuid,
         assigned_to: &UserId,
     ) -> Result<QueueItem>;
+
+    async fn get_assigned_items_across_queues(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResponse<InboxItem>>;
 }
 
 /// Repository for assignment rules

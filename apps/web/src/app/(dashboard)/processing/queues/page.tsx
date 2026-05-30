@@ -17,6 +17,7 @@ import {
   ArrowRight,
   FolderOpen,
   Loader2,
+  Inbox,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -62,6 +63,13 @@ export default function WorkQueuesPage() {
     queryFn: () => workflowsApi.listQueues(),
   });
 
+  const { data: inboxResult } = useQuery({
+    queryKey: ['inbox-count'],
+    queryFn: () => workflowsApi.listInboxItems({ per_page: 1 }),
+  });
+
+  const inboxCount = inboxResult?.pagination.total_items ?? 0;
+
   // Sort queues by type for a logical flow: exception -> review -> approval -> payment
   const sortedQueues = queues?.sort((a: any, b: any) => {
     const order = ['exception', 'review', 'approval', 'payment', 'custom'];
@@ -93,6 +101,32 @@ export default function WorkQueuesPage() {
           Create Queue
         </Link>
       </div>
+
+      {/* My Inbox Card */}
+      <Link
+        href="/processing/queues/inbox"
+        className="card card-hover overflow-hidden flex items-center justify-between p-5 bg-primary/5 border border-primary/20"
+      >
+        <div className="flex items-center gap-4">
+          <div className="p-3 rounded-xl bg-primary/10">
+            <Inbox className="w-6 h-6 text-primary" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-foreground">My Inbox</h2>
+            <p className="text-sm text-muted-foreground">
+              All queue items assigned to you across all queues
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {inboxCount > 0 && (
+            <span className="px-2.5 py-0.5 text-sm font-medium bg-primary text-primary-foreground rounded-full">
+              {inboxCount}
+            </span>
+          )}
+          <ArrowRight className="w-5 h-5 text-primary" />
+        </div>
+      </Link>
 
       {/* Queue Flow Diagram */}
       <div className="card overflow-hidden">

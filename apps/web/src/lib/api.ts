@@ -159,7 +159,15 @@ class ApiClient {
     return text ? JSON.parse(text) : (null as unknown as T);
   }
 
-  async get<T>(path: string): Promise<T> {
+  async get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+    if (params) {
+      const searchParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined) searchParams.set(key, String(value));
+      }
+      const qs = searchParams.toString();
+      if (qs) return this.request<T>('GET', `${path}?${qs}`);
+    }
     return this.request<T>('GET', path);
   }
 
@@ -537,6 +545,10 @@ export const workflowsApi = {
   completeQueueItem: (queueId: string, itemId: string, action: string) =>
     api.post(`/api/v1/workflows/queues/${queueId}/items/${itemId}/complete`, { action }),
 
+  // Inbox
+  listInboxItems: (params?: { page?: number; per_page?: number }) =>
+    api.get<{ data: InboxItem[]; pagination: { page: number; per_page: number; total_items: number; total_pages: number } }>('/api/v1/workflows/inbox', params as Record<string, string | number | undefined>),
+
   // Assignment Rules
   listAssignmentRules: () => api.get<AssignmentRule[]>('/api/v1/workflows/assignment-rules'),
   createAssignmentRule: (data: CreateAssignmentRuleInput) =>
@@ -831,6 +843,25 @@ export interface QueueItem {
   due_at?: string;
   claimed_at?: string;
   completed_at?: string;
+}
+
+export interface InboxItem {
+  id: string;
+  queue_id: string;
+  invoice_id: string;
+  assigned_to?: string;
+  priority: number;
+  entered_at: string;
+  due_at?: string;
+  claimed_at?: string;
+  completed_at?: string;
+  queue_name: string;
+  queue_type: string;
+  invoice_number?: string;
+  vendor_name?: string;
+  total_amount_cents?: number;
+  currency?: string;
+  invoice_status?: string;
 }
 
 export interface AssignmentRule {

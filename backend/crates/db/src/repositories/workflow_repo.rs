@@ -6,9 +6,10 @@ use billforge_core::{
         ApprovalDelegation, ApprovalLimit, ApprovalRequest, ApprovalStatus, AssignmentCondition,
         AssignmentRule, AssignmentRuleId, AssignmentTarget, CreateApprovalDelegationInput,
         CreateApprovalLimitInput, CreateAssignmentRuleInput, CreateWorkQueueInput,
-        CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InvoiceId, QueueItem, QueueSettings,
-        QueueType, RuleAction, RuleCondition, WorkQueue, WorkQueueId, WorkflowRule, WorkflowRuleId,
-        WorkflowRuleType, WorkflowTemplate, WorkflowTemplateId, WorkflowTemplateStage,
+        CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InboxItem, InvoiceId, QueueItem,
+        QueueSettings, QueueType, RuleAction, RuleCondition, WorkQueue, WorkQueueId, WorkflowRule,
+        WorkflowRuleId, WorkflowRuleType, WorkflowTemplate, WorkflowTemplateId,
+        WorkflowTemplateStage,
     },
     traits::{
         ApprovalDelegationRepository, ApprovalLimitRepository, ApprovalRepository,
@@ -660,6 +661,81 @@ impl WorkQueueRepository for WorkflowRepositoryImpl {
 
         Ok(result.into_item())
     }
+
+    async fn get_assigned_items_across_queues(
+        &self,
+        tenant_id: &TenantId,
+        user_id: &UserId,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResponse<InboxItem>> {
+        let offset = ((pagination.page - 1) * pagination.per_page) as i32;
+
+        let total: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM queue_items qi
+            JOIN work_queues wq ON qi.queue_id = wq.id
+            WHERE qi.tenant_id = $1
+              AND qi.assigned_to = $2
+              AND qi.completed_at IS NULL
+            "#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .fetch_one(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to count inbox items: {}", e)))?;
+
+        let rows = sqlx::query_as::<_, InboxItemRow>(
+            r#"
+            SELECT
+                qi.id,
+                qi.queue_id,
+                qi.invoice_id,
+                qi.tenant_id,
+                qi.assigned_to,
+                qi.priority,
+                qi.entered_at,
+                qi.due_at,
+                qi.claimed_at,
+                qi.completed_at,
+                wq.name AS queue_name,
+                wq.queue_type,
+                i.invoice_number,
+                i.vendor_name,
+                i.total_amount_cents,
+                i.currency,
+                i.processing_status AS invoice_status
+            FROM queue_items qi
+            JOIN work_queues wq ON qi.queue_id = wq.id
+            LEFT JOIN invoices i ON qi.invoice_id = i.id
+            WHERE qi.tenant_id = $1
+              AND qi.assigned_to = $2
+              AND qi.completed_at IS NULL
+            ORDER BY qi.priority DESC, qi.entered_at ASC
+            LIMIT $3 OFFSET $4
+            "#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(user_id.0)
+        .bind(pagination.per_page as i32)
+        .bind(offset)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to get inbox items: {}", e)))?;
+
+        let items: Vec<InboxItem> = rows.into_iter().map(|row| row.into_inbox_item()).collect();
+
+        Ok(PaginatedResponse {
+            data: items,
+            pagination: PaginationMeta {
+                page: pagination.page,
+                per_page: pagination.per_page,
+                total_items: total as u64,
+                total_pages: ((total as f64) / (pagination.per_page as f64)).ceil() as u32,
+            },
+        })
+    }
 }
 
 #[async_trait]
@@ -1266,6 +1342,58 @@ impl QueueItemRow {
             due_at: self.due_at,
             claimed_at: self.claimed_at,
             completed_at: self.completed_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct InboxItemRow {
+    id: Uuid,
+    queue_id: Uuid,
+    invoice_id: Uuid,
+    tenant_id: Uuid,
+    assigned_to: Option<Uuid>,
+    priority: i32,
+    entered_at: chrono::DateTime<Utc>,
+    due_at: Option<chrono::DateTime<Utc>>,
+    claimed_at: Option<chrono::DateTime<Utc>>,
+    completed_at: Option<chrono::DateTime<Utc>>,
+    queue_name: String,
+    queue_type: String,
+    invoice_number: Option<String>,
+    vendor_name: Option<String>,
+    total_amount_cents: Option<i64>,
+    currency: Option<String>,
+    invoice_status: Option<String>,
+}
+
+impl InboxItemRow {
+    fn into_inbox_item(self) -> InboxItem {
+        InboxItem {
+            id: self.id,
+            queue_id: WorkQueueId(self.queue_id),
+            invoice_id: InvoiceId(self.invoice_id),
+            tenant_id: TenantId(self.tenant_id),
+            assigned_to: self.assigned_to.map(UserId),
+            priority: self.priority,
+            entered_at: self.entered_at,
+            due_at: self.due_at,
+            claimed_at: self.claimed_at,
+            completed_at: self.completed_at,
+            queue_name: self.queue_name,
+            queue_type: match self.queue_type.as_str() {
+                "review" => QueueType::Review,
+                "approval" => QueueType::Approval,
+                "exception" => QueueType::Exception,
+                "ocr_error" => QueueType::OcrError,
+                "payment" => QueueType::Payment,
+                _ => QueueType::Custom,
+            },
+            invoice_number: self.invoice_number,
+            vendor_name: self.vendor_name,
+            total_amount_cents: self.total_amount_cents,
+            currency: self.currency,
+            invoice_status: self.invoice_status,
         }
     }
 }
