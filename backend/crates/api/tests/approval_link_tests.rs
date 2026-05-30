@@ -167,9 +167,16 @@ async fn test_tampered_token_signature_rejected() {
 }
 
 #[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
 async fn test_token_cannot_be_reused() {
+    let pool = get_pool().await;
     let invoice_id = Uuid::new_v4();
     let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+
+    // Ensure schema is present (including used_approval_tokens table)
+    billforge_db::tenant_db::run_tenant_migrations(&pool, &TenantId(tenant_id))
+        .await
+        .expect("tenant migrations");
 
     let token = create_approval_token(
         invoice_id,
@@ -183,14 +190,32 @@ async fn test_token_cannot_be_reused() {
     let first = verify_approval_token(&token).await;
     assert!(first.is_ok(), "First verification should succeed");
 
-    // Mark it as used (simulating what the handler does)
+    // Mark it as used via the DB-backed consume_token (simulates what the handler does)
     if let Ok(claims) = first {
-        billforge_api::routes::approval_links::mark_token_used_pub(claims.jti).await;
+        billforge_api::routes::approval_links::mark_token_used_pub(
+            &pool,
+            claims.jti,
+            claims.tenant_id,
+            claims.invoice_id,
+            claims.exp,
+        )
+        .await
+        .expect("mark_token_used_pub should succeed");
     }
 
-    // Second use should fail
-    let second = verify_approval_token(&token).await;
-    assert!(second.is_err(), "Re-using the same token should fail");
+    // Second consume of the same jti should return TokenAlreadyUsed
+    let claims2 = verify_approval_token(&token)
+        .await
+        .expect("verify still succeeds");
+    let result = billforge_api::routes::approval_links::mark_token_used_pub(
+        &pool,
+        claims2.jti,
+        claims2.tenant_id,
+        claims2.invoice_id,
+        claims2.exp,
+    )
+    .await;
+    assert!(result.is_err(), "Re-using the same token should fail");
 }
 
 // ===========================================================================
@@ -531,4 +556,78 @@ async fn test_reject_via_link_resolves_approval_request() {
     assert_eq!(processing_status, "rejected");
 
     cleanup_invoice(&pool, invoice_id).await;
+}
+
+// ===========================================================================
+// Regression: single-use tokens survive server restart (DB-backed store)
+// ===========================================================================
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test approval_link_tests -- --ignored
+async fn single_use_token_survives_simulated_restart() {
+    let pool = get_pool().await;
+    let invoice_id = Uuid::new_v4();
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+
+    // Ensure schema (including used_approval_tokens table) is present
+    billforge_db::tenant_db::run_tenant_migrations(&pool, &TenantId(tenant_id))
+        .await
+        .expect("tenant migrations");
+
+    // Build a token and decode claims
+    let token = create_approval_token(
+        invoice_id,
+        "approver@example.com".to_string(),
+        tenant_id,
+        vec!["approve".to_string()],
+    )
+    .expect("signing should succeed");
+
+    let claims = verify_approval_token(&token)
+        .await
+        .expect("verify should succeed");
+
+    // Consume the token (writes to DB)
+    billforge_api::routes::approval_links::mark_token_used_pub(
+        &pool,
+        claims.jti,
+        claims.tenant_id,
+        claims.invoice_id,
+        claims.exp,
+    )
+    .await
+    .expect("first consume should succeed");
+
+    // Simulate a server restart: the in-memory HashSet would be cleared, but
+    // the row is still in Postgres. Verify persistence directly.
+    let row_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM used_approval_tokens WHERE jti = $1)")
+            .bind(claims.jti)
+            .fetch_one(&pool)
+            .await
+            .expect("row check");
+
+    assert!(row_exists, "Token consumption should be persisted in DB");
+
+    // Attempting to consume the same jti again must fail (TokenAlreadyUsed)
+    let replay = billforge_api::routes::approval_links::mark_token_used_pub(
+        &pool,
+        claims.jti,
+        claims.tenant_id,
+        claims.invoice_id,
+        claims.exp,
+    )
+    .await;
+
+    assert!(
+        replay.is_err(),
+        "Replaying the same token jti should be rejected even after a simulated restart"
+    );
+
+    // Clean up the used_approval_tokens row
+    sqlx::query("DELETE FROM used_approval_tokens WHERE jti = $1")
+        .bind(claims.jti)
+        .execute(&pool)
+        .await
+        .ok();
 }

@@ -406,6 +406,14 @@ pub async fn run_implementation_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // Single-use approval token store (persists across server restarts)
+    apply_migration(
+        pool,
+        "101_create_used_approval_tokens.sql",
+        include_str!("../../../migrations/101_create_used_approval_tokens.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

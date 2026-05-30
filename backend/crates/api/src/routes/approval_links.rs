@@ -12,9 +12,6 @@
 //! # TODO
 //! - Secret rotation (currently uses a single `TOKEN_SECRET_KEY` env var).
 //! - Rate limiting on these endpoints.
-//! - Move the in-memory `USED_TOKENS` set to a DB-backed store (e.g. a
-//!   `used_approval_tokens` table with a UNIQUE constraint on `jti`) for
-//!   persistence across server restarts.
 
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse};
@@ -23,9 +20,6 @@ use axum::Router;
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
@@ -44,10 +38,6 @@ const TOKEN_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 const SECRET_ENV: &str = "TOKEN_SECRET_KEY";
 
 lazy_static::lazy_static! {
-    /// In-memory single-use token store.
-    /// TODO: replace with a DB table (`used_approval_tokens`) for durability.
-    static ref USED_TOKENS: Arc<Mutex<HashSet<Uuid>>> = Arc::new(Mutex::new(HashSet::new()));
-
     /// Cached signing secret so sign/verify always use the same value within a process.
     static ref SIGNING_SECRET: String = std::env::var(SECRET_ENV)
         .unwrap_or_else(|_| "development-approval-secret".to_string());
@@ -92,7 +82,7 @@ pub fn sign_approval_token(claims: &ApprovalTokenClaims) -> Result<String, Appro
     .map_err(|e| ApprovalError::TokenEncoding(e.to_string()))
 }
 
-/// Verify a signed JWT, checking signature, expiry, and single-use constraint.
+/// Verify a signed JWT, checking signature and expiry.
 pub async fn verify_approval_token(token: &str) -> Result<ApprovalTokenClaims, ApprovalError> {
     let token_data = decode::<ApprovalTokenClaims>(
         token,
@@ -104,26 +94,48 @@ pub async fn verify_approval_token(token: &str) -> Result<ApprovalTokenClaims, A
         _ => ApprovalError::InvalidToken(e.to_string()),
     })?;
 
-    // Single-use check
-    {
-        let used = USED_TOKENS.lock().await;
-        if used.contains(&token_data.claims.jti) {
-            return Err(ApprovalError::TokenAlreadyUsed);
-        }
-    }
-
     Ok(token_data.claims)
 }
 
-/// Mark a token's `jti` as used so it cannot be replayed.
-async fn mark_token_used(jti: Uuid) {
-    let mut used = USED_TOKENS.lock().await;
-    used.insert(jti);
+/// Atomically consume a token so it cannot be replayed.
+///
+/// Performs an `INSERT ... ON CONFLICT DO NOTHING` against the
+/// `used_approval_tokens` table.  Returns `TokenAlreadyUsed` when the
+/// `jti` has already been recorded.
+pub async fn consume_token(
+    pool: &sqlx::PgPool,
+    jti: Uuid,
+    tenant_id: Uuid,
+    invoice_id: Uuid,
+    expires_at: i64,
+) -> Result<(), ApprovalError> {
+    let rows = sqlx::query(
+        "INSERT INTO used_approval_tokens (jti, tenant_id, invoice_id, expires_at) \
+         VALUES ($1, $2, $3, to_timestamp($4)) ON CONFLICT (jti) DO NOTHING",
+    )
+    .bind(jti)
+    .bind(tenant_id)
+    .bind(invoice_id)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .map_err(|e| ApprovalError::Core(billforge_core::Error::Database(e.to_string())))?;
+
+    if rows.rows_affected() == 0 {
+        return Err(ApprovalError::TokenAlreadyUsed);
+    }
+    Ok(())
 }
 
-/// Public wrapper for marking a token as used (exposed for tests).
-pub async fn mark_token_used_pub(jti: Uuid) {
-    mark_token_used(jti).await
+/// Public wrapper for consuming a token (exposed for tests).
+pub async fn mark_token_used_pub(
+    pool: &sqlx::PgPool,
+    jti: Uuid,
+    tenant_id: Uuid,
+    invoice_id: Uuid,
+    exp: i64,
+) -> Result<(), ApprovalError> {
+    consume_token(pool, jti, tenant_id, invoice_id, exp).await
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +281,16 @@ async fn approve_via_link(
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
 
+    // Atomically consume the token *before* performing the action.
+    consume_token(
+        &pool,
+        claims.jti,
+        claims.tenant_id,
+        claims.invoice_id,
+        claims.exp,
+    )
+    .await?;
+
     // Use a sentinel actor_id for email-based actions (the approver_email is
     // recorded in the audit metadata instead).
     let actor_id = Uuid::nil();
@@ -300,8 +322,6 @@ async fn approve_via_link(
     .await
     .map_err(ApprovalError::Core)?;
 
-    mark_token_used(claims.jti).await;
-
     Ok(Html(success_page_html(
         "Approved",
         &claims.invoice_id.to_string(),
@@ -322,6 +342,16 @@ async fn reject_via_link(
 
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
+
+    // Atomically consume the token *before* performing the action.
+    consume_token(
+        &pool,
+        claims.jti,
+        claims.tenant_id,
+        claims.invoice_id,
+        claims.exp,
+    )
+    .await?;
 
     let actor_id = Uuid::nil();
     let reason = query.reason.unwrap_or_default();
@@ -354,8 +384,6 @@ async fn reject_via_link(
     .await
     .map_err(ApprovalError::Core)?;
 
-    mark_token_used(claims.jti).await;
-
     Ok(Html(success_page_html(
         "Rejected",
         &claims.invoice_id.to_string(),
@@ -376,6 +404,16 @@ async fn comment_via_link(
 
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
+
+    // Atomically consume the token *before* performing the action.
+    consume_token(
+        &pool,
+        claims.jti,
+        claims.tenant_id,
+        claims.invoice_id,
+        claims.exp,
+    )
+    .await?;
 
     let body = query.body.unwrap_or_default();
 
@@ -400,8 +438,6 @@ async fn comment_via_link(
     .map_err(|e| {
         billforge_core::Error::Database(format!("Failed to insert comment audit row: {}", e))
     })?;
-
-    mark_token_used(claims.jti).await;
 
     Ok(Html(success_page_html(
         "Comment Added",
