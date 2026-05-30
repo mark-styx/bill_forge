@@ -102,6 +102,10 @@ pub struct Vendor {
     pub default_payment_method: Option<PaymentMethod>,
     pub bank_account: Option<BankAccount>,
 
+    // Payment freeze (BEC fraud prevention)
+    pub payment_hold: bool,
+    pub payment_hold_reason: Option<String>,
+
     // Internal tracking
     pub vendor_code: Option<String>,
     pub default_gl_code: Option<String>,
@@ -170,6 +174,43 @@ pub struct BankAccount {
     pub account_number_encrypted: String,
     /// Encrypted routing number
     pub routing_number_encrypted: String,
+}
+
+/// Callback method used for out-of-band banking verification
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallbackMethod {
+    Phone,
+    InPerson,
+    KnownEmail,
+}
+
+/// Status of a banking verification request
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BankingVerificationStatus {
+    Pending,
+    Verified,
+    Rejected,
+}
+
+/// A banking-change verification record, created when vendor banking details change.
+/// Tracks the out-of-band callback verification workflow to prevent BEC fraud.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BankingVerification {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub vendor_id: VendorId,
+    pub previous_account_last_four: Option<String>,
+    pub new_account_last_four: String,
+    pub status: BankingVerificationStatus,
+    pub callback_method: Option<CallbackMethod>,
+    pub callback_contact: Option<String>,
+    pub verifier_notes: Option<String>,
+    pub requested_by: Uuid,
+    pub requested_at: DateTime<Utc>,
+    pub verified_by: Option<Uuid>,
+    pub verified_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -164,6 +164,8 @@ pub enum AuditAction {
     // Vendor operations
     VendorActivated,
     VendorDeactivated,
+    VendorBankingChanged,
+    VendorBankingVerified,
 
     // Export operations
     DataExported,
@@ -211,6 +213,8 @@ impl AuditAction {
             AuditAction::OcrRerun => "Reran OCR processing",
             AuditAction::VendorActivated => "Activated vendor",
             AuditAction::VendorDeactivated => "Deactivated vendor",
+            AuditAction::VendorBankingChanged => "Vendor banking details changed",
+            AuditAction::VendorBankingVerified => "Vendor banking details verified",
             AuditAction::DataExported => "Exported data",
             AuditAction::SettingsChanged => "Changed settings",
             AuditAction::ModulesChanged => "Changed modules",
@@ -241,6 +245,7 @@ pub enum ResourceType {
     ApprovalDelegation,
     ApprovalLimit,
     AiActionProposal,
+    VendorBankingVerification,
 }
 
 impl ResourceType {
@@ -263,6 +268,7 @@ impl ResourceType {
             ResourceType::ApprovalDelegation => "Approval Delegation",
             ResourceType::ApprovalLimit => "Approval Limit",
             ResourceType::AiActionProposal => "AI Action Proposal",
+            ResourceType::VendorBankingVerification => "Vendor Banking Verification",
         }
     }
 }
