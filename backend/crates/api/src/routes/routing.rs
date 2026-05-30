@@ -15,7 +15,10 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    intelligent_routing::{IntelligentRoutingEngine, RoutingDecision},
+    intelligent_routing::{
+        IntelligentRoutingEngine, RoutingConfig, RoutingDecision, SimulationInput,
+        SimulationSummary, SimulatedOutcome, simulate_routing,
+    },
     workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig, WorkloadDistributionStats},
 };
 use billforge_db::routing_repository::{AvailabilityStatusInput, SetAvailabilityInput};
@@ -33,6 +36,7 @@ pub fn routes() -> Router<AppState> {
             "/config",
             get(get_routing_config).put(update_routing_config),
         )
+        .route("/simulate", post(simulate_routing_handler))
 }
 
 /// Request body for routing an invoice
@@ -421,6 +425,219 @@ async fn update_routing_config(
         working_timezone: config.working_timezone,
         working_days: config.working_days,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Simulation endpoint (what-if rule testing, issue #246)
+// ---------------------------------------------------------------------------
+
+/// JSON request body for `POST /api/v1/routing/simulate`.
+#[derive(Debug, Deserialize)]
+struct SimulateRequest {
+    /// Candidate routing configuration to test against.
+    candidate_config: SimulationConfigInput,
+    /// Number of recent invoices to replay (capped at 500).
+    sample_size: Option<usize>,
+}
+
+/// JSON-serializable routing config (mirrors RoutingConfig but uses string times).
+#[derive(Debug, Deserialize)]
+struct SimulationConfigInput {
+    workload_weight: Option<f64>,
+    expertise_weight: Option<f64>,
+    availability_weight: Option<f64>,
+    max_workload_score: Option<f64>,
+    min_expertise_score: Option<f64>,
+    enable_auto_delegation: Option<bool>,
+    enable_pattern_learning: Option<bool>,
+    enable_calendar_sync: Option<bool>,
+    working_hours_start: Option<String>,
+    working_hours_end: Option<String>,
+    working_timezone: Option<String>,
+    working_days: Option<Vec<i32>>,
+}
+
+/// JSON response for a single invoice's simulated outcome.
+#[derive(Debug, Serialize)]
+struct SimulatedOutcomeResponse {
+    invoice_id: Uuid,
+    predicted_approver: Option<Uuid>,
+    live_approver: Option<Uuid>,
+    changed: bool,
+    predicted_cycle_hours: f64,
+    live_cycle_hours: f64,
+    would_stall: bool,
+}
+
+/// JSON response for the full simulation summary.
+#[derive(Debug, Serialize)]
+struct SimulationSummaryResponse {
+    outcomes: Vec<SimulatedOutcomeResponse>,
+    approver_load_candidate: HashMap<Uuid, u32>,
+    approver_load_live: HashMap<Uuid, u32>,
+    avg_cycle_hours_candidate: f64,
+    avg_cycle_hours_live: f64,
+    stalled_count_candidate: u32,
+    stalled_count_live: u32,
+    changed_count: u32,
+    total_simulated: u32,
+}
+
+impl From<SimulationSummary> for SimulationSummaryResponse {
+    fn from(s: SimulationSummary) -> Self {
+        Self {
+            outcomes: s
+                .outcomes
+                .into_iter()
+                .map(|o| SimulatedOutcomeResponse {
+                    invoice_id: o.invoice_id,
+                    predicted_approver: o.predicted_approver.map(|u| u.0),
+                    live_approver: o.live_approver.map(|u| u.0),
+                    changed: o.changed,
+                    predicted_cycle_hours: o.predicted_cycle_hours,
+                    live_cycle_hours: o.live_cycle_hours,
+                    would_stall: o.would_stall,
+                })
+                .collect(),
+            approver_load_candidate: s
+                .approver_load_candidate
+                .into_iter()
+                .map(|(k, v)| (k.0, v))
+                .collect(),
+            approver_load_live: s
+                .approver_load_live
+                .into_iter()
+                .map(|(k, v)| (k.0, v))
+                .collect(),
+            avg_cycle_hours_candidate: s.avg_cycle_hours_candidate,
+            avg_cycle_hours_live: s.avg_cycle_hours_live,
+            stalled_count_candidate: s.stalled_count_candidate,
+            stalled_count_live: s.stalled_count_live,
+            changed_count: s.changed_count,
+            total_simulated: s.total_simulated,
+        }
+    }
+}
+
+/// Run a what-if simulation: replay the last N invoices through both the live and
+/// a candidate routing config and return a diff.
+#[utoipa::path(
+    post,
+    path = "/api/v1/routing/simulate",
+    tag = "Routing",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Simulation summary"),
+        (status = 400, description = "Invalid candidate config")
+    )
+)]
+async fn simulate_routing_handler(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
+    Json(body): Json<SimulateRequest>,
+) -> Result<Json<SimulationSummaryResponse>, StatusCode> {
+    let tenant_id = &user.tenant_id;
+
+    // Cap sample size at 500, default 200.
+    let sample_size = body.sample_size.unwrap_or(200).min(500).max(1);
+
+    // Get tenant DB pool.
+    let tenant_pool = state.db.tenant(tenant_id).await.map_err(|e| {
+        tracing::error!("Failed to get tenant pool: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let routing_repo = billforge_db::RoutingRepository::new((*tenant_pool).clone());
+
+    // Load live routing config.
+    let live_config = routing_repo
+        .get_routing_config(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get live routing config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Build candidate config by overlaying the provided fields on top of the live config.
+    let mut candidate_config = live_config.clone();
+    if let Some(w) = body.candidate_config.workload_weight {
+        candidate_config.workload_weight = w;
+    }
+    if let Some(w) = body.candidate_config.expertise_weight {
+        candidate_config.expertise_weight = w;
+    }
+    if let Some(w) = body.candidate_config.availability_weight {
+        candidate_config.availability_weight = w;
+    }
+    if let Some(w) = body.candidate_config.max_workload_score {
+        candidate_config.max_workload_score = w;
+    }
+    if let Some(w) = body.candidate_config.min_expertise_score {
+        candidate_config.min_expertise_score = w;
+    }
+    if let Some(v) = body.candidate_config.enable_auto_delegation {
+        candidate_config.enable_auto_delegation = v;
+    }
+    if let Some(v) = body.candidate_config.enable_pattern_learning {
+        candidate_config.enable_pattern_learning = v;
+    }
+    if let Some(v) = body.candidate_config.enable_calendar_sync {
+        candidate_config.enable_calendar_sync = v;
+    }
+    if let Some(ref t) = body.candidate_config.working_hours_start {
+        candidate_config.working_hours_start = t.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    }
+    if let Some(ref t) = body.candidate_config.working_hours_end {
+        candidate_config.working_hours_end = t.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+    }
+    if let Some(ref tz) = body.candidate_config.working_timezone {
+        candidate_config.working_timezone = tz.clone();
+    }
+    if let Some(ref days) = body.candidate_config.working_days {
+        candidate_config.working_days = days.clone();
+    }
+
+    // Load routing context (workloads, availability, expertise).
+    let context = routing_repo
+        .get_routing_context(tenant_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get routing context: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Fetch last N invoices for replay.
+    let invoice_rows = sqlx::query_as::<_, InvoiceMinRow>(
+        "SELECT id, vendor_id, vendor_name, total_amount_cents, department, gl_code \
+         FROM invoices \
+         WHERE tenant_id = $1 \
+         ORDER BY created_at DESC \
+         LIMIT $2",
+    )
+    .bind(tenant_id.0)
+    .bind(sample_size as i64)
+    .fetch_all(&*tenant_pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch sample invoices: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let invoices: Vec<billforge_core::domain::Invoice> = invoice_rows
+        .into_iter()
+        .map(|row| row.into_invoice(tenant_id))
+        .collect();
+
+    // Build workload HashMap for stall detection.
+    let workloads = context.workloads.clone();
+
+    // Run simulation.
+    let engine_live = IntelligentRoutingEngine::new(live_config);
+    let engine_candidate = IntelligentRoutingEngine::new(candidate_config);
+
+    let summary = simulate_routing(&engine_live, &engine_candidate, &invoices, &context, &workloads);
+
+    Ok(Json(summary.into()))
 }
 
 // Minimal invoice row for routing - avoids pulling in full domain type
