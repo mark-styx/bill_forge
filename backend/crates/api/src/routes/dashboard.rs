@@ -5,12 +5,15 @@
 //! - Approval workflow metrics
 //! - Vendor analytics
 //! - Team performance metrics
+//! - Stage dwell time bottleneck heat map
+//! - Approver workload distribution
+//! - Exception rate trend chart
 
 use crate::error::ApiResult;
 use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     response::{IntoResponse, Json},
     routing::get,
     Router,
@@ -19,6 +22,7 @@ use billforge_core::Error;
 use billforge_db::repositories::MetricsRepositoryImpl;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -27,6 +31,9 @@ pub fn routes() -> Router<AppState> {
         .route("/metrics/approvals", get(get_approval_metrics))
         .route("/metrics/vendors", get(get_vendor_metrics))
         .route("/metrics/team", get(get_team_metrics))
+        .route("/stage-dwell", get(get_stage_dwell))
+        .route("/approver-workload", get(get_approver_workload))
+        .route("/exception-trend", get(get_exception_trend))
 }
 
 /// Dashboard metrics response
@@ -383,4 +390,271 @@ async fn get_team_metrics(
     };
 
     Ok(Json(metrics))
+}
+
+// ---------------------------------------------------------------------------
+// Stage Dwell Time
+// ---------------------------------------------------------------------------
+
+/// Stage dwell-time row for the bottleneck heat map
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct StageDwellRow {
+    /// Pipeline stage name (e.g. Capture, OCR, Coding, Approval, Payment)
+    pub stage: String,
+    /// Median minutes invoices spend in this stage
+    pub median_minutes: f64,
+    /// P90 minutes invoices spend in this stage
+    pub p90_minutes: f64,
+    /// Number of invoices that passed through this stage in the lookback window
+    pub count: i64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/dashboard/stage-dwell",
+    tag = "Dashboard",
+    responses(
+        (status = 200, description = "Stage dwell time data", body = Vec<StageDwellRow>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn get_stage_dwell(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let rows = sqlx::query_as::<_, (String, f64, f64, i64)>(
+        r#"
+        WITH transitions AS (
+            SELECT
+                from_status AS stage,
+                EXTRACT(EPOCH FROM (created_at - LAG(created_at) OVER (PARTITION BY invoice_id ORDER BY created_at))) / 60.0 AS dwell_minutes
+            FROM invoice_audit_log
+            WHERE tenant_id = $1
+              AND created_at > NOW() - INTERVAL '30 days'
+              AND from_status IS NOT NULL
+        )
+        SELECT
+            stage,
+            COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY dwell_minutes), 0) AS median_minutes,
+            COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY dwell_minutes), 0) AS p90_minutes,
+            COUNT(*) AS count
+        FROM transitions
+        WHERE dwell_minutes IS NOT NULL AND dwell_minutes >= 0
+        GROUP BY stage
+        ORDER BY MIN(stage) ASC
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| Error::Internal(format!("Failed to query stage dwell: {}", e)))?;
+
+    let result: Vec<StageDwellRow> = rows
+        .into_iter()
+        .map(
+            |(stage, median_minutes, p90_minutes, count)| StageDwellRow {
+                stage,
+                median_minutes,
+                p90_minutes,
+                count,
+            },
+        )
+        .collect();
+
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Approver Workload
+// ---------------------------------------------------------------------------
+
+/// Per-approver workload row
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ApproverWorkloadRow {
+    pub approver_id: Uuid,
+    pub approver_name: String,
+    pub pending_count: i64,
+    pub near_breach_count: i64,
+    pub breached_count: i64,
+    pub avg_response_hours: f64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/dashboard/approver-workload",
+    tag = "Dashboard",
+    responses(
+        (status = 200, description = "Approver workload data", body = Vec<ApproverWorkloadRow>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn get_approver_workload(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let rows = sqlx::query_as::<_, (Uuid, String, i64, i64, i64, f64)>(
+        r#"
+        SELECT
+            u.id AS approver_id,
+            u.name AS approver_name,
+            COUNT(*) FILTER (WHERE ar.status = 'pending') AS pending_count,
+            COUNT(*) FILTER (
+                WHERE ar.status = 'pending'
+                  AND EXTRACT(EPOCH FROM (NOW() - COALESCE(ar.sla_started_at, ar.created_at))) / 3600.0
+                      >= COALESCE(ar.sla_hours, 24) * 0.8
+            ) AS near_breach_count,
+            COUNT(*) FILTER (
+                WHERE ar.status = 'pending'
+                  AND EXTRACT(EPOCH FROM (NOW() - COALESCE(ar.sla_started_at, ar.created_at))) / 3600.0
+                      >= COALESCE(ar.sla_hours, 24)
+            ) AS breached_count,
+            COALESCE(
+                AVG(
+                    EXTRACT(EPOCH FROM (ar.responded_at - ar.created_at)) / 3600.0
+                ) FILTER (WHERE ar.status IN ('approved', 'rejected') AND ar.responded_at IS NOT NULL),
+                0
+            ) AS avg_response_hours
+        FROM users u
+        LEFT JOIN approval_requests ar
+            ON ar.requested_from->>'User' = u.id::text
+            AND ar.tenant_id = $1
+        WHERE u.tenant_id = $1
+          AND u.id IN (
+            SELECT DISTINCT NULLIF(requested_from->>'User', '')::uuid
+            FROM approval_requests
+            WHERE tenant_id = $1 AND status = 'pending'
+              AND requested_from->>'User' IS NOT NULL
+          )
+        GROUP BY u.id, u.name
+        ORDER BY pending_count DESC
+        LIMIT 10
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| Error::Internal(format!("Failed to query approver workload: {}", e)))?;
+
+    let result: Vec<ApproverWorkloadRow> = rows
+        .into_iter()
+        .map(
+            |(
+                approver_id,
+                approver_name,
+                pending_count,
+                near_breach_count,
+                breached_count,
+                avg_response_hours,
+            )| {
+                ApproverWorkloadRow {
+                    approver_id,
+                    approver_name,
+                    pending_count,
+                    near_breach_count,
+                    breached_count,
+                    avg_response_hours,
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Exception Rate Trend
+// ---------------------------------------------------------------------------
+
+/// Daily exception rate data point
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ExceptionTrendPoint {
+    /// Date in YYYY-MM-DD format
+    pub date: String,
+    /// Total invoices processed that day
+    pub total_invoices: i64,
+    /// Invoices that hit an exception state
+    pub exception_count: i64,
+    /// exception_count / total_invoices (0.0 if no invoices)
+    pub exception_rate: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExceptionTrendParams {
+    #[serde(default = "default_days")]
+    days: i32,
+}
+
+fn default_days() -> i32 {
+    14
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/dashboard/exception-trend",
+    tag = "Dashboard",
+    responses(
+        (status = 200, description = "Exception rate trend", body = Vec<ExceptionTrendPoint>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn get_exception_trend(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+    Query(params): Query<ExceptionTrendParams>,
+) -> ApiResult<impl IntoResponse> {
+    let days = params.days.clamp(1, 90);
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let rows = sqlx::query_as::<_, (String, i64, i64)>(
+        r#"
+        SELECT
+            d.day::text AS date,
+            COUNT(i.id) AS total_invoices,
+            COUNT(i.id) FILTER (
+                WHERE i.status IN ('on_hold', 'rejected', 'voided', 'ocr_failed', 'exception')
+                   OR i.processing_status IN ('on_hold', 'rejected', 'voided', 'exception')
+            ) AS exception_count
+        FROM generate_series(
+            CURRENT_DATE - ($2::int || ' days')::interval,
+            CURRENT_DATE,
+            INTERVAL '1 day'
+        ) AS d(day)
+        LEFT JOIN invoices i
+            ON i.tenant_id = $1
+            AND i.created_at::date = d.day::date
+        GROUP BY d.day
+        ORDER BY d.day ASC
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(days)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| Error::Internal(format!("Failed to query exception trend: {}", e)))?;
+
+    let result: Vec<ExceptionTrendPoint> = rows
+        .into_iter()
+        .map(|(date, total_invoices, exception_count)| {
+            let exception_rate = if total_invoices > 0 {
+                (exception_count as f64 / total_invoices as f64) * 100.0
+            } else {
+                0.0
+            };
+            ExceptionTrendPoint {
+                date,
+                total_invoices,
+                exception_count,
+                exception_rate,
+            }
+        })
+        .collect();
+
+    Ok(Json(result))
 }
