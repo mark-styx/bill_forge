@@ -25,6 +25,7 @@ use billforge_db::routing_repository::{AvailabilityStatusInput, SetAvailabilityI
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
