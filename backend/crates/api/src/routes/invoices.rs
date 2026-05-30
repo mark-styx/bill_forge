@@ -54,7 +54,7 @@ pub struct CreateInvoiceQuery {
 }
 
 /// Per-signal breakdown for a duplicate match.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DuplicateSignalBreakdown {
     pub vendor: f64,
     pub invoice_number: f64,
@@ -64,7 +64,7 @@ pub struct DuplicateSignalBreakdown {
 }
 
 /// A single potential duplicate match returned during invoice creation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DuplicateMatch {
     pub existing_invoice_id: String,
     pub score: f64,
@@ -226,6 +226,13 @@ async fn create_invoice(
         detect_duplicates_for_invoice(&pool, &tenant.tenant_id, &invoice).await
     };
 
+    // If duplicates were found, hold the invoice for review (keep it in Pending so
+    // it doesn't flow into dashboards, queues, or exports until resolved).
+    if !potential_duplicates.is_empty() {
+        repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Pending)
+            .await?;
+    }
+
     Ok(Json(CreateInvoiceResponse {
         invoice,
         potential_duplicates,
@@ -239,8 +246,8 @@ async fn detect_duplicates_for_invoice(
     tenant_id: &billforge_core::TenantId,
     new_invoice: &Invoice,
 ) -> Vec<DuplicateMatch> {
-    let rows = match sqlx::query_as::<_, (Uuid, Option<String>, Option<i64>, Option<chrono::NaiveDate>, Option<serde_json::Value>)>(
-        r#"SELECT id, invoice_number, total_amount_cents, invoice_date, line_items
+    let rows = match sqlx::query_as::<_, (Uuid, Option<String>, Option<i64>, Option<chrono::NaiveDate>, Option<serde_json::Value>, Option<String>)>(
+        r#"SELECT id, invoice_number, total_amount_cents, invoice_date, line_items, vendor_name
            FROM invoices
            WHERE tenant_id = $1
              AND id != $2
@@ -291,7 +298,7 @@ async fn detect_duplicates_for_invoice(
     let detector = billforge_analytics::anomaly_detection::DuplicateDetector::new(*tenant_id.as_uuid());
 
     let mut matches = Vec::new();
-    for (id, inv_num, amount_cents, inv_date, line_items_json) in rows {
+    for (id, inv_num, amount_cents, inv_date, line_items_json, vendor_name) in rows {
         // Build fingerprint from stored line items JSON
         let fp = line_items_json
             .as_ref()
@@ -319,7 +326,7 @@ async fn detect_duplicates_for_invoice(
 
         let existing_record = billforge_analytics::anomaly_detection::InvoiceRecord {
             invoice_id: id.to_string(),
-            vendor_name: new_invoice.vendor_name.clone(), // We don't have vendor_name from this query; approximate
+            vendor_name: vendor_name.unwrap_or_default(),
             amount: amount_cents.unwrap_or(0) as f64 / 100.0,
             invoice_date: existing_date,
             invoice_number: inv_num,
@@ -518,6 +525,7 @@ pub struct UploadResponse {
     pub invoice_id: String,
     pub document_id: String,
     pub message: String,
+    pub potential_duplicates: Vec<DuplicateMatch>,
 }
 
 async fn record_invoice_metering_usage(
@@ -733,10 +741,23 @@ pub(crate) async fn upload_invoice_file(
         sync_ocr_message(&file_name_for_msg, status)
     };
 
+    // Run duplicate detection after OCR has populated real data.
+    // Only effective for sync OCR path; async OCR will detect later in the pipeline.
+    let potential_duplicates = {
+        let refreshed = repo.get_by_id(&tenant.tenant_id, &invoice.id).await.ok().flatten();
+        match refreshed {
+            Some(ref inv) if inv.vendor_name != "Processing..." && !inv.invoice_number.starts_with("UPLOAD-") => {
+                detect_duplicates_for_invoice(&pool, &tenant.tenant_id, inv).await
+            }
+            _ => vec![],
+        }
+    };
+
     Ok(UploadResponse {
         invoice_id: invoice.id.to_string(),
         document_id: document_id.to_string(),
         message,
+        potential_duplicates,
     })
 }
 

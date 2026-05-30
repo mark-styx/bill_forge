@@ -476,6 +476,7 @@ export const invoicesApi = {
       invoice_id: string;
       document_id: string;
       message: string;
+      potential_duplicates: DuplicateMatch[];
     }>('/api/v1/invoices/upload', formData);
   },
 

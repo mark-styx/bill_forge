@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
 import { useQueries } from '@tanstack/react-query';
-import { invoicesApi } from '@/lib/api';
+import { invoicesApi, type DuplicateMatch } from '@/lib/api';
 import type { Invoice } from '@billforge/shared-types';
 import { toast } from 'sonner';
 import {
@@ -31,6 +31,7 @@ type UploadEntry = {
   status: 'queued' | 'uploading' | 'success' | 'error';
   invoiceId?: string;
   error?: string;
+  potentialDuplicates?: DuplicateMatch[];
 };
 
 async function runBatch(
@@ -47,7 +48,11 @@ async function runBatch(
         onUpdate(entry.id, { status: 'uploading' });
         try {
           const result = await invoicesApi.upload(entry.file);
-          onUpdate(entry.id, { status: 'success', invoiceId: result.invoice_id });
+          onUpdate(entry.id, {
+            status: 'success',
+            invoiceId: result.invoice_id,
+            potentialDuplicates: result.potential_duplicates,
+          });
         } catch (e: any) {
           onUpdate(entry.id, { status: 'error', error: e?.message ?? 'Upload failed' });
         }
@@ -329,6 +334,14 @@ export default function UploadInvoicePage() {
     const finalEntries = entriesRef.current;
     const succeeded = finalEntries.filter((e) => e.status === 'success');
     const failed = finalEntries.filter((e) => e.status === 'error');
+
+    // If a single upload has potential duplicates, redirect to the review page
+    if (succeeded.length === 1 && succeeded[0].potentialDuplicates && succeeded[0].potentialDuplicates.length > 0 && succeeded[0].invoiceId) {
+      const dup = succeeded[0];
+      const dupsParam = encodeURIComponent(JSON.stringify(dup.potentialDuplicates));
+      router.push(`/invoices/${dup.invoiceId}/duplicate-review?duplicates=${dupsParam}`);
+      return;
+    }
 
     if (failed.length === 0) {
       toast.success(`${succeeded.length} invoice${succeeded.length > 1 ? 's' : ''} uploaded`);
