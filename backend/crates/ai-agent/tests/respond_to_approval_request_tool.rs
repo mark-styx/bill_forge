@@ -28,7 +28,8 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
     let result = ToolRegistry::validate_tool_execution_guard(&def, None);
     let err = result.expect_err("mutating tool should require approved proposal context");
     assert!(
-        err.to_string().contains("requires an approved proposal context"),
+        err.to_string()
+            .contains("requires an approved proposal context"),
         "error message should mention approved proposal context, got: {}",
         err
     );

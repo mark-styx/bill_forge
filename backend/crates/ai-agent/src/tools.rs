@@ -2962,18 +2962,15 @@ impl Tool for RespondToApprovalRequestTool {
         let approval_repo = WorkflowRepositoryImpl::new(pool);
 
         // Verify the request exists and belongs to this tenant
-        let existing = ApprovalRepository::get_by_id(
-            &approval_repo,
-            &tenant_id,
-            parsed.approval_request_id,
-        )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Approval request {} not found in your organization.",
-                    parsed.approval_request_id
-                )
-            })?;
+        let existing =
+            ApprovalRepository::get_by_id(&approval_repo, &tenant_id, parsed.approval_request_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Approval request {} not found in your organization.",
+                        parsed.approval_request_id
+                    )
+                })?;
 
         if existing.status != ApprovalStatus::Pending {
             anyhow::bail!(
@@ -2997,7 +2994,7 @@ impl Tool for RespondToApprovalRequestTool {
             parsed.comments,
             &user_id,
         )
-            .await?;
+        .await?;
 
         let status_str = match updated.status {
             ApprovalStatus::Approved => "Approved",
