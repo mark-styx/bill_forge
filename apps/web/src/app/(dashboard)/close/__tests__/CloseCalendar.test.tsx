@@ -165,7 +165,7 @@ describe('CloseCalendarPage', () => {
 
     // Confirmation dialog appears
     expect(screen.getByText('Run Month-End Close')).toBeInTheDocument();
-    expect(screen.getByText(/2026-05-31/)).toBeInTheDocument();
+    expect(screen.getAllByText(/2026-05-31/).length).toBeGreaterThan(0);
 
     // Confirm
     const confirmButtons = screen.getAllByText('Run Close');

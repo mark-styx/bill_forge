@@ -15,7 +15,7 @@ mod tests {
 
     #[test]
     fn test_create_period_request_valid_json() {
-        let req: crate::routes::close_periods::CreatePeriodRequest = serde_json::from_value(json!({
+        let req: billforge_api::routes::close_periods::CreatePeriodRequest = serde_json::from_value(json!({
             "period_label": "2026-05",
             "period_start": "2026-05-01",
             "period_end": "2026-05-31",
@@ -29,7 +29,7 @@ mod tests {
     #[test]
     fn test_create_period_request_missing_field_fails() {
         let result = serde_json::from_value::<
-            crate::routes::close_periods::CreatePeriodRequest,
+            billforge_api::routes::close_periods::CreatePeriodRequest,
         >(json!({
             "period_label": "2026-05",
             "period_start": "2026-05-01",
@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn test_update_period_request_cutoff_only() {
-        let req: crate::routes::close_periods::UpdatePeriodRequest =
+        let req: billforge_api::routes::close_periods::UpdatePeriodRequest =
             serde_json::from_value(json!({
                 "cutoff_date": "2026-05-28"
             }))
@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn test_update_period_request_empty() {
-        let req: crate::routes::close_periods::UpdatePeriodRequest =
+        let req: billforge_api::routes::close_periods::UpdatePeriodRequest =
             serde_json::from_value(json!({})).unwrap();
         assert!(req.cutoff_date.is_none());
     }
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn test_run_close_response_fields() {
         let period_id = uuid::Uuid::new_v4();
-        let resp = crate::routes::close_periods::RunCloseResponse {
+        let resp = billforge_api::routes::close_periods::RunCloseResponse {
             period_id,
             accrual_entries_created: 3,
             erp_post_status: "posted".to_string(),
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_run_close_response_with_error() {
-        let resp = crate::routes::close_periods::RunCloseResponse {
+        let resp = billforge_api::routes::close_periods::RunCloseResponse {
             period_id: uuid::Uuid::new_v4(),
             accrual_entries_created: 0,
             erp_post_status: "failed".to_string(),
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_close_period_response_serialization() {
-        let resp = crate::routes::close_periods::ClosePeriodResponse {
+        let resp = billforge_api::routes::close_periods::ClosePeriodResponse {
             id: uuid::Uuid::new_v4(),
             tenant_id: uuid::Uuid::new_v4(),
             period_label: "2026-05".to_string(),
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_close_period_response_locked() {
-        let resp = crate::routes::close_periods::ClosePeriodResponse {
+        let resp = billforge_api::routes::close_periods::ClosePeriodResponse {
             id: uuid::Uuid::new_v4(),
             tenant_id: uuid::Uuid::new_v4(),
             period_label: "2026-04".to_string(),

@@ -63,8 +63,9 @@ function NewPeriodDialog({
         <h3 className="text-lg font-semibold text-foreground mb-4">Create Close Period</h3>
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">Period Label</label>
+            <label htmlFor="period-label" className="block text-sm font-medium text-muted-foreground mb-1">Period Label</label>
             <input
+              id="period-label"
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
@@ -74,8 +75,9 @@ function NewPeriodDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">Period Start</label>
+              <label htmlFor="period-start" className="block text-sm font-medium text-muted-foreground mb-1">Period Start</label>
               <input
+                id="period-start"
                 type="date"
                 value={start}
                 onChange={(e) => setStart(e.target.value)}
@@ -83,8 +85,9 @@ function NewPeriodDialog({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">Period End</label>
+              <label htmlFor="period-end" className="block text-sm font-medium text-muted-foreground mb-1">Period End</label>
               <input
+                id="period-end"
                 type="date"
                 value={end}
                 onChange={(e) => setEnd(e.target.value)}
@@ -93,8 +96,9 @@ function NewPeriodDialog({
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-1">Cutoff Date</label>
+            <label htmlFor="cutoff-date" className="block text-sm font-medium text-muted-foreground mb-1">Cutoff Date</label>
             <input
+              id="cutoff-date"
               type="date"
               value={cutoff}
               onChange={(e) => setCutoff(e.target.value)}
