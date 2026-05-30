@@ -288,6 +288,8 @@ impl AppState {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE(tenant_id, status_key)
             );
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS invoice_id UUID REFERENCES invoices(id) ON DELETE CASCADE;
+            ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS line_number INTEGER NOT NULL DEFAULT 0;
             CREATE INDEX IF NOT EXISTS idx_line_items_invoice ON invoice_line_items(invoice_id);
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS unit_price_cents BIGINT;
             ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS total_amount_cents BIGINT;
