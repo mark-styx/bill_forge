@@ -5,6 +5,7 @@
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
 use anyhow::{Context, Result};
+use billforge_core::TenantId;
 use billforge_db::PgManager;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -26,7 +27,14 @@ pub async fn learn_from_feedback(pg_manager: Arc<PgManager>) -> Result<()> {
     info!("Learning from feedback for {} tenants", tenants.len());
 
     for (tenant_id,) in tenants {
-        match process_tenant_feedback(&pg_manager, &tenant_id).await {
+        let tenant_id = match tenant_id.parse::<TenantId>() {
+            Ok(tenant_id) => tenant_id,
+            Err(e) => {
+                warn!(tenant_id = %tenant_id, error = %e, "Skipping invalid tenant id");
+                continue;
+            }
+        };
+        match learn_from_tenant_feedback(pg_manager.clone(), &tenant_id).await {
             Ok(metrics) => {
                 info!(
                     tenant_id = %tenant_id,
@@ -47,14 +55,12 @@ pub async fn learn_from_feedback(pg_manager: Arc<PgManager>) -> Result<()> {
     Ok(())
 }
 
-/// Process feedback for a single tenant
-async fn process_tenant_feedback(
-    pg_manager: &PgManager,
-    tenant_id: &str,
+/// Process feedback for a single tenant.
+pub async fn learn_from_tenant_feedback(
+    pg_manager: Arc<PgManager>,
+    tenant_id: &TenantId,
 ) -> Result<AccuracyMetrics> {
-    let tenant_id: billforge_core::TenantId =
-        tenant_id.parse().context("Invalid tenant ID format")?;
-    let pool = pg_manager.tenant(&tenant_id).await?;
+    let pool = pg_manager.tenant(tenant_id).await?;
 
     let learning = FeedbackLearning::new((*pool).clone());
 

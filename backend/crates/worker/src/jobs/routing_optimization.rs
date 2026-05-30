@@ -53,6 +53,15 @@ pub async fn run_routing_optimization(
     Ok(())
 }
 
+/// Run routing optimization for one validated tenant.
+pub async fn run_tenant_routing_optimization(
+    pg_manager: std::sync::Arc<billforge_db::PgManager>,
+    tenant_id: &TenantId,
+) -> Result<()> {
+    let tenant_pool = pg_manager.tenant(tenant_id).await?;
+    optimize_tenant_routing(&tenant_pool, tenant_id).await
+}
+
 /// Optimize routing for a single tenant
 async fn optimize_tenant_routing(pool: &PgPool, tenant_id: &TenantId) -> Result<()> {
     info!("Optimizing routing for tenant {}", tenant_id);

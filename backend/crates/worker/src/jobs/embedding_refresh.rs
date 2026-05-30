@@ -5,6 +5,7 @@
 //! Sprint 13 Feature #1: ML-Based Invoice Categorization
 
 use anyhow::{Context, Result};
+use billforge_core::TenantId;
 use billforge_db::PgManager;
 use std::env;
 use std::sync::Arc;
@@ -32,7 +33,15 @@ pub async fn refresh_all_embeddings(pg_manager: Arc<PgManager>) -> Result<()> {
     info!("Refreshing embeddings for {} tenants", tenants.len());
 
     for (tenant_id,) in tenants {
-        match refresh_tenant_embeddings(&pg_manager, &tenant_id, &openai_api_key).await {
+        let tenant_id = match tenant_id.parse::<TenantId>() {
+            Ok(tenant_id) => tenant_id,
+            Err(e) => {
+                warn!(tenant_id = %tenant_id, error = %e, "Skipping invalid tenant id");
+                continue;
+            }
+        };
+        match refresh_tenant_embeddings_with_api_key(&pg_manager, &tenant_id, &openai_api_key).await
+        {
             Ok(stats) => {
                 info!(
                     tenant_id = %tenant_id,
@@ -51,15 +60,22 @@ pub async fn refresh_all_embeddings(pg_manager: Arc<PgManager>) -> Result<()> {
     Ok(())
 }
 
-/// Refresh embeddings for a single tenant
-async fn refresh_tenant_embeddings(
+pub async fn refresh_tenant_embeddings(
+    pg_manager: Arc<PgManager>,
+    tenant_id: &TenantId,
+) -> Result<billforge_invoice_processing::embedding_cache::CacheStats> {
+    let openai_api_key =
+        env::var("OPENAI_API_KEY").context("OPENAI_API_KEY environment variable not set")?;
+    refresh_tenant_embeddings_with_api_key(&pg_manager, tenant_id, &openai_api_key).await
+}
+
+/// Refresh embeddings for a single tenant.
+async fn refresh_tenant_embeddings_with_api_key(
     pg_manager: &PgManager,
-    tenant_id: &str,
+    tenant_id: &TenantId,
     openai_api_key: &str,
 ) -> Result<billforge_invoice_processing::embedding_cache::CacheStats> {
-    let tenant_id: billforge_core::TenantId =
-        tenant_id.parse().context("Invalid tenant ID format")?;
-    let pool = pg_manager.tenant(&tenant_id).await?;
+    let pool = pg_manager.tenant(tenant_id).await?;
 
     let categorizer = MLCategorizer::new((*pool).clone(), openai_api_key.to_string());
     let cache = EmbeddingCache::new((*pool).clone());

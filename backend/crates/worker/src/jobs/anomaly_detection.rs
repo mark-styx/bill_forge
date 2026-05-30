@@ -26,7 +26,14 @@ pub async fn detect_anomalies(pg_manager: Arc<PgManager>) -> Result<()> {
     info!("Processing {} active tenants", tenants.len());
 
     for (tenant_id_str,) in tenants {
-        if let Err(e) = process_tenant_anomalies(pg_manager.clone(), &tenant_id_str).await {
+        let tenant_id = match tenant_id_str.parse::<TenantId>() {
+            Ok(tenant_id) => tenant_id,
+            Err(e) => {
+                warn!(tenant_id = %tenant_id_str, error = %e, "Skipping invalid tenant id");
+                continue;
+            }
+        };
+        if let Err(e) = process_tenant_anomalies(pg_manager.clone(), &tenant_id).await {
             warn!(
                 "Failed to process anomalies for tenant {}: {}",
                 tenant_id_str, e
@@ -38,12 +45,20 @@ pub async fn detect_anomalies(pg_manager: Arc<PgManager>) -> Result<()> {
     Ok(())
 }
 
+/// Run anomaly detection for a single validated tenant.
+pub async fn detect_tenant_anomalies(
+    pg_manager: Arc<PgManager>,
+    tenant_id: &TenantId,
+) -> Result<()> {
+    process_tenant_anomalies(pg_manager, tenant_id).await
+}
+
 /// Process anomaly detection for a single tenant
-async fn process_tenant_anomalies(pg_manager: Arc<PgManager>, tenant_id_str: &str) -> Result<()> {
+async fn process_tenant_anomalies(pg_manager: Arc<PgManager>, tenant_id: &TenantId) -> Result<()> {
+    let tenant_id_str = tenant_id.as_str();
     info!("Processing anomalies for tenant {}", tenant_id_str);
 
-    let tenant_id: TenantId = tenant_id_str.parse().context("Invalid tenant ID format")?;
-    let pool = pg_manager.tenant(&tenant_id).await?;
+    let pool = pg_manager.tenant(tenant_id).await?;
 
     let uuid_tenant_id: Uuid = tenant_id_str
         .parse()

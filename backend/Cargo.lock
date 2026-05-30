@@ -1101,6 +1101,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -1227,6 +1228,7 @@ dependencies = [
  "billforge-core",
  "billforge-mobile-push",
  "chrono",
+ "chrono-tz",
  "mockall",
  "reqwest",
  "serde",

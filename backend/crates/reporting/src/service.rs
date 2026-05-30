@@ -36,7 +36,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query pending review count: {}", e)))?;
 
         // Count invoices pending approval
         let invoices_pending_approval: i64 = sqlx::query_scalar(
@@ -45,7 +45,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query pending approval count: {}", e)))?;
 
         // Count invoices ready for payment
         let invoices_ready_for_payment: i64 = sqlx::query_scalar(
@@ -54,7 +54,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query ready for payment count: {}", e)))?;
 
         // Count invoices processed today
         let invoices_processed_today: i64 = sqlx::query_scalar(
@@ -63,7 +63,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query processed today count: {}", e)))?;
 
         // Total pending amount (cents)
         let total_pending_cents: i64 = sqlx::query_scalar(
@@ -72,7 +72,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query pending amount: {}", e)))?;
 
         // Count active vendors
         let vendors_active: i64 = sqlx::query_scalar(
@@ -81,7 +81,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query active vendor count: {}", e)))?;
 
         // Calculate average processing time (hours) for paid invoices
         // Using time from created_at to when it was paid (approximated by updated_at for paid status)
@@ -100,7 +100,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0.0);
+        .map_err(|e| Error::Database(format!("Failed to query average processing time: {}", e)))?;
 
         Ok(DashboardSummary {
             invoices_pending_review: invoices_pending_review as u64,
@@ -386,7 +386,7 @@ impl ReportingService {
         .bind(week_start)
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query weekly processed count: {}", e)))?;
 
         Ok(count as u64)
     }
@@ -522,7 +522,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0.0);
+        .map_err(|e| Error::Database(format!("Failed to query average capture time: {}", e)))?;
 
         // Average approval time (from submitted to approved)
         let avg_approval_time_hours: f64 = sqlx::query_scalar(
@@ -539,7 +539,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0.0);
+        .map_err(|e| Error::Database(format!("Failed to query average approval time: {}", e)))?;
 
         // Average total processing time (from created to paid)
         let avg_total_processing_time_hours: f64 = sqlx::query_scalar(
@@ -556,7 +556,12 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0.0);
+        .map_err(|e| {
+            Error::Database(format!(
+                "Failed to query average total processing time: {}",
+                e
+            ))
+        })?;
 
         // Count total and auto-approved for rate calculation
         let _total_approved: i64 = sqlx::query_scalar(
@@ -565,7 +570,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query approved invoice count: {}", e)))?;
 
         let total_rejected: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'rejected' AND created_at >= NOW() - INTERVAL '30 days'"
@@ -573,7 +578,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query rejected invoice count: {}", e)))?;
 
         let total_processed: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status NOT IN ('draft', 'submitted') AND created_at >= NOW() - INTERVAL '30 days'"
@@ -581,7 +586,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(1); // Avoid division by zero
+        .map_err(|e| Error::Database(format!("Failed to query processed invoice count: {}", e)))?;
 
         // First pass rate (invoices that didn't go on hold or get rejected first)
         let first_pass_count: i64 = sqlx::query_scalar(
@@ -590,7 +595,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(0);
+        .map_err(|e| Error::Database(format!("Failed to query first-pass invoice count: {}", e)))?;
 
         let paid_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM invoices WHERE tenant_id = $1 AND processing_status = 'paid' AND created_at >= NOW() - INTERVAL '30 days'"
@@ -598,7 +603,7 @@ impl ReportingService {
         .bind(*tenant_id.as_uuid())
         .fetch_one(&**pool)
         .await
-        .unwrap_or(1);
+        .map_err(|e| Error::Database(format!("Failed to query paid invoice count: {}", e)))?;
 
         Ok(ProcessingMetrics {
             avg_capture_time_minutes,
@@ -647,7 +652,9 @@ impl ReportingService {
                 .bind(*tenant_id.as_uuid())
                 .fetch_one(&**pool)
                 .await
-                .unwrap_or(1);
+                .map_err(|e| {
+                    Error::Database(format!("Failed to query status total count: {}", e))
+                })?;
 
         let rows = sqlx::query_as::<_, StatusRow>(sql)
             .bind(*tenant_id.as_uuid())

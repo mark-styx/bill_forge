@@ -9,8 +9,13 @@ use crate::{
     Notification, NotificationChannel, NotificationError, NotificationPriority,
     NotificationProvider, NotificationResult,
 };
+use async_trait::async_trait;
 use billforge_core::UserId;
-use billforge_mobile_push::{ApnsClient, ApnsConfig, ApnsError, FcmClient, FcmConfig, FcmError};
+use billforge_mobile_push::{
+    ApnsClient, ApnsConfig, ApnsError, DevicePlatform, FcmClient, FcmConfig, FcmError,
+    PushNotificationProvider,
+};
+use chrono::{NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,7 +28,28 @@ pub struct NotificationRouter {
     teams_client: Option<Arc<TeamsClient>>,
     fcm_client: Option<Arc<FcmClient>>,
     apns_client: Option<Arc<ApnsClient>>,
+    push_token_store: Option<Arc<dyn PushDeviceTokenStore>>,
+    in_app_store: Option<Arc<dyn InAppNotificationStore>>,
     providers: HashMap<String, Arc<dyn NotificationProvider>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushDeviceToken {
+    pub token: String,
+    pub platform: DevicePlatform,
+}
+
+#[async_trait]
+pub trait PushDeviceTokenStore: Send + Sync {
+    async fn tokens_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Vec<PushDeviceToken>, NotificationError>;
+}
+
+#[async_trait]
+pub trait InAppNotificationStore: Send + Sync {
+    async fn persist(&self, notification: &Notification) -> Result<Uuid, NotificationError>;
 }
 
 /// User notification preferences
@@ -63,6 +89,8 @@ impl NotificationRouter {
             teams_client: None,
             fcm_client: None,
             apns_client: None,
+            push_token_store: None,
+            in_app_store: None,
             providers: HashMap::new(),
         }
     }
@@ -95,6 +123,16 @@ impl NotificationRouter {
         let client = Arc::new(ApnsClient::new(config)?);
         self.apns_client = Some(client);
         Ok(self)
+    }
+
+    pub fn with_push_token_store(mut self, store: Arc<dyn PushDeviceTokenStore>) -> Self {
+        self.push_token_store = Some(store);
+        self
+    }
+
+    pub fn with_in_app_store(mut self, store: Arc<dyn InAppNotificationStore>) -> Self {
+        self.in_app_store = Some(store);
+        self
     }
 
     /// Route notification to appropriate channels
@@ -235,35 +273,10 @@ impl NotificationRouter {
                 });
             }
             NotificationChannel::Push => {
-                // Send push notification via FCM/APNS
-                // Note: This requires device tokens to be fetched from database
-                // For now, return success if any push provider is configured
-                if self.fcm_client.is_some() || self.apns_client.is_some() {
-                    return Ok(NotificationResult {
-                        success: true,
-                        channel,
-                        external_id: Some(notification.id.to_string()),
-                        error_message: None,
-                    });
-                } else {
-                    return Ok(NotificationResult {
-                        success: false,
-                        channel,
-                        external_id: None,
-                        error_message: Some(
-                            "No push notification providers configured".to_string(),
-                        ),
-                    });
-                }
+                return self.send_push(notification, channel).await;
             }
             NotificationChannel::InApp => {
-                // In-app would store to database
-                return Ok(NotificationResult {
-                    success: true,
-                    channel,
-                    external_id: Some(notification.id.to_string()),
-                    error_message: None,
-                });
+                return self.persist_in_app(notification, channel).await;
             }
         };
 
@@ -274,10 +287,172 @@ impl NotificationRouter {
         provider.send(notification).await
     }
 
+    async fn send_push(
+        &self,
+        notification: &Notification,
+        channel: NotificationChannel,
+    ) -> Result<NotificationResult, NotificationError> {
+        if self.fcm_client.is_none() && self.apns_client.is_none() {
+            return Ok(NotificationResult {
+                success: false,
+                channel,
+                external_id: None,
+                error_message: Some("No push notification providers configured".to_string()),
+            });
+        }
+
+        let Some(token_store) = &self.push_token_store else {
+            return Ok(NotificationResult {
+                success: false,
+                channel,
+                external_id: None,
+                error_message: Some("No push device token store configured".to_string()),
+            });
+        };
+
+        let tokens = token_store.tokens_for_user(&notification.user_id).await?;
+        if tokens.is_empty() {
+            return Ok(NotificationResult {
+                success: false,
+                channel,
+                external_id: None,
+                error_message: Some("No push device tokens for user".to_string()),
+            });
+        }
+
+        let mut successes = Vec::new();
+        let mut errors = Vec::new();
+
+        for device in tokens {
+            let result = match device.platform {
+                DevicePlatform::Android => match &self.fcm_client {
+                    Some(client) => client
+                        .send(
+                            &device.token,
+                            &notification.title,
+                            &notification.message,
+                            Some(notification.metadata.clone()),
+                        )
+                        .await
+                        .map_err(|e| NotificationError::Unknown(e.to_string())),
+                    None => {
+                        errors.push("FCM provider not configured".to_string());
+                        continue;
+                    }
+                },
+                DevicePlatform::Ios => match &self.apns_client {
+                    Some(client) => client
+                        .send(
+                            &device.token,
+                            &notification.title,
+                            &notification.message,
+                            Some(notification.metadata.clone()),
+                        )
+                        .await
+                        .map_err(|e| NotificationError::Unknown(e.to_string())),
+                    None => {
+                        errors.push("APNS provider not configured".to_string());
+                        continue;
+                    }
+                },
+            };
+
+            match result {
+                Ok(push_result) if push_result.success => {
+                    successes.push(
+                        push_result
+                            .message_id
+                            .unwrap_or_else(|| notification.id.to_string()),
+                    );
+                }
+                Ok(push_result) => {
+                    errors.push(push_result.error_message.unwrap_or_else(|| {
+                        format!(
+                            "{} push provider returned unsuccessful result",
+                            device.platform
+                        )
+                    }));
+                }
+                Err(e) => errors.push(e.to_string()),
+            }
+        }
+
+        if successes.is_empty() {
+            Ok(NotificationResult {
+                success: false,
+                channel,
+                external_id: None,
+                error_message: Some(errors.join("; ")),
+            })
+        } else {
+            Ok(NotificationResult {
+                success: true,
+                channel,
+                external_id: Some(successes.join(",")),
+                error_message: None,
+            })
+        }
+    }
+
+    async fn persist_in_app(
+        &self,
+        notification: &Notification,
+        channel: NotificationChannel,
+    ) -> Result<NotificationResult, NotificationError> {
+        let Some(store) = &self.in_app_store else {
+            return Ok(NotificationResult {
+                success: false,
+                channel,
+                external_id: None,
+                error_message: Some("No in-app notification store configured".to_string()),
+            });
+        };
+
+        let persisted_id = store.persist(notification).await?;
+        Ok(NotificationResult {
+            success: true,
+            channel,
+            external_id: Some(persisted_id.to_string()),
+            error_message: None,
+        })
+    }
+
     /// Check if current time is in quiet hours
-    fn is_quiet_hours(&self, _preferences: &NotificationPreference) -> bool {
-        // Placeholder - would implement timezone-aware quiet hours check
-        false
+    fn is_quiet_hours(&self, preferences: &NotificationPreference) -> bool {
+        self.is_quiet_hours_at(preferences, chrono::Utc::now())
+    }
+
+    fn is_quiet_hours_at(
+        &self,
+        preferences: &NotificationPreference,
+        now_utc: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let (Some(start), Some(end)) = (
+            preferences.quiet_hours_start.as_deref(),
+            preferences.quiet_hours_end.as_deref(),
+        ) else {
+            return false;
+        };
+
+        let Some(start) = parse_quiet_time(start) else {
+            return false;
+        };
+        let Some(end) = parse_quiet_time(end) else {
+            return false;
+        };
+
+        let local_time = preferences
+            .quiet_hours_timezone
+            .as_deref()
+            .and_then(|timezone| timezone.parse::<chrono_tz::Tz>().ok())
+            .map(|timezone| now_utc.with_timezone(&timezone).time())
+            .unwrap_or_else(|| now_utc.time());
+
+        if start <= end {
+            local_time >= start && local_time < end
+        } else {
+            local_time >= start || local_time < end
+        }
     }
 
     /// Get default preferences for a user
@@ -306,6 +481,16 @@ impl NotificationRouter {
     }
 }
 
+fn parse_quiet_time(value: &str) -> Option<NaiveTime> {
+    NaiveTime::parse_from_str(value, "%H:%M:%S")
+        .or_else(|_| NaiveTime::parse_from_str(value, "%H:%M"))
+        .ok()
+        .map(|time| {
+            NaiveTime::from_hms_opt(time.hour(), time.minute(), time.second())
+                .expect("parsed NaiveTime components are valid")
+        })
+}
+
 impl Default for NotificationRouter {
     fn default() -> Self {
         Self::new()
@@ -315,6 +500,19 @@ impl Default for NotificationRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct MemoryInAppStore {
+        persisted: Mutex<Vec<Uuid>>,
+    }
+
+    #[async_trait]
+    impl InAppNotificationStore for MemoryInAppStore {
+        async fn persist(&self, notification: &Notification) -> Result<Uuid, NotificationError> {
+            self.persisted.lock().unwrap().push(notification.id);
+            Ok(notification.id)
+        }
+    }
 
     #[test]
     fn test_router_creation() {
@@ -391,5 +589,76 @@ mod tests {
         let result = router.route(&notification, &preferences).await.unwrap();
 
         assert!(!result.delivered);
+    }
+
+    #[tokio::test]
+    async fn test_in_app_requires_store() {
+        let router = NotificationRouter::new();
+        let user_id = UserId(Uuid::new_v4());
+        let notification = Notification::new(
+            user_id.clone(),
+            crate::NotificationType::ApprovalRequest,
+            "Test".to_string(),
+            "Test message".to_string(),
+        );
+        let mut preferences = NotificationRouter::default_preferences(user_id);
+        preferences.channels = vec![ChannelPreference {
+            channel: NotificationChannel::InApp,
+            enabled: true,
+            notification_types: vec![],
+            priority_filter: None,
+        }];
+
+        let result = router.route(&notification, &preferences).await.unwrap();
+
+        assert!(!result.delivered);
+        assert_eq!(result.results.len(), 1);
+        assert!(!result.results[0].success);
+    }
+
+    #[tokio::test]
+    async fn test_in_app_success_requires_persistence() {
+        let store = Arc::new(MemoryInAppStore {
+            persisted: Mutex::new(vec![]),
+        });
+        let router = NotificationRouter::new().with_in_app_store(store.clone());
+        let user_id = UserId(Uuid::new_v4());
+        let notification = Notification::new(
+            user_id.clone(),
+            crate::NotificationType::ApprovalRequest,
+            "Test".to_string(),
+            "Test message".to_string(),
+        );
+        let mut preferences = NotificationRouter::default_preferences(user_id);
+        preferences.channels = vec![ChannelPreference {
+            channel: NotificationChannel::InApp,
+            enabled: true,
+            notification_types: vec![],
+            priority_filter: None,
+        }];
+
+        let result = router.route(&notification, &preferences).await.unwrap();
+
+        assert!(result.delivered);
+        assert_eq!(
+            store.persisted.lock().unwrap().as_slice(),
+            &[notification.id]
+        );
+    }
+
+    #[test]
+    fn test_quiet_hours_supports_overnight_window() {
+        let router = NotificationRouter::new();
+        let user_id = UserId(Uuid::new_v4());
+        let mut preferences = NotificationRouter::default_preferences(user_id);
+        preferences.quiet_hours_start = Some("22:00".to_string());
+        preferences.quiet_hours_end = Some("07:00".to_string());
+        preferences.quiet_hours_timezone = Some("UTC".to_string());
+
+        let quiet_now = chrono::DateTime::parse_from_rfc3339("2026-05-29T23:30:00Z").unwrap();
+        let active_now = chrono::DateTime::parse_from_rfc3339("2026-05-29T12:30:00Z").unwrap();
+
+        assert!(router.is_quiet_hours_at(&preferences, quiet_now.into()));
+        assert!(!router.is_quiet_hours_at(&preferences, active_now.into()));
     }
 }

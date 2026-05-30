@@ -310,7 +310,7 @@ impl IntelligentRoutingEngine {
 
         // Check if delegation applies
         let (final_approver, delegated_from) =
-            self.apply_delegation(best.user_id.clone(), availabilities);
+            self.apply_delegation(best.user_id.clone(), availabilities, &candidates);
 
         // Determine strategy used (respect override when all unavailable)
         let strategy = strategy_override.unwrap_or_else(|| {
@@ -471,6 +471,7 @@ impl IntelligentRoutingEngine {
         &self,
         approver_id: UserId,
         availabilities: &[ApproverAvailability],
+        candidates: &[CandidateScore],
     ) -> (UserId, Option<UserId>) {
         if !self.config.enable_auto_delegation {
             return (approver_id, None);
@@ -492,9 +493,16 @@ impl IntelligentRoutingEngine {
 
         match unavailable {
             Some(availability) => {
-                // Delegate to the specified person
                 let delegate = availability.delegate_id.clone().unwrap();
-                (delegate, Some(approver_id))
+                let delegate_is_routable = candidates.iter().any(|candidate| {
+                    candidate.user_id == delegate && candidate.availability_score > 0.0
+                });
+
+                if delegate_is_routable {
+                    (delegate, Some(approver_id))
+                } else {
+                    (approver_id, None)
+                }
             }
             None => (approver_id, None),
         }
@@ -675,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_route_invoice_with_delegation() {
+    fn test_route_invoice_rejects_non_eligible_delegate() {
         let config = RoutingConfig {
             enable_auto_delegation: true,
             ..Default::default()
@@ -702,8 +710,80 @@ mod tests {
         );
 
         assert!(decision.approver_id.is_some());
-        assert_eq!(decision.approver_id.unwrap(), delegate);
-        assert_eq!(decision.delegated_from, Some(approver1));
+        assert_eq!(decision.approver_id.unwrap(), approver1);
+        assert_eq!(decision.delegated_from, None);
+    }
+
+    #[test]
+    fn test_route_invoice_rejects_unavailable_delegate() {
+        let config = RoutingConfig {
+            enable_auto_delegation: true,
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+
+        let invoice = create_test_invoice();
+        let approver1 = UserId(Uuid::new_v4());
+        let delegate = UserId(Uuid::new_v4());
+
+        let workloads = HashMap::from([
+            (
+                approver1.clone(),
+                ApproverWorkload {
+                    user_id: approver1.clone(),
+                    active_approvals: 0,
+                    pending_approvals: 0,
+                    completed_this_week: 0,
+                    avg_approval_time_hours: None,
+                    workload_score: 0.0,
+                    last_assignment_at: None,
+                },
+            ),
+            (
+                delegate.clone(),
+                ApproverWorkload {
+                    user_id: delegate.clone(),
+                    active_approvals: 10,
+                    pending_approvals: 10,
+                    completed_this_week: 0,
+                    avg_approval_time_hours: None,
+                    workload_score: 100.0,
+                    last_assignment_at: None,
+                },
+            ),
+        ]);
+
+        let now = Utc::now();
+        let decision = engine.route_invoice(
+            &invoice,
+            &[approver1.clone(), delegate.clone()],
+            &workloads,
+            &[
+                ApproverAvailability {
+                    user_id: approver1.clone(),
+                    status: AvailabilityStatus::OutOfOffice,
+                    delegate_id: Some(delegate.clone()),
+                    start_at: now - chrono::Duration::hours(1),
+                    end_at: now + chrono::Duration::hours(24),
+                    reason: Some("Vacation".to_string()),
+                },
+                ApproverAvailability {
+                    user_id: delegate.clone(),
+                    status: AvailabilityStatus::Vacation,
+                    delegate_id: None,
+                    start_at: now - chrono::Duration::hours(1),
+                    end_at: now + chrono::Duration::hours(24),
+                    reason: Some("Vacation".to_string()),
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(decision.approver_id, Some(approver1));
+        assert_eq!(decision.delegated_from, None);
     }
 
     #[test]

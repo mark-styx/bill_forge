@@ -1,7 +1,8 @@
 //! Background job definitions and worker
 
 use crate::config::WorkerConfig;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use billforge_core::TenantId;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -169,38 +170,59 @@ async fn poll_and_process_job(
     }
 }
 
+fn parse_job_tenant_id(job: &Job) -> Result<TenantId> {
+    job.tenant_id
+        .parse::<TenantId>()
+        .with_context(|| format!("Invalid tenant_id for job {}", job.id))
+}
+
 async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
+    let tenant_id = parse_job_tenant_id(job)?;
+    config
+        .pg_manager
+        .tenant(&tenant_id)
+        .await
+        .with_context(|| format!("Tenant validation failed for job {}", job.id))?;
+    let tenant_id_str = tenant_id.as_str();
+
     match job.job_type {
         JobType::QuickBooksVendorSync => {
-            quickbooks_sync::sync_vendors(&job.tenant_id, &job.payload, config).await
+            quickbooks_sync::sync_vendors(&tenant_id_str, &job.payload, config).await
         }
         JobType::QuickBooksAccountSync => {
-            quickbooks_sync::sync_accounts(&job.tenant_id, &job.payload, config).await
+            quickbooks_sync::sync_accounts(&tenant_id_str, &job.payload, config).await
         }
         JobType::QuickBooksInvoiceExport => {
-            quickbooks_sync::export_invoice(&job.tenant_id, &job.payload, config).await
+            quickbooks_sync::export_invoice(&tenant_id_str, &job.payload, config).await
         }
         JobType::MetricsAggregation => {
-            metrics_aggregation::aggregate_metrics(&job.tenant_id, config).await
+            metrics_aggregation::aggregate_metrics(&tenant_id_str, config).await
         }
-        JobType::EmailBatch => email_batch::send_batch(&job.tenant_id, &job.payload, config).await,
-        JobType::ReportDigest => report_digest::send_digests(&job.tenant_id, config).await,
+        JobType::EmailBatch => email_batch::send_batch(&tenant_id_str, &job.payload, config).await,
+        JobType::ReportDigest => report_digest::send_digests(&tenant_id_str, config).await,
         JobType::EmbeddingRefresh => {
-            embedding_refresh::refresh_all_embeddings(config.pg_manager.clone()).await
+            embedding_refresh::refresh_tenant_embeddings(config.pg_manager.clone(), &tenant_id)
+                .await
+                .map(|_| ())
         }
-        JobType::CategorizationTraining => {
-            categorization_training::learn_from_feedback(config.pg_manager.clone()).await
-        }
+        JobType::CategorizationTraining => categorization_training::learn_from_tenant_feedback(
+            config.pg_manager.clone(),
+            &tenant_id,
+        )
+        .await
+        .map(|_| ()),
         JobType::RoutingOptimization => {
-            // Get connection pool
-            let pool = config.pg_manager.clone();
-            routing_optimization::run_routing_optimization(pool).await
+            routing_optimization::run_tenant_routing_optimization(
+                config.pg_manager.clone(),
+                &tenant_id,
+            )
+            .await
         }
         JobType::ForecastRefresh => {
-            forecast_refresh::refresh_forecasts(config.pg_manager.clone()).await
+            forecast_refresh::refresh_tenant_forecasts(config.pg_manager.clone(), &tenant_id).await
         }
         JobType::AnomalyDetection => {
-            anomaly_detection::detect_anomalies(config.pg_manager.clone()).await
+            anomaly_detection::detect_tenant_anomalies(config.pg_manager.clone(), &tenant_id).await
         }
         JobType::EdiProcessInbound => {
             // EDI inbound processing is handled inline in the webhook handler for now.
@@ -228,10 +250,46 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             Ok(())
         }
         JobType::OcrProcess => {
-            ocr_processing::process_ocr(&job.tenant_id, &job.payload, config, job.retry_count).await
+            ocr_processing::process_ocr(&tenant_id_str, &job.payload, config, job.retry_count).await
         }
         JobType::ApprovalExpiry => {
-            approval_expiry::process_approval_expiry(&job.tenant_id, config).await
+            approval_expiry::process_approval_expiry(&tenant_id_str, config).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn job_with_tenant(tenant_id: String) -> Job {
+        Job {
+            id: "job-tenant-parse".to_string(),
+            job_type: JobType::MetricsAggregation,
+            tenant_id,
+            payload: json!({}),
+            created_at: Utc::now(),
+            retry_count: 0,
+        }
+    }
+
+    #[test]
+    fn parse_job_tenant_id_accepts_uuid_tenant() {
+        let tenant_uuid = Uuid::new_v4();
+        let job = job_with_tenant(tenant_uuid.to_string());
+
+        let parsed = parse_job_tenant_id(&job).unwrap();
+
+        assert_eq!(*parsed.as_uuid(), tenant_uuid);
+    }
+
+    #[test]
+    fn parse_job_tenant_id_rejects_system_sentinel() {
+        let job = job_with_tenant("system".to_string());
+
+        assert!(parse_job_tenant_id(&job).is_err());
     }
 }

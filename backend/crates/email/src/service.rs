@@ -7,7 +7,8 @@
 //! - Log/Mock (default for development)
 
 use async_trait::async_trait;
-use billforge_core::{Error, Result};
+use billforge_core::{http_retry, Error, Result};
+use reqwest::Response;
 use serde::Serialize;
 
 /// Email service configuration
@@ -99,6 +100,97 @@ impl EmailServiceImpl {
 
         Ok(Self { config, client })
     }
+
+    async fn send_request_with_retry(
+        &self,
+        service: &str,
+        request_fn: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<Response> {
+        self.send_request_with_retry_config(service, http_retry::RetryConfig::default(), request_fn)
+            .await
+    }
+
+    async fn send_request_with_retry_config(
+        &self,
+        service: &str,
+        retry_config: http_retry::RetryConfig,
+        request_fn: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<Response> {
+        let mut attempt = 0u32;
+
+        loop {
+            let response = match request_fn().send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    if attempt + 1 >= retry_config.max_retries {
+                        return Err(Error::ExternalService {
+                            service: service.to_string(),
+                            message: format!("Failed to send request after retries: {}", e),
+                        });
+                    }
+
+                    let backoff = http_retry::compute_backoff(&retry_config, attempt, None);
+                    tracing::warn!(
+                        service,
+                        attempt,
+                        error = %e,
+                        ?backoff,
+                        "Email request transport error, retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    attempt += 1;
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+
+            let retry_after = http_retry::parse_retry_after(
+                response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|value| value.to_str().ok()),
+            );
+            let body = response.text().await.unwrap_or_default();
+            let status_code = status.as_u16();
+
+            if !http_retry::is_retryable_status(status_code) {
+                return Err(Error::ExternalService {
+                    service: service.to_string(),
+                    message: format!("API error {}: {}", status, body),
+                });
+            }
+
+            if attempt + 1 >= retry_config.max_retries {
+                return Err(Error::ExternalService {
+                    service: service.to_string(),
+                    message: format!("API error {} after retries: {}", status, body),
+                });
+            }
+
+            let backoff = http_retry::compute_backoff(
+                &retry_config,
+                attempt,
+                if status_code == 429 {
+                    retry_after
+                } else {
+                    None
+                },
+            );
+            tracing::warn!(
+                service,
+                status = status_code,
+                attempt,
+                ?backoff,
+                "Email provider returned retryable error, retrying"
+            );
+            tokio::time::sleep(backoff).await;
+            attempt += 1;
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -172,27 +264,14 @@ impl EmailService for EmailServiceImpl {
                     ],
                 };
 
-                let response = self
-                    .client
-                    .post("https://api.sendgrid.com/v3/mail/send")
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("Content-Type", "application/json")
-                    .json(&email)
-                    .send()
-                    .await
-                    .map_err(|e| Error::ExternalService {
-                        service: "SendGrid".to_string(),
-                        message: format!("Failed to send request: {}", e),
-                    })?;
-
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(Error::ExternalService {
-                        service: "SendGrid".to_string(),
-                        message: format!("API error {}: {}", status, body),
-                    });
-                }
+                self.send_request_with_retry("SendGrid", || {
+                    self.client
+                        .post("https://api.sendgrid.com/v3/mail/send")
+                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("Content-Type", "application/json")
+                        .json(&email)
+                })
+                .await?;
 
                 tracing::info!(to = %to, subject = %subject, provider = "sendgrid", "Email sent successfully");
             }
@@ -200,35 +279,22 @@ impl EmailService for EmailServiceImpl {
             EmailProvider::Mailgun { api_key, domain } => {
                 let url = format!("https://api.mailgun.net/v3/{}/messages", domain);
 
-                let response = self
-                    .client
-                    .post(&url)
-                    .basic_auth("api", Some(api_key))
-                    .form(&[
-                        (
-                            "from",
-                            format!("{} <{}>", self.config.from_name, self.config.from_email),
-                        ),
-                        ("to", to.to_string()),
-                        ("subject", subject.to_string()),
-                        ("text", text_body.to_string()),
-                        ("html", html_body.to_string()),
-                    ])
-                    .send()
-                    .await
-                    .map_err(|e| Error::ExternalService {
-                        service: "Mailgun".to_string(),
-                        message: format!("Failed to send request: {}", e),
-                    })?;
-
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(Error::ExternalService {
-                        service: "Mailgun".to_string(),
-                        message: format!("API error {}: {}", status, body),
-                    });
-                }
+                self.send_request_with_retry("Mailgun", || {
+                    self.client
+                        .post(&url)
+                        .basic_auth("api", Some(api_key))
+                        .form(&[
+                            (
+                                "from",
+                                format!("{} <{}>", self.config.from_name, self.config.from_email),
+                            ),
+                            ("to", to.to_string()),
+                            ("subject", subject.to_string()),
+                            ("text", text_body.to_string()),
+                            ("html", html_body.to_string()),
+                        ])
+                })
+                .await?;
 
                 tracing::info!(to = %to, subject = %subject, provider = "mailgun", "Email sent successfully");
             }
@@ -243,29 +309,20 @@ impl EmailService for EmailServiceImpl {
                     text_body: text_body.to_string(),
                 };
 
-                let mut request = self
-                    .client
-                    .post(url)
-                    .header("Content-Type", "application/json")
-                    .json(&payload);
+                self.send_request_with_retry("EmailWebhook", || {
+                    let mut request = self
+                        .client
+                        .post(url)
+                        .header("Content-Type", "application/json")
+                        .json(&payload);
 
-                if let Some(auth) = auth_header {
-                    request = request.header("Authorization", auth);
-                }
+                    if let Some(auth) = auth_header {
+                        request = request.header("Authorization", auth);
+                    }
 
-                let response = request.send().await.map_err(|e| Error::ExternalService {
-                    service: "EmailWebhook".to_string(),
-                    message: format!("Failed to send request: {}", e),
-                })?;
-
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(Error::ExternalService {
-                        service: "EmailWebhook".to_string(),
-                        message: format!("Webhook error {}: {}", status, body),
-                    });
-                }
+                    request
+                })
+                .await?;
 
                 tracing::info!(to = %to, subject = %subject, provider = "webhook", "Email sent successfully");
             }
@@ -328,6 +385,8 @@ impl EmailService for MockEmailService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn test_mock_email_service() {
@@ -351,5 +410,78 @@ mod tests {
             .send("test@example.com", "Test Subject", "<p>Hello</p>", "Hello")
             .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn retry_helper_retries_transient_provider_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/email"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/email"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+
+        let config = EmailConfig {
+            provider: EmailProvider::Log,
+            from_email: "test@test.com".to_string(),
+            from_name: "Test".to_string(),
+            enabled: true,
+        };
+        let service = EmailServiceImpl::new(config).unwrap();
+        let retry_config = billforge_core::http_retry::RetryConfig {
+            base_backoff_ms: 1,
+            max_backoff_ms: 1,
+            max_jitter_ms: 0,
+            max_retries: 3,
+            max_retry_after_secs: 1,
+        };
+
+        let result = service
+            .send_request_with_retry_config("TestEmail", retry_config, || {
+                service.client.post(format!("{}/email", server.uri()))
+            })
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn retry_helper_does_not_retry_permanent_provider_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/email"))
+            .respond_with(ResponseTemplate::new(400))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let config = EmailConfig {
+            provider: EmailProvider::Log,
+            from_email: "test@test.com".to_string(),
+            from_name: "Test".to_string(),
+            enabled: true,
+        };
+        let service = EmailServiceImpl::new(config).unwrap();
+        let retry_config = billforge_core::http_retry::RetryConfig {
+            base_backoff_ms: 1,
+            max_backoff_ms: 1,
+            max_jitter_ms: 0,
+            max_retries: 3,
+            max_retry_after_secs: 1,
+        };
+
+        let result = service
+            .send_request_with_retry_config("TestEmail", retry_config, || {
+                service.client.post(format!("{}/email", server.uri()))
+            })
+            .await;
+
+        assert!(result.is_err());
     }
 }
