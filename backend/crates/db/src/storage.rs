@@ -196,6 +196,9 @@ impl StorageService for LocalStorageService {
         file.write_all(data)
             .await
             .map_err(|e| Error::Storage(format!("Failed to write file: {}", e)))?;
+        file.flush()
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to flush file: {}", e)))?;
 
         tracing::debug!("Uploaded document {} to {}", document_id, path.display());
 
@@ -203,7 +206,7 @@ impl StorageService for LocalStorageService {
     }
 
     async fn download(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<Vec<u8>> {
-        let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+        let storage_key = build_storage_key(tenant_id, file_id);
         let path = self.get_path(&storage_key);
         fs::read(&path)
             .await
@@ -211,7 +214,7 @@ impl StorageService for LocalStorageService {
     }
 
     async fn delete(&self, tenant_id: &TenantId, file_id: Uuid) -> Result<()> {
-        let storage_key = format!("{}/{}", tenant_id.as_str(), file_id);
+        let storage_key = build_storage_key(tenant_id, file_id);
         let path = self.get_path(&storage_key);
         fs::remove_file(&path)
             .await
