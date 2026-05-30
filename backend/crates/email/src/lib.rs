@@ -4,6 +4,7 @@
 
 mod inbound;
 mod service;
+mod statement_ingest;
 mod templates;
 
 pub use inbound::{
@@ -11,4 +12,8 @@ pub use inbound::{
     InboundEmailPayload, InboundEmailResult,
 };
 pub use service::{EmailConfig, EmailService, EmailServiceImpl, MockEmailService};
+pub use statement_ingest::{
+    classify, extract_attachment_text, ingest_statement, parse_statement_lines, InboundKind,
+    ParsedStatementLine,
+};
 pub use templates::*;
