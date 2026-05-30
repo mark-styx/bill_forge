@@ -26,6 +26,7 @@ use billforge_invoice_processing::feedback_loop::{
 };
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Instant;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -1963,7 +1964,7 @@ async fn reject_duplicate(
 // OCR field correction endpoint
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct OcrCorrectionRequest {
     pub field_name: String,
     #[allow(dead_code)]
@@ -2009,18 +2010,18 @@ async fn record_ocr_correction(
 
     // Build a capture service with the calibration store to record the correction.
     let provider_name = resolve_ocr_provider_name(&state.config.ocr_provider, &tenant.settings);
-    let invoice_repo: Arc<dyn billforge_core::traits::InvoiceRepository> =
-        Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone()));
+    let invoice_repo: Arc<dyn billforge_core::traits::InvoiceRepository> = Arc::new(
+        billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone()),
+    );
     let calibration_store: Arc<dyn billforge_invoice_capture::OcrCalibrationStore> =
         Arc::new(billforge_invoice_capture::PgOcrCalibrationStore::new(pool));
 
-    let capture_service =
-        billforge_invoice_capture::InvoiceCaptureService::new(
-            &provider_name,
-            invoice_repo,
-            state.storage.clone(),
-        )
-        .with_calibration(calibration_store);
+    let capture_service = billforge_invoice_capture::InvoiceCaptureService::new(
+        &provider_name,
+        invoice_repo,
+        state.storage.clone(),
+    )
+    .with_calibration(calibration_store);
 
     capture_service
         .record_field_correction(&tenant.tenant_id, &invoice_id, &body.field_name)

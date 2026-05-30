@@ -144,7 +144,9 @@ impl InvoiceCaptureService {
         ocr_result: &OcrExtractionResult,
     ) -> Result<Invoice> {
         // Calculate overall confidence (calibrated if store is available)
-        let confidence = self.calculate_confidence_with_calibration(tenant_id, ocr_result).await;
+        let confidence = self
+            .calculate_confidence_with_calibration(tenant_id, ocr_result)
+            .await;
 
         let input = CreateInvoiceInput {
             document_id,
@@ -197,6 +199,7 @@ impl InvoiceCaptureService {
     }
 
     /// Calculate overall confidence score from OCR result (unweighted, for backwards compat)
+    #[allow(dead_code)]
     fn calculate_confidence(&self, ocr_result: &OcrExtractionResult) -> f32 {
         let fields = [
             ocr_result.invoice_number.confidence,
@@ -228,7 +231,11 @@ impl InvoiceCaptureService {
         if let Some(ref store) = self.calibration {
             // Record this extraction event so the calibration data grows.
             if let Err(e) = store
-                .record_extraction(tenant_id, self.ocr_provider.provider_name(), OCR_CALIBRATED_FIELDS)
+                .record_extraction(
+                    tenant_id,
+                    self.ocr_provider.provider_name(),
+                    OCR_CALIBRATED_FIELDS,
+                )
                 .await
             {
                 tracing::warn!(error = %e, "Failed to record extraction for calibration");

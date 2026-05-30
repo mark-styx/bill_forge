@@ -114,7 +114,9 @@ impl OcrCalibrationStore for PgOcrCalibrationStore {
         .bind(MIN_EXTRACTIONS_FOR_CALIBRATION)
         .fetch_all(&*self.pool)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch calibration weights: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to fetch calibration weights: {}", e))
+        })?;
 
         let mut weights = HashMap::new();
         for (field_name, extractions, corrections) in rows {
@@ -134,10 +136,7 @@ impl OcrCalibrationStore for PgOcrCalibrationStore {
 /// If all four tracked fields have weights, returns a weighted mean where each
 /// field's raw confidence is multiplied by its empirical accuracy weight.
 /// Otherwise falls back to the unweighted arithmetic mean (current behavior).
-pub fn calibrated_confidence(
-    raw: &[(&'static str, f32)],
-    weights: &HashMap<String, f32>,
-) -> f32 {
+pub fn calibrated_confidence(raw: &[(&'static str, f32)], weights: &HashMap<String, f32>) -> f32 {
     if raw.is_empty() {
         return 0.0;
     }
@@ -205,7 +204,7 @@ mod tests {
         let raw: &[(&str, f32)] = &[
             ("invoice_number", 0.90),
             ("invoice_date", 0.90),
-            ("vendor_name", 0.90),
+            ("vendor_name", 0.95),
             ("total_amount", 0.90),
         ];
 
@@ -218,7 +217,7 @@ mod tests {
         weights.insert("total_amount".to_string(), 0.86);
 
         let calibrated = calibrated_confidence(raw, &weights);
-        let unweighted = 0.90f32; // all 0.90
+        let unweighted = (0.90 + 0.90 + 0.95 + 0.90) / 4.0f32; // 0.9125
 
         assert!(
             calibrated < unweighted,
