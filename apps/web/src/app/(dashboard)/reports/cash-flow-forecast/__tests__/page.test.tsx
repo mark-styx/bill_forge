@@ -1,0 +1,162 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import CashFlowForecastPage from '../page';
+import type { ApCashFlowForecast } from '@/lib/api';
+
+// Mock the API modules
+vi.mock('@/lib/api', () => ({
+  reportsApi: {
+    apCashFlowForecast: vi.fn(),
+  },
+}));
+
+// Mock charts module
+vi.mock('@/components/ui/charts', () => ({
+  ChartContainer: ({ children, title }: { children: React.ReactNode; title?: string }) => (
+    <div data-testid="chart-container" data-title={title}>
+      {children}
+    </div>
+  ),
+  BillForgeBarChart: ({ data }: { data: unknown[] }) => (
+    <div data-testid="bar-chart" data-bar-count={data.length} />
+  ),
+}));
+
+// Mock next/link
+vi.mock('next/link', () => ({
+  default: ({ children, ...props }: { children: React.ReactNode; href: string }) => (
+    <a {...props}>{children}</a>
+  ),
+}));
+
+// Mock lucide-react icons
+vi.mock('lucide-react', () => ({
+  DollarSign: () => <span>DollarSign</span>,
+  ArrowRight: () => <span>ArrowRight</span>,
+  AlertTriangle: () => <span>AlertTriangle</span>,
+  Calendar: () => <span>Calendar</span>,
+  TrendingUp: () => <span>TrendingUp</span>,
+  ArrowLeft: () => <span>ArrowLeft</span>,
+}));
+
+import { reportsApi } from '@/lib/api';
+
+const mockForecast: ApCashFlowForecast = {
+  as_of_date: '2026-05-30',
+  horizon_weeks: 13,
+  daily: Array.from({ length: 91 }, (_, i) => ({
+    date: `2026-05-${String(31 + (i % 30)).padStart(2, '0')}`,
+    expected_amount: i === 5 ? 500_00_00 : i === 10 ? 300_00_00 : 10_00_00,
+    low_band: i === 5 ? 425_00_00 : 7_00_00,
+    high_band: i === 5 ? 575_00_00 : 13_00_00,
+    vendor_breakdown: [
+      { name: 'Vendor A', amount_cents: i === 5 ? 400_00_00 : 6_00_00 },
+      { name: 'Vendor B', amount_cents: i === 5 ? 100_00_00 : 4_00_00 },
+    ],
+    gl_breakdown: [
+      { name: '5000 - Supplies', amount_cents: i === 5 ? 400_00_00 : 6_00_00 },
+      { name: '6000 - Services', amount_cents: i === 5 ? 100_00_00 : 4_00_00 },
+    ],
+    funding_required: i === 5 || i === 10,
+  })),
+  weekly: Array.from({ length: 13 }, (_, i) => ({
+    week_start: `2026-05-${String(31 + i * 7).padStart(2, '0')}`,
+    week_end: `2026-06-${String(6 + i * 7).padStart(2, '0')}`,
+    expected_amount: i === 0 ? 580_00_00 : 70_00_00,
+    low_band: i === 0 ? 500_00_00 : 49_00_00,
+    high_band: i === 0 ? 660_00_00 : 91_00_00,
+  })),
+  monthly: [
+    { month: '2026-05', expected_amount: 800_00_00, low_band: 600_00_00, high_band: 1000_00_00 },
+    { month: '2026-06', expected_amount: 3000_00_00, low_band: 2500_00_00, high_band: 3500_00_00 },
+    { month: '2026-07', expected_amount: 2500_00_00, low_band: 2000_00_00, high_band: 3000_00_00 },
+  ],
+};
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+    logger: {
+      log: console.log,
+      warn: console.warn,
+      error: () => {},
+    },
+  });
+}
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = createQueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
+describe('CashFlowForecastPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the 13-week forecast page with KPI cards', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('13-Week Cash Flow Forecast')).toBeInTheDocument();
+    });
+
+    // Check KPI card labels are present
+    expect(screen.getByText('Total expected outflow')).toBeInTheDocument();
+    expect(screen.getByText('Peak week')).toBeInTheDocument();
+    expect(screen.getByText('Funding alert days')).toBeInTheDocument();
+  });
+
+  it('renders the weekly bar chart with 13 bars', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      const chart = screen.getByTestId('bar-chart');
+      expect(chart).toBeInTheDocument();
+      expect(chart.dataset.barCount).toBe('13');
+    });
+  });
+
+  it('shows funding-required alert rows when days exceed threshold', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Daily Funding Required')).toBeInTheDocument();
+    });
+
+    // The funding alert section should exist because our mock has funding_required days
+    expect(screen.getByText('Days where expected outflow exceeds threshold')).toBeInTheDocument();
+  });
+
+  it('shows breakdown tabs for vendor and GL', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('By Vendor')).toBeInTheDocument();
+      expect(screen.getByText('By GL Code')).toBeInTheDocument();
+    });
+  });
+
+  it('displays error state when forecast fails', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockRejectedValue(new Error('Network error'));
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Forecast unavailable')).toBeInTheDocument();
+    });
+  });
+});

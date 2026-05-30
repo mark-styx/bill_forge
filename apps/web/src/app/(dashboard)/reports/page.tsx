@@ -1091,6 +1091,17 @@ export default function ReportsPage() {
                 </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-processing group-hover:translate-x-1 transition-all" />
               </a>
+
+              <Link href="/reports/cash-flow-forecast" className="action-card group text-left">
+                <div className="action-card-icon bg-accent/10">
+                  <DollarSign className="w-5 h-5 text-accent" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-medium text-foreground">13-Week Cash Forecast</p>
+                  <p className="text-sm text-muted-foreground">AP-driven funding view</p>
+                </div>
+                <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-accent group-hover:translate-x-1 transition-all" />
+              </Link>
             </>
           )}
 

@@ -662,6 +662,14 @@ export const reportsApi = {
 
   cashFlowObligations: () =>
     api.get<CashFlowObligation[]>('/api/v1/reports/cash-flow/obligations'),
+
+  apCashFlowForecast: (params?: { horizon_weeks?: number; as_of_date?: string; min_daily_funding_threshold?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.horizon_weeks) qs.set('horizon_weeks', String(params.horizon_weeks));
+    if (params?.as_of_date) qs.set('as_of_date', params.as_of_date);
+    if (params?.min_daily_funding_threshold) qs.set('min_daily_funding_threshold', String(params.min_daily_funding_threshold));
+    return api.get<ApCashFlowForecast>(`/api/v1/reports/cash-flow/forecast?${qs}`);
+  },
 };
 
 // Documents API
@@ -1058,6 +1066,45 @@ export interface CashFlowObligation {
   currency: string;
   processing_status: string;
   late_risk: boolean;
+}
+
+// AP Cash Flow Forecast types
+export interface ForecastBreakdownEntry {
+  name: string;
+  amount_cents: number;
+}
+
+export interface ForecastDay {
+  date: string;
+  expected_amount: number;
+  low_band: number;
+  high_band: number;
+  vendor_breakdown: ForecastBreakdownEntry[];
+  gl_breakdown: ForecastBreakdownEntry[];
+  funding_required: boolean;
+}
+
+export interface ForecastWeek {
+  week_start: string;
+  week_end: string;
+  expected_amount: number;
+  low_band: number;
+  high_band: number;
+}
+
+export interface ForecastMonth {
+  month: string;
+  expected_amount: number;
+  low_band: number;
+  high_band: number;
+}
+
+export interface ApCashFlowForecast {
+  as_of_date: string;
+  horizon_weeks: number;
+  daily: ForecastDay[];
+  weekly: ForecastWeek[];
+  monthly: ForecastMonth[];
 }
 
 // Workflow Template types
