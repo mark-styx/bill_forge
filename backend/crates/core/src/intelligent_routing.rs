@@ -712,8 +712,16 @@ pub fn simulate_routing(
     }
 
     let total = invoices.len() as u32;
-    let avg_cycle_candidate = if total > 0 { total_cycle_candidate / total as f64 } else { 0.0 };
-    let avg_cycle_live = if total > 0 { total_cycle_live / total as f64 } else { 0.0 };
+    let avg_cycle_candidate = if total > 0 {
+        total_cycle_candidate / total as f64
+    } else {
+        0.0
+    };
+    let avg_cycle_live = if total > 0 {
+        total_cycle_live / total as f64
+    } else {
+        0.0
+    };
 
     SimulationSummary {
         outcomes,
@@ -730,7 +738,10 @@ pub fn simulate_routing(
 
 /// Estimate cycle hours for an approver based on their historical average approval time.
 /// Falls back to 24.0 hours (one business day) when no data is available.
-fn estimate_cycle_hours(approver: &Option<UserId>, workloads: &HashMap<UserId, ApproverWorkload>) -> f64 {
+fn estimate_cycle_hours(
+    approver: &Option<UserId>,
+    workloads: &HashMap<UserId, ApproverWorkload>,
+) -> f64 {
     match approver {
         Some(id) => workloads
             .get(id)
@@ -1285,7 +1296,8 @@ mod simulate_tests {
             ..RoutingConfig::default()
         });
 
-        let summary = simulate_routing(&engine_live, &engine_candidate, &invoices, &ctx, &workloads);
+        let summary =
+            simulate_routing(&engine_live, &engine_candidate, &invoices, &ctx, &workloads);
 
         assert_eq!(summary.total_simulated, 5);
         assert_eq!(summary.outcomes.len(), 5);

@@ -7,9 +7,7 @@
 //!      payment_hold, and writes an audit entry.
 //!   3. is_payment_blocked returns true while pending, false after verified.
 
-use billforge_core::domain::{
-    AuditAction, BankingVerificationStatus, ResourceType,
-};
+use billforge_core::domain::{AuditAction, BankingVerificationStatus, ResourceType};
 use billforge_core::TenantId;
 use billforge_core::VendorRepository;
 use billforge_db::repositories::AuditRepositoryImpl;
@@ -60,10 +58,7 @@ async fn insert_vendor(pool: &sqlx::PgPool, tenant_id: &TenantId) -> Uuid {
 }
 
 /// Read the latest audit_log entry for a resource_id, returning action and resource_type.
-async fn read_latest_audit(
-    pool: &sqlx::PgPool,
-    resource_id: &str,
-) -> Option<(String, String)> {
+async fn read_latest_audit(pool: &sqlx::PgPool, resource_id: &str) -> Option<(String, String)> {
     sqlx::query_as(
         "SELECT action, resource_type FROM audit_log WHERE resource_id = $1 ORDER BY created_at DESC LIMIT 1",
     )
@@ -120,11 +115,16 @@ async fn banking_change_creates_pending_verification_and_freezes_payments(pool: 
         .await
         .expect("get vendor")
         .expect("vendor exists");
-    assert!(vendor.payment_hold, "payment_hold should be true after banking change");
+    assert!(
+        vendor.payment_hold,
+        "payment_hold should be true after banking change"
+    );
     assert!(vendor.payment_hold_reason.is_some());
 
     // Vendor should have banking columns populated
-    let bank_account = vendor.bank_account.expect("bank_account should be populated");
+    let bank_account = vendor
+        .bank_account
+        .expect("bank_account should be populated");
     assert_eq!(bank_account.account_last_four, "6789");
     assert_eq!(bank_account.bank_name, "First National");
 
@@ -236,7 +236,10 @@ async fn verify_banking_clears_hold_and_creates_audit_entry(pool: sqlx::PgPool) 
         .await
         .expect("get vendor")
         .expect("vendor exists");
-    assert!(!vendor.payment_hold, "payment_hold should be false after verification");
+    assert!(
+        !vendor.payment_hold,
+        "payment_hold should be false after verification"
+    );
     assert!(vendor.payment_hold_reason.is_none());
 
     // No pending verification should remain
@@ -244,7 +247,10 @@ async fn verify_banking_clears_hold_and_creates_audit_entry(pool: sqlx::PgPool) 
         .has_pending_banking_verification(&tenant_id, &vendor_id_obj)
         .await
         .expect("check pending");
-    assert!(!has_pending, "should not have pending banking verification after verify");
+    assert!(
+        !has_pending,
+        "should not have pending banking verification after verify"
+    );
 
     // Write audit entry (simulates route handler)
     use billforge_core::domain::AuditEntry;

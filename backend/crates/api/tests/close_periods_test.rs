@@ -15,13 +15,14 @@ mod tests {
 
     #[test]
     fn test_create_period_request_valid_json() {
-        let req: billforge_api::routes::close_periods::CreatePeriodRequest = serde_json::from_value(json!({
-            "period_label": "2026-05",
-            "period_start": "2026-05-01",
-            "period_end": "2026-05-31",
-            "cutoff_date": "2026-05-25"
-        }))
-        .unwrap();
+        let req: billforge_api::routes::close_periods::CreatePeriodRequest =
+            serde_json::from_value(json!({
+                "period_label": "2026-05",
+                "period_start": "2026-05-01",
+                "period_end": "2026-05-31",
+                "cutoff_date": "2026-05-25"
+            }))
+            .unwrap();
         assert_eq!(req.period_label, "2026-05");
         assert_eq!(req.period_start, "2026-05-01");
     }

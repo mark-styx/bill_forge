@@ -124,7 +124,6 @@ impl Error {
             Error::RateLimited { .. } => 429,
             Error::PaymentFrozen(_) => 403,
             Error::InvalidToken(_) => 401,
-            Error::PaymentFrozen(_) => 403,
             _ => 500,
         }
     }

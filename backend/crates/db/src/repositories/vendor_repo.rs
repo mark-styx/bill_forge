@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
-        AccountType, BankingVerification, BankingVerificationStatus, BankAccount,
+        AccountType, BankAccount, BankingVerification, BankingVerificationStatus,
         CreateVendorInput, UpdateVendorInput, Vendor, VendorAddress, VendorContact, VendorFilters,
         VendorId, VendorStatus, VendorType,
     },
@@ -421,6 +421,7 @@ impl VendorRow {
 impl VendorRepositoryImpl {
     /// Record a banking detail change: updates the vendor's encrypted banking columns,
     /// sets payment_hold = true, and creates a pending verification row.
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_banking_change(
         &self,
         tenant_id: &TenantId,
@@ -519,7 +520,7 @@ impl VendorRepositoryImpl {
                 callback_contact = $6,
                 verifier_notes = $7
             WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
-            RETURNING id, tenant_id, vendor_id, previous_account_last_four, new_account_last_four,
+            RETURNING id, vendor_id, previous_account_last_four, new_account_last_four,
                       status, requested_by, requested_at, verified_by, verified_at,
                       callback_method, callback_contact, verifier_notes"#,
         )
@@ -599,7 +600,7 @@ impl VendorRepositoryImpl {
         vendor_id: &VendorId,
     ) -> Result<Vec<BankingVerification>> {
         let rows = sqlx::query_as::<_, VerificationRow>(
-            "SELECT id, tenant_id, vendor_id, previous_account_last_four, new_account_last_four, \
+            "SELECT id, vendor_id, previous_account_last_four, new_account_last_four, \
                     status, requested_by, requested_at, verified_by, verified_at, \
                     callback_method, callback_contact, verifier_notes \
              FROM vendor_banking_verifications \
@@ -646,7 +647,6 @@ impl VendorRepositoryImpl {
 #[derive(sqlx::FromRow)]
 struct VerificationRow {
     id: Uuid,
-    tenant_id: Uuid,
     vendor_id: Uuid,
     previous_account_last_four: Option<String>,
     new_account_last_four: String,

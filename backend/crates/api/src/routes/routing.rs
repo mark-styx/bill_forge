@@ -16,16 +16,16 @@ use axum::{
 };
 use billforge_core::{
     intelligent_routing::{
-        IntelligentRoutingEngine, RoutingConfig, RoutingDecision, SimulationInput,
-        SimulationSummary, SimulatedOutcome, simulate_routing,
+        simulate_routing, IntelligentRoutingEngine, RoutingConfig, RoutingDecision,
+        SimulatedOutcome, SimulationInput, SimulationSummary,
     },
     workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig, WorkloadDistributionStats},
 };
 use billforge_db::routing_repository::{AvailabilityStatusInput, SetAvailabilityInput};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use std::collections::HashMap;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -636,7 +636,13 @@ async fn simulate_routing_handler(
     let engine_live = IntelligentRoutingEngine::new(live_config);
     let engine_candidate = IntelligentRoutingEngine::new(candidate_config);
 
-    let summary = simulate_routing(&engine_live, &engine_candidate, &invoices, &context, &workloads);
+    let summary = simulate_routing(
+        &engine_live,
+        &engine_candidate,
+        &invoices,
+        &context,
+        &workloads,
+    );
 
     Ok(Json(summary.into()))
 }

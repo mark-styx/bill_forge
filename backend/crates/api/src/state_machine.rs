@@ -310,25 +310,29 @@ async fn transition_handler(
     let metadata = body.metadata.unwrap_or(serde_json::json!({}));
 
     // Read current status + invoice date for the response and lock check
-    let current: (String, Option<String>) =
-        sqlx::query_as("SELECT status, invoice_date::text FROM invoices WHERE id = $1 AND tenant_id = $2")
-            .bind(invoice_id)
-            .bind(*tenant.tenant_id.as_uuid())
-            .fetch_one(&*pool)
-            .await
-            .map_err(|e| {
-                billforge_core::Error::Database(format!("Failed to query invoice: {}", e))
-            })?;
+    let current: (String, Option<String>) = sqlx::query_as(
+        "SELECT status, invoice_date::text FROM invoices WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(*tenant.tenant_id.as_uuid())
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query invoice: {}", e)))?;
 
     let from_status = current.0.clone();
 
     // Period lock guard: reject transitions on invoices in locked periods
     if let Some(ref inv_date) = current.1 {
-        if let Some(_locked_period_id) =
-            crate::routes::close_periods::find_locked_period_for_date(&pool, &tenant.tenant_id, inv_date).await?
+        if let Some(_locked_period_id) = crate::routes::close_periods::find_locked_period_for_date(
+            &pool,
+            &tenant.tenant_id,
+            inv_date,
+        )
+        .await?
         {
             return Err(billforge_core::Error::Conflict(
-                "period_locked: Invoice belongs to a locked period and cannot be modified".to_string(),
+                "period_locked: Invoice belongs to a locked period and cannot be modified"
+                    .to_string(),
             )
             .into());
         }

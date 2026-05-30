@@ -314,10 +314,18 @@ impl InvoiceRecord {
 /// OCR character substitution pairs — treating these as zero-cost substitutions
 /// handles common OCR misreads in invoice numbers.
 const OCR_CONFUSABLE: &[(char, char)] = &[
-    ('O', '0'), ('0', 'O'),
-    ('I', '1'), ('1', 'I'), ('l', '1'), ('1', 'l'), ('I', 'l'), ('l', 'I'),
-    ('S', '5'), ('5', 'S'),
-    ('B', '8'), ('8', 'B'),
+    ('O', '0'),
+    ('0', 'O'),
+    ('I', '1'),
+    ('1', 'I'),
+    ('l', '1'),
+    ('1', 'l'),
+    ('I', 'l'),
+    ('l', 'I'),
+    ('S', '5'),
+    ('5', 'S'),
+    ('B', '8'),
+    ('8', 'B'),
 ];
 
 /// Returns true when two characters are an OCR confusable pair.
@@ -326,7 +334,9 @@ fn ocr_char_eq(a: char, b: char) -> bool {
         return true;
     }
     a.to_ascii_uppercase() == b.to_ascii_uppercase()
-        || OCR_CONFUSABLE.iter().any(|&(ca, cb)| (a == ca && b == cb) || (a == cb && b == ca))
+        || OCR_CONFUSABLE
+            .iter()
+            .any(|&(ca, cb)| (a == ca && b == cb) || (a == cb && b == ca))
 }
 
 /// OCR-aware normalized Levenshtein similarity (0.0 - 1.0).
@@ -351,7 +361,11 @@ fn ocr_levenshtein_similarity(s1: &str, s2: &str) -> f64 {
     for i in 1..=len1 {
         curr[0] = i;
         for j in 1..=len2 {
-            let sub_cost = if ocr_char_eq(c1[i - 1], c2[j - 1]) { 0 } else { 1 };
+            let sub_cost = if ocr_char_eq(c1[i - 1], c2[j - 1]) {
+                0
+            } else {
+                1
+            };
             curr[j] = (prev[j] + 1) // delete
                 .min(curr[j - 1] + 1) // insert
                 .min(prev[j - 1] + sub_cost); // substitute
@@ -387,11 +401,7 @@ impl DuplicateDetector {
 
     /// Score a pair of invoices, returning the composite score and per-signal breakdown.
     /// Weights: vendor 0.20, invoice_number 0.30, amount 0.25, date 0.10, fingerprint 0.15.
-    pub fn score_pair(
-        &self,
-        inv1: &InvoiceRecord,
-        inv2: &InvoiceRecord,
-    ) -> (f64, SignalBreakdown) {
+    pub fn score_pair(&self, inv1: &InvoiceRecord, inv2: &InvoiceRecord) -> (f64, SignalBreakdown) {
         let mut breakdown = SignalBreakdown::new();
 
         // Vendor name similarity (weight: 0.20) - Jaccard on normalized tokens
@@ -444,7 +454,7 @@ impl DuplicateDetector {
                 }
             }
             (None, None) => 1.0, // both missing - neutral, don't penalize
-            _ => 0.5,           // one has fingerprint, other doesn't
+            _ => 0.5,            // one has fingerprint, other doesn't
         };
         breakdown.insert("line_item_fingerprint".to_string(), fingerprint_sim);
 
@@ -462,10 +472,8 @@ impl DuplicateDetector {
     fn jaccard_similarity(s1: &str, s2: &str) -> f64 {
         let s1_lower = s1.to_lowercase();
         let s2_lower = s2.to_lowercase();
-        let words1: std::collections::HashSet<&str> =
-            s1_lower.split_whitespace().collect();
-        let words2: std::collections::HashSet<&str> =
-            s2_lower.split_whitespace().collect();
+        let words1: std::collections::HashSet<&str> = s1_lower.split_whitespace().collect();
+        let words2: std::collections::HashSet<&str> = s2_lower.split_whitespace().collect();
         if words1.is_empty() && words2.is_empty() {
             return 1.0;
         }
@@ -806,13 +814,20 @@ mod tests {
             line_item_fingerprint: Some("sprocket|q:5|u:3.00;cog|q:1|u:50.00".to_string()),
         };
         let (score, breakdown) = detector.score_pair(&inv1, &inv2);
-        let fp_sim = breakdown.get("line_item_fingerprint").copied().unwrap_or(1.0);
+        let fp_sim = breakdown
+            .get("line_item_fingerprint")
+            .copied()
+            .unwrap_or(1.0);
         assert!(
             fp_sim < 0.5,
             "Differing line items fingerprint should be < 0.5, got {}",
             fp_sim
         );
-        assert!(score < 1.0, "Score should be < 1.0 with different items, got {}", score);
+        assert!(
+            score < 1.0,
+            "Score should be < 1.0 with different items, got {}",
+            score
+        );
     }
 
     #[test]
@@ -831,8 +846,8 @@ mod tests {
         let inv2 = InvoiceRecord {
             invoice_id: "B".to_string(),
             vendor_name: "Acme Corp".to_string(),
-            amount: 99999.00,   // totally different amount
-            invoice_date: now - Duration::days(30), // outside 14-day window
+            amount: 99999.00,                            // totally different amount
+            invoice_date: now - Duration::days(30),      // outside 14-day window
             invoice_number: Some("INV-ZZZ".to_string()), // different number
             line_item_fingerprint: None,
         };

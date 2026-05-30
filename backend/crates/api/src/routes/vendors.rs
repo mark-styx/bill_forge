@@ -10,9 +10,9 @@ use axum::{
 };
 use billforge_core::{
     domain::{
-        AuditAction, AuditEntry, BankingVerification, BankingVerificationStatus,
-        CreateVendorInput, ResourceType, UpdateVendorInput, Vendor, VendorId,
-        VendorContact, VendorFilters, VendorType,
+        AuditAction, AuditEntry, BankingVerification, BankingVerificationStatus, CreateVendorInput,
+        ResourceType, UpdateVendorInput, Vendor, VendorContact, VendorFilters, VendorId,
+        VendorType,
     },
     traits::{AuditService, TaxDocumentRepository, VendorRepository},
     types::{PaginatedResponse, Pagination, TenantId},
@@ -73,7 +73,10 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/messages", post(send_message))
         .route("/:id/portal-link", post(create_portal_link))
         .route("/:id/banking", put(update_banking))
-        .route("/:id/banking-verifications", get(list_banking_verifications))
+        .route(
+            "/:id/banking-verifications",
+            get(list_banking_verifications),
+        )
         .route(
             "/:id/banking-verifications/:vid/verify",
             post(verify_banking),
@@ -1067,7 +1070,10 @@ async fn update_banking(
             id: id.clone(),
         })?;
 
-    let prev_last_four = vendor.bank_account.as_ref().map(|ba| ba.account_last_four.as_str());
+    let prev_last_four = vendor
+        .bank_account
+        .as_ref()
+        .map(|ba| ba.account_last_four.as_str());
 
     let new_last_four = req
         .account_number
@@ -1228,7 +1234,11 @@ async fn list_banking_verifications(
 
 /// Check if payments are blocked for a vendor due to pending banking verification.
 /// Used by ERP sync and payment code to guard against BEC fraud.
-pub async fn is_payment_blocked(pool: &sqlx::PgPool, tenant_id: &TenantId, vendor_id: &VendorId) -> bool {
+pub async fn is_payment_blocked(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+    vendor_id: &VendorId,
+) -> bool {
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(Arc::new(pool.clone()));
     repo.has_pending_banking_verification(tenant_id, vendor_id)
         .await

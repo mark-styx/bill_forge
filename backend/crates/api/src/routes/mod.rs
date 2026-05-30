@@ -4,10 +4,10 @@ pub mod ai;
 pub mod approval_links;
 pub(crate) mod audit;
 pub mod auth;
-pub mod close_periods;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
 pub mod billing;
+pub mod close_periods;
 pub mod dashboard;
 pub(crate) mod documents;
 #[cfg(feature = "edi")]

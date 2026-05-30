@@ -248,7 +248,17 @@ async fn detect_duplicates_for_invoice(
     tenant_id: &billforge_core::TenantId,
     new_invoice: &Invoice,
 ) -> Vec<DuplicateMatch> {
-    let rows = match sqlx::query_as::<_, (Uuid, Option<String>, Option<i64>, Option<chrono::NaiveDate>, Option<serde_json::Value>, Option<String>)>(
+    let rows = match sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<String>,
+            Option<i64>,
+            Option<chrono::NaiveDate>,
+            Option<serde_json::Value>,
+            Option<String>,
+        ),
+    >(
         r#"SELECT id, invoice_number, total_amount_cents, invoice_date, line_items, vendor_name
            FROM invoices
            WHERE tenant_id = $1
@@ -281,7 +291,10 @@ async fn detect_duplicates_for_invoice(
             )
         })
         .collect();
-    let new_fp = billforge_analytics::anomaly_detection::InvoiceRecord::compute_line_item_fingerprint(&new_li_items);
+    let new_fp =
+        billforge_analytics::anomaly_detection::InvoiceRecord::compute_line_item_fingerprint(
+            &new_li_items,
+        );
 
     let new_date = new_invoice
         .invoice_date
@@ -294,10 +307,15 @@ async fn detect_duplicates_for_invoice(
         amount: new_invoice.total_amount.amount as f64 / 100.0,
         invoice_date: new_date,
         invoice_number: Some(new_invoice.invoice_number.clone()),
-        line_item_fingerprint: if new_fp.is_empty() { None } else { Some(new_fp) },
+        line_item_fingerprint: if new_fp.is_empty() {
+            None
+        } else {
+            Some(new_fp)
+        },
     };
 
-    let detector = billforge_analytics::anomaly_detection::DuplicateDetector::new(*tenant_id.as_uuid());
+    let detector =
+        billforge_analytics::anomaly_detection::DuplicateDetector::new(*tenant_id.as_uuid());
 
     let mut matches = Vec::new();
     for (id, inv_num, amount_cents, inv_date, line_items_json, vendor_name) in rows {
@@ -360,7 +378,11 @@ async fn detect_duplicates_for_invoice(
     }
 
     // Sort by score descending
-    matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    matches.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     matches
 }
 
@@ -597,9 +619,17 @@ async fn upload_invoice(
                 billforge_core::Error::Validation(format!("Failed to read file: {}", e))
             })?;
 
-            return upload_invoice_file(&state, &user, &tenant, file_name, content_type, &data, capture_started)
-                .await
-                .map(Json);
+            return upload_invoice_file(
+                &state,
+                &user,
+                &tenant,
+                file_name,
+                content_type,
+                &data,
+                capture_started,
+            )
+            .await
+            .map(Json);
         }
     }
 
@@ -749,9 +779,16 @@ pub(crate) async fn upload_invoice_file(
     // Run duplicate detection after OCR has populated real data.
     // Only effective for sync OCR path; async OCR will detect later in the pipeline.
     let potential_duplicates = {
-        let refreshed = repo.get_by_id(&tenant.tenant_id, &invoice.id).await.ok().flatten();
+        let refreshed = repo
+            .get_by_id(&tenant.tenant_id, &invoice.id)
+            .await
+            .ok()
+            .flatten();
         match refreshed {
-            Some(ref inv) if inv.vendor_name != "Processing..." && !inv.invoice_number.starts_with("UPLOAD-") => {
+            Some(ref inv)
+                if inv.vendor_name != "Processing..."
+                    && !inv.invoice_number.starts_with("UPLOAD-") =>
+            {
                 detect_duplicates_for_invoice(&pool, &tenant.tenant_id, inv).await
             }
             _ => vec![],
@@ -1792,18 +1829,23 @@ async fn merge_duplicate(
     if keep_inv.vendor_name.is_empty() || keep_inv.vendor_name == "Processing..." {
         updates["vendor_name"] = serde_json::json!(dup_inv.vendor_name);
     }
-    if keep_inv.invoice_number.starts_with("UPLOAD-") && !dup_inv.invoice_number.starts_with("UPLOAD-") {
+    if keep_inv.invoice_number.starts_with("UPLOAD-")
+        && !dup_inv.invoice_number.starts_with("UPLOAD-")
+    {
         updates["invoice_number"] = serde_json::json!(dup_inv.invoice_number);
     }
     if keep_inv.invoice_date.is_none() && dup_inv.invoice_date.is_some() {
-        updates["invoice_date"] = serde_json::json!(dup_inv.invoice_date.map(|d| d.format("%Y-%m-%d").to_string()));
+        updates["invoice_date"] = serde_json::json!(dup_inv
+            .invoice_date
+            .map(|d| d.format("%Y-%m-%d").to_string()));
     }
     if keep_inv.notes.is_none() && dup_inv.notes.is_some() {
         updates["notes"] = serde_json::json!(dup_inv.notes);
     }
 
     if updates.as_object().map_or(false, |o| !o.is_empty()) {
-        repo.update(&tenant.tenant_id, &keep_invoice_id, updates).await?;
+        repo.update(&tenant.tenant_id, &keep_invoice_id, updates)
+            .await?;
     }
 
     // Soft-delete the duplicate
@@ -1881,7 +1923,10 @@ async fn reject_duplicate(
         AuditAction::Update,
         ResourceType::Invoice,
         invoice_id.to_string(),
-        format!("Rejected duplicate flag for invoice {}", invoice.invoice_number),
+        format!(
+            "Rejected duplicate flag for invoice {}",
+            invoice.invoice_number
+        ),
     )
     .with_user_email(&user.email)
     .with_metadata(serde_json::json!({

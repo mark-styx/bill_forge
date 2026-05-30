@@ -36,10 +36,10 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreatePeriodRequest {
-    pub period_label: String,   // e.g. "2026-05"
-    pub period_start: String,   // ISO date
-    pub period_end: String,     // ISO date
-    pub cutoff_date: String,    // ISO date
+    pub period_label: String, // e.g. "2026-05"
+    pub period_start: String, // ISO date
+    pub period_end: String,   // ISO date
+    pub cutoff_date: String,  // ISO date
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,7 +91,9 @@ pub async fn find_locked_period_for_date(
     .bind(invoice_date)
     .fetch_optional(pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to check locked period: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to check locked period: {}", e))
+    })?;
 
     Ok(row.map(|(id,)| id))
 }
@@ -167,7 +169,19 @@ async fn list_periods(
 ) -> ApiResult<Json<Vec<ClosePeriodResponse>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    let rows: Vec<(Uuid, Uuid, String, String, String, String, String, Option<String>, Option<Uuid>, String, String)> = sqlx::query_as(
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<Uuid>,
+        String,
+        String,
+    )> = sqlx::query_as(
         "SELECT id, tenant_id, period_label, period_start::text, period_end::text, \
                 cutoff_date::text, status, locked_at::text, locked_by_user_id, \
                 created_at::text, updated_at::text \
@@ -182,21 +196,35 @@ async fn list_periods(
 
     let periods = rows
         .into_iter()
-        .map(|(id, tid, label, start, end, cutoff, status, locked_at, locked_by, created, updated)| {
-            ClosePeriodResponse {
+        .map(
+            |(
                 id,
-                tenant_id: tid,
-                period_label: label,
-                period_start: start,
-                period_end: end,
-                cutoff_date: cutoff,
+                tid,
+                label,
+                start,
+                end,
+                cutoff,
                 status,
                 locked_at,
-                locked_by_user_id: locked_by,
-                created_at: created,
-                updated_at: updated,
-            }
-        })
+                locked_by,
+                created,
+                updated,
+            )| {
+                ClosePeriodResponse {
+                    id,
+                    tenant_id: tid,
+                    period_label: label,
+                    period_start: start,
+                    period_end: end,
+                    cutoff_date: cutoff,
+                    status,
+                    locked_at,
+                    locked_by_user_id: locked_by,
+                    created_at: created,
+                    updated_at: updated,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(periods))
@@ -269,7 +297,9 @@ async fn update_period(
         .bind(tenant.tenant_id.as_uuid())
         .execute(&*pool)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to update close period: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to update close period: {}", e))
+        })?;
 
         if result.rows_affected() == 0 {
             return Err(billforge_core::Error::Validation(
@@ -280,7 +310,19 @@ async fn update_period(
     }
 
     // Fetch updated row
-    let row: (Uuid, Uuid, String, String, String, String, String, Option<String>, Option<Uuid>, String, String) = sqlx::query_as(
+    let row: (
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<Uuid>,
+        String,
+        String,
+    ) = sqlx::query_as(
         "SELECT id, tenant_id, period_label, period_start::text, period_end::text, \
                 cutoff_date::text, status, locked_at::text, locked_by_user_id, \
                 created_at::text, updated_at::text \
@@ -336,21 +378,19 @@ async fn run_close(
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch period: {}", e)))?;
 
-    let (current_status, period_end, _cutoff_date) = period.ok_or_else(|| {
-        billforge_core::Error::NotFound {
+    let (current_status, period_end, _cutoff_date) =
+        period.ok_or_else(|| billforge_core::Error::NotFound {
             resource_type: "ClosePeriod".to_string(),
             id: id.to_string(),
-        }
-    })?;
+        })?;
 
     if current_status == "locked" {
-        tx.rollback().await.map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to rollback: {}", e))
-        })?;
-        return Err(billforge_core::Error::Validation(
-            "Period is already locked".to_string(),
-        )
-        .into());
+        tx.rollback()
+            .await
+            .map_err(|e| billforge_core::Error::Database(format!("Failed to rollback: {}", e)))?;
+        return Err(
+            billforge_core::Error::Validation("Period is already locked".to_string()).into(),
+        );
     }
 
     // 2. Find unapproved invoices within period range that haven't been accrued yet
@@ -482,9 +522,7 @@ async fn run_close(
         .bind(tenant.tenant_id.as_uuid())
         .execute(&mut *tx)
         .await
-        .map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to lock period: {}", e))
-        })?;
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to lock period: {}", e)))?;
     } else {
         sqlx::query(
             "UPDATE close_periods SET status = 'cutoff_passed', updated_at = NOW() \
@@ -500,9 +538,9 @@ async fn run_close(
     }
 
     // 7. Commit
-    tx.commit().await.map_err(|e| {
-        billforge_core::Error::Database(format!("Failed to commit close: {}", e))
-    })?;
+    tx.commit()
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to commit close: {}", e)))?;
 
     Ok(Json(RunCloseResponse {
         period_id: id,

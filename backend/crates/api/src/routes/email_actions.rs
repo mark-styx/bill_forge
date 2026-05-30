@@ -284,14 +284,13 @@ async fn perform_approval(
     user_id: &UserId,
 ) -> billforge_core::Result<()> {
     // Period lock guard: reject approval if invoice is in a locked period
-    let inv_date: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT invoice_date::text FROM invoices WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(invoice_id)
-    .bind(tenant_id.as_uuid())
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+    let inv_date: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT invoice_date::text FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_id)
+            .bind(tenant_id.as_uuid())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
 
     if let Some((Some(ref dt),)) = inv_date {
         if super::close_periods::find_locked_period_for_date(pool, tenant_id, dt)
