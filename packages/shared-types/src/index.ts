@@ -88,6 +88,36 @@ export interface CreateInvoiceInput {
 }
 
 // ---------------------------------------------------------------------------
+// Contracts (non-PO recurring spend matching)
+// ---------------------------------------------------------------------------
+
+export interface Contract {
+  id: string;
+  tenant_id: string;
+  vendor_id: string;
+  contract_number?: string;
+  description?: string;
+  monthly_amount: number;
+  currency: string;
+  /** Annual % escalation in percentage units (e.g. 3.0 = 3%). */
+  escalator_pct: number;
+  escalator_anniversary_month?: number;
+  start_date: string;
+  end_date: string;
+  /** Tolerance band in percentage units (e.g. 2.0 = 2%). */
+  tolerance_pct: number;
+  status: 'active' | 'expired' | 'cancelled';
+  created_at: string;
+  updated_at: string;
+}
+
+export type ContractMatchResult =
+  | { outcome: 'in_band'; detail: { contract_id: string; expected: number; variance_pct: number } }
+  | { outcome: 'out_of_band'; detail: { contract_id: string; expected: number; variance_pct: number } }
+  | { outcome: 'expired'; detail: { contract_id: string } }
+  | { outcome: 'no_active_contract' };
+
+// ---------------------------------------------------------------------------
 // Dashboard KPIs (materialized view backed)
 // ---------------------------------------------------------------------------
 

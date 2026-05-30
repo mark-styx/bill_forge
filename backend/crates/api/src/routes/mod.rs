@@ -9,6 +9,7 @@ pub mod bill_com;
 pub mod billing;
 pub mod chat_approvals;
 pub mod close_periods;
+pub mod contracts;
 pub mod dashboard;
 pub mod discounts;
 pub(crate) mod documents;
@@ -221,6 +222,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/qbo", qbo::routes())
         // Month-end close periods
         .nest("/close-periods", close_periods::routes())
+        // Contracts (non-PO recurring spend matching)
+        .nest("/contracts", contracts::routes())
         // Early-payment discount optimizer
         .nest("/discounts", discounts::routes())
         // Invoice Capture (standalone OCR upload)
