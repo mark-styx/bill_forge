@@ -7,6 +7,7 @@ pub mod auth;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
 pub mod billing;
+pub mod chat_approvals;
 pub mod close_periods;
 pub mod dashboard;
 pub mod discounts;
@@ -70,6 +71,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/metrics", get(metrics_handler))
         // Inbound email webhook (no auth — uses shared secret header)
         .nest("/webhooks", inbound_email::routes())
+        // Chat approval surface — Slack/Teams interaction callbacks (no JWT; verified via signing secret)
+        // NOTE: Teams /teams/actions is disabled by default (TEAMS_ACTIONS_ENABLED). See chat_approvals.rs.
+        .nest("/integrations", chat_approvals::routes())
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
         .with_state(state)
