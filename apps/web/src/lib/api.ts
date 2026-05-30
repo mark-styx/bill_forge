@@ -684,6 +684,9 @@ export const reportsApi = {
     if (params?.min_daily_funding_threshold) qs.set('min_daily_funding_threshold', String(params.min_daily_funding_threshold));
     return api.get<ApCashFlowForecast>(`/api/v1/reports/cash-flow/forecast?${qs}`);
   },
+
+  mlAccuracy: () =>
+    api.get<{ accuracy_rate: number; total_suggestions: number; accepted: number; corrected: number; rejected: number }>('/api/v1/invoices/ml-accuracy'),
 };
 
 // Documents API

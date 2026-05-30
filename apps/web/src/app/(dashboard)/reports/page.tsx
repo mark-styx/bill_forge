@@ -157,6 +157,12 @@ export default function ReportsPage() {
     enabled: showProcessingMetrics,
   });
 
+  const mlAccuracyQuery = useQuery({
+    queryKey: ['ml-accuracy'],
+    queryFn: () => reportsApi.mlAccuracy(),
+    enabled: showOcrMetrics || showProcessingMetrics,
+  });
+
   // --- Predictive Analytics Queries ---
   const queryClient = useQueryClient();
 
@@ -644,6 +650,64 @@ export default function ReportsPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ML Categorization Accuracy */}
+      {(showOcrMetrics || showProcessingMetrics) && showSection('ocr') && (
+        <div id="ml-accuracy" className="card overflow-hidden scroll-mt-24">
+          <div className="h-1.5 bg-gradient-to-r from-reporting via-reporting/70 to-transparent" />
+          <div className="p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2.5 rounded-xl bg-reporting/10">
+                <Sparkles className="w-5 h-5 text-reporting" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-foreground">ML Categorization Accuracy</h2>
+                <p className="text-sm text-muted-foreground">How well AI categorization matches your corrections (last 90 days)</p>
+              </div>
+            </div>
+
+            {mlAccuracyQuery.isError ? (
+              <ReportNotice
+                tone="error"
+                title="ML accuracy unavailable"
+                description="The categorization accuracy endpoint failed."
+              />
+            ) : (mlAccuracyQuery.data?.total_suggestions ?? 0) === 0 && !mlAccuracyQuery.isLoading ? (
+              <ReportNotice
+                title="No categorization feedback yet"
+                description="Accept or correct AI suggestions to start tracking accuracy."
+              />
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="p-4 bg-secondary/50 rounded-xl flex flex-col justify-center">
+                  <span className="text-sm text-muted-foreground">Accuracy Rate</span>
+                  <p className="text-3xl font-bold text-foreground mt-1">
+                    {mlAccuracyQuery.isLoading ? '—' : `${((mlAccuracyQuery.data?.accuracy_rate ?? 0) * 100).toFixed(1)}%`}
+                  </p>
+                </div>
+                <div className="p-4 bg-secondary/50 rounded-xl flex flex-col justify-center">
+                  <span className="text-sm text-muted-foreground">Accepted</span>
+                  <p className="text-2xl font-bold text-success mt-1">
+                    {mlAccuracyQuery.isLoading ? '—' : mlAccuracyQuery.data?.accepted ?? 0}
+                  </p>
+                </div>
+                <div className="p-4 bg-secondary/50 rounded-xl flex flex-col justify-center">
+                  <span className="text-sm text-muted-foreground">Corrected</span>
+                  <p className="text-2xl font-bold text-warning mt-1">
+                    {mlAccuracyQuery.isLoading ? '—' : mlAccuracyQuery.data?.corrected ?? 0}
+                  </p>
+                </div>
+                <div className="p-4 bg-secondary/50 rounded-xl flex flex-col justify-center">
+                  <span className="text-sm text-muted-foreground">Rejected</span>
+                  <p className="text-2xl font-bold text-error mt-1">
+                    {mlAccuracyQuery.isLoading ? '—' : mlAccuracyQuery.data?.rejected ?? 0}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

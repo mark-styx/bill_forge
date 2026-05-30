@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/suggest-categories", post(suggest_categories))
         .route("/:id/merge-duplicate", post(merge_duplicate))
         .route("/:id/reject-duplicate", post(reject_duplicate))
+        .route("/ml-accuracy", get(get_ml_accuracy_metrics))
 }
 
 // ---------------------------------------------------------------------------
@@ -2063,6 +2064,52 @@ async fn record_ocr_correction(
     })))
 }
 
+// ---------------------------------------------------------------------------
+// ML Categorization Accuracy Metrics
+// ---------------------------------------------------------------------------
+
+/// Response payload for ML categorization accuracy metrics.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MlAccuracyResponse {
+    pub accuracy_rate: f32,
+    pub total_suggestions: i64,
+    pub accepted: i64,
+    pub corrected: i64,
+    pub rejected: i64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/invoices/ml-accuracy",
+    tag = "Invoices",
+    responses(
+        (status = 200, description = "ML categorization accuracy metrics", body = MlAccuracyResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn get_ml_accuracy_metrics(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(_user, tenant): InvoiceCaptureAccess,
+) -> ApiResult<Json<MlAccuracyResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let tenant_id_str = tenant.tenant_id.to_string();
+    let feedback = FeedbackLearning::new((*pool).clone());
+    let metrics = feedback
+        .get_accuracy_metrics(&tenant_id_str, 90)
+        .await
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to get ML accuracy metrics: {}", e))
+        })?;
+
+    Ok(Json(MlAccuracyResponse {
+        accuracy_rate: metrics.accuracy_rate(),
+        total_suggestions: metrics.total_suggestions,
+        accepted: metrics.accepted_suggestions,
+        corrected: metrics.corrected_suggestions,
+        rejected: metrics.rejected_suggestions,
+    }))
+}
+
 /// Build response message based on sync OCR result status.
 fn sync_ocr_message(file_name: &str, status: CaptureStatus) -> String {
     if status == CaptureStatus::Failed {
@@ -2108,5 +2155,41 @@ fn observe_field_confidence(result: &billforge_core::domain::OcrExtractionResult
         metrics::OCR_FIRST_PASS_FIELD_CONFIDENCE
             .with_label_values(&[field])
             .observe(*conf as f64);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ml_accuracy_response_fields() {
+        let response = MlAccuracyResponse {
+            accuracy_rate: 0.85,
+            total_suggestions: 100,
+            accepted: 85,
+            corrected: 10,
+            rejected: 5,
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert!((json["accuracy_rate"].as_f64().unwrap() - 0.85).abs() < 0.001);
+        assert_eq!(json["total_suggestions"], 100);
+        assert_eq!(json["accepted"], 85);
+        assert_eq!(json["corrected"], 10);
+        assert_eq!(json["rejected"], 5);
+    }
+
+    #[test]
+    fn test_ml_accuracy_response_zero_metrics() {
+        let response = MlAccuracyResponse {
+            accuracy_rate: 0.0,
+            total_suggestions: 0,
+            accepted: 0,
+            corrected: 0,
+            rejected: 0,
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["accuracy_rate"], 0.0);
+        assert_eq!(json["total_suggestions"], 0);
     }
 }
