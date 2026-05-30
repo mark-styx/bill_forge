@@ -87,7 +87,28 @@ TEST_END=$(date +%s)
 TEST_DURATION=$((TEST_END - TEST_START))
 
 echo ""
-echo -e "${YELLOW}Test completed in ${TEST_DURATION}s${NC}"
+echo -e "${YELLOW}api_load_test completed in ${TEST_DURATION}s${NC}"
+
+# ---------------------------------------------------------------------------
+# OCR → Approval Pipeline End-to-End Load Test
+# ---------------------------------------------------------------------------
+echo ""
+echo -e "${YELLOW}╔══════════════════════════════════════════════════╗${NC}"
+echo -e "${YELLOW}║   Running OCR-to-Approval Pipeline Load Test    ║${NC}"
+echo -e "${YELLOW}╚══════════════════════════════════════════════════╝${NC}"
+echo ""
+
+OCR_TEST_START=$(date +%s)
+
+k6 run \
+    --out json="${RESULTS_DIR}/ocr-e2e-latest.json" \
+    "${SCRIPT_DIR}/ocr_to_approval_load_test.js"
+
+OCR_TEST_END=$(date +%s)
+OCR_TEST_DURATION=$((OCR_TEST_END - OCR_TEST_START))
+
+echo ""
+echo -e "${YELLOW}ocr_to_approval_load_test completed in ${OCR_TEST_DURATION}s${NC}"
 
 # If baseline mode, save as baseline
 if [[ "$BASELINE_MODE" == "true" ]]; then
