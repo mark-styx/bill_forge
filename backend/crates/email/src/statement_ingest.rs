@@ -6,8 +6,7 @@
 //! ledger.
 
 use billforge_core::domain::vendor_statement::{
-    auto_match_lines, InvoiceSummary, LineMatchStatus, LineType, MatchConfidence,
-    StatementLineItem,
+    auto_match_lines, InvoiceSummary, LineMatchStatus, LineType, MatchConfidence, StatementLineItem,
 };
 use billforge_core::types::TenantId;
 use chrono::NaiveDate;
@@ -47,7 +46,7 @@ pub fn classify(subject: &str, attachment_names: &[&str]) -> InboundKind {
     }
 
     for name in attachment_names {
-        let name_lower = name.to_lowercase();
+        let name_lower = name.to_lowercase().replace('_', " ");
         for kw in STATEMENT_KEYWORDS {
             if name_lower.contains(kw) {
                 return InboundKind::Statement;
@@ -144,10 +143,8 @@ fn line_contains_amount(text: &str) -> bool {
     // Standalone decimal number, e.g. "123.45"
     for tok in text.split_whitespace() {
         let cleaned = tok.trim_end_matches(',');
-        if cleaned.contains('.') {
-            if cleaned.parse::<f64>().is_ok() {
-                return true;
-            }
+        if cleaned.contains('.') && cleaned.parse::<f64>().is_ok() {
+            return true;
         }
     }
     false
@@ -191,13 +188,13 @@ fn try_parse_data_line(line: &str) -> Option<ParsedStatementLine> {
 fn find_date(tokens: &[&str]) -> Option<(usize, NaiveDate)> {
     for (i, tok) in tokens.iter().enumerate() {
         let t = tok.trim_end_matches(',');
-        if let Some(d) = NaiveDate::parse_from_str(t, "%Y-%m-%d").ok() {
+        if let Ok(d) = NaiveDate::parse_from_str(t, "%Y-%m-%d") {
             return Some((i, d));
         }
-        if let Some(d) = NaiveDate::parse_from_str(t, "%m/%d/%Y").ok() {
+        if let Ok(d) = NaiveDate::parse_from_str(t, "%m/%d/%Y") {
             return Some((i, d));
         }
-        if let Some(d) = NaiveDate::parse_from_str(t, "%m-%d-%Y").ok() {
+        if let Ok(d) = NaiveDate::parse_from_str(t, "%m-%d-%Y") {
             return Some((i, d));
         }
     }
@@ -259,10 +256,7 @@ fn find_reference(tokens: &[&str], date_idx: usize, amount_idx: usize) -> Option
             continue;
         }
         let t = tok.trim_end_matches(',');
-        if t.chars().any(|c| c.is_alphanumeric())
-            && !looks_like_date(t)
-            && !looks_like_amount(t)
-        {
+        if t.chars().any(|c| c.is_alphanumeric()) && !looks_like_date(t) && !looks_like_amount(t) {
             return Some(t.to_string());
         }
     }
@@ -307,7 +301,7 @@ fn extract_pdf_text_heuristic(bytes: &[u8]) -> Option<String> {
     let mut printable_run = 0;
 
     for &b in bytes {
-        if b >= 0x20 && b <= 0x7E {
+        if (0x20..=0x7E).contains(&b) {
             current.push(b as char);
             printable_run += 1;
         } else if b == b'\n' || b == b'\r' {
@@ -395,10 +389,10 @@ pub async fn ingest_statement(
     .bind(tenant_id.as_uuid())
     .bind(vendor_id)
     .bind(Option::<String>::None) // statement_number
-    .bind(latest)                  // statement_date
-    .bind(earliest)                // period_start
-    .bind(latest)                  // period_end
-    .bind(0_i64)                   // opening_balance_cents
+    .bind(latest) // statement_date
+    .bind(earliest) // period_start
+    .bind(latest) // period_end
+    .bind(0_i64) // opening_balance_cents
     .bind(closing_balance_cents)
     .bind("USD")
     .bind("pending")
@@ -462,32 +456,34 @@ pub async fn ingest_statement(
         .collect();
 
     // ---- Query candidate invoices ----
-    let invoice_rows: Vec<(Uuid, String, i64, Option<NaiveDate>, Option<Uuid>)> = sqlx::
-        query_as(
-            r#"SELECT id, invoice_number, total_amount_cents, invoice_date, vendor_id
+    #[allow(clippy::type_complexity)]
+    let invoice_rows: Vec<(Uuid, String, i64, Option<NaiveDate>, Option<Uuid>)> = sqlx::query_as(
+        r#"SELECT id, invoice_number, total_amount_cents, invoice_date, vendor_id
                FROM invoices
                WHERE tenant_id = $1
                  AND vendor_id = $2
                  AND invoice_date >= $3
                  AND invoice_date <= $4"#,
-        )
-        .bind(tenant_id.as_uuid())
-        .bind(vendor_id)
-        .bind(earliest)
-        .bind(latest)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Failed to query invoices for matching: {}", e))?;
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(vendor_id)
+    .bind(earliest)
+    .bind(latest)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to query invoices for matching: {}", e))?;
 
     let invoices: Vec<InvoiceSummary> = invoice_rows
         .into_iter()
-        .map(|(id, invoice_number, total_amount_cents, invoice_date, vendor_id)| InvoiceSummary {
-            id,
-            invoice_number,
-            total_amount_cents,
-            invoice_date,
-            vendor_id,
-        })
+        .map(
+            |(id, invoice_number, total_amount_cents, invoice_date, vendor_id)| InvoiceSummary {
+                id,
+                invoice_number,
+                total_amount_cents,
+                invoice_date,
+                vendor_id,
+            },
+        )
         .collect();
 
     // ---- Run auto-match ----
@@ -551,14 +547,8 @@ mod tests {
             classify("Monthly account summary", &[]),
             InboundKind::Statement
         );
-        assert_eq!(
-            classify("Q1 aging report", &[]),
-            InboundKind::Statement
-        );
-        assert_eq!(
-            classify("Statement", &[]),
-            InboundKind::Statement
-        );
+        assert_eq!(classify("Q1 aging report", &[]), InboundKind::Statement);
+        assert_eq!(classify("Statement", &[]), InboundKind::Statement);
     }
 
     #[test]
@@ -583,18 +573,12 @@ mod tests {
             classify("Purchase order", &["po.xlsx"]),
             InboundKind::Invoice
         );
-        assert_eq!(
-            classify("", &[]),
-            InboundKind::Invoice
-        );
+        assert_eq!(classify("", &[]), InboundKind::Invoice);
     }
 
     #[test]
     fn classify_is_case_insensitive() {
-        assert_eq!(
-            classify("APRIL STATEMENT", &[]),
-            InboundKind::Statement
-        );
+        assert_eq!(classify("APRIL STATEMENT", &[]), InboundKind::Statement);
         assert_eq!(
             classify("docs", &["STATEMENT_OF_ACCOUNT.PDF"]),
             InboundKind::Statement
@@ -614,7 +598,10 @@ INV-003  03/05/2024  €300.00";
         assert_eq!(lines.len(), 3);
 
         assert_eq!(lines[0].reference_number, "INV-001");
-        assert_eq!(lines[0].line_date, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
+        assert_eq!(
+            lines[0].line_date,
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()
+        );
         assert_eq!(lines[0].amount_cents, 125000);
 
         assert_eq!(lines[1].reference_number, "INV-002");
