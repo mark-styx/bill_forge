@@ -137,6 +137,12 @@ pub async fn process_ocr(
     let ocr_confidence;
     let capture_status = match &ocr_result {
         Ok(result) => {
+            // Emit OCR provider success + per-field confidence metrics
+            crate::metrics::OCR_PROVIDER_OUTCOME_TOTAL
+                .with_label_values(&[&effective_ocr_provider, "success"])
+                .inc();
+            observe_field_confidence(result);
+
             // Build update payload — rejects missing or zero totals
             let (updates, confidence) = match build_invoice_update_from_ocr(result, document_id) {
                 Ok(v) => v,
@@ -244,6 +250,10 @@ pub async fn process_ocr(
             status
         }
         Err(e) => {
+            // Emit OCR provider failure metric
+            crate::metrics::OCR_PROVIDER_OUTCOME_TOTAL
+                .with_label_values(&[&effective_ocr_provider, "failure"])
+                .inc();
             if retry_count + 1 >= MAX_RETRIES {
                 // Final attempt - mark as Failed and route to error queue
                 error!(invoice_id = %invoice_id, error = %e, "OCR extraction failed after all retries");
@@ -691,6 +701,22 @@ fn build_invoice_update_from_ocr(
         / 3.0;
 
     Ok((updates, confidence))
+}
+
+/// Observe per-field confidence from an OCR result into the first-pass confidence histogram.
+fn observe_field_confidence(result: &OcrExtractionResult) {
+    let fields: &[(&str, f32)] = &[
+        ("invoice_number", result.invoice_number.confidence),
+        ("vendor_name", result.vendor_name.confidence),
+        ("total_amount", result.total_amount.confidence),
+        ("invoice_date", result.invoice_date.confidence),
+        ("po_number", result.po_number.confidence),
+    ];
+    for (field, conf) in fields {
+        crate::metrics::OCR_FIRST_PASS_FIELD_CONFIDENCE
+            .with_label_values(&[field])
+            .observe(*conf as f64);
+    }
 }
 
 #[cfg(test)]

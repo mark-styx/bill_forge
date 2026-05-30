@@ -159,25 +159,31 @@ async fn test_duplicate_detector() {
 
     let now = Utc::now();
 
-    // Create duplicate invoices (same vendor, amount, and date)
+    // Create duplicate invoices (same vendor, amount, invoice number, and date)
     let invoices = vec![
         InvoiceRecord {
             invoice_id: "inv_1".to_string(),
             vendor_name: "Acme Corp".to_string(),
             amount: 5000.0,
             invoice_date: now,
+            invoice_number: Some("INV-5000".to_string()),
+            line_item_fingerprint: None,
         },
         InvoiceRecord {
             invoice_id: "inv_2".to_string(),
             vendor_name: "Acme Corp".to_string(),
             amount: 5000.0,    // Same amount
             invoice_date: now, // Same date
+            invoice_number: Some("INV-5000".to_string()),
+            line_item_fingerprint: None,
         },
         InvoiceRecord {
             invoice_id: "inv_3".to_string(),
             vendor_name: "Other Corp".to_string(),
             amount: 1000.0,
             invoice_date: now,
+            invoice_number: Some("INV-1000".to_string()),
+            line_item_fingerprint: None,
         },
     ];
 
@@ -206,6 +212,8 @@ async fn test_duplicate_detector_unique() {
             vendor_name: format!("Vendor {}", i),
             amount: 1000.0 + (i as f64 * 100.0),
             invoice_date: now - Duration::days(i),
+            invoice_number: None,
+            line_item_fingerprint: None,
         })
         .collect();
 

@@ -7,7 +7,7 @@
 //! - Team performance metrics
 
 use crate::error::ApiResult;
-use crate::extractors::TenantCtx;
+use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -153,7 +153,7 @@ pub struct TeamMemberStats {
 )]
 async fn get_dashboard_metrics(
     State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let metrics_repo = MetricsRepositoryImpl::new(pool);
@@ -238,7 +238,7 @@ async fn get_dashboard_metrics(
 )]
 async fn get_invoice_metrics(
     State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let metrics_repo = MetricsRepositoryImpl::new(pool);
@@ -278,7 +278,7 @@ async fn get_invoice_metrics(
 )]
 async fn get_approval_metrics(
     State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let metrics_repo = MetricsRepositoryImpl::new(pool);
@@ -314,7 +314,7 @@ async fn get_approval_metrics(
 )]
 async fn get_vendor_metrics(
     State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let metrics_repo = MetricsRepositoryImpl::new(pool);
@@ -356,7 +356,7 @@ async fn get_vendor_metrics(
 )]
 async fn get_team_metrics(
     State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let metrics_repo = MetricsRepositoryImpl::new(pool);

@@ -21,6 +21,7 @@ import {
   Workflow,
   Search,
   Filter,
+  FlaskConical,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -171,10 +172,16 @@ export default function AssignmentRulesPage() {
               Configure automatic invoice routing and assignment within queues
             </p>
           </div>
-          <Link href="/processing/assignment-rules/new" className="btn btn-primary btn-sm">
-            <Plus className="w-4 h-4 mr-1.5" />
-            Create Rule
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/processing/assignment-rules/simulate" className="btn btn-secondary btn-sm">
+              <FlaskConical className="w-4 h-4 mr-1.5" />
+              Simulate
+            </Link>
+            <Link href="/processing/assignment-rules/new" className="btn btn-primary btn-sm">
+              <Plus className="w-4 h-4 mr-1.5" />
+              Create Rule
+            </Link>
+          </div>
         </div>
       </div>
 

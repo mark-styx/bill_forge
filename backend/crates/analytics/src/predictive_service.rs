@@ -464,6 +464,8 @@ impl PredictiveService {
                     vendor_name: row.try_get("vendor_name").ok()?,
                     amount,
                     invoice_date: row.try_get("invoice_date").ok()?,
+                    invoice_number: row.try_get("invoice_number").ok()?,
+                    line_item_fingerprint: None,
                 })
             })
             .collect();

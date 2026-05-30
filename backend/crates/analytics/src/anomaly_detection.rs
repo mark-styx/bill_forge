@@ -273,9 +273,103 @@ impl StatisticalAnomalyDetector {
     }
 }
 
+// DuplicateDetector and InvoiceRecord are defined below (after the OCR helpers).
+
+/// Invoice record for duplicate detection
+#[derive(Debug, Clone)]
+pub struct InvoiceRecord {
+    pub invoice_id: String,
+    pub vendor_name: String,
+    pub amount: f64,
+    pub invoice_date: chrono::DateTime<Utc>,
+    pub invoice_number: Option<String>,
+    pub line_item_fingerprint: Option<String>,
+}
+
+impl InvoiceRecord {
+    /// Compute a line-item fingerprint from "desc|qty|unit_price" rows.
+    /// Returns a sorted-token hash string suitable for Jaccard comparison.
+    pub fn compute_line_item_fingerprint(items: &[(String, Option<f64>, Option<f64>)]) -> String {
+        if items.is_empty() {
+            return String::new();
+        }
+        let mut tokens: Vec<String> = items
+            .iter()
+            .map(|(desc, qty, unit_price)| {
+                let mut parts = vec![desc.to_lowercase()];
+                if let Some(q) = qty {
+                    parts.push(format!("q:{}", q));
+                }
+                if let Some(u) = unit_price {
+                    parts.push(format!("u:{}", u));
+                }
+                parts.join("|")
+            })
+            .collect();
+        tokens.sort();
+        tokens.join(";")
+    }
+}
+
+/// OCR character substitution pairs — treating these as zero-cost substitutions
+/// handles common OCR misreads in invoice numbers.
+const OCR_CONFUSABLE: &[(char, char)] = &[
+    ('O', '0'), ('0', 'O'),
+    ('I', '1'), ('1', 'I'), ('l', '1'), ('1', 'l'), ('I', 'l'), ('l', 'I'),
+    ('S', '5'), ('5', 'S'),
+    ('B', '8'), ('8', 'B'),
+];
+
+/// Returns true when two characters are an OCR confusable pair.
+fn ocr_char_eq(a: char, b: char) -> bool {
+    if a == b {
+        return true;
+    }
+    a.to_ascii_uppercase() == b.to_ascii_uppercase()
+        || OCR_CONFUSABLE.iter().any(|&(ca, cb)| (a == ca && b == cb) || (a == cb && b == ca))
+}
+
+/// OCR-aware normalized Levenshtein similarity (0.0 - 1.0).
+/// OCR confusable substitutions cost 0 instead of 1.
+fn ocr_levenshtein_similarity(s1: &str, s2: &str) -> f64 {
+    if s1.is_empty() && s2.is_empty() {
+        return 1.0;
+    }
+    let c1: Vec<char> = s1.chars().collect();
+    let c2: Vec<char> = s2.chars().collect();
+    let len1 = c1.len();
+    let len2 = c2.len();
+    if len1 == 0 || len2 == 0 {
+        return 0.0;
+    }
+    // Single-row DP
+    let mut prev = vec![0usize; len2 + 1];
+    let mut curr = vec![0usize; len2 + 1];
+    for j in 0..=len2 {
+        prev[j] = j;
+    }
+    for i in 1..=len1 {
+        curr[0] = i;
+        for j in 1..=len2 {
+            let sub_cost = if ocr_char_eq(c1[i - 1], c2[j - 1]) { 0 } else { 1 };
+            curr[j] = (prev[j] + 1) // delete
+                .min(curr[j - 1] + 1) // insert
+                .min(prev[j - 1] + sub_cost); // substitute
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    let dist = prev[len2] as f64;
+    let max_len = len1.max(len2) as f64;
+    1.0 - dist / max_len
+}
+
+/// Per-signal breakdown returned by `score_pair`.
+pub type SignalBreakdown = std::collections::BTreeMap<String, f64>;
+
 /// Duplicate Invoice Detector
 ///
-/// Detects potential duplicate invoices using fuzzy matching.
+/// Detects potential duplicate invoices using fuzzy matching
+/// with 5 weighted signals: vendor, invoice number, amount, date, and line-item fingerprint.
 pub struct DuplicateDetector {
     tenant_id: Uuid,
     amount_tolerance: f64,    // Percentage tolerance for amount matching
@@ -286,8 +380,101 @@ impl DuplicateDetector {
     pub fn new(tenant_id: Uuid) -> Self {
         Self {
             tenant_id,
-            amount_tolerance: 0.01,  // 1% tolerance
-            date_tolerance_days: 30, // Within 30 days
+            amount_tolerance: 0.02,  // 2% tolerance
+            date_tolerance_days: 14, // Within 14 days
+        }
+    }
+
+    /// Score a pair of invoices, returning the composite score and per-signal breakdown.
+    /// Weights: vendor 0.20, invoice_number 0.30, amount 0.25, date 0.10, fingerprint 0.15.
+    pub fn score_pair(
+        &self,
+        inv1: &InvoiceRecord,
+        inv2: &InvoiceRecord,
+    ) -> (f64, SignalBreakdown) {
+        let mut breakdown = SignalBreakdown::new();
+
+        // Vendor name similarity (weight: 0.20) - Jaccard on normalized tokens
+        let vendor_sim = Self::jaccard_similarity(&inv1.vendor_name, &inv2.vendor_name);
+        breakdown.insert("vendor".to_string(), vendor_sim);
+
+        // Invoice number similarity (weight: 0.30) - OCR-aware Levenshtein
+        let invoice_number_sim = match (&inv1.invoice_number, &inv2.invoice_number) {
+            (Some(n1), Some(n2)) => {
+                let n1_norm = n1.to_uppercase();
+                let n2_norm = n2.to_uppercase();
+                ocr_levenshtein_similarity(&n1_norm, &n2_norm)
+            }
+            _ => 0.0, // missing invoice number contributes nothing
+        };
+        breakdown.insert("invoice_number".to_string(), invoice_number_sim);
+
+        // Amount proximity (weight: 0.25) - 1 - |a-b|/max within tolerance
+        let amount_sim = if inv1.amount > 0.0 && inv2.amount > 0.0 {
+            let max_amt = inv1.amount.max(inv2.amount);
+            let diff = (inv1.amount - inv2.amount).abs() / max_amt;
+            if diff <= self.amount_tolerance {
+                1.0 - diff
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        breakdown.insert("amount".to_string(), amount_sim);
+
+        // Date proximity (weight: 0.10) - linear decay over tolerance window
+        let date_diff = (inv1.invoice_date - inv2.invoice_date).num_days().abs();
+        let date_sim = if date_diff <= self.date_tolerance_days {
+            1.0 - (date_diff as f64 / self.date_tolerance_days as f64)
+        } else {
+            0.0
+        };
+        breakdown.insert("date".to_string(), date_sim);
+
+        // Line-item fingerprint similarity (weight: 0.15) - token Jaccard
+        let fingerprint_sim = match (&inv1.line_item_fingerprint, &inv2.line_item_fingerprint) {
+            (Some(fp1), Some(fp2)) => {
+                if fp1.is_empty() && fp2.is_empty() {
+                    1.0
+                } else if fp1.is_empty() || fp2.is_empty() {
+                    0.5 // one has items, the other doesn't - neutral
+                } else {
+                    Self::jaccard_similarity(fp1, fp2)
+                }
+            }
+            (None, None) => 1.0, // both missing - neutral, don't penalize
+            _ => 0.5,           // one has fingerprint, other doesn't
+        };
+        breakdown.insert("line_item_fingerprint".to_string(), fingerprint_sim);
+
+        // Weighted composite
+        let score = vendor_sim * 0.20
+            + invoice_number_sim * 0.30
+            + amount_sim * 0.25
+            + date_sim * 0.10
+            + fingerprint_sim * 0.15;
+
+        (score, breakdown)
+    }
+
+    /// Jaccard similarity on whitespace-split, lowercased tokens.
+    fn jaccard_similarity(s1: &str, s2: &str) -> f64 {
+        let s1_lower = s1.to_lowercase();
+        let s2_lower = s2.to_lowercase();
+        let words1: std::collections::HashSet<&str> =
+            s1_lower.split_whitespace().collect();
+        let words2: std::collections::HashSet<&str> =
+            s2_lower.split_whitespace().collect();
+        if words1.is_empty() && words2.is_empty() {
+            return 1.0;
+        }
+        let intersection = words1.intersection(&words2).count();
+        let union = words1.union(&words2).count();
+        if union == 0 {
+            0.0
+        } else {
+            intersection as f64 / union as f64
         }
     }
 
@@ -312,11 +499,9 @@ impl DuplicateDetector {
                 let inv1 = &invoices[i];
                 let inv2 = &invoices[j];
 
-                // Check if potential duplicate
-                let similarity_score = self.calculate_similarity(inv1, inv2);
+                let (similarity_score, _breakdown) = self.score_pair(inv1, inv2);
 
                 if similarity_score > 0.8 {
-                    // High similarity threshold
                     let severity = if similarity_score > 0.95 {
                         AnomalySeverity::Critical
                     } else if similarity_score > 0.90 {
@@ -342,12 +527,14 @@ impl DuplicateDetector {
                                 "vendor": inv1.vendor_name,
                                 "amount": inv1.amount,
                                 "date": inv1.invoice_date,
+                                "invoice_number": inv1.invoice_number,
                             },
                             "invoice2": {
                                 "id": inv2.invoice_id,
                                 "vendor": inv2.vendor_name,
                                 "amount": inv2.amount,
                                 "date": inv2.invoice_date,
+                                "invoice_number": inv2.invoice_number,
                             },
                             "similarity_score": similarity_score,
                         }),
@@ -369,70 +556,14 @@ impl DuplicateDetector {
         Ok(anomalies)
     }
 
+    /// Backward-compatible similarity method used internally.
     fn calculate_similarity(&self, inv1: &InvoiceRecord, inv2: &InvoiceRecord) -> f64 {
-        let mut score = 0.0;
-        let mut weights = 0.0;
-
-        // Vendor name similarity (weight: 0.3)
-        let vendor_sim = self.string_similarity(&inv1.vendor_name, &inv2.vendor_name);
-        score += vendor_sim * 0.3;
-        weights += 0.3;
-
-        // Amount similarity (weight: 0.4)
-        if inv1.amount > 0.0 && inv2.amount > 0.0 {
-            let amount_diff = (inv1.amount - inv2.amount).abs() / inv1.amount.max(inv2.amount);
-            if amount_diff <= self.amount_tolerance {
-                score += 1.0 * 0.4;
-            } else {
-                score += (1.0 - amount_diff.min(1.0)) * 0.4;
-            }
-            weights += 0.4;
-        }
-
-        // Date proximity (weight: 0.3)
-        let date_diff = (inv1.invoice_date - inv2.invoice_date).num_days().abs();
-        if date_diff <= self.date_tolerance_days {
-            let date_sim = 1.0 - (date_diff as f64 / self.date_tolerance_days as f64);
-            score += date_sim * 0.3;
-        }
-        weights += 0.3;
-
-        if weights > 0.0 {
-            score / weights
-        } else {
-            0.0
-        }
+        self.score_pair(inv1, inv2).0
     }
 
     fn string_similarity(&self, s1: &str, s2: &str) -> f64 {
-        // Simplified Jaccard similarity on words
-        let s1_lower = s1.to_lowercase();
-        let s2_lower = s2.to_lowercase();
-        let words1: std::collections::HashSet<&str> = s1_lower.split_whitespace().collect();
-        let words2: std::collections::HashSet<&str> = s2_lower.split_whitespace().collect();
-
-        if words1.is_empty() && words2.is_empty() {
-            return 1.0;
-        }
-
-        let intersection = words1.intersection(&words2).count();
-        let union = words1.union(&words2).count();
-
-        if union == 0 {
-            0.0
-        } else {
-            intersection as f64 / union as f64
-        }
+        Self::jaccard_similarity(s1, s2)
     }
-}
-
-/// Invoice record for duplicate detection
-#[derive(Debug, Clone)]
-pub struct InvoiceRecord {
-    pub invoice_id: String,
-    pub vendor_name: String,
-    pub amount: f64,
-    pub invoice_date: chrono::DateTime<Utc>,
 }
 
 #[cfg(test)]
@@ -534,18 +665,24 @@ mod tests {
                 vendor_name: "Acme Corp".to_string(),
                 amount: 1500.00,
                 invoice_date: now - Duration::days(10),
+                invoice_number: Some("INV-1005".to_string()),
+                line_item_fingerprint: None,
             },
             InvoiceRecord {
                 invoice_id: "INV-002".to_string(),
                 vendor_name: "Acme Corp".to_string(), // Identical name
                 amount: 1500.00,                      // Same amount
                 invoice_date: now - Duration::days(8), // Close date
+                invoice_number: Some("INV-1005".to_string()),
+                line_item_fingerprint: None,
             },
             InvoiceRecord {
                 invoice_id: "INV-003".to_string(),
                 vendor_name: "Different Vendor".to_string(),
                 amount: 2000.00,
                 invoice_date: now - Duration::days(5),
+                invoice_number: None,
+                line_item_fingerprint: None,
             },
         ];
 
@@ -574,5 +711,136 @@ mod tests {
 
         let sim2 = detector.string_similarity("Acme Corp", "Different Vendor");
         assert!(sim2 < 0.3);
+    }
+
+    // ---- 5-signal score_pair tests ----
+
+    #[test]
+    fn test_score_pair_exact_match() {
+        let detector = DuplicateDetector::new(Uuid::new_v4());
+        let now = Utc::now();
+        let fp = Some("widget|q:2|u:10.00;gadget|q:1|u:5.00".to_string());
+
+        let inv1 = InvoiceRecord {
+            invoice_id: "A".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            invoice_number: Some("INV-1005".to_string()),
+            line_item_fingerprint: fp.clone(),
+        };
+        let inv2 = InvoiceRecord {
+            invoice_id: "B".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            invoice_number: Some("INV-1005".to_string()),
+            line_item_fingerprint: fp,
+        };
+        let (score, breakdown) = detector.score_pair(&inv1, &inv2);
+        assert!(
+            score >= 0.99,
+            "Exact match should score >= 0.99, got {}",
+            score
+        );
+        assert_eq!(breakdown.get("vendor").copied().unwrap_or(0.0), 1.0);
+        assert_eq!(breakdown.get("invoice_number").copied().unwrap_or(0.0), 1.0);
+        assert_eq!(breakdown.get("amount").copied().unwrap_or(0.0), 1.0);
+        assert_eq!(breakdown.get("date").copied().unwrap_or(0.0), 1.0);
+    }
+
+    #[test]
+    fn test_score_pair_ocr_substituted_invoice_number() {
+        let detector = DuplicateDetector::new(Uuid::new_v4());
+        let now = Utc::now();
+
+        let inv1 = InvoiceRecord {
+            invoice_id: "A".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            invoice_number: Some("INV-1005".to_string()),
+            line_item_fingerprint: None,
+        };
+        let inv2 = InvoiceRecord {
+            invoice_id: "B".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            // O↔0 and I↔1 substitutions from OCR
+            invoice_number: Some("INV-1OO5".to_string()),
+            line_item_fingerprint: None,
+        };
+        let (score, breakdown) = detector.score_pair(&inv1, &inv2);
+        assert!(
+            breakdown.get("invoice_number").copied().unwrap_or(0.0) >= 0.9,
+            "OCR-substituted invoice number should score >= 0.9, got {}",
+            breakdown.get("invoice_number").unwrap_or(&0.0)
+        );
+        assert!(
+            score >= 0.9,
+            "OCR-fuzzy pair should score >= 0.9, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_score_pair_differing_line_items_lowers_score() {
+        let detector = DuplicateDetector::new(Uuid::new_v4());
+        let now = Utc::now();
+
+        let inv1 = InvoiceRecord {
+            invoice_id: "A".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            invoice_number: Some("INV-100".to_string()),
+            line_item_fingerprint: Some("widget|q:2|u:10.00".to_string()),
+        };
+        let inv2 = InvoiceRecord {
+            invoice_id: "B".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1500.00,
+            invoice_date: now,
+            invoice_number: Some("INV-100".to_string()),
+            line_item_fingerprint: Some("sprocket|q:5|u:3.00;cog|q:1|u:50.00".to_string()),
+        };
+        let (score, breakdown) = detector.score_pair(&inv1, &inv2);
+        let fp_sim = breakdown.get("line_item_fingerprint").copied().unwrap_or(1.0);
+        assert!(
+            fp_sim < 0.5,
+            "Differing line items fingerprint should be < 0.5, got {}",
+            fp_sim
+        );
+        assert!(score < 1.0, "Score should be < 1.0 with different items, got {}", score);
+    }
+
+    #[test]
+    fn test_score_pair_vendor_only_below_medium_threshold() {
+        let detector = DuplicateDetector::new(Uuid::new_v4());
+        let now = Utc::now();
+
+        let inv1 = InvoiceRecord {
+            invoice_id: "A".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 100.00,
+            invoice_date: now,
+            invoice_number: Some("INV-AAA".to_string()),
+            line_item_fingerprint: None,
+        };
+        let inv2 = InvoiceRecord {
+            invoice_id: "B".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 99999.00,   // totally different amount
+            invoice_date: now - Duration::days(30), // outside 14-day window
+            invoice_number: Some("INV-ZZZ".to_string()), // different number
+            line_item_fingerprint: None,
+        };
+        let (score, _) = detector.score_pair(&inv1, &inv2);
+        assert!(
+            score < 0.8,
+            "Vendor-only match should be below Medium threshold (0.8), got {}",
+            score
+        );
     }
 }

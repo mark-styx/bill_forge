@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
+        AccountType, BankingVerification, BankingVerificationStatus, BankAccount,
         CreateVendorInput, UpdateVendorInput, Vendor, VendorAddress, VendorContact, VendorFilters,
         VendorId, VendorStatus, VendorType,
     },
@@ -76,6 +77,8 @@ impl VendorRepository for VendorRepositoryImpl {
             payment_terms: input.payment_terms,
             default_payment_method: input.default_payment_method,
             bank_account: None,
+            payment_hold: false,
+            payment_hold_reason: None,
             vendor_code: input.vendor_code,
             default_gl_code: input.default_gl_code,
             default_department: input.default_department,
@@ -337,6 +340,14 @@ struct VendorRow {
     is_active: bool,
     created_at: chrono::DateTime<Utc>,
     updated_at: chrono::DateTime<Utc>,
+    // Banking columns (migration 097)
+    bank_name: Option<String>,
+    bank_account_last_four: Option<String>,
+    bank_account_encrypted: Option<String>,
+    bank_routing_encrypted: Option<String>,
+    bank_account_type: Option<String>,
+    payment_hold: Option<bool>,
+    payment_hold_reason: Option<String>,
 }
 
 impl VendorRow {
@@ -368,7 +379,27 @@ impl VendorRow {
             w9_received_date: None,
             payment_terms: self.payment_terms,
             default_payment_method: None,
-            bank_account: None,
+            bank_account: match (
+                &self.bank_name,
+                &self.bank_account_last_four,
+                &self.bank_account_encrypted,
+                &self.bank_routing_encrypted,
+                &self.bank_account_type,
+            ) {
+                (Some(bn), Some(lf), Some(ae), Some(re), Some(at)) => Some(BankAccount {
+                    bank_name: bn.clone(),
+                    account_type: match at.as_str() {
+                        "savings" => AccountType::Savings,
+                        _ => AccountType::Checking,
+                    },
+                    account_last_four: lf.clone(),
+                    account_number_encrypted: ae.clone(),
+                    routing_number_encrypted: re.clone(),
+                }),
+                _ => None,
+            },
+            payment_hold: self.payment_hold.unwrap_or(false),
+            payment_hold_reason: self.payment_hold_reason,
             vendor_code: None,
             default_gl_code: None,
             default_department: None,
@@ -381,6 +412,252 @@ impl VendorRow {
             updated_at: self.updated_at,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Banking verification methods (outside the trait, called directly)
+// ---------------------------------------------------------------------------
+
+impl VendorRepositoryImpl {
+    /// Record a banking detail change: updates the vendor's encrypted banking columns,
+    /// sets payment_hold = true, and creates a pending verification row.
+    pub async fn record_banking_change(
+        &self,
+        tenant_id: &TenantId,
+        vendor_id: &VendorId,
+        prev_last_four: Option<&str>,
+        new_last_four: &str,
+        bank_name: &str,
+        account_type: &str,
+        account_encrypted: &str,
+        routing_encrypted: &str,
+        requested_by: Uuid,
+    ) -> Result<BankingVerification> {
+        let verification_id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+
+        // Update vendor banking columns + set payment_hold
+        sqlx::query(
+            r#"UPDATE vendors SET
+                bank_name = $3,
+                bank_account_last_four = $4,
+                bank_account_encrypted = $5,
+                bank_routing_encrypted = $6,
+                bank_account_type = $7,
+                bank_account_updated_at = $8,
+                payment_hold = true,
+                payment_hold_reason = 'Banking details changed - pending verification',
+                updated_at = $8
+            WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(vendor_id.0)
+        .bind(*tenant_id.as_uuid())
+        .bind(bank_name)
+        .bind(new_last_four)
+        .bind(account_encrypted)
+        .bind(routing_encrypted)
+        .bind(account_type)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update vendor banking: {}", e)))?;
+
+        // Create pending verification row
+        sqlx::query(
+            r#"INSERT INTO vendor_banking_verifications
+                (id, tenant_id, vendor_id, previous_account_last_four, new_account_last_four,
+                 status, requested_by, requested_at)
+            VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)"#,
+        )
+        .bind(verification_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(vendor_id.0)
+        .bind(prev_last_four)
+        .bind(new_last_four)
+        .bind(requested_by)
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create banking verification: {}", e)))?;
+
+        Ok(BankingVerification {
+            id: verification_id,
+            tenant_id: tenant_id.clone(),
+            vendor_id: vendor_id.clone(),
+            previous_account_last_four: prev_last_four.map(String::from),
+            new_account_last_four: new_last_four.to_string(),
+            status: BankingVerificationStatus::Pending,
+            callback_method: None,
+            callback_contact: None,
+            verifier_notes: None,
+            requested_by,
+            requested_at: now,
+            verified_by: None,
+            verified_at: None,
+        })
+    }
+
+    /// Verify a pending banking change: sets status = verified, clears payment_hold.
+    pub async fn verify_banking_change(
+        &self,
+        tenant_id: &TenantId,
+        verification_id: Uuid,
+        verifier_user_id: Uuid,
+        callback_method: &str,
+        callback_contact: &str,
+        notes: Option<&str>,
+    ) -> Result<BankingVerification> {
+        let now = chrono::Utc::now();
+
+        // Update verification row
+        let result = sqlx::query_as::<_, VerificationRow>(
+            r#"UPDATE vendor_banking_verifications SET
+                status = 'verified',
+                verified_by = $3,
+                verified_at = $4,
+                callback_method = $5,
+                callback_contact = $6,
+                verifier_notes = $7
+            WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
+            RETURNING id, tenant_id, vendor_id, previous_account_last_four, new_account_last_four,
+                      status, requested_by, requested_at, verified_by, verified_at,
+                      callback_method, callback_contact, verifier_notes"#,
+        )
+        .bind(verification_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(verifier_user_id)
+        .bind(now)
+        .bind(callback_method)
+        .bind(callback_contact)
+        .bind(notes)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to verify banking change: {}", e)))?;
+
+        let row = result.ok_or_else(|| Error::NotFound {
+            resource_type: "BankingVerification".to_string(),
+            id: verification_id.to_string(),
+        })?;
+
+        // Clear payment hold on the vendor
+        sqlx::query(
+            "UPDATE vendors SET payment_hold = false, payment_hold_reason = NULL, updated_at = $3 \
+             WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(row.vendor_id)
+        .bind(*tenant_id.as_uuid())
+        .bind(now)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to clear payment hold: {}", e)))?;
+
+        Ok(BankingVerification {
+            id: row.id,
+            tenant_id: tenant_id.clone(),
+            vendor_id: VendorId(row.vendor_id),
+            previous_account_last_four: row.previous_account_last_four,
+            new_account_last_four: row.new_account_last_four,
+            status: BankingVerificationStatus::Verified,
+            callback_method: match row.callback_method.as_deref() {
+                Some("phone") => Some(billforge_core::domain::CallbackMethod::Phone),
+                Some("in_person") => Some(billforge_core::domain::CallbackMethod::InPerson),
+                Some("known_email") => Some(billforge_core::domain::CallbackMethod::KnownEmail),
+                _ => None,
+            },
+            callback_contact: row.callback_contact,
+            verifier_notes: row.verifier_notes,
+            requested_by: row.requested_by,
+            requested_at: row.requested_at,
+            verified_by: row.verified_by,
+            verified_at: row.verified_at,
+        })
+    }
+
+    /// Check if a vendor has a pending banking verification (used by ERP sync guard).
+    pub async fn has_pending_banking_verification(
+        &self,
+        tenant_id: &TenantId,
+        vendor_id: &VendorId,
+    ) -> Result<bool> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM vendor_banking_verifications \
+             WHERE tenant_id = $1 AND vendor_id = $2 AND status = 'pending'",
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(vendor_id.0)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to check pending verification: {}", e)))?;
+
+        Ok(row.map(|(c,)| c > 0).unwrap_or(false))
+    }
+
+    /// List banking verifications for a vendor.
+    pub async fn list_banking_verifications(
+        &self,
+        tenant_id: &TenantId,
+        vendor_id: &VendorId,
+    ) -> Result<Vec<BankingVerification>> {
+        let rows = sqlx::query_as::<_, VerificationRow>(
+            "SELECT id, tenant_id, vendor_id, previous_account_last_four, new_account_last_four, \
+                    status, requested_by, requested_at, verified_by, verified_at, \
+                    callback_method, callback_contact, verifier_notes \
+             FROM vendor_banking_verifications \
+             WHERE tenant_id = $1 AND vendor_id = $2 \
+             ORDER BY requested_at DESC",
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(vendor_id.0)
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to list banking verifications: {}", e)))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| BankingVerification {
+                id: r.id,
+                tenant_id: tenant_id.clone(),
+                vendor_id: VendorId(r.vendor_id),
+                previous_account_last_four: r.previous_account_last_four,
+                new_account_last_four: r.new_account_last_four,
+                status: match r.status.as_str() {
+                    "verified" => BankingVerificationStatus::Verified,
+                    "rejected" => BankingVerificationStatus::Rejected,
+                    _ => BankingVerificationStatus::Pending,
+                },
+                callback_method: match r.callback_method.as_deref() {
+                    Some("phone") => Some(billforge_core::domain::CallbackMethod::Phone),
+                    Some("in_person") => Some(billforge_core::domain::CallbackMethod::InPerson),
+                    Some("known_email") => Some(billforge_core::domain::CallbackMethod::KnownEmail),
+                    _ => None,
+                },
+                callback_contact: r.callback_contact,
+                verifier_notes: r.verifier_notes,
+                requested_by: r.requested_by,
+                requested_at: r.requested_at,
+                verified_by: r.verified_by,
+                verified_at: r.verified_at,
+            })
+            .collect())
+    }
+}
+
+/// Helper struct for mapping verification rows
+#[derive(sqlx::FromRow)]
+struct VerificationRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    vendor_id: Uuid,
+    previous_account_last_four: Option<String>,
+    new_account_last_four: String,
+    status: String,
+    requested_by: Uuid,
+    requested_at: chrono::DateTime<Utc>,
+    verified_by: Option<Uuid>,
+    verified_at: Option<chrono::DateTime<Utc>>,
+    callback_method: Option<String>,
+    callback_contact: Option<String>,
+    verifier_notes: Option<String>,
 }
 
 /// Helper struct for mapping message rows

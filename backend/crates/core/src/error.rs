@@ -99,6 +99,10 @@ pub enum Error {
     #[error("Rate limit exceeded. Try again in {retry_after} seconds.")]
     RateLimited { retry_after: u64 },
 
+    // Payment Frozen (BEC fraud prevention)
+    #[error("Payment frozen: {0}")]
+    PaymentFrozen(String),
+
     // Internal Errors
     #[error("Internal error: {0}")]
     Internal(String),
@@ -118,7 +122,9 @@ impl Error {
             Error::Validation(_) | Error::InvalidInput { .. } | Error::UnsupportedFormat(_) => 400,
             Error::ModuleNotAvailable(_) | Error::FeatureNotEnabled(_) => 402, // Payment Required
             Error::RateLimited { .. } => 429,
+            Error::PaymentFrozen(_) => 403,
             Error::InvalidToken(_) => 401,
+            Error::PaymentFrozen(_) => 403,
             _ => 500,
         }
     }
@@ -152,6 +158,7 @@ impl Error {
             Error::Storage(_) => "STORAGE_ERROR",
             Error::FileNotFound(_) => "FILE_NOT_FOUND",
             Error::RateLimited { .. } => "RATE_LIMITED",
+            Error::PaymentFrozen(_) => "PAYMENT_FROZEN",
             Error::Internal(_) => "INTERNAL_ERROR",
             Error::Configuration(_) => "CONFIGURATION_ERROR",
         }

@@ -16,6 +16,7 @@ use tracing::info;
 
 mod config;
 mod jobs;
+mod metrics;
 mod scheduler;
 
 #[tokio::main]
@@ -32,6 +33,12 @@ async fn main() -> Result<()> {
     let config = config::WorkerConfig::from_env().await?;
 
     info!("Configuration loaded successfully");
+
+    // Start metrics endpoint (default 0.0.0.0:9091, configurable via WORKER_METRICS_PORT)
+    {
+        let metrics_addr = metrics::metrics_addr();
+        tokio::spawn(metrics::serve_metrics(metrics_addr));
+    }
 
     match mode.as_str() {
         "worker" => {

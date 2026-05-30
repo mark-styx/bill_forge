@@ -315,6 +315,7 @@ pub async fn upload_sample_invoices(
             file_name,
             content_type,
             &data,
+            std::time::Instant::now(),
         )
         .await?;
         let invoice_id = response.invoice_id.parse().map_err(|_| {

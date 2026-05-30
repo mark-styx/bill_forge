@@ -48,6 +48,7 @@ use crate::metrics;
 use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
 use crate::state::AppState;
 use axum::{middleware, routing::get, Extension, Router};
+use std::time::Instant;
 
 /// Create the main API router
 pub fn create_router(state: AppState) -> Router {
@@ -73,6 +74,51 @@ pub fn create_router(state: AppState) -> Router {
 /// Prometheus metrics endpoint
 async fn metrics_handler() -> String {
     metrics::export_metrics()
+}
+
+/// Middleware that records request-level SLO telemetry (duration + sub-200ms compliance).
+async fn track_http_slo(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let start = Instant::now();
+    let path = req.uri().path().to_string();
+    let response = next.run(req).await;
+    let elapsed = start.elapsed().as_secs_f64();
+
+    // Sanitize endpoint label: collapse UUIDs and numeric IDs to keep cardinality bounded.
+    let endpoint = sanitize_endpoint(&path);
+    let status = response.status().as_u16();
+
+    metrics::record_request_slo(&endpoint, status, elapsed);
+
+    response
+}
+
+/// Collapse path segments that look like UUIDs or numeric IDs so metric labels
+/// stay low-cardinality (e.g. `/api/v1/invoices/123` -> `/api/v1/invoices/:id`).
+fn sanitize_endpoint(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for seg in path.split('/') {
+        if seg.is_empty() {
+            out.push('/');
+            continue;
+        }
+        if seg.len() == 36 && seg.matches('-').count() == 4 {
+            // Looks like a UUID
+            out.push_str("/:id");
+        } else if seg.bytes().all(|b| b.is_ascii_digit()) {
+            out.push_str("/:id");
+        } else {
+            out.push_str(seg);
+        }
+        out.push('/');
+    }
+    // Remove trailing slash (unless the path is just "/")
+    if out.len() > 1 {
+        out.pop();
+    }
+    out
 }
 
 /// Landing page with API info
@@ -172,4 +218,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
         .layer(middleware::from_fn(require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
+        // SLO telemetry: duration + sub-200ms compliance for every API request
+        .layer(middleware::from_fn(track_http_slo))
 }

@@ -252,6 +252,12 @@ async fn qbo_sync_vendors(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
+    // BEC fraud prevention: skip ERP sync for vendors with pending banking verification.
+    // This same guard pattern should be applied to NetSuite/Xero/Sage syncs (deferred).
+    // The check is per-vendor during the upsert loop below (see inline comment).
+
+    // Load connection.
+
     // Load connection.
     let conn: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
         "SELECT company_id, access_token, access_token_expires_at
@@ -313,6 +319,24 @@ async fn qbo_sync_vendors(
             None => continue,
         };
         let external_id = format!("qbo:{qb_id}");
+
+        // BEC fraud prevention: skip upsert if existing vendor has pending banking verification.
+        // The same guard pattern applies to NetSuite/Xero/Sage syncs (deferred to a follow-up).
+        let existing_hold: Option<bool> = sqlx::query_scalar(
+            "SELECT payment_hold FROM vendors WHERE tenant_id = $1 AND external_id = $2",
+        )
+        .bind(tenant.tenant_id.as_uuid())
+        .bind(&external_id)
+        .fetch_optional(&*pool)
+        .await
+        .unwrap_or(None)
+        .flatten();
+
+        if existing_hold == Some(true) {
+            warn!(qb_id = %qb_id, "Skipping vendor sync - pending banking verification");
+            continue;
+        }
+
         let display_name = vendor
             .get("DisplayName")
             .and_then(|n| n.as_str())

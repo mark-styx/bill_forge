@@ -459,8 +459,10 @@ export const invoicesApi = {
 
   get: (id: string) => api.get<Invoice>(`/api/v1/invoices/${id}`),
 
-  create: (data: CreateInvoiceInput) =>
-    api.post<Invoice>('/api/v1/invoices', data),
+  create: (data: CreateInvoiceInput, options?: { force?: boolean }) => {
+    const params = options?.force ? '?force=true' : '';
+    return api.post<CreateInvoiceResponse>(`/api/v1/invoices${params}`, data);
+  },
 
   update: (id: string, data: Partial<Invoice>) =>
     api.put<Invoice>(`/api/v1/invoices/${id}`, data),
@@ -474,6 +476,7 @@ export const invoicesApi = {
       invoice_id: string;
       document_id: string;
       message: string;
+      potential_duplicates: DuplicateMatch[];
     }>('/api/v1/invoices/upload', formData);
   },
 
@@ -2628,6 +2631,43 @@ export interface RoutingConfig {
 /** Partial update for routing config (all fields optional) */
 export type UpdateRoutingConfigRequest = Partial<RoutingConfig>;
 
+// ---------------------------------------------------------------------------
+// Routing Simulation types (what-if rule testing, issue #246)
+// ---------------------------------------------------------------------------
+
+/** Partial routing config for simulation - all fields optional (overlays on live config). */
+export type SimulationConfigInput = Partial<RoutingConfig>;
+
+/** Per-invoice result of comparing live vs candidate routing. */
+export interface SimulatedOutcomeResponse {
+  invoice_id: string;
+  predicted_approver: string | null;
+  live_approver: string | null;
+  changed: boolean;
+  predicted_cycle_hours: number;
+  live_cycle_hours: number;
+  would_stall: boolean;
+}
+
+/** Aggregate summary returned by the simulation endpoint. */
+export interface SimulationSummaryResponse {
+  outcomes: SimulatedOutcomeResponse[];
+  approver_load_candidate: Record<string, number>;
+  approver_load_live: Record<string, number>;
+  avg_cycle_hours_candidate: number;
+  avg_cycle_hours_live: number;
+  stalled_count_candidate: number;
+  stalled_count_live: number;
+  changed_count: number;
+  total_simulated: number;
+}
+
+/** Request body for `POST /api/v1/routing/simulate`. */
+export interface SimulateRoutingRequest {
+  candidate_config: SimulationConfigInput;
+  sample_size?: number;
+}
+
 /** Typed wrapper for the Intelligent Routing backend module (/api/v1/routing) */
 export const routingApi = {
   routeInvoice: (invoiceId: string, body: RouteInvoiceRequest) =>
@@ -2647,6 +2687,10 @@ export const routingApi = {
 
   updateConfig: (body: UpdateRoutingConfigRequest) =>
     api.put<RoutingConfig>('/api/v1/routing/config', body),
+
+  /** Run a what-if simulation: replay recent invoices through a candidate config. */
+  simulate: (body: SimulateRoutingRequest) =>
+    api.post<SimulationSummaryResponse>('/api/v1/routing/simulate', body),
 };
 
 // ---------------------------------------------------------------------------
@@ -2691,4 +2735,44 @@ export const closePeriodsApi = {
 
   runClose: (id: string) =>
     api.post<RunCloseResponse>(`/api/v1/close-periods/${id}/close`, {}),
+};
+
+// ---------------------------------------------------------------------------
+// Duplicate Detection Types
+// ---------------------------------------------------------------------------
+
+export interface DuplicateSignalBreakdown {
+  vendor: number;
+  invoice_number: number;
+  amount: number;
+  date: number;
+  line_item_fingerprint: number;
+}
+
+export interface DuplicateMatch {
+  existing_invoice_id: string;
+  score: number;
+  severity: string;
+  signal_breakdown: DuplicateSignalBreakdown;
+}
+
+export interface CreateInvoiceResponse {
+  invoice: Invoice;
+  potential_duplicates: DuplicateMatch[];
+}
+
+// Extend invoicesApi with duplicate detection methods
+export const duplicateApi = {
+  /** Merge a duplicate invoice into an existing one (soft-deletes the dup). */
+  mergeDuplicate: (duplicateInvoiceId: string, keepInvoiceId: string) =>
+    api.post<{ success: boolean; action: string; kept_invoice_id: string; discarded_invoice_id: string }>(
+      `/api/v1/invoices/${duplicateInvoiceId}/merge-duplicate`,
+      { keep_invoice_id: keepInvoiceId },
+    ),
+
+  /** Reject the duplicate flag, keeping both invoices. */
+  rejectDuplicate: (invoiceId: string) =>
+    api.post<{ success: boolean; action: string; invoice_id: string }>(
+      `/api/v1/invoices/${invoiceId}/reject-duplicate`,
+    ),
 };
