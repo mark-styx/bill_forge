@@ -466,6 +466,8 @@ fn test_vendor_schema_matches_domain_vendor_shape() {
         notes: None,
         tags: vec![],
         custom_fields: serde_json::Value::Null,
+        payment_hold: false,
+        payment_hold_reason: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };

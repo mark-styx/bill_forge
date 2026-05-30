@@ -1176,6 +1176,7 @@ mod tests {
 #[cfg(test)]
 mod simulate_tests {
     use super::*;
+    use crate::types::Money;
 
     /// Helper: build an invoice with a given amount (in cents).
     fn make_invoice(amount_cents: i64) -> Invoice {

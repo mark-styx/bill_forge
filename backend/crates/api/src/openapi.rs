@@ -669,6 +669,8 @@ pub struct Vendor {
     pub payment_terms: Option<String>,
     pub default_payment_method: Option<String>,
     pub bank_account: Option<serde_json::Value>,
+    pub payment_hold: bool,
+    pub payment_hold_reason: Option<String>,
     pub vendor_code: Option<String>,
     pub default_gl_code: Option<String>,
     pub default_department: Option<String>,

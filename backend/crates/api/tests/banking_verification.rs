@@ -11,6 +11,7 @@ use billforge_core::domain::{
     AuditAction, BankingVerificationStatus, ResourceType,
 };
 use billforge_core::TenantId;
+use billforge_core::VendorRepository;
 use billforge_db::repositories::AuditRepositoryImpl;
 use std::sync::Arc;
 use uuid::Uuid;
