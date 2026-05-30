@@ -12,8 +12,16 @@ type StatusType =
   | 'processing'
   | 'paused'
   | 'draft'
+  | 'submitted'
   | 'approved'
   | 'rejected'
+  | 'on_hold'
+  | 'ready_for_payment'
+  | 'paid'
+  | 'voided'
+  | 'ready_for_review'
+  | 'reviewed'
+  | 'failed'
   | 'review';
 
 interface StatusIndicatorProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -106,6 +114,14 @@ const statusConfig: Record<StatusType, {
     borderColor: 'border-border',
     dotColor: 'bg-muted-foreground',
   },
+  submitted: {
+    label: 'Submitted',
+    icon: Clock,
+    color: 'text-primary',
+    bgColor: 'bg-primary/10',
+    borderColor: 'border-primary/30',
+    dotColor: 'bg-primary',
+  },
   review: {
     label: 'In Review',
     icon: Clock,
@@ -113,6 +129,62 @@ const statusConfig: Record<StatusType, {
     bgColor: 'bg-primary/10',
     borderColor: 'border-primary/30',
     dotColor: 'bg-primary',
+  },
+  on_hold: {
+    label: 'On Hold',
+    icon: Pause,
+    color: 'text-warning',
+    bgColor: 'bg-warning/10',
+    borderColor: 'border-warning/30',
+    dotColor: 'bg-warning',
+  },
+  ready_for_payment: {
+    label: 'Ready for Payment',
+    icon: Check,
+    color: 'text-success',
+    bgColor: 'bg-success/10',
+    borderColor: 'border-success/30',
+    dotColor: 'bg-success',
+  },
+  paid: {
+    label: 'Paid',
+    icon: Check,
+    color: 'text-success',
+    bgColor: 'bg-success/10',
+    borderColor: 'border-success/30',
+    dotColor: 'bg-success',
+  },
+  voided: {
+    label: 'Voided',
+    icon: X,
+    color: 'text-muted-foreground',
+    bgColor: 'bg-secondary',
+    borderColor: 'border-border',
+    dotColor: 'bg-muted-foreground',
+  },
+  ready_for_review: {
+    label: 'Ready for Review',
+    icon: Clock,
+    color: 'text-warning',
+    bgColor: 'bg-warning/10',
+    borderColor: 'border-warning/30',
+    dotColor: 'bg-warning',
+  },
+  reviewed: {
+    label: 'Reviewed',
+    icon: Check,
+    color: 'text-success',
+    bgColor: 'bg-success/10',
+    borderColor: 'border-success/30',
+    dotColor: 'bg-success',
+  },
+  failed: {
+    label: 'Failed',
+    icon: X,
+    color: 'text-error',
+    bgColor: 'bg-error/10',
+    borderColor: 'border-error/30',
+    dotColor: 'bg-error',
   },
 };
 

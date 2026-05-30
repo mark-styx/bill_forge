@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -8,6 +8,8 @@ import { invoicesApi, workflowsApi, vendorsApi, documentsApi, DocumentMetadata, 
 import { toast } from 'sonner';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { LineItemsGrid } from '@/components/ui/line-items-grid';
+import { useStatusConfig } from '@/hooks/useStatusConfig';
+import { invalidateInvoiceWorkflowQueries } from '@/lib/workflow-cache';
 import {
   ArrowLeft,
   FileText,
@@ -43,8 +45,6 @@ export default function InvoiceDetailPage() {
   const [selectedQueueId, setSelectedQueueId] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingDocument, setUploadingDocument] = useState(false);
-  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [showQuickAddVendor, setShowQuickAddVendor] = useState(false);
   const [quickAddVendorName, setQuickAddVendorName] = useState('');
   const [quickAddVendorType, setQuickAddVendorType] = useState('business');
@@ -55,8 +55,10 @@ export default function InvoiceDetailPage() {
     queryFn: () => invoicesApi.get(id),
   });
 
+  const { getStatusDisplay } = useStatusConfig();
+
   const { data: queues } = useQuery({
-    queryKey: ['queues'],
+    queryKey: ['work-queues'],
     queryFn: () => workflowsApi.listQueues(),
   });
 
@@ -72,40 +74,47 @@ export default function InvoiceDetailPage() {
     enabled: !!id,
   });
 
-  // Fetch document blob for preview with authentication
+  const previewDocument = documents?.[0];
+  const {
+    data: previewBlob,
+    isLoading: previewLoading,
+    isError: previewQueryError,
+    error: previewQueryErrorDetail,
+  } = useQuery({
+    queryKey: ['invoice-document-preview', previewDocument?.id],
+    queryFn: () => documentsApi.downloadBlob(previewDocument!.id),
+    enabled: !!previewDocument?.id,
+  });
+
+  const previewBlobUrl = useMemo(() => {
+    if (!previewBlob) return null;
+    return URL.createObjectURL(previewBlob);
+  }, [previewBlob]);
+
   useEffect(() => {
-    if (documents && documents.length > 0) {
-      const doc = documents[0];
-      setPreviewError(null);
-      documentsApi.downloadBlob(doc.id)
-        .then((blob) => {
-          // Revoke previous blob URL to avoid memory leaks
-          if (previewBlobUrl) {
-            URL.revokeObjectURL(previewBlobUrl);
-          }
-          const url = URL.createObjectURL(blob);
-          setPreviewBlobUrl(url);
-        })
-        .catch((err) => {
-          setPreviewError(err.message || 'Failed to load document preview');
-          setPreviewBlobUrl(null);
-        });
-    } else {
-      setPreviewBlobUrl(null);
-    }
-    // Cleanup on unmount
     return () => {
       if (previewBlobUrl) {
         URL.revokeObjectURL(previewBlobUrl);
       }
     };
-  }, [documents]);
+  }, [previewBlobUrl]);
+
+  const previewError = previewQueryError
+    ? previewQueryErrorDetail instanceof Error
+      ? previewQueryErrorDetail.message
+      : 'Failed to load document preview'
+    : null;
+
+  const invalidateWorkflowQueries = () => {
+    invalidateInvoiceWorkflowQueries(queryClient, id);
+  };
 
   // Upload document mutation
   const uploadDocument = useMutation({
     mutationFn: (file: File) => documentsApi.uploadForInvoice(id, file),
     onSuccess: () => {
       refetchDocuments();
+      queryClient.invalidateQueries({ queryKey: ['invoice-document-preview'] });
       toast.success('Document uploaded successfully');
       setUploadingDocument(false);
     },
@@ -143,7 +152,7 @@ export default function InvoiceDetailPage() {
   const updateInvoice = useMutation({
     mutationFn: (data: any) => invoicesApi.update(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice updated successfully');
       setIsEditing(false);
       setEditedFields({});
@@ -157,7 +166,7 @@ export default function InvoiceDetailPage() {
   const submitForProcessing = useMutation({
     mutationFn: () => invoicesApi.submitForProcessing(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice submitted for processing');
     },
     onError: (error: any) => {
@@ -168,7 +177,7 @@ export default function InvoiceDetailPage() {
   const approveInvoice = useMutation({
     mutationFn: () => workflowsApi.markReadyForPayment(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice approved');
     },
     onError: (error: any) => {
@@ -179,7 +188,7 @@ export default function InvoiceDetailPage() {
   const putOnHold = useMutation({
     mutationFn: (reason: string) => workflowsApi.putOnHold(id, reason),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice placed on hold');
     },
   });
@@ -187,7 +196,7 @@ export default function InvoiceDetailPage() {
   const releaseHold = useMutation({
     mutationFn: () => workflowsApi.releaseFromHold(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice released from hold');
     },
   });
@@ -195,7 +204,7 @@ export default function InvoiceDetailPage() {
   const voidInvoice = useMutation({
     mutationFn: () => workflowsApi.voidInvoice(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice voided');
       router.push('/invoices');
     },
@@ -204,7 +213,7 @@ export default function InvoiceDetailPage() {
   const moveToQueue = useMutation({
     mutationFn: (queueId: string) => workflowsApi.moveToQueue(id, queueId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       toast.success('Invoice moved to queue');
       setShowMoveToQueueModal(false);
     },
@@ -220,7 +229,7 @@ export default function InvoiceDetailPage() {
       return vendor;
     },
     onSuccess: (vendor) => {
-      queryClient.invalidateQueries({ queryKey: ['invoice', id] });
+      invalidateWorkflowQueries();
       queryClient.invalidateQueries({ queryKey: ['vendors'] });
       toast.success(`Vendor "${vendor.name}" created and linked to invoice`);
       setShowQuickAddVendor(false);
@@ -269,21 +278,8 @@ export default function InvoiceDetailPage() {
   };
 
   const currentQueue = queues?.find((q: any) => q.id === (invoice as any).current_queue_id);
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved':
-      case 'ready_for_payment':
-      case 'paid':
-      case 'reviewed':
-        return 'status-badge-approved';
-      case 'rejected':
-      case 'failed':
-        return 'status-badge-rejected';
-      default:
-        return 'status-badge-pending';
-    }
-  };
+  const captureStatus = getStatusDisplay(invoice.capture_status);
+  const processingStatus = getStatusDisplay(invoice.processing_status);
 
   return (
     <div className="space-y-6">
@@ -360,11 +356,11 @@ export default function InvoiceDetailPage() {
 
       {/* Status & Queue Info */}
       <div className="flex flex-wrap items-center gap-3">
-        <span className={`status-badge ${getStatusColor(invoice.capture_status)}`}>
-          Capture: {invoice.capture_status.replace(/_/g, ' ')}
+        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${captureStatus.bg} ${captureStatus.text}`}>
+          Capture: {captureStatus.label}
         </span>
-        <span className={`status-badge ${getStatusColor(invoice.processing_status)}`}>
-          Processing: {invoice.processing_status.replace(/_/g, ' ')}
+        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${processingStatus.bg} ${processingStatus.text}`}>
+          Processing: {processingStatus.label}
         </span>
         {/* OCR Confidence Badge (Sprint 3) */}
         {invoice.ocr_confidence !== undefined && invoice.ocr_confidence !== null && (
@@ -429,7 +425,7 @@ export default function InvoiceDetailPage() {
                       <p className="text-red-500 text-sm">{previewError}</p>
                     </div>
                   </div>
-                ) : !previewBlobUrl ? (
+                ) : previewLoading || !previewBlobUrl ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
                   </div>

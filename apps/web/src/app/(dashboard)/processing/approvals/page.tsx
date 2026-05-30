@@ -15,7 +15,6 @@ import {
   Calendar,
   AlertCircle,
   Loader2,
-  Filter,
   Search,
   ChevronRight,
   ListChecks,
@@ -42,7 +41,7 @@ export default function ApprovalsPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
 
-  const { data: approvals, isLoading } = useQuery({
+  const { data: approvals, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['pending-approvals'],
     queryFn: () => workflowsApi.listPendingApprovals(),
   });
@@ -84,6 +83,10 @@ export default function ApprovalsPage() {
   });
 
   const pendingCount = approvals?.length || 0;
+  const overdueCount = approvals?.filter((approval: ApprovalItem) => {
+    if (!approval.due_date) return false;
+    return new Date(approval.due_date) < new Date();
+  }).length;
 
   const visibleIds = filteredApprovals?.map((a: ApprovalItem) => a.id) ?? [];
   const allSelected = visibleIds.length > 0 && visibleIds.every((id: string) => selectedIds.has(id));
@@ -208,7 +211,7 @@ export default function ApprovalsPage() {
               <CheckCircle className="w-5 h-5 text-success" />
             </div>
             <div>
-              <p className="text-2xl font-semibold text-foreground">—</p>
+              <p className="text-sm font-semibold text-muted-foreground">Unavailable</p>
               <p className="text-sm text-muted-foreground">Approved Today</p>
             </div>
           </div>
@@ -219,7 +222,7 @@ export default function ApprovalsPage() {
               <AlertCircle className="w-5 h-5 text-error" />
             </div>
             <div>
-              <p className="text-2xl font-semibold text-foreground">—</p>
+              <p className="text-2xl font-semibold text-foreground">{isError ? '--' : (overdueCount ?? 0)}</p>
               <p className="text-sm text-muted-foreground">Overdue</p>
             </div>
           </div>
@@ -239,10 +242,6 @@ export default function ApprovalsPage() {
               className="input pl-9"
             />
           </div>
-          <button className="btn btn-secondary">
-            <Filter className="w-4 h-4 mr-1.5" />
-            Filters
-          </button>
         </div>
       </div>
 
@@ -256,6 +255,19 @@ export default function ApprovalsPage() {
               <Loader2 className="w-5 h-5 animate-spin" />
               Loading approvals...
             </div>
+          </div>
+        ) : isError ? (
+          <div className="p-12 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-error/10 flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-8 h-8 text-error" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground mb-2">Unable to load approvals</h3>
+            <p className="text-muted-foreground max-w-sm mx-auto mb-4">
+              {error instanceof Error ? error.message : 'The approval queue could not be loaded.'}
+            </p>
+            <button onClick={() => refetch()} className="btn btn-secondary">
+              Retry
+            </button>
           </div>
         ) : !filteredApprovals || filteredApprovals.length === 0 ? (
           <div className="p-12 text-center">

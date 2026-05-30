@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DashboardPage from '../page';
-import { reportsApi, dashboardApi } from '@/lib/api';
+import { reportsApi, dashboardApi, auditApi } from '@/lib/api';
 
 // Mock the API module
 vi.mock('@/lib/api', () => ({
@@ -46,6 +46,28 @@ vi.mock('@/lib/api', () => ({
         total_pending_actions: 0,
       },
     }),
+    getKpis: vi.fn().mockResolvedValue({
+      queue_count: 0,
+      approved_count: 0,
+      paid_count: 0,
+      rejected_count: 0,
+      aging: {
+        aging_0_7: 0,
+        aging_0_7_amount: 0,
+        aging_8_14: 0,
+        aging_8_14_amount: 0,
+        aging_15_30: 0,
+        aging_15_30_amount: 0,
+        aging_30_plus: 0,
+        aging_30_plus_amount: 0,
+      },
+      spend_by_vendor: [],
+      total_spend_30d: 0,
+      avg_processing_hours: 0,
+    }),
+  },
+  auditApi: {
+    list: vi.fn().mockResolvedValue({ data: [] }),
   },
 }));
 
@@ -141,6 +163,26 @@ const mockSummaryData = {
 describe('DashboardPage error handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(auditApi.list).mockResolvedValue({ data: [] } as any);
+    vi.mocked(dashboardApi.getKpis).mockResolvedValue({
+      queue_count: 0,
+      approved_count: 0,
+      paid_count: 0,
+      rejected_count: 0,
+      aging: {
+        aging_0_7: 0,
+        aging_0_7_amount: 0,
+        aging_8_14: 0,
+        aging_8_14_amount: 0,
+        aging_15_30: 0,
+        aging_15_30_amount: 0,
+        aging_30_plus: 0,
+        aging_30_plus_amount: 0,
+      },
+      spend_by_vendor: [],
+      total_spend_30d: 0,
+      avg_processing_hours: 0,
+    });
   });
 
   it('shows error banner and dashes when API fails, not zeros', async () => {
@@ -251,5 +293,36 @@ describe('DashboardPage error handling', () => {
 
     expect(screen.getByText('87.5%')).toBeInTheDocument();
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+  });
+
+  it('does not show static recent activity when audit activity fails', async () => {
+    vi.mocked(reportsApi.dashboardSummary).mockResolvedValueOnce(mockSummaryData);
+    vi.mocked(auditApi.list).mockRejectedValueOnce(new Error('audit unavailable'));
+
+    renderWithProviders(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/unable to load recent activity/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('audit unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('AWS-2024-JAN approved')).not.toBeInTheDocument();
+    expect(screen.queryByText('6 invoices uploaded via OCR')).not.toBeInTheDocument();
+  });
+
+  it('shows explicit errors for insights and KPI failures', async () => {
+    vi.mocked(reportsApi.dashboardSummary).mockResolvedValueOnce(mockSummaryData);
+    vi.mocked(dashboardApi.metrics).mockRejectedValueOnce(new Error('metrics unavailable'));
+    vi.mocked(dashboardApi.getKpis).mockRejectedValueOnce(new Error('kpis unavailable'));
+
+    renderWithProviders(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/unable to load insights/i)).toBeInTheDocument();
+      expect(screen.getByText(/unable to load real-time KPIs/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('metrics unavailable')).toBeInTheDocument();
+    expect(screen.getByText('kpis unavailable')).toBeInTheDocument();
   });
 });

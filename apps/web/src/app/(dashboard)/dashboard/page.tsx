@@ -44,27 +44,38 @@ export default function DashboardPage() {
     queryFn: () => reportsApi.dashboardSummary(),
   });
 
-  const { data: metrics, isLoading: metricsLoading, isError: metricsError } = useQuery({
+  const {
+    data: metrics,
+    isLoading: metricsLoading,
+    isError: metricsError,
+    error: metricsErrorDetail,
+    refetch: refetchMetrics,
+  } = useQuery({
     queryKey: ['dashboard-metrics'],
     queryFn: () => dashboardApi.metrics(),
   });
 
-  const { data: auditData } = useQuery({
+  const {
+    data: auditData,
+    isLoading: auditLoading,
+    isError: auditError,
+    error: auditErrorDetail,
+    refetch: refetchAudit,
+  } = useQuery({
     queryKey: ['audit-recent'],
     queryFn: () => auditApi.list({ per_page: 5 }),
   });
 
-  const { data: kpis, isLoading: kpisLoading } = useQuery({
+  const {
+    data: kpis,
+    isLoading: kpisLoading,
+    isError: kpisError,
+    error: kpisErrorDetail,
+    refetch: refetchKpis,
+  } = useQuery({
     queryKey: ['dashboard-kpis'],
     queryFn: () => dashboardApi.getKpis(),
   });
-
-  const staticFallback = [
-    { action: 'AWS-2024-JAN approved', time: '2 min ago', icon: CheckCircle as LucideIcon, colorKey: 'success' },
-    { action: '6 invoices uploaded via OCR', time: '15 min ago', icon: Upload as LucideIcon, colorKey: 'capture' },
-    { action: 'MMA-Q1-2024 sent for approval', time: '1 hour ago', icon: AlertCircle as LucideIcon, colorKey: 'warning' },
-    { action: 'DevOps Solutions LLC added', time: '3 hours ago', icon: Users as LucideIcon, colorKey: 'vendor' },
-  ];
 
   function mapAuditToActivity(entry: AuditEntry) {
     const actionToStyle: Record<string, { icon: LucideIcon; colorKey: string }> = {
@@ -99,9 +110,30 @@ export default function DashboardPage() {
     };
   }
 
-  const activityItems = auditData?.data?.length
-    ? auditData.data.map(mapAuditToActivity)
-    : staticFallback;
+  const activityItems = auditData?.data?.map(mapAuditToActivity) ?? [];
+
+  const DashboardPanelError = ({
+    title,
+    error,
+    onRetry,
+  }: {
+    title: string;
+    error: unknown;
+    onRetry: () => void;
+  }) => (
+    <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 flex items-center gap-3">
+      <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
+      <div className="flex-1">
+        <p className="text-sm font-medium text-destructive">{title}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {error instanceof Error ? error.message : 'Please try again'}
+        </p>
+      </div>
+      <button onClick={onRetry} className="text-sm font-medium text-primary hover:underline">
+        Retry
+      </button>
+    </div>
+  );
 
   // Stats based on enabled modules
   const allStats = [
@@ -359,7 +391,25 @@ export default function DashboardPage() {
           </h2>
           <div className="card p-4">
             <div className="space-y-4">
-              {activityItems.map((activity, i) => {
+              {auditLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex items-start gap-3 animate-pulse">
+                    <div className="w-7 h-7 rounded-lg bg-secondary" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-4 w-3/4 bg-secondary rounded" />
+                      <div className="h-3 w-1/3 bg-secondary rounded" />
+                    </div>
+                  </div>
+                ))
+              ) : auditError ? (
+                <DashboardPanelError
+                  title="Unable to load recent activity"
+                  error={auditErrorDetail}
+                  onRetry={() => refetchAudit()}
+                />
+              ) : activityItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No recent activity.</p>
+              ) : activityItems.map((activity, i) => {
                 const colorValue = getColorValue(activity.colorKey);
                 return (
                   <div key={i} className="flex items-start gap-3 animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
@@ -382,13 +432,19 @@ export default function DashboardPage() {
       </div>
 
       {/* Insights - Rich Metrics */}
-      {hasModule('reporting') && !metricsError && (
+      {hasModule('reporting') && (
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
             <BarChart3 className="w-4 h-4" />
             Insights
           </h2>
-          {metricsLoading ? (
+          {metricsError ? (
+            <DashboardPanelError
+              title="Unable to load insights"
+              error={metricsErrorDetail}
+              onRetry={() => refetchMetrics()}
+            />
+          ) : metricsLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="card p-5 space-y-3">
@@ -397,7 +453,7 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          ) : metrics && (
+          ) : metrics ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="card p-5">
@@ -443,6 +499,10 @@ export default function DashboardPage() {
                 </div>
               )}
             </>
+          ) : (
+            <div className="card p-5">
+              <p className="text-sm text-muted-foreground">No insight data available.</p>
+            </div>
           )}
         </div>
       )}
@@ -454,7 +514,13 @@ export default function DashboardPage() {
             <Target className="w-4 h-4" />
             Real-Time KPIs
           </h2>
-          {kpisLoading ? (
+          {kpisError ? (
+            <DashboardPanelError
+              title="Unable to load real-time KPIs"
+              error={kpisErrorDetail}
+              onRetry={() => refetchKpis()}
+            />
+          ) : kpisLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="card p-5 space-y-3">
@@ -463,7 +529,7 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          ) : kpis && (
+          ) : kpis ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="card p-5">
@@ -549,6 +615,10 @@ export default function DashboardPage() {
                 </div>
               </div>
             </>
+          ) : (
+            <div className="card p-5">
+              <p className="text-sm text-muted-foreground">No KPI data available.</p>
+            </div>
           )}
         </div>
       )}

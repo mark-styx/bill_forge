@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { workflowsApi } from '@/lib/api';
+import { useStatusConfig } from '@/hooks/useStatusConfig';
 import {
   Layers,
   Plus,
@@ -52,15 +53,9 @@ const queueTypeConfig: Record<string, { icon: typeof AlertCircle; color: string;
   },
 };
 
-const flowStages = [
-  { name: 'OCR Error', color: 'bg-error/10 text-error border-error/20' },
-  { name: 'AP Queue', color: 'bg-processing/10 text-processing border-processing/20' },
-  { name: 'Pending Approval', color: 'bg-warning/10 text-warning border-warning/20' },
-  { name: 'Ready for Payment', color: 'bg-success/10 text-success border-success/20' },
-];
-
 export default function WorkQueuesPage() {
   const [searchQuery, setSearchQuery] = useState('');
+  const { getStatusDisplay } = useStatusConfig();
 
   const { data: queues, isLoading } = useQuery({
     queryKey: ['work-queues'],
@@ -107,16 +102,19 @@ export default function WorkQueuesPage() {
             Queue Flow
           </h2>
           <div className="flex items-center justify-between overflow-x-auto pb-2 gap-2">
-            {flowStages.map((stage, idx) => (
-              <div key={stage.name} className="flex items-center">
-                <div className={`px-4 py-2.5 rounded-xl border text-sm font-medium whitespace-nowrap ${stage.color}`}>
-                  {stage.name}
+            {['failed', 'ready_for_review', 'pending_approval', 'ready_for_payment'].map((statusKey, idx, stages) => {
+              const stage = getStatusDisplay(statusKey);
+              return (
+                <div key={stage.key} className="flex items-center">
+                  <div className={`px-4 py-2.5 rounded-xl border text-sm font-medium whitespace-nowrap ${stage.bg} ${stage.text}`}>
+                    {stage.label}
+                  </div>
+                  {idx < stages.length - 1 && (
+                    <ArrowRight className="w-5 h-5 text-muted-foreground mx-2 flex-shrink-0" />
+                  )}
                 </div>
-                {idx < flowStages.length - 1 && (
-                  <ArrowRight className="w-5 h-5 text-muted-foreground mx-2 flex-shrink-0" />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

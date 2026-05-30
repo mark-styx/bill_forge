@@ -210,4 +210,17 @@ describe('ApprovalsPage bulk actions', () => {
       expect(mockToast.warning).toHaveBeenCalledWith('2 succeeded, 1 failed');
     });
   });
+
+  it('shows an error state instead of all caught up when approvals fail to load', async () => {
+    vi.mocked(workflowsApi.listPendingApprovals).mockRejectedValueOnce(new Error('approvals unavailable'));
+
+    renderWithProviders(<ApprovalsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/unable to load approvals/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('approvals unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/all caught up/i)).not.toBeInTheDocument();
+  });
 });
