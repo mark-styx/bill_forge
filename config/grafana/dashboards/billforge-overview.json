@@ -136,6 +136,30 @@
       }
     },
     {
+      "title": "Sub-200ms SLO Compliance",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 4 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(billforge_api_sub_200ms_compliance_total{compliant=\"true\"}[5m])) / sum(rate(billforge_api_sub_200ms_compliance_total[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 90 },
+              { "color": "green", "value": 95 }
+            ]
+          }
+        }
+      }
+    },
+    {
       "title": "Invoice Processing Rate",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },

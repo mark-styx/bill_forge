@@ -68,6 +68,37 @@ groups:
           description: "P95 latency is {{ $value | humanizeDuration }} (critical threshold: 2s)"
           runbook_url: "docs/runbooks/on-call-operations.md#apihighlatency"
 
+      # Sub-200ms SLO Compliance (Speed pillar)
+      - alert: APISub200msSLOWarning
+        expr: |
+          sum(rate(billforge_api_sub_200ms_compliance_total{compliant="true"}[5m]))
+          /
+          sum(rate(billforge_api_sub_200ms_compliance_total[5m]))
+          < 0.95
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Sub-200ms SLO compliance degraded"
+          description: "Sub-200ms SLO compliance is {{ $value | humanizePercentage }} (warning threshold: 95%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apisub200msslo"
+
+      - alert: APISub200msSLOCritical
+        expr: |
+          sum(rate(billforge_api_sub_200ms_compliance_total{compliant="true"}[5m]))
+          /
+          sum(rate(billforge_api_sub_200ms_compliance_total[5m]))
+          < 0.90
+        for: 10m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "Sub-200ms SLO compliance critically low"
+          description: "Sub-200ms SLO compliance is {{ $value | humanizePercentage }} (critical threshold: 90%)"
+          runbook_url: "docs/runbooks/on-call-operations.md#apisub200msslo"
+
       - alert: APIDown
         expr: up{job="billforge-api"} == 0
         for: 2m

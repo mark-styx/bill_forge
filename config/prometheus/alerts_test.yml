@@ -1,0 +1,47 @@
+# Prometheus alert rule tests for BillForge
+#
+# Run: promtool test rules config/prometheus/alerts_test.yml
+
+rule_files:
+  - alerts.yml
+
+tests:
+  # Scenario 1: 98% compliance — no alert should fire
+  - interval: 1m
+    input_series:
+      - series: 'billforge_api_sub_200ms_compliance_total{endpoint="/api/v1/invoices",compliant="true"}'
+        values: "0+1x15"
+      - series: 'billforge_api_sub_200ms_compliance_total{endpoint="/api/v1/invoices",compliant="false"}'
+        values: "0+0.02x15"
+    alert_rule_test:
+      - alertname: APISub200msSLOWarning
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: APISub200msSLOCritical
+        eval_time: 10m
+        exp_alerts: []
+
+  # Scenario 2: 80% non-compliant — both warning and critical fire
+  - interval: 1m
+    input_series:
+      - series: 'billforge_api_sub_200ms_compliance_total{endpoint="/api/v1/invoices",compliant="true"}'
+        values: "0+1x15"
+      - series: 'billforge_api_sub_200ms_compliance_total{endpoint="/api/v1/invoices",compliant="false"}'
+        values: "0+4x15"
+    alert_rule_test:
+      - alertname: APISub200msSLOWarning
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Sub-200ms SLO compliance degraded"
+      - alertname: APISub200msSLOCritical
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: api
+            exp_annotations:
+              summary: "Sub-200ms SLO compliance critically low"
