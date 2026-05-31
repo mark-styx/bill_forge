@@ -32,6 +32,8 @@ fn tenant_context(enabled_modules: Vec<Module>) -> TenantContext {
             timezone: "UTC".to_string(),
             default_currency: "USD".to_string(),
             ocr_provider: None,
+            auto_approval_threshold: None,
+            auto_approval_enabled: true,
             features: TenantFeatures::default(),
         },
     }

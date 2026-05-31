@@ -190,6 +190,14 @@ pub struct TenantSettings {
     #[serde(default)]
     pub ocr_provider: Option<String>,
 
+    /// Per-tenant auto-approval confidence threshold (None → use global default 0.95).
+    #[serde(default)]
+    pub auto_approval_threshold: Option<f32>,
+
+    /// Whether the touchless auto-approval lane is enabled for this tenant.
+    #[serde(default = "default_true")]
+    pub auto_approval_enabled: bool,
+
     /// Feature flags
     pub features: TenantFeatures,
 }
@@ -203,9 +211,15 @@ impl Default for TenantSettings {
             timezone: "UTC".to_string(),
             default_currency: "USD".to_string(),
             ocr_provider: None,
+            auto_approval_threshold: None,
+            auto_approval_enabled: true,
             features: TenantFeatures::default(),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Feature flags per tenant

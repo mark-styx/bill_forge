@@ -41,6 +41,8 @@ fn default_settings() -> TenantSettings {
         ocr_provider: None,
         logo_url: None,
         primary_color: None,
+        auto_approval_threshold: None,
+        auto_approval_enabled: true,
         features: TenantFeatures::default(),
     }
 }

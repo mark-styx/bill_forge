@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/suggest-categories", post(suggest_categories))
         .route("/:id/merge-duplicate", post(merge_duplicate))
         .route("/:id/reject-duplicate", post(reject_duplicate))
+        .route("/:id/unwind-approval", post(unwind_auto_approval))
         .route("/ml-accuracy", get(get_ml_accuracy_metrics))
 }
 
@@ -2156,6 +2157,140 @@ fn observe_field_confidence(result: &billforge_core::domain::OcrExtractionResult
             .with_label_values(&[field])
             .observe(*conf as f64);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Touchless auto-approval unwind endpoint
+// ---------------------------------------------------------------------------
+
+/// Request body for unwinding a touchless auto-approval.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UnwindRequest {
+    pub reason: String,
+}
+
+/// Response body for a successful unwind.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UnwindResponse {
+    pub invoice_id: String,
+    pub reverted_to: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/unwind-approval",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    request_body = UnwindRequest,
+    responses(
+        (status = 200, description = "Auto-approval unwound, invoice reverted", body = UnwindResponse),
+        (status = 404, description = "Invoice not found"),
+        (status = 409, description = "Cannot unwind: no touchless auto-approval or subsequent action exists"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn unwind_auto_approval(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Path(id): Path<String>,
+    Json(body): Json<UnwindRequest>,
+) -> ApiResult<Json<UnwindResponse>> {
+    let invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+
+    // Load the invoice (tenant-scoped)
+    let invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Query the most recent invoice_audit_log entry for this invoice
+    let latest_audit: Option<(
+        Uuid,
+        Option<Uuid>,
+        Option<String>,
+        String,
+        serde_json::Value,
+    )> = sqlx::query_as(
+        r#"SELECT id, actor_id, from_status, event_type, metadata
+               FROM invoice_audit_log
+               WHERE tenant_id = $1 AND invoice_id = $2
+               ORDER BY created_at DESC
+               LIMIT 1"#,
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(invoice.id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query audit log: {}", e)))?;
+
+    let (audit_id, _actor_id, from_status, event_type, _metadata) =
+        latest_audit.ok_or_else(|| {
+            billforge_core::Error::Conflict("No audit trail found for this invoice".to_string())
+        })?;
+
+    // Only allow unwinding the most recent touchless auto-approval
+    if event_type != "touchless_auto_approval" {
+        return Err(billforge_core::Error::Conflict(
+            "Most recent action is not a touchless auto-approval".to_string(),
+        )
+        .into());
+    }
+
+    let reverted_status = from_status.unwrap_or_else(|| "received".to_string());
+
+    // Revert the invoice status
+    sqlx::query(
+        "UPDATE invoices SET status = $1, processing_status = $2, updated_at = NOW() WHERE id = $3 AND tenant_id = $4",
+    )
+    .bind(&reverted_status)
+    .bind("submitted")
+    .bind(invoice.id.as_uuid())
+    .bind(*tenant.tenant_id.as_uuid())
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to revert invoice status: {}", e)))?;
+
+    // Write unwind audit row
+    sqlx::query(
+        r#"INSERT INTO invoice_audit_log (tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'auto_approval_unwound', $6, NOW())"#,
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(invoice.id.as_uuid())
+    .bind(user.user_id.as_uuid())
+    .bind("approved")
+    .bind(&reverted_status)
+    .bind(serde_json::json!({
+        "reason": body.reason,
+        "original_audit_id": audit_id.to_string(),
+    }))
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to write unwind audit entry: {}", e)))?;
+
+    // Re-fetch updated invoice
+    let updated_invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    Ok(Json(UnwindResponse {
+        invoice_id: updated_invoice.id.to_string(),
+        reverted_to: reverted_status,
+    }))
 }
 
 #[cfg(test)]

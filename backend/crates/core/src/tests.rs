@@ -481,6 +481,8 @@ mod tenant_settings_tests {
             timezone: "America/New_York".to_string(),
             default_currency: "USD".to_string(),
             ocr_provider: Some("aws_textract".to_string()),
+            auto_approval_threshold: None,
+            auto_approval_enabled: true,
             features: TenantFeatures {
                 advanced_ocr: true,
                 api_access: true,

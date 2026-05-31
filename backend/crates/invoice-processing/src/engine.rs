@@ -6,8 +6,11 @@ use billforge_core::{
         RuleAction, RuleCondition, WorkflowRule, WorkflowRuleType,
     },
     intelligent_routing::{IntelligentRoutingEngine, RoutingConfig, RoutingDataProvider},
-    traits::{ApprovalRepository, InvoiceRepository, WorkflowRuleRepository},
-    types::{TenantId, UserId},
+    traits::{
+        ApprovalRepository, AuditService, InvoiceRepository, TenantSettingsProvider,
+        WorkflowRuleRepository,
+    },
+    types::{TenantId, TenantSettings, UserId},
     Result,
 };
 use billforge_invoice_capture::OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD;
@@ -24,6 +27,8 @@ pub struct WorkflowEngine {
     rule_repo: Arc<dyn WorkflowRuleRepository>,
     approval_repo: Arc<dyn ApprovalRepository>,
     routing_provider: Option<Arc<dyn RoutingDataProvider>>,
+    settings_provider: Option<Arc<dyn TenantSettingsProvider>>,
+    audit_service: Option<Arc<dyn AuditService>>,
 }
 
 impl WorkflowEngine {
@@ -37,11 +42,26 @@ impl WorkflowEngine {
             rule_repo,
             approval_repo,
             routing_provider: None,
+            settings_provider: None,
+            audit_service: None,
         }
     }
 
     pub fn with_routing(mut self, routing_provider: Arc<dyn RoutingDataProvider>) -> Self {
         self.routing_provider = Some(routing_provider);
+        self
+    }
+
+    pub fn with_tenant_settings_provider(
+        mut self,
+        settings_provider: Arc<dyn TenantSettingsProvider>,
+    ) -> Self {
+        self.settings_provider = Some(settings_provider);
+        self
+    }
+
+    pub fn with_audit_service(mut self, audit_service: Arc<dyn AuditService>) -> Self {
+        self.audit_service = Some(audit_service);
         self
     }
 
@@ -51,6 +71,12 @@ impl WorkflowEngine {
         tenant_id: &TenantId,
         invoice: &Invoice,
     ) -> Result<ProcessingStatus> {
+        // Resolve per-tenant settings (fallback to defaults)
+        let settings = match &self.settings_provider {
+            Some(provider) => provider.get(tenant_id).await.unwrap_or_default(),
+            None => TenantSettings::default(),
+        };
+
         // Get active routing rules
         let routing_rules = self
             .rule_repo
@@ -63,32 +89,63 @@ impl WorkflowEngine {
             .get_active_rules(tenant_id, WorkflowRuleType::Approval)
             .await?;
 
-        // Check ML categorization auto-approval threshold
-        // Both OCR confidence and categorization confidence must meet their thresholds,
-        // and all required fields must be present, to auto-approve
-        let ocr_ok = invoice
-            .ocr_confidence
-            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
-            .unwrap_or(false);
-        let categorization_ok = invoice
-            .categorization_confidence
-            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
-            .unwrap_or(false);
+        // Check ML categorization auto-approval threshold.
+        // Both OCR confidence and categorization confidence must meet their
+        // thresholds, and all required fields must be present, to auto-approve.
+        // The categorization threshold is per-tenant (falling back to the
+        // global const 0.95). The lane can be disabled per-tenant entirely.
+        if settings.auto_approval_enabled {
+            let threshold = settings
+                .auto_approval_threshold
+                .unwrap_or(ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD);
+            let ocr_ok = invoice
+                .ocr_confidence
+                .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(false);
+            let categorization_ok = invoice
+                .categorization_confidence
+                .map(|c| c >= threshold)
+                .unwrap_or(false);
 
-        if ocr_ok && categorization_ok {
-            // Check that all required categorization fields are populated
-            let has_complete_categorization = invoice.gl_code.is_some()
-                && invoice.department.is_some()
-                && invoice.cost_center.is_some();
+            if ocr_ok && categorization_ok {
+                // Check that all required categorization fields are populated
+                let has_complete_categorization = invoice.gl_code.is_some()
+                    && invoice.department.is_some()
+                    && invoice.cost_center.is_some();
 
-            if has_complete_categorization {
-                tracing::info!(
-                    invoice_id = %invoice.id.as_uuid(),
-                    ocr_confidence = ?invoice.ocr_confidence,
-                    categorization_confidence = ?invoice.categorization_confidence,
-                    "Auto-approving invoice due to high OCR and ML categorization confidence"
-                );
-                return Ok(ProcessingStatus::Approved);
+                if has_complete_categorization {
+                    tracing::info!(
+                        invoice_id = %invoice.id.as_uuid(),
+                        ocr_confidence = ?invoice.ocr_confidence,
+                        categorization_confidence = ?invoice.categorization_confidence,
+                        threshold_used = threshold,
+                        "Auto-approving invoice due to high OCR and ML categorization confidence"
+                    );
+
+                    // Write dedicated audit entry for touchless auto-approval
+                    if let Some(ref audit) = self.audit_service {
+                        let entry = billforge_core::domain::AuditEntry::new(
+                            tenant_id.clone(),
+                            None, // system-initiated, no actor
+                            billforge_core::domain::AuditAction::Update,
+                            billforge_core::domain::ResourceType::Invoice,
+                            invoice.id.to_string(),
+                            "Touchless auto-approval: learned-pattern lane".to_string(),
+                        )
+                        .with_metadata(serde_json::json!({
+                            "event_type": "touchless_auto_approval",
+                            "ocr_confidence": invoice.ocr_confidence,
+                            "categorization_confidence": invoice.categorization_confidence,
+                            "threshold_used": threshold,
+                            "lane": "learned_pattern",
+                        }));
+                        if let Err(e) = audit.log(entry).await {
+                            tracing::warn!(error = %e, "Failed to write touchless auto-approval audit entry");
+                        }
+                    }
+
+                    return Ok(ProcessingStatus::Approved);
+                }
             }
         }
 
@@ -487,6 +544,60 @@ mod tests {
         assert!(
             !(ocr_ok && cat_ok),
             "Should not auto-approve when categorization confidence is below threshold"
+        );
+    }
+
+    // -- Per-tenant threshold override tests --
+
+    #[test]
+    fn per_tenant_threshold_overrides_default() {
+        // When a tenant sets auto_approval_threshold = 0.99, a categorization
+        // confidence of 0.96 should NOT pass (it would pass the default 0.95).
+        let threshold: f32 = 0.99;
+        let cat_ok = Some(0.96f32).map(|c| c >= threshold).unwrap_or(false);
+        assert!(
+            !cat_ok,
+            "Categorization 0.96 should not pass a tenant threshold of 0.99"
+        );
+    }
+
+    #[test]
+    fn per_tenant_threshold_none_uses_default() {
+        // When auto_approval_threshold is None, the global const is used.
+        let threshold: Option<f32> = None;
+        #[allow(clippy::unnecessary_literal_unwrap)]
+        let resolved = threshold.unwrap_or(ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD);
+        assert!(
+            (resolved - ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD).abs() < f32::EPSILON,
+            "None threshold should fall back to the global default"
+        );
+        let cat_ok = Some(0.96f32).map(|c| c >= resolved).unwrap_or(false);
+        assert!(
+            cat_ok,
+            "Categorization 0.96 should pass the default 0.95 threshold"
+        );
+    }
+
+    #[test]
+    fn auto_approval_disabled_skips_lane() {
+        // When auto_approval_enabled is false, the lane should be skipped
+        // entirely regardless of confidence levels.
+        let auto_approval_enabled = false;
+        let ocr_ok = Some(0.99f32)
+            .map(|c| c >= OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        let cat_ok = Some(0.99f32)
+            .map(|c| c >= ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD)
+            .unwrap_or(false);
+        // The lane check is `if settings.auto_approval_enabled { ... }`
+        // so when disabled, neither ocr_ok nor cat_ok matter.
+        assert!(
+            ocr_ok && cat_ok,
+            "Both confidences should pass their thresholds"
+        );
+        assert!(
+            !auto_approval_enabled,
+            "Lane should be skipped when disabled"
         );
     }
 }

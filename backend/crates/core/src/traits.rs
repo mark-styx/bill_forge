@@ -586,3 +586,9 @@ pub trait UserRepository: Send + Sync {
     /// Get all user emails for a specific role
     async fn get_emails_by_role(&self, tenant_id: &TenantId, role: &str) -> Result<Vec<String>>;
 }
+
+/// Provider for per-tenant settings consumed by the workflow engine.
+#[async_trait]
+pub trait TenantSettingsProvider: Send + Sync {
+    async fn get(&self, tenant_id: &TenantId) -> Result<TenantSettings>;
+}

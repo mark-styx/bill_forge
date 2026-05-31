@@ -273,6 +273,8 @@ impl AuthService {
             timezone: input.timezone.unwrap_or_else(|| "UTC".to_string()),
             default_currency: input.default_currency.unwrap_or_else(|| "USD".to_string()),
             ocr_provider: input.ocr_provider.clone(),
+            auto_approval_threshold: None,
+            auto_approval_enabled: true,
             features: billforge_core::TenantFeatures {
                 advanced_ocr: matches!(
                     input.ocr_provider.as_deref(),
