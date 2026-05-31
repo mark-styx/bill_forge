@@ -10,16 +10,18 @@ use axum::{
     http::{header, Method, Request, StatusCode},
 };
 use billforge_api::{routes, AppState, Config};
+use billforge_auth::{JwtConfig, JwtService};
+use billforge_core::{Role, TenantId, UserId};
 use serde_json::Value;
 use tower::util::ServiceExt;
 
 async fn create_test_state() -> AppState {
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
-    std::env::set_var(
-        "DATABASE_URL",
-        "postgres://postgres@localhost:5432/billforge_test",
-    );
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/billforge_test".into());
+    std::env::set_var("DATABASE_URL", database_url);
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
@@ -35,38 +37,33 @@ async fn create_test_router() -> axum::Router {
     routes::create_router(state)
 }
 
-async fn get_auth_token(app: &axum::Router) -> String {
-    let login_body = serde_json::json!({
-        "tenant_id": "00000000-0000-0000-0000-000000000001",
-        "email": "admin@example.com",
-        "password": "password123"
+fn get_auth_token() -> String {
+    let jwt = JwtService::new(JwtConfig {
+        secret: "test-secret-key-for-testing-32-bytes".to_string(),
+        access_token_expiry_hours: 1,
+        refresh_token_expiry_days: 7,
     });
+    let tenant_id: TenantId = "11111111-1111-1111-1111-111111111111"
+        .parse()
+        .expect("sandbox tenant id should parse");
+    let user_id = UserId::from_uuid(
+        uuid::Uuid::parse_str("17b66d9b-6da5-4cfb-93ad-f8d2f1aefe8f")
+            .expect("sandbox user id should parse"),
+    );
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/api/v1/auth/login")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_string(&login_body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .expect("Login failed");
-
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-
-    json["token"].as_str().unwrap().to_string()
+    jwt.create_access_token(
+        &user_id,
+        &tenant_id,
+        "admin@sandbox.local",
+        &[Role::TenantAdmin],
+    )
+    .expect("token creation should succeed")
 }
 
 #[tokio::test]
 async fn test_inbox_returns_only_assigned_items_for_user() {
     let app = create_test_router().await;
-    let token = get_auth_token(&app).await;
+    let token = get_auth_token();
 
     // The inbox endpoint should respond 200 and return an array
     let response = app
@@ -110,7 +107,7 @@ async fn test_inbox_returns_only_assigned_items_for_user() {
 #[tokio::test]
 async fn test_inbox_items_have_queue_fields() {
     let app = create_test_router().await;
-    let token = get_auth_token(&app).await;
+    let token = get_auth_token();
 
     let response = app
         .clone()
@@ -184,7 +181,7 @@ async fn test_inbox_requires_auth() {
 #[tokio::test]
 async fn test_inbox_pagination_params() {
     let app = create_test_router().await;
-    let token = get_auth_token(&app).await;
+    let token = get_auth_token();
 
     let response = app
         .clone()

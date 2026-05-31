@@ -1,20 +1,21 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import InboxPage from '../page';
 
 // Mock next/navigation
-const mockPush = jest.fn();
-jest.mock('next/navigation', () => ({
+const mockPush = vi.fn();
+vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
   usePathname: () => '/processing/queues/inbox',
 }));
 
 // Mock the API
-const mockCompleteQueueItem = jest.fn().mockResolvedValue({ data: { success: true } });
-const mockClaimQueueItem = jest.fn().mockResolvedValue({ data: {} });
-const mockListInboxItems = jest.fn();
+const mockCompleteQueueItem = vi.fn().mockResolvedValue({ data: { success: true } });
+const mockClaimQueueItem = vi.fn().mockResolvedValue({ data: {} });
+const mockListInboxItems = vi.fn();
 
-jest.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', () => ({
   workflowsApi: {
     listInboxItems: (...args: unknown[]) => mockListInboxItems(...args),
     completeQueueItem: (...args: unknown[]) => mockCompleteQueueItem(...args),
@@ -81,9 +82,13 @@ function renderInboxPage() {
   );
 }
 
+function getVendorListButton(vendorName: string) {
+  return screen.getAllByText(vendorName)[0].closest('button')!;
+}
+
 describe('InboxPage', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockListInboxItems.mockResolvedValue({
       data: mockItems,
       pagination: { page: 1, per_page: 100, total_items: mockItems.length, total_pages: 1 },
@@ -97,7 +102,7 @@ describe('InboxPage', () => {
     expect(mockListInboxItems).toHaveBeenCalledWith({ per_page: 100 });
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
       expect(screen.getByText('Beta LLC')).toBeInTheDocument();
       expect(screen.getByText('Gamma Inc')).toBeInTheDocument();
     });
@@ -107,18 +112,18 @@ describe('InboxPage', () => {
     renderInboxPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
     });
 
     // First item should be focused by default
-    const acmeButton = screen.getByText('Acme Corp').closest('button')!;
+    const acmeButton = getVendorListButton('Acme Corp');
     expect(acmeButton).toHaveClass('ring-2');
 
     // Press j to move to next
     fireEvent.keyDown(window, { key: 'j' });
 
     await waitFor(() => {
-      const betaButton = screen.getByText('Beta LLC').closest('button')!;
+      const betaButton = getVendorListButton('Beta LLC');
       expect(betaButton).toHaveClass('ring-2');
     });
 
@@ -126,7 +131,7 @@ describe('InboxPage', () => {
     fireEvent.keyDown(window, { key: 'k' });
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp').closest('button')!).toHaveClass('ring-2');
+      expect(getVendorListButton('Acme Corp')).toHaveClass('ring-2');
     });
   });
 
@@ -134,7 +139,7 @@ describe('InboxPage', () => {
     renderInboxPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
     });
 
     // First item focused by default (Acme Corp, item-1, queue-1)
@@ -149,7 +154,7 @@ describe('InboxPage', () => {
     renderInboxPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
     });
 
     fireEvent.keyDown(window, { key: 'r' });
@@ -163,7 +168,7 @@ describe('InboxPage', () => {
     renderInboxPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
     });
 
     fireEvent.keyDown(window, { key: 'c' });
@@ -177,7 +182,7 @@ describe('InboxPage', () => {
     renderInboxPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getAllByText('Acme Corp')[0]).toBeInTheDocument();
     });
 
     fireEvent.keyDown(window, { key: 'o' });

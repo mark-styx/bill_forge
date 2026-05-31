@@ -1,24 +1,25 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OcrExceptionsPage from '../page';
 
 // Mock next/navigation
-jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn() }),
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
   usePathname: () => '/invoices/exceptions',
 }));
 
 // Mock the API
-const mockListInvoices = jest.fn();
+const mockListInvoices = vi.fn();
 
-jest.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', () => ({
   invoicesApi: {
     list: (...args: unknown[]) => mockListInvoices(...args),
   },
 }));
 
 // Mock ConfidenceBadge
-jest.mock('@/components/ConfidenceBadge', () => ({
+vi.mock('@/components/ConfidenceBadge', () => ({
   ConfidenceBadge: ({ confidence }: { confidence: number }) => (
     <span data-testid="confidence-badge">{Math.round(confidence * 100)}%</span>
   ),
@@ -56,7 +57,7 @@ function renderExceptionsPage() {
 
 describe('OcrExceptionsPage', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockListInvoices.mockResolvedValue({
       data: mockInvoices,
       pagination: { page: 1, per_page: 25, total_items: 2, total_pages: 1 },
