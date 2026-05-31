@@ -554,7 +554,7 @@ pub fn verify_slack_signature(
         return Err(SlackError::InvalidSignature);
     }
 
-    let basestring = format!("v0:{}", timestamp);
+    let basestring = format!("v0:{}:", timestamp);
     let mut mac =
         HmacSha256::new_from_slice(signing_secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(basestring.as_bytes());

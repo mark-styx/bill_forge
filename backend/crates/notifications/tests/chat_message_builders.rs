@@ -113,10 +113,10 @@ fn verify_slack_signature_accepts_valid_payload() {
     use sha2::Sha256;
 
     let secret = "test-signing-secret";
-    let timestamp = "1234567890";
+    let timestamp = chrono::Utc::now().timestamp().to_string();
     let body = b"payload=%7B%22type%22%3A%22block_actions%22%7D";
 
-    let basestring = format!("v0:{}", timestamp);
+    let basestring = format!("v0:{}:", timestamp);
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(basestring.as_bytes());
     mac.update(body);
@@ -124,7 +124,7 @@ fn verify_slack_signature_accepts_valid_payload() {
     let sig = format!("v0={}", hex::encode(result));
 
     assert!(
-        verify_slack_signature(secret, timestamp, &sig, body).is_ok(),
+        verify_slack_signature(secret, &timestamp, &sig, body).is_ok(),
         "valid signature should pass"
     );
 }
@@ -147,28 +147,32 @@ fn verify_slack_signature_rejects_stale_timestamp() {
 fn teams_show_card_actions_include_input_value_substitutions() {
     let ctx = sample_context();
     let card = build_teams_approval_card(&ctx);
-    let json = serde_json::to_string(&card).unwrap();
+    let actions = card["attachments"][0]["content"]["actions"][0]["actions"]
+        .as_array()
+        .unwrap();
+    let reassign_body = actions[3]["card"]["actions"][0]["body"].as_str().unwrap();
+    let comment_body = actions[4]["card"]["actions"][0]["body"].as_str().unwrap();
 
     // The Reassign ShowCard body must contain the Adaptive Card
     // input-value substitution expression for reassign_to_user_id
     assert!(
-        json.contains("{{reassign_to_user_id.value}}"),
+        reassign_body.contains("{{reassign_to_user_id.value}}"),
         "Reassign ShowCard body must reference {{reassign_to_user_id.value}}"
     );
 
     // The Comment ShowCard body must contain the input-value substitution
     assert!(
-        json.contains("{{comment_body.value}}"),
+        comment_body.contains("{{comment_body.value}}"),
         "Comment ShowCard body must reference {{comment_body.value}}"
     );
 
     // The static fields should still be present
     assert!(
-        json.contains("\"action\":\"reassign\""),
+        reassign_body.contains("\"action\":\"reassign\""),
         "Reassign body must contain action field"
     );
     assert!(
-        json.contains("\"action\":\"comment\""),
+        comment_body.contains("\"action\":\"comment\""),
         "Comment body must contain action field"
     );
 }
