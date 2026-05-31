@@ -15,6 +15,7 @@ use billforge_core::{
 };
 use billforge_invoice_capture::OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD;
 use chrono::Duration;
+use sqlx::PgPool;
 use std::sync::Arc;
 
 /// Minimum confidence threshold for ML auto-approval (95%)
@@ -29,6 +30,7 @@ pub struct WorkflowEngine {
     routing_provider: Option<Arc<dyn RoutingDataProvider>>,
     settings_provider: Option<Arc<dyn TenantSettingsProvider>>,
     audit_service: Option<Arc<dyn AuditService>>,
+    pool: Option<Arc<PgPool>>,
 }
 
 impl WorkflowEngine {
@@ -44,6 +46,7 @@ impl WorkflowEngine {
             routing_provider: None,
             settings_provider: None,
             audit_service: None,
+            pool: None,
         }
     }
 
@@ -62,6 +65,11 @@ impl WorkflowEngine {
 
     pub fn with_audit_service(mut self, audit_service: Arc<dyn AuditService>) -> Self {
         self.audit_service = Some(audit_service);
+        self
+    }
+
+    pub fn with_pool(mut self, pool: Arc<PgPool>) -> Self {
+        self.pool = Some(pool);
         self
     }
 
@@ -122,25 +130,41 @@ impl WorkflowEngine {
                         "Auto-approving invoice due to high OCR and ML categorization confidence"
                     );
 
-                    // Write dedicated audit entry for touchless auto-approval
-                    if let Some(ref audit) = self.audit_service {
-                        let entry = billforge_core::domain::AuditEntry::new(
-                            tenant_id.clone(),
-                            None, // system-initiated, no actor
-                            billforge_core::domain::AuditAction::Update,
-                            billforge_core::domain::ResourceType::Invoice,
-                            invoice.id.to_string(),
-                            "Touchless auto-approval: learned-pattern lane".to_string(),
+                    // Write dedicated audit entry to invoice_audit_log for touchless auto-approval
+                    if let Some(ref pool) = self.pool {
+                        let from_status = sqlx::query_scalar::<_, String>(
+                            "SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2",
                         )
-                        .with_metadata(serde_json::json!({
-                            "event_type": "touchless_auto_approval",
+                        .bind(invoice.id.as_uuid())
+                        .bind(tenant_id.as_uuid())
+                        .fetch_optional(&**pool)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "received".to_string());
+
+                        if let Err(e) = sqlx::query(
+                            r#"INSERT INTO invoice_audit_log
+                               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                        )
+                        .bind(uuid::Uuid::new_v4())
+                        .bind(tenant_id.as_uuid())
+                        .bind(invoice.id.as_uuid())
+                        .bind(None::<uuid::Uuid>)
+                        .bind(&from_status)
+                        .bind("approved")
+                        .bind("touchless_auto_approval")
+                        .bind(serde_json::json!({
                             "ocr_confidence": invoice.ocr_confidence,
                             "categorization_confidence": invoice.categorization_confidence,
                             "threshold_used": threshold,
                             "lane": "learned_pattern",
-                        }));
-                        if let Err(e) = audit.log(entry).await {
-                            tracing::warn!(error = %e, "Failed to write touchless auto-approval audit entry");
+                        }))
+                        .execute(&**pool)
+                        .await
+                        {
+                            tracing::warn!(error = %e, "Failed to write touchless auto-approval audit entry to invoice_audit_log");
                         }
                     }
 

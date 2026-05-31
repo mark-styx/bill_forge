@@ -39,6 +39,7 @@ pub mod tenant_db;
 
 pub use manager::DatabaseManager;
 pub use metadata_db::MetadataDatabase;
+pub use metadata_db::TenantSettingsFromDb;
 pub use pg_manager::PgManager;
 pub use repositories::{AuditRepositoryImpl, PaymentRequestRepositoryImpl, WorkflowRepositoryImpl};
 pub use routing_repository::RoutingRepository;

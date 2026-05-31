@@ -534,3 +534,37 @@ pub struct ApiKeyRecord {
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// Implements TenantSettingsProvider by reading from the tenants table.
+pub struct TenantSettingsFromDb {
+    pool: std::sync::Arc<PgPool>,
+}
+
+impl TenantSettingsFromDb {
+    pub fn new(pool: std::sync::Arc<PgPool>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl billforge_core::traits::TenantSettingsProvider for TenantSettingsFromDb {
+    async fn get(&self, tenant_id: &TenantId) -> billforge_core::Result<TenantSettings> {
+        let row: Option<(sqlx::types::Json<serde_json::Value>,)> =
+            sqlx::query_as("SELECT settings FROM tenants WHERE id = $1")
+                .bind(tenant_id.as_uuid())
+                .fetch_optional(&*self.pool)
+                .await
+                .map_err(|e| {
+                    billforge_core::Error::Database(format!(
+                        "Failed to fetch tenant settings: {}",
+                        e
+                    ))
+                })?;
+
+        let settings = match row {
+            Some((json_val,)) => serde_json::from_value(json_val.0).unwrap_or_default(),
+            None => TenantSettings::default(),
+        };
+        Ok(settings)
+    }
+}

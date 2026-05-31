@@ -16,7 +16,7 @@ use billforge_core::{
 };
 use billforge_db::{
     repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl},
-    LocalStorageService,
+    LocalStorageService, TenantSettingsFromDb,
 };
 use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
 use billforge_invoice_capture::{
@@ -326,9 +326,15 @@ pub async fn process_ocr(
         }
         OcrRoutingDecision::StraightThrough => {
             if let Ok(result) = &ocr_result {
-                if let Err(e) =
-                    run_straight_through_processing(&repo, &pool, &tenant_id, &invoice_id, result)
-                        .await
+                if let Err(e) = run_straight_through_processing(
+                    &repo,
+                    &pool,
+                    &tenant_id,
+                    &invoice_id,
+                    result,
+                    config,
+                )
+                .await
                 {
                     warn!(
                         invoice_id = %invoice_id,
@@ -374,6 +380,7 @@ async fn run_straight_through_processing(
     tenant_id: &billforge_core::TenantId,
     invoice_id: &billforge_core::domain::InvoiceId,
     ocr_result: &OcrExtractionResult,
+    config: &crate::config::WorkerConfig,
 ) -> Result<()> {
     let mut invoice = repo
         .get_by_id(tenant_id, invoice_id)
@@ -482,7 +489,11 @@ async fn run_straight_through_processing(
     )
     .with_routing(Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),
-    )));
+    )))
+    .with_pool(pool.clone())
+    .with_tenant_settings_provider(Arc::new(billforge_db::TenantSettingsFromDb::new(Arc::new(
+        config.pg_manager.metadata().clone(),
+    ))));
     let final_status = engine.process_invoice(tenant_id, &invoice).await?;
 
     repo.update_processing_status(tenant_id, invoice_id, final_status)

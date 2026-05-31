@@ -1035,9 +1035,15 @@ async fn run_sync_ocr(
         }
         OcrRoutingDecision::StraightThrough => {
             if let Ok(result) = &ocr_result {
-                if let Err(e) =
-                    run_sync_straight_through_processing(repo, pool, tenant_id, invoice_id, result)
-                        .await
+                if let Err(e) = run_sync_straight_through_processing(
+                    repo,
+                    pool,
+                    tenant_id,
+                    invoice_id,
+                    result,
+                    state.db.metadata(),
+                )
+                .await
                 {
                     tracing::warn!(
                         invoice_id = %invoice_id,
@@ -1105,6 +1111,7 @@ async fn run_sync_straight_through_processing(
     tenant_id: &billforge_core::TenantId,
     invoice_id: &billforge_core::domain::InvoiceId,
     ocr_result: &billforge_core::domain::OcrExtractionResult,
+    metadata_pool: std::sync::Arc<sqlx::PgPool>,
 ) -> Result<(), billforge_core::Error> {
     let mut invoice = repo
         .get_by_id(tenant_id, invoice_id)
@@ -1211,7 +1218,11 @@ async fn run_sync_straight_through_processing(
     )
     .with_routing(std::sync::Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),
-    )));
+    )))
+    .with_pool(pool.clone())
+    .with_tenant_settings_provider(std::sync::Arc::new(
+        billforge_db::TenantSettingsFromDb::new(metadata_pool),
+    ));
     let final_status = engine.process_invoice(tenant_id, &invoice).await?;
 
     repo.update_processing_status(tenant_id, invoice_id, final_status)
@@ -1589,6 +1600,10 @@ async fn submit_for_processing(
     )
     .with_routing(Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),
+    )))
+    .with_pool(pool.clone())
+    .with_tenant_settings_provider(Arc::new(billforge_db::TenantSettingsFromDb::new(
+        state.db.metadata(),
     )));
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
