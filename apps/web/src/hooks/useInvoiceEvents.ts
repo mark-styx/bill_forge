@@ -16,6 +16,7 @@ const MAX_BACKOFF = 15000;
  *  accepts this fallback ONLY on the stream endpoint. */
 export function useInvoiceEvents() {
   const queryClient = useQueryClient();
+  const accessToken = useAuthStore((state) => state.accessToken);
   const esRef = useRef<EventSource | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef(MIN_BACKOFF);
@@ -23,8 +24,8 @@ export function useInvoiceEvents() {
   const connect = useCallback(() => {
     if (esRef.current) return;
 
-    const accessToken = useAuthStore.getState().accessToken;
     if (!accessToken) return; // not authenticated yet
+    if (typeof EventSource === 'undefined') return;
 
     const url = `/api/v1/invoices/stream?token=${encodeURIComponent(accessToken)}`;
     const es = new EventSource(url);
@@ -58,7 +59,7 @@ export function useInvoiceEvents() {
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
       retryRef.current = setTimeout(connect, delay);
     };
-  }, [queryClient]);
+  }, [accessToken, queryClient]);
 
   useEffect(() => {
     connect();

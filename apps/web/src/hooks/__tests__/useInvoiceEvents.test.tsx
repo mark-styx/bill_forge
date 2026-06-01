@@ -9,9 +9,7 @@ const mockAuthStore = {
   accessToken: 'test-jwt-token',
 };
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: {
-    getState: () => mockAuthStore,
-  },
+  useAuthStore: (selector: (state: typeof mockAuthStore) => unknown) => selector(mockAuthStore),
 }));
 
 // Mock EventSource
@@ -44,8 +42,10 @@ afterEach(() => { (global as any).EventSource = originalES; });
 
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: qc }, children);
+  function Wrapper({ children }: { children: ReactNode }) {
+    return createElement(QueryClientProvider, { client: qc }, children);
+  }
+  return Wrapper;
 }
 
 describe('useInvoiceEvents', () => {
@@ -67,11 +67,12 @@ describe('useInvoiceEvents', () => {
 
   it('invalidates invoice list and detail queries on message', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(QueryClientProvider, { client: qc }, children);
+    function Wrapper({ children }: { children: ReactNode }) {
+      return createElement(QueryClientProvider, { client: qc }, children);
+    }
 
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
-    const { unmount } = renderHook(() => useInvoiceEvents(), { wrapper });
+    const { unmount } = renderHook(() => useInvoiceEvents(), { wrapper: Wrapper });
 
     const es = MockEventSource.instances[0];
     es.dispatch({ invoice_id: 'abc-123', status: 'approved', kind: 'status_changed' });
