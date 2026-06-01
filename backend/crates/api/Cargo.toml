@@ -67,6 +67,10 @@ jsonwebtoken = { workspace = true }
 # Encoding (base64 attachment decoding)
 base64 = "0.22"
 
+# SSE streaming helper
+async-stream = "0.3"
+futures = "0.3"
+
 # Redis job queue (for enqueuing OCR jobs)
 redis = { version = "0.24", features = ["tokio-comp"] }
 

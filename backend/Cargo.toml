@@ -40,7 +40,7 @@ license = "Proprietary"
 tokio = { version = "1.35", features = ["full"] }
 
 # Web framework
-axum = { version = "0.7", features = ["multipart", "macros"] }
+axum = { version = "0.7", features = ["multipart", "macros", "tokio"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tower = { version = "0.4" }
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "limit"] }

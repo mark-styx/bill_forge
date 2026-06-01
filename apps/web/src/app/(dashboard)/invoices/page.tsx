@@ -9,6 +9,7 @@ import { useStatusConfig } from '@/hooks/useStatusConfig';
 import InvoicePanel from '@/components/InvoicePanel';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AdvancedDataTable, ColumnDef } from '@/components/ui/advanced-data-table';
+import { useInvoiceEvents } from '@/hooks/useInvoiceEvents';
 import {
   Plus,
   Download,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 
 export default function InvoicesPage() {
+  useInvoiceEvents();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');

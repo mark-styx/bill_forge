@@ -1,11 +1,12 @@
 //! Invoice routes (Invoice Capture module)
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::extractors::InvoiceCaptureAccess;
 use crate::metrics;
-use crate::state::AppState;
+use crate::state::{AppState, InvoiceEvent};
 use axum::{
     extract::{Multipart, Path, Query, State},
+    response::sse::{Event, KeepAlive, Sse},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -16,6 +17,7 @@ use billforge_core::{
     },
     traits::{AuditService, InvoiceRepository},
     types::{Money, PaginatedResponse, Pagination, TenantContext, TenantSettings, UserContext},
+    Error,
 };
 use billforge_invoice_capture::{
     ocr, ocr_routing_decision, resolve_ocr_provider_name, OcrRoutingDecision,
@@ -24,10 +26,12 @@ use billforge_invoice_capture::{
 use billforge_invoice_processing::feedback_loop::{
     CategorizationFeedback, FeedbackLearning, FeedbackType,
 };
+use futures::stream::Stream;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -36,6 +40,7 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(list_invoices))
         .route("/", post(create_invoice))
         .route("/upload", post(upload_invoice))
+        .route("/stream", get(invoice_stream))
         .route("/:id", get(get_invoice))
         .route("/:id", put(update_invoice))
         .route("/:id", delete(delete_invoice))
@@ -47,6 +52,93 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/reject-duplicate", post(reject_duplicate))
         .route("/:id/unwind-approval", post(unwind_auto_approval))
         .route("/ml-accuracy", get(get_ml_accuracy_metrics))
+}
+
+// ---------------------------------------------------------------------------
+// SSE stream for real-time invoice status updates
+// ---------------------------------------------------------------------------
+
+/// Query parameters accepted by the SSE stream endpoint.
+/// `token` is a fallback for `EventSource` which cannot send Authorization headers.
+#[derive(Debug, Deserialize)]
+pub struct StreamQuery {
+    pub token: Option<String>,
+}
+
+/// Handler for `GET /api/v1/invoices/stream`.
+/// Returns an SSE stream filtered to the authenticated tenant.
+///
+/// Auth: prefers `Authorization: Bearer ...` header (standard extractor path).
+/// Falls back to `?token=<jwt>` query parameter so that browser `EventSource`
+/// (which cannot set custom headers) can authenticate.
+async fn invoice_stream(
+    State(state): State<AppState>,
+    Query(query): Query<StreamQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Resolve auth: try header first, then ?token= fallback
+    let user: UserContext = if let Some(auth_header) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        state.auth.validate_token(auth_header).await?
+    } else if let Some(ref token) = query.token {
+        state.auth.validate_token(token).await?
+    } else {
+        return Err(ApiError(Error::Unauthenticated));
+    };
+
+    let tenant_context = state.auth.get_tenant_context(&user.tenant_id).await?;
+
+    if !tenant_context.has_module(billforge_core::Module::InvoiceCapture) {
+        return Err(ApiError(Error::ModuleNotAvailable(
+            "Invoice Capture".to_string(),
+        )));
+    }
+
+    let tenant_id = *tenant_context.tenant_id.as_uuid();
+    let mut rx = state.invoice_events.subscribe();
+
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(event) if event.tenant_id == tenant_id => {
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    yield Ok(Event::default().data(data));
+                }
+                Ok(_other_tenant) => { /* skip */ }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Missed events - client's next list refetch will reconcile
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
+/// Emit an invoice event on the broadcast channel (non-blocking, best-effort).
+fn emit_invoice_event(
+    state: &AppState,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &Uuid,
+    status: &str,
+    kind: &'static str,
+) {
+    let _ = state.invoice_events.send(InvoiceEvent {
+        tenant_id: *tenant_id.as_uuid(),
+        invoice_id: *invoice_id,
+        status: status.to_string(),
+        kind,
+        occurred_at: chrono::Utc::now(),
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +607,14 @@ async fn update_invoice(
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
     }
+
+    emit_invoice_event(
+        &state,
+        &tenant.tenant_id,
+        invoice.id.as_uuid(),
+        &format!("{:?}", invoice.processing_status),
+        "updated",
+    );
 
     Ok(Json(invoice))
 }
@@ -1011,6 +1111,14 @@ async fn run_sync_ocr(
     {
         tracing::error!(invoice_id = %invoice_id, error = %e, "Failed to update capture status");
     }
+
+    emit_invoice_event(
+        &state,
+        tenant_id,
+        invoice_id.as_uuid(),
+        &format!("{:?}", capture_status),
+        "ocr_completed",
+    );
 
     let ocr_confidence = match &ocr_result {
         Ok(result) => Some(
@@ -1614,6 +1722,14 @@ async fn submit_for_processing(
     invoice_repo
         .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
         .await?;
+
+    emit_invoice_event(
+        &state,
+        &tenant.tenant_id,
+        invoice_id.as_uuid(),
+        &format!("{:?}", final_status),
+        "status_changed",
+    );
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),

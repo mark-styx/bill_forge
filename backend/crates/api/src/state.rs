@@ -12,7 +12,21 @@ use billforge_db::metadata_db::CreateUserInput;
 use billforge_db::repositories::AuditRepositoryImpl;
 use billforge_db::{DatabaseManager, LocalStorageService};
 use billforge_email::{EmailService, EmailServiceImpl, MockEmailService};
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::sync::Arc;
+use tokio::sync::broadcast;
+use uuid::Uuid;
+
+/// Event broadcast to SSE subscribers when an invoice changes state.
+#[derive(Debug, Clone, Serialize)]
+pub struct InvoiceEvent {
+    pub tenant_id: Uuid,
+    pub invoice_id: Uuid,
+    pub status: String,
+    pub kind: &'static str,
+    pub occurred_at: DateTime<Utc>,
+}
 
 /// Shared application state
 #[derive(Clone)]
@@ -25,6 +39,9 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Redis client for enqueuing background jobs (None = sync fallback)
     pub redis: Option<redis::Client>,
+    /// Broadcast channel for per-tenant invoice status events (SSE).
+    /// Single-process only; for multi-process fan-out, add Redis pub/sub.
+    pub invoice_events: broadcast::Sender<InvoiceEvent>,
 }
 
 impl FromRef<AppState> for Arc<AuthService> {
@@ -112,6 +129,9 @@ impl AppState {
         // before the edi_receiver_map table existed
         Self::backfill_edi_receiver_map(&db).await;
 
+        // Invoice event broadcast channel for SSE (capacity 256)
+        let (invoice_events, _) = broadcast::channel(256);
+
         Ok(Self {
             db,
             auth,
@@ -120,6 +140,7 @@ impl AppState {
             email,
             config: Arc::new(config.clone()),
             redis,
+            invoice_events,
         })
     }
 
