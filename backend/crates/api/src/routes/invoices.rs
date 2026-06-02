@@ -51,6 +51,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/merge-duplicate", post(merge_duplicate))
         .route("/:id/reject-duplicate", post(reject_duplicate))
         .route("/:id/unwind-approval", post(unwind_auto_approval))
+        .route("/:id/ocr-exception/resolve", post(resolve_ocr_exception))
         .route("/ml-accuracy", get(get_ml_accuracy_metrics))
 }
 
@@ -193,6 +194,7 @@ pub struct ListInvoicesQuery {
     pub search: Option<String>,
     pub min_ocr_confidence: Option<f32>,
     pub max_ocr_confidence: Option<f32>,
+    pub ocr_exception_status: Option<String>,
 }
 
 #[utoipa::path(
@@ -236,6 +238,7 @@ async fn list_invoices(
             .and_then(|s| ProcessingStatus::from_str(&s)),
         min_ocr_confidence: query.min_ocr_confidence,
         max_ocr_confidence: query.max_ocr_confidence,
+        ocr_exception_status: query.ocr_exception_status,
         ..Default::default()
     };
 
@@ -2288,6 +2291,124 @@ fn observe_field_confidence(result: &billforge_core::domain::OcrExtractionResult
             .with_label_values(&[field])
             .observe(*conf as f64);
     }
+}
+
+// ---------------------------------------------------------------------------
+// OCR Exception Resolution
+// ---------------------------------------------------------------------------
+
+/// Request body for resolving an OCR exception.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ResolveOcrExceptionRequest {
+    pub action: String,
+}
+
+/// Response body for a successful OCR exception resolution.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ResolveOcrExceptionResponse {
+    pub id: String,
+    pub ocr_exception_status: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/invoices/{id}/ocr-exception/resolve",
+    tag = "Invoices",
+    params(
+        ("id" = String, Path, description = "Invoice ID")
+    ),
+    request_body = ResolveOcrExceptionRequest,
+    responses(
+        (status = 200, description = "OCR exception resolved", body = ResolveOcrExceptionResponse),
+        (status = 400, description = "Invalid action"),
+        (status = 404, description = "Invoice not found"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn resolve_ocr_exception(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    Path(id): Path<String>,
+    Json(body): Json<ResolveOcrExceptionRequest>,
+) -> ApiResult<Json<ResolveOcrExceptionResponse>> {
+    let action = body.action.to_lowercase();
+    if action != "approve" && action != "reject" {
+        return Err(billforge_core::Error::Validation(
+            "Invalid action: must be 'approve' or 'reject'".to_string(),
+        )
+        .into());
+    }
+
+    let new_status = if action == "approve" {
+        "approved"
+    } else {
+        "rejected"
+    };
+
+    let invoice_id: billforge_core::domain::InvoiceId = id
+        .parse()
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Verify invoice exists in this tenant
+    let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let _invoice = repo
+        .get_by_id(&tenant.tenant_id, &invoice_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        })?;
+
+    // Update the exception status
+    let rows = sqlx::query(
+        r#"UPDATE invoices
+           SET ocr_exception_status = $1,
+               ocr_exception_resolved_by = $2,
+               ocr_exception_resolved_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $3 AND tenant_id = $4"#,
+    )
+    .bind(new_status)
+    .bind(user.user_id.as_uuid())
+    .bind(invoice_id.as_uuid())
+    .bind(*tenant.tenant_id.as_uuid())
+    .execute(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to update OCR exception status: {}", e)))?;
+
+    if rows.rows_affected() == 0 {
+        return Err(billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        }
+        .into());
+    }
+
+    // Audit log
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Invoice,
+        id.clone(),
+        format!("OCR exception resolved: {}", new_status),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "ocr_exception_resolve",
+        "resolution": new_status,
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log OCR exception resolution audit entry");
+    }
+
+    Ok(Json(ResolveOcrExceptionResponse {
+        id,
+        ocr_exception_status: new_status.to_string(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

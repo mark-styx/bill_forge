@@ -162,6 +162,10 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
             query_str.push_str(&format!(" AND ocr_confidence >= ${}", param_count));
             param_count += 1;
         }
+        if filters.ocr_exception_status.is_some() {
+            query_str.push_str(&format!(" AND ocr_exception_status = ${}", param_count));
+            param_count += 1;
+        }
 
         query_str.push_str(&format!(
             " ORDER BY created_at DESC LIMIT ${} OFFSET ${}",
@@ -186,6 +190,9 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         }
         if let Some(min_ocr) = filters.min_ocr_confidence {
             query = query.bind(min_ocr);
+        }
+        if let Some(ref es) = filters.ocr_exception_status {
+            query = query.bind(es);
         }
 
         query = query.bind(pagination.per_page as i32).bind(offset);
@@ -220,6 +227,9 @@ impl InvoiceRepository for InvoiceRepositoryImpl {
         }
         if let Some(min_ocr) = filters.min_ocr_confidence {
             count_query = count_query.bind(min_ocr);
+        }
+        if let Some(ref es) = filters.ocr_exception_status {
+            count_query = count_query.bind(es);
         }
 
         let total = count_query

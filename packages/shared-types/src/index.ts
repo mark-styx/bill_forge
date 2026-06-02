@@ -70,6 +70,7 @@ export interface Invoice {
   supporting_documents: string[];
   ocr_confidence?: number;
   categorization_confidence?: number;
+  ocr_exception_status?: string;
   department?: string;
   gl_code?: string;
   cost_center?: string;

@@ -546,4 +546,5 @@ pub struct InvoiceFilters {
     pub tags: Vec<String>,
     pub min_ocr_confidence: Option<f32>,
     pub max_ocr_confidence: Option<f32>,
+    pub ocr_exception_status: Option<String>,
 }

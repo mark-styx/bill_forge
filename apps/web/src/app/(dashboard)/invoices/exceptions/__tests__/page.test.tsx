@@ -11,10 +11,12 @@ vi.mock('next/navigation', () => ({
 
 // Mock the API
 const mockListInvoices = vi.fn();
+const mockResolveOcrException = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   invoicesApi: {
     list: (...args: unknown[]) => mockListInvoices(...args),
+    resolveOcrException: (...args: unknown[]) => mockResolveOcrException(...args),
   },
 }));
 
@@ -62,6 +64,10 @@ describe('OcrExceptionsPage', () => {
       data: mockInvoices,
       pagination: { page: 1, per_page: 25, total_items: 2, total_pages: 1 },
     });
+    mockResolveOcrException.mockResolvedValue({
+      id: 'resolved-id',
+      ocr_exception_status: 'approved',
+    });
   });
 
   it('defaults threshold to 0.85 and fetches with max_ocr_confidence', async () => {
@@ -76,6 +82,7 @@ describe('OcrExceptionsPage', () => {
           max_ocr_confidence: 0.85,
           page: 1,
           per_page: 25,
+          ocr_exception_status: 'pending',
         }),
       );
     });
@@ -144,5 +151,71 @@ describe('OcrExceptionsPage', () => {
     expect(badges).toHaveLength(2);
     expect(badges[0]).toHaveTextContent('72%');
     expect(badges[1]).toHaveTextContent('60%');
+  });
+
+  it('renders Approve and Reject buttons on each exception row', async () => {
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: /approve invoice/i });
+    const rejectButtons = screen.getAllByRole('button', { name: /reject invoice/i });
+    expect(approveButtons).toHaveLength(2);
+    expect(rejectButtons).toHaveLength(2);
+  });
+
+  it('calls resolveOcrException with approve action when Approve is clicked', async () => {
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: /approve invoice/i });
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(mockResolveOcrException).toHaveBeenCalledWith(
+        'inv-001-abcdefgh',
+        'approve',
+      );
+    });
+  });
+
+  it('calls resolveOcrException with reject action when Reject is clicked', async () => {
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const rejectButtons = screen.getAllByRole('button', { name: /reject invoice/i });
+    fireEvent.click(rejectButtons[1]);
+
+    await waitFor(() => {
+      expect(mockResolveOcrException).toHaveBeenCalledWith(
+        'inv-002-ijklmnop',
+        'reject',
+      );
+    });
+  });
+
+  it('invalidates exceptions list query after successful resolution', async () => {
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: /approve invoice/i });
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(mockResolveOcrException).toHaveBeenCalled();
+      // After mutation success, list should be re-fetched
+      expect(mockListInvoices.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });

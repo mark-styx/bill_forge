@@ -454,6 +454,7 @@ export const invoicesApi = {
     search?: string;
     min_ocr_confidence?: number;
     max_ocr_confidence?: number;
+    ocr_exception_status?: string;
   }) => {
     const qs = new URLSearchParams();
     if (params) {
@@ -492,6 +493,9 @@ export const invoicesApi = {
 
   submitForProcessing: (id: string) =>
     api.post(`/api/v1/invoices/${id}/submit`),
+
+  resolveOcrException: (id: string, action: 'approve' | 'reject') =>
+    api.post<{ id: string; ocr_exception_status: string }>(`/api/v1/invoices/${id}/ocr-exception/resolve`, { action }),
 
   exportCsv: () => api.get<Blob>('/api/v1/export/invoices/csv'),
 };
