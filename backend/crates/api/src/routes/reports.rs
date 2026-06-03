@@ -8,6 +8,10 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use billforge_core::{
+    domain::{AuditAction, AuditEntry, ResourceType},
+    traits::AuditService,
+};
 use billforge_reporting::DashboardSummary;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
@@ -1410,6 +1414,21 @@ async fn create_digest(
         .upsert_digest(&tenant.tenant_id, &pool, user.user_id.0, request)
         .await?;
 
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Settings,
+        digest.id.to_string(),
+        format!("Upserted report digest {}", digest.id),
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&digest).unwrap_or_default());
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
     Ok(Json(digest))
 }
 
@@ -1426,6 +1445,20 @@ async fn delete_digest(
     reporting_service
         .delete_digest(&tenant.tenant_id, &pool, user.user_id.0, digest_id)
         .await?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Delete,
+        ResourceType::Settings,
+        digest_id.to_string(),
+        format!("Deleted report digest {}", digest_id),
+    )
+    .with_user_email(&user.email);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
 
     Ok(())
 }
