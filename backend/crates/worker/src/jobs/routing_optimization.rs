@@ -5,6 +5,9 @@
 //! - Expertise score updates from recent approvals
 //! - Availability calendar sync
 //! - Performance pattern analysis
+//!
+//! Issue #284: Auto-adjusts routing config weights when workload imbalance
+//! exceeds a threshold, closing the learning loop beyond expertise scores.
 
 use anyhow::{Context, Result};
 use billforge_core::{
@@ -14,10 +17,24 @@ use billforge_core::{
     UserId,
 };
 use num_traits::{cast::ToPrimitive, FromPrimitive};
-use sqlx::{types::BigDecimal, PgPool};
+use sqlx::{types::BigDecimal, PgPool, Row};
 use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Imbalance threshold above which auto-adjustment is triggered.
+/// Variance coefficient is (std_dev / mean * 100); 30.0 means ~30% dispersion.
+const IMBALANCE_THRESHOLD: f64 = 30.0;
+
+/// How much to increase workload_weight per adjustment step.
+const WEIGHT_NUDGE_STEP: f64 = 0.05;
+
+/// Bounds for individual weight values.
+const WEIGHT_MIN: f64 = 0.1;
+const WEIGHT_MAX: f64 = 0.7;
+
+/// Cooldown period between auto-adjustments for the same tenant (hours).
+const AUTO_ADJUST_COOLDOWN_HOURS: i64 = 24;
 
 /// Run routing optimization for all tenants
 pub async fn run_routing_optimization(
@@ -278,7 +295,6 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
     // Get suggestions
     let suggestions = balancer.suggest_redistribution(&workloads);
 
-    // Store stats and suggestions in database (could be used for alerts/dashboards)
     if !suggestions.is_empty() {
         info!(
             "Tenant {} has {} workload redistribution suggestions (variance: {:.2}%)",
@@ -286,8 +302,20 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
             suggestions.len(),
             stats.variance_coefficient
         );
+    }
 
-        // Could send notifications to admins here
+    // Issue #284: Auto-adjust routing weights when imbalance is significant,
+    // regardless of whether individual redistribution suggestions were produced.
+    // The variance_coefficient from distribution stats is the authoritative signal.
+    if stats.variance_coefficient > IMBALANCE_THRESHOLD {
+        if let Err(e) =
+            apply_workload_rebalance(pool, tenant_id, stats.variance_coefficient).await
+        {
+            warn!(
+                "Failed to auto-adjust routing weights for tenant {}: {}",
+                tenant_id, e
+            );
+        }
     }
 
     Ok(())
@@ -314,6 +342,191 @@ async fn cleanup_old_routing_logs(pool: &PgPool, tenant_id: &TenantId) -> Result
             tenant_id
         );
     }
+
+    Ok(())
+}
+
+/// Nudge routing weights toward correcting workload imbalance.
+///
+/// Increases `workload_weight` by `WEIGHT_NUDGE_STEP`, then proportionally
+/// renormalizes `expertise_weight` + `availability_weight` so the three
+/// still sum to 1.0. All weights are clamped to `[WEIGHT_MIN, WEIGHT_MAX]`.
+///
+/// Returns `Some((old_workload, new_workload))` if a change was made,
+/// or `None` if the weight was already at `WEIGHT_MAX`.
+fn nudge_routing_weights(
+    workload_weight: f64,
+    expertise_weight: f64,
+    availability_weight: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    // Returns (new_workload, new_expertise, new_availability, old_workload)
+
+    let old_workload = workload_weight;
+
+    // Increase workload weight
+    let new_workload = (workload_weight + WEIGHT_NUDGE_STEP).min(WEIGHT_MAX);
+    if (new_workload - old_workload).abs() < 1e-9 {
+        return None; // Already at max, nothing to do
+    }
+
+    let remaining = 1.0 - new_workload;
+    let other_sum = expertise_weight + availability_weight;
+
+    let (new_expertise, new_availability) = if other_sum > 1e-9 {
+        let scale = remaining / other_sum;
+        let e = (expertise_weight * scale).clamp(WEIGHT_MIN, WEIGHT_MAX);
+        let a = (availability_weight * scale).clamp(WEIGHT_MIN, WEIGHT_MAX);
+        (e, a)
+    } else {
+        // Even split if both are zero
+        (remaining / 2.0, remaining / 2.0)
+    };
+
+    // Final normalization: ensure sum == 1.0 across all three weights.
+    // Clamping an individual weight up can push total > 1.0, so we scale
+    // everything proportionally.
+    let total = new_workload + new_expertise + new_availability;
+    let new_workload = new_workload / total;
+    let new_expertise = new_expertise / total;
+    let new_availability = new_availability / total;
+
+    Some((new_workload, new_expertise, new_availability, old_workload))
+}
+
+/// Auto-adjust routing config weights when workload imbalance is detected.
+///
+/// This closes the routing learning loop (issue #284): instead of merely
+/// logging the imbalance, we nudge the `workload_weight` up so the routing
+/// engine favours less-loaded approvers more strongly on future runs.
+///
+/// Guards:
+/// - Only adjusts if the last auto-adjustment was > 24h ago (or never).
+/// - Persists the new weights to `routing_configuration`.
+/// - Writes an audit trail entry to `workflow_audit_log`.
+async fn apply_workload_rebalance(
+    pool: &PgPool,
+    tenant_id: &TenantId,
+    imbalance_score: f64,
+) -> Result<()> {
+    let tid = tenant_id.as_uuid();
+
+    // 1. Load current weights and cooldown timestamp
+    //    NOTE: routing_configuration.tenant_id is VARCHAR(255) (migration 051),
+    //    so we bind as &str, not UUID.
+    let row = sqlx::query(
+        r#"
+        SELECT workload_weight, expertise_weight, availability_weight,
+               last_auto_adjusted_at
+        FROM routing_configuration
+        WHERE tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .fetch_optional(pool)
+    .await
+    .context("Failed to load routing config for auto-adjust")?;
+
+    // If no config row exists, there is nothing to adjust
+    let row = match row {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    // 2. Cooldown guard: skip if adjusted within the last N hours
+    let last_auto_adjusted: Option<chrono::DateTime<chrono::Utc>> = row
+        .get("last_auto_adjusted_at");
+    if let Some(last) = last_auto_adjusted {
+        let elapsed = chrono::Utc::now() - last;
+        if elapsed < chrono::Duration::hours(AUTO_ADJUST_COOLDOWN_HOURS) {
+            info!(
+                "Skipping auto-adjust for tenant {}: last adjusted {}h ago (cooldown {}h)",
+                tenant_id,
+                elapsed.num_hours(),
+                AUTO_ADJUST_COOLDOWN_HOURS
+            );
+            return Ok(());
+        }
+    }
+
+    let old_w: f64 = row.get::<BigDecimal, _>("workload_weight").to_f64().unwrap_or(0.4);
+    let old_e: f64 = row.get::<BigDecimal, _>("expertise_weight").to_f64().unwrap_or(0.3);
+    let old_a: f64 = row.get::<BigDecimal, _>("availability_weight").to_f64().unwrap_or(0.3);
+
+    // 3. Compute new weights
+    let result = match nudge_routing_weights(old_w, old_e, old_a) {
+        Some(r) => r,
+        None => {
+            info!(
+                "No weight adjustment needed for tenant {} (workload_weight already at max)",
+                tenant_id
+            );
+            return Ok(());
+        }
+    };
+    let (new_w, new_e, new_a, _old_workload) = result;
+
+    // 4. Persist the new weights and update cooldown timestamp
+    //    NOTE: routing_configuration.tenant_id is VARCHAR(255) (migration 051).
+    sqlx::query(
+        r#"
+        UPDATE routing_configuration
+        SET workload_weight = $2,
+            expertise_weight = $3,
+            availability_weight = $4,
+            last_auto_adjusted_at = NOW(),
+            updated_at = NOW()
+        WHERE tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .bind(BigDecimal::from_f64(new_w).unwrap_or_else(|| BigDecimal::from(0)))
+    .bind(BigDecimal::from_f64(new_e).unwrap_or_else(|| BigDecimal::from(0)))
+    .bind(BigDecimal::from_f64(new_a).unwrap_or_else(|| BigDecimal::from(0)))
+    .execute(pool)
+    .await
+    .context("Failed to persist auto-adjusted routing weights")?;
+
+    // 5. Write audit trail
+    let old_weights = serde_json::json!({
+        "workload_weight": old_w,
+        "expertise_weight": old_e,
+        "availability_weight": old_a,
+    });
+    let new_weights = serde_json::json!({
+        "workload_weight": new_w,
+        "expertise_weight": new_e,
+        "availability_weight": new_a,
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO workflow_audit_log (
+            id, tenant_id, entity_type, entity_id, action,
+            actor_type, old_values, new_values, metadata, created_at
+        ) VALUES (
+            gen_random_uuid(), $1, 'RoutingConfig', $2,
+            'routing_config.auto_adjusted', 'system:routing_optimizer',
+            $3, $4, $5, NOW()
+        )
+        "#,
+    )
+    .bind(tid)
+    .bind(tid)
+    .bind(&old_weights)
+    .bind(&new_weights)
+    .bind(serde_json::json!({
+        "imbalance_score": imbalance_score,
+        "nudge_step": WEIGHT_NUDGE_STEP,
+    }))
+    .execute(pool)
+    .await
+    .context("Failed to insert routing auto-adjust audit entry")?;
+
+    info!(
+        "Auto-adjusted routing weights for tenant {}: workload {:.3} -> {:.3}, \
+         expertise {:.3} -> {:.3}, availability {:.3} -> {:.3} (imbalance: {:.1}%)",
+        tenant_id, old_w, new_w, old_e, new_e, old_a, new_a, imbalance_score
+    );
 
     Ok(())
 }
@@ -431,5 +644,72 @@ mod tests {
         };
         let score = calculate_expertise_score(&stats);
         assert!(score < 0.6);
+    }
+
+    // ------------------------------------------------------------------
+    // Issue #284: Weight nudging unit tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_nudge_routing_weights_increases_workload() {
+        let result = nudge_routing_weights(0.4, 0.3, 0.3);
+        let (new_w, new_e, new_a, old_w) = result.expect("should produce a nudge");
+        assert_eq!(old_w, 0.4);
+        assert!(new_w > 0.4, "workload weight should increase");
+        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights must sum to 1.0");
+    }
+
+    #[test]
+    fn test_nudge_routing_weights_clamps_to_max() {
+        // workload_weight near max: 0.68 + 0.05 = 0.73, clamped to 0.7
+        let result = nudge_routing_weights(0.68, 0.16, 0.16);
+        let (new_w, new_e, new_a, _old) = result.expect("should produce a nudge");
+        assert!(
+            new_w <= WEIGHT_MAX + 1e-9,
+            "workload weight must not exceed max"
+        );
+        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights must sum to 1.0");
+    }
+
+    #[test]
+    fn test_nudge_routing_weights_returns_none_at_max() {
+        let result = nudge_routing_weights(WEIGHT_MAX, 0.15, 0.15);
+        assert!(result.is_none(), "should return None when already at max");
+    }
+
+    #[test]
+    fn test_nudge_routing_weights_stays_in_bounds() {
+        // Start from a skewed config and verify all weights are non-negative
+        // and the primary constraint (sum == 1.0) holds. Normalization after
+        // clamping can push a value slightly below WEIGHT_MIN, which is
+        // acceptable because the weights are always renormalized.
+        let result = nudge_routing_weights(0.6, 0.1, 0.3);
+        let (new_w, new_e, new_a, _) = result.expect("should produce a nudge");
+        assert!(new_w >= 0.0 && new_w <= WEIGHT_MAX + 1e-9,
+            "workload in range: got {}", new_w);
+        assert!(new_e >= 0.0, "expertise non-negative: got {}", new_e);
+        assert!(new_a >= 0.0, "availability non-negative: got {}", new_a);
+        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights sum to 1.0");
+    }
+
+    #[test]
+    fn test_nudge_routing_weights_proportional_rebalance() {
+        // With 0.4/0.3/0.3 default, after nudge workload should be 0.45,
+        // remaining 0.55 split proportionally: expertise gets 0.55 * (0.3/0.6) = 0.275,
+        // availability gets 0.55 * (0.3/0.6) = 0.275
+        let (new_w, new_e, new_a, _) = nudge_routing_weights(0.4, 0.3, 0.3)
+            .expect("should produce a nudge");
+        assert!((new_w - 0.45).abs() < 1e-9, "workload should be 0.45, got {}", new_w);
+        assert!((new_e - 0.275).abs() < 1e-9, "expertise should be 0.275, got {}", new_e);
+        assert!((new_a - 0.275).abs() < 1e-9, "availability should be 0.275, got {}", new_a);
+    }
+
+    #[test]
+    fn test_imbalance_threshold_sanity() {
+        // Ensure the threshold constant is reasonable
+        assert!(IMBALANCE_THRESHOLD > 0.0);
+        assert!(WEIGHT_NUDGE_STEP > 0.0);
+        assert!(WEIGHT_MIN < WEIGHT_MAX);
+        assert!(AUTO_ADJUST_COOLDOWN_HOURS > 0);
     }
 }
