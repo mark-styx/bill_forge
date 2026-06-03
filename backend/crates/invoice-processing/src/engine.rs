@@ -97,6 +97,21 @@ impl WorkflowEngine {
             .get_active_rules(tenant_id, WorkflowRuleType::Approval)
             .await?;
 
+        // Defer: after every approval path, try to detect/update a recurring
+        // pattern for this tenant+vendor so patterns form even when no pattern
+        // existed yet (the primary review gap).  The call is cheap (one query)
+        // and returns early if there are fewer than MIN_SAMPLE_COUNT invoices.
+        macro_rules! try_update_pattern {
+            () => {
+                if let (Some(ref pool), Some(vendor_id)) = (&self.pool, invoice.vendor_id) {
+                    let _ = crate::recurring_patterns::detect_or_update_pattern(
+                        &**pool, *tenant_id.as_uuid(), vendor_id,
+                    )
+                    .await;
+                }
+            };
+        }
+
         // Check recurring-pattern auto-approval before ML-confidence lane.
         if let (Some(ref pool), Some(vendor_id)) = (&self.pool, invoice.vendor_id) {
             if let Ok(Some(pattern)) =
@@ -159,12 +174,7 @@ impl WorkflowEngine {
                         tracing::warn!(error = %e, "Failed to write recurring-pattern auto-approval audit entry");
                     }
 
-                    // Keep pattern current after approval.
-                    let _ = crate::recurring_patterns::detect_or_update_pattern(
-                        &**pool, *tenant_id.as_uuid(), vendor_id,
-                    )
-                    .await;
-
+                    try_update_pattern!();
                     return Ok(ProcessingStatus::Approved);
                 }
 
@@ -275,6 +285,7 @@ impl WorkflowEngine {
                         }
                     }
 
+                    try_update_pattern!();
                     return Ok(ProcessingStatus::Approved);
                 }
             }
@@ -289,6 +300,7 @@ impl WorkflowEngine {
         for rule in &auto_approval_rules {
             if self.evaluate_conditions(invoice, &rule.conditions) {
                 // Auto-approve
+                try_update_pattern!();
                 return Ok(ProcessingStatus::Approved);
             }
         }
@@ -298,6 +310,7 @@ impl WorkflowEngine {
                 continue;
             }
             if self.rule_has_action(rule, ActionType::AutoApprove) {
+                try_update_pattern!();
                 return Ok(ProcessingStatus::Approved);
             }
             let approval_actions = self.approval_actions(rule);
@@ -336,6 +349,7 @@ impl WorkflowEngine {
         }
 
         // No approval needed
+        try_update_pattern!();
         Ok(ProcessingStatus::Approved)
     }
 
@@ -554,6 +568,21 @@ impl WorkflowEngine {
             .iter()
             .all(|a| a.status == ApprovalStatus::Approved)
         {
+            // Keep recurring patterns current: try to detect/update a pattern
+            // for this invoice's vendor now that the approval is finalized.
+            // This ensures patterns form even for vendors that had no prior
+            // pattern row (the primary detection gap identified in review).
+            if let (Some(ref pool), Ok(Some(invoice))) = (
+                &self.pool,
+                self.invoice_repo.get_by_id(tenant_id, &approval.invoice_id).await,
+            ) {
+                if let Some(vendor_id) = invoice.vendor_id {
+                    let _ = crate::recurring_patterns::detect_or_update_pattern(
+                        &**pool, *tenant_id.as_uuid(), vendor_id,
+                    )
+                    .await;
+                }
+            }
             return Ok(ProcessingStatus::Approved);
         }
 
