@@ -36,9 +36,19 @@ export interface QueuedAction {
   enqueuedAt: string;
 }
 
+export interface OfflineConflict {
+  id: string;
+  actionId: string;
+  approvalId: string;
+  action: ActionKind;
+  reason: 'conflict';
+  serverPayload: unknown;
+  occurredAt: string;
+}
+
 export interface FlushSummary {
   synced: number;
-  conflicts: number;
+  conflicts: OfflineConflict[];
   remaining: number;
 }
 
@@ -50,6 +60,7 @@ export interface KVStore {
 
 const CACHE_KEY = 'offline_approvals_cache';
 const QUEUE_KEY = 'offline_action_queue';
+const CONFLICTS_KEY = 'offline-queue.conflicts';
 
 // ---- Cache ----
 
@@ -115,10 +126,21 @@ export async function enqueueAction(
   queue.push(queued);
   await writeQueue(store, queue);
 
-  // Optimistic: remove the approval from cache so the UI updates immediately
+  // Optimistic: remove the approval from cache so the UI updates immediately.
+  // Capture the removed item so flushQueue can restore it on conflict.
   const cached = await getCachedApprovals(store);
+  const removed = cached.find((a) => a.id === action.approvalId);
   const updated = cached.filter((a) => a.id !== action.approvalId);
   await cacheApprovals(store, updated);
+
+  // Store a rollback closure so flushQueue can restore the approval on 409.
+  // We stash it in a side-channel keyed by actionId.
+  if (removed) {
+    await store.setItem(
+      `offline_rollback_${queued.actionId}`,
+      JSON.stringify(removed),
+    );
+  }
 
   return queued;
 }
@@ -149,7 +171,10 @@ export interface ApiClient {
  * (approval already processed).
  */
 export class ConflictError extends Error {
-  constructor() {
+  constructor(
+    public readonly serverPayload: unknown = null,
+    public readonly status: number = 409,
+  ) {
     super('Conflict');
     this.name = 'ConflictError';
   }
@@ -165,10 +190,48 @@ export class NetworkError extends Error {
   }
 }
 
+// ---- Conflict store ----
+
+async function readConflicts(store: KVStore): Promise<OfflineConflict[]> {
+  const raw = await store.getItem(CONFLICTS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as OfflineConflict[];
+  } catch {
+    return [];
+  }
+}
+
+async function writeConflicts(
+  store: KVStore,
+  conflicts: OfflineConflict[],
+): Promise<void> {
+  await store.setItem(CONFLICTS_KEY, JSON.stringify(conflicts));
+}
+
+/** List all persisted conflicts (survives app restarts). */
+export async function listConflicts(store: KVStore): Promise<OfflineConflict[]> {
+  return readConflicts(store);
+}
+
+/** Dismiss a single conflict by id. */
+export async function dismissConflict(
+  store: KVStore,
+  id: string,
+): Promise<void> {
+  const conflicts = await readConflicts(store);
+  await writeConflicts(store, conflicts.filter((c) => c.id !== id));
+}
+
+/** Clear all persisted conflicts. */
+export async function clearConflicts(store: KVStore): Promise<void> {
+  await writeConflicts(store, []);
+}
+
 /**
  * Replay queued actions in FIFO order.
  * - On success: remove from queue.
- * - On ConflictError (409): drop the action (already processed).
+ * - On ConflictError (409): record conflict details, restore approval to cache, drop action.
  * - On NetworkError: stop flushing, preserve remaining for next attempt.
  *
  * Returns a summary of what happened.
@@ -179,7 +242,7 @@ export async function flushQueue(
 ): Promise<FlushSummary> {
   const queue = await readQueue(store);
   let synced = 0;
-  let conflicts = 0;
+  const conflictRecords: OfflineConflict[] = [];
   let i = 0;
 
   for (; i < queue.length; i++) {
@@ -193,7 +256,38 @@ export async function flushQueue(
       synced++;
     } catch (err) {
       if (err instanceof ConflictError) {
-        conflicts++;
+        const conflict: OfflineConflict = {
+          id: generateActionId(),
+          actionId: action.actionId,
+          approvalId: action.approvalId,
+          action: action.kind,
+          reason: 'conflict',
+          serverPayload: err.serverPayload,
+          occurredAt: new Date().toISOString(),
+        };
+
+        // Persist the conflict record
+        const existing = await readConflicts(store);
+        existing.push(conflict);
+        await writeConflicts(store, existing);
+
+        // Restore the optimistically-removed approval to cache
+        const rollbackRaw = await store.getItem(`offline_rollback_${action.actionId}`);
+        if (rollbackRaw) {
+          try {
+            const restored = JSON.parse(rollbackRaw) as ApprovalItem;
+            const cached = await getCachedApprovals(store);
+            if (!cached.some((a) => a.id === restored.id)) {
+              cached.push(restored);
+              await cacheApprovals(store, cached);
+            }
+          } catch {
+            // best-effort rollback
+          }
+          await store.setItem(`offline_rollback_${action.actionId}`, '');
+        }
+
+        conflictRecords.push(conflict);
         continue; // already processed, drop it and move on
       }
       // Network or unexpected error: stop flushing
@@ -208,7 +302,7 @@ export async function flushQueue(
 
   return {
     synced,
-    conflicts,
+    conflicts: conflictRecords,
     remaining: remaining.length,
   };
 }

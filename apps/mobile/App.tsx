@@ -18,11 +18,15 @@ import NetInfo from '@react-native-community/netinfo';
 import {
   ApprovalItem,
   KVStore,
+  OfflineConflict,
   cacheApprovals,
+  clearConflicts,
+  dismissConflict,
   enqueueAction,
   flushQueue,
   getCachedApprovals,
   getQueuedActions,
+  listConflicts,
 } from './src/lib/offline-queue';
 import * as api from './src/lib/api';
 import {
@@ -248,6 +252,7 @@ export default function App() {
   const [modalKind, setModalKind] = useState<'approve' | 'reject'>('approve');
   const [modalItem, setModalItem] = useState<ApprovalItem | null>(null);
   const [modalText, setModalText] = useState('');
+  const [conflicts, setConflicts] = useState<OfflineConflict[]>([]);
 
   // Track whether push registration was attempted this session
   const pushRegistered = useRef(false);
@@ -262,6 +267,15 @@ export default function App() {
       setAuthLoading(false);
     };
     restore();
+  }, []);
+
+  // Load persisted conflicts on mount so they survive app restarts
+  useEffect(() => {
+    const load = async () => {
+      const stored = await listConflicts(store);
+      if (stored.length > 0) setConflicts(stored);
+    };
+    load();
   }, []);
 
   // When auth becomes available, register for push notifications (once)
@@ -314,8 +328,12 @@ export default function App() {
               reject: (id: string, reason: string) => api.reject(config, id, reason),
             };
             const summary = await flushQueue(store, offlineApi);
-            if (summary.synced > 0 || summary.conflicts > 0) {
+            if (summary.synced > 0 || summary.conflicts.length > 0) {
               await refreshApprovals();
+            }
+            if (summary.conflicts.length > 0) {
+              const stored = await listConflicts(store);
+              setConflicts(stored);
             }
           } catch {
             // best effort
@@ -442,7 +460,20 @@ export default function App() {
     setAuth(null);
     setApprovals([]);
     setPendingCount(0);
+    setConflicts([]);
+    await clearConflicts(store);
     pushRegistered.current = false;
+  };
+
+  const handleDismissConflict = async (id: string) => {
+    await dismissConflict(store, id);
+    const updated = await listConflicts(store);
+    setConflicts(updated);
+  };
+
+  const handleDismissAllConflicts = async () => {
+    await clearConflicts(store);
+    setConflicts([]);
   };
 
   // Auth loading splash
@@ -474,6 +505,21 @@ export default function App() {
           {pendingCount > 0 ? ` (${pendingCount} pending sync)` : ''}
         </Text>
       </View>
+
+      {/* Conflict banner */}
+      {conflicts.length > 0 && (
+        <View style={styles.conflictBanner}>
+          <Text style={styles.conflictBannerText}>
+            {conflicts.length} conflict{conflicts.length > 1 ? 's' : ''} detected.
+            {conflicts[0] ? ` Action: ${conflicts[0].action}` : ''}
+          </Text>
+          <View style={styles.conflictActions}>
+            <TouchableOpacity onPress={handleDismissAllConflicts}>
+              <Text style={styles.conflictDismissText}>Dismiss All</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Header */}
       <View style={styles.header}>
@@ -765,5 +811,28 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#333',
+  },
+  conflictBanner: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#f59e0b',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  conflictBannerText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  conflictActions: {
+    flexDirection: 'row',
+  },
+  conflictDismissText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 12,
   },
 });

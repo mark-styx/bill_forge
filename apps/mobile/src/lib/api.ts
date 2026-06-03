@@ -82,7 +82,13 @@ function assertOk(response: Response, body: string): void {
   if (response.ok) return;
 
   if (response.status === 409) {
-    throw new ConflictError();
+    let payload: unknown = body;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      // keep raw text as payload
+    }
+    throw new ConflictError(payload, response.status);
   }
 
   throw new ApiError(

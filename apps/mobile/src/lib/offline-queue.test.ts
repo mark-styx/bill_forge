@@ -1,6 +1,7 @@
 import {
   ApprovalItem,
   KVStore,
+  OfflineConflict,
   cacheApprovals,
   getCachedApprovals,
   enqueueAction,
@@ -10,6 +11,9 @@ import {
   ApiClient,
   ConflictError,
   NetworkError,
+  listConflicts,
+  dismissConflict,
+  clearConflicts,
 } from './offline-queue';
 
 // In-memory KVStore for testing
@@ -156,7 +160,7 @@ describe('offline-queue', () => {
       const api = mockApi(new Map());
       const summary = await flushQueue(store, api);
 
-      expect(summary).toEqual({ synced: 2, conflicts: 0, remaining: 0 });
+      expect(summary).toEqual({ synced: 2, conflicts: [], remaining: 0 });
       const remaining = await getQueuedActions(store);
       expect(remaining).toHaveLength(0);
     });
@@ -177,7 +181,11 @@ describe('offline-queue', () => {
       const api = mockApi(responses);
       const summary = await flushQueue(store, api);
 
-      expect(summary).toEqual({ synced: 2, conflicts: 1, remaining: 0 });
+      expect(summary.synced).toBe(2);
+      expect(summary.conflicts).toHaveLength(1);
+      expect(summary.remaining).toBe(0);
+      expect(summary.conflicts[0].approvalId).toBe('a2');
+      expect(summary.conflicts[0].reason).toBe('conflict');
       const remaining = await getQueuedActions(store);
       expect(remaining).toHaveLength(0);
     });
@@ -198,7 +206,7 @@ describe('offline-queue', () => {
       const api = mockApi(responses);
       const summary = await flushQueue(store, api);
 
-      expect(summary).toEqual({ synced: 1, conflicts: 0, remaining: 2 });
+      expect(summary).toEqual({ synced: 1, conflicts: [] as OfflineConflict[], remaining: 2 });
       const remaining = await getQueuedActions(store);
       expect(remaining).toHaveLength(2);
       expect(remaining[0].approvalId).toBe('a2');
@@ -222,13 +230,13 @@ describe('offline-queue', () => {
       const api1 = mockApi(responses1);
       const summary1 = await flushQueue(store, api1);
 
-      expect(summary1).toEqual({ synced: 1, conflicts: 0, remaining: 2 });
+      expect(summary1).toEqual({ synced: 1, conflicts: [] as OfflineConflict[], remaining: 2 });
 
       // Second flush: all remaining succeed
       const api2 = mockApi(new Map());
       const summary2 = await flushQueue(store, api2);
 
-      expect(summary2).toEqual({ synced: 2, conflicts: 0, remaining: 0 });
+      expect(summary2).toEqual({ synced: 2, conflicts: [] as OfflineConflict[], remaining: 0 });
 
       // Queue is now empty
       const remaining = await getQueuedActions(store);
@@ -258,11 +266,189 @@ describe('offline-queue', () => {
       const summary = await flushQueue(store, api);
 
       // a1: conflict (dropped), a2: network error (stops flush)
-      expect(summary).toEqual({ synced: 0, conflicts: 1, remaining: 2 });
+      expect(summary.synced).toBe(0);
+      expect(summary.conflicts).toHaveLength(1);
+      expect(summary.remaining).toBe(2);
       const remaining = await getQueuedActions(store);
       expect(remaining).toHaveLength(2);
       expect(remaining[0].approvalId).toBe('a2');
       expect(remaining[1].approvalId).toBe('a3');
+    });
+
+    it('captures server payload on 409 conflict', async () => {
+      await enqueueAction(store, { approvalId: 'a1', kind: 'approve', payload: '' });
+
+      const serverBody = { error: 'already_approved', processedBy: 'user@example.com' };
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'approve:a1',
+          async () => {
+            throw new ConflictError(serverBody, 409);
+          },
+        ],
+      ]);
+      const api = mockApi(responses);
+      const summary = await flushQueue(store, api);
+
+      expect(summary.conflicts).toHaveLength(1);
+      expect(summary.conflicts[0].serverPayload).toEqual(serverBody);
+      expect(summary.conflicts[0].action).toBe('approve');
+      expect(summary.conflicts[0].approvalId).toBe('a1');
+      expect(summary.conflicts[0].reason).toBe('conflict');
+      expect(summary.conflicts[0].occurredAt).toBeTruthy();
+    });
+
+    it('restores approval to cache on conflict', async () => {
+      const approval = makeApproval('a1');
+      await cacheApprovals(store, [approval]);
+
+      await enqueueAction(store, { approvalId: 'a1', kind: 'approve', payload: '' });
+
+      // Approval should be removed from cache after optimistic enqueue
+      let cached = await getCachedApprovals(store);
+      expect(cached).toHaveLength(0);
+
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'approve:a1',
+          async () => {
+            throw new ConflictError({ error: 'conflict' }, 409);
+          },
+        ],
+      ]);
+      const api = mockApi(responses);
+      await flushQueue(store, api);
+
+      // Approval should be restored to cache after conflict
+      cached = await getCachedApprovals(store);
+      expect(cached).toHaveLength(1);
+      expect(cached[0].id).toBe('a1');
+    });
+
+    it('persists conflict to conflict store', async () => {
+      await enqueueAction(store, { approvalId: 'a1', kind: 'reject', payload: 'Bad' });
+
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'reject:a1',
+          async () => {
+            throw new ConflictError({ detail: 'gone' }, 409);
+          },
+        ],
+      ]);
+      const api = mockApi(responses);
+      await flushQueue(store, api);
+
+      const stored = await listConflicts(store);
+      expect(stored).toHaveLength(1);
+      expect(stored[0].approvalId).toBe('a1');
+      expect(stored[0].action).toBe('reject');
+      expect(stored[0].serverPayload).toEqual({ detail: 'gone' });
+    });
+
+    it('removes action from queue on conflict', async () => {
+      await enqueueAction(store, { approvalId: 'a1', kind: 'approve', payload: '' });
+
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'approve:a1',
+          async () => {
+            throw new ConflictError(null, 409);
+          },
+        ],
+      ]);
+      const api = mockApi(responses);
+      await flushQueue(store, api);
+
+      const remaining = await getQueuedActions(store);
+      expect(remaining).toHaveLength(0);
+    });
+  });
+
+  // ---- Conflict store ----
+
+  describe('conflictStore', () => {
+    it('listConflicts returns empty when none stored', async () => {
+      const result = await listConflicts(store);
+      expect(result).toEqual([]);
+    });
+
+    it('dismissConflict removes a specific conflict', async () => {
+      // Seed a conflict by flushing a conflict-producing action
+      await enqueueAction(store, { approvalId: 'a1', kind: 'approve', payload: '' });
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'approve:a1',
+          async () => {
+            throw new ConflictError({}, 409);
+          },
+        ],
+      ]);
+      const api: ApiClient = {
+        approve: async (id: string) => {
+          const handler = responses.get(`approve:${id}`);
+          if (handler) return handler();
+        },
+        reject: async () => {},
+      };
+      await flushQueue(store, api);
+
+      const stored = await listConflicts(store);
+      expect(stored).toHaveLength(1);
+
+      await dismissConflict(store, stored[0].id);
+      const after = await listConflicts(store);
+      expect(after).toHaveLength(0);
+    });
+
+    it('clearConflicts removes all conflicts', async () => {
+      // Seed two conflicts
+      await enqueueAction(store, { approvalId: 'a1', kind: 'approve', payload: '' });
+      await enqueueAction(store, { approvalId: 'a2', kind: 'approve', payload: '' });
+      const responses = new Map<string, () => Promise<void>>([
+        [
+          'approve:a1',
+          async () => {
+            throw new ConflictError({}, 409);
+          },
+        ],
+        [
+          'approve:a2',
+          async () => {
+            throw new ConflictError({}, 409);
+          },
+        ],
+      ]);
+      const api: ApiClient = {
+        approve: async (id: string) => {
+          const handler = responses.get(`approve:${id}`);
+          if (handler) return handler();
+        },
+        reject: async () => {},
+      };
+      await flushQueue(store, api);
+
+      expect(await listConflicts(store)).toHaveLength(2);
+
+      await clearConflicts(store);
+      expect(await listConflicts(store)).toHaveLength(0);
+    });
+  });
+
+  // ---- ConflictError ----
+
+  describe('ConflictError', () => {
+    it('carries server payload and status', () => {
+      const err = new ConflictError({ message: 'already processed' }, 409);
+      expect(err.serverPayload).toEqual({ message: 'already processed' });
+      expect(err.status).toBe(409);
+      expect(err.name).toBe('ConflictError');
+    });
+
+    it('defaults serverPayload to null and status to 409', () => {
+      const err = new ConflictError();
+      expect(err.serverPayload).toBeNull();
+      expect(err.status).toBe(409);
     });
   });
 });
