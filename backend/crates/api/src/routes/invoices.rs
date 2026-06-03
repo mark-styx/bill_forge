@@ -1318,6 +1318,9 @@ async fn run_sync_straight_through_processing(
     ));
     let final_status = engine.process_invoice(tenant_id, &invoice).await?;
 
+    // Emit capture-to-approval/final-status timing metric.
+    emit_capture_timing_metrics(tenant_id, final_status, invoice.created_at);
+
     repo.update_processing_status(tenant_id, invoice_id, final_status)
         .await?;
     route_sync_processing_queue(pool, tenant_id, invoice_id, final_status).await;
@@ -1722,6 +1725,9 @@ async fn submit_for_processing(
     )));
 
     let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+
+    // Emit capture-to-approval/final-status timing metric.
+    emit_capture_timing_metrics(&tenant.tenant_id, final_status, invoice.created_at);
 
     // Update invoice with final status from workflow
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -2318,6 +2324,45 @@ fn observe_field_confidence(result: &billforge_core::domain::OcrExtractionResult
     }
 }
 
+/// Emit end-to-end SLO timing metrics for a workflow outcome.
+///
+/// - `CAPTURE_TO_APPROVAL_QUEUE_DURATION_SECONDS` for every outcome.
+/// - `CAPTURE_TO_FINAL_STATUS_DURATION_SECONDS` only when `final_status` is a terminal state.
+fn emit_capture_timing_metrics(
+    tenant_id: &billforge_core::TenantId,
+    final_status: ProcessingStatus,
+    created_at: chrono::DateTime<chrono::Utc>,
+) {
+    let elapsed = (chrono::Utc::now() - created_at).num_seconds() as f64;
+    let tenant_str = tenant_id.to_string();
+
+    // Capture → approval queue / auto-approve outcome.
+    let outcome = match final_status {
+        ProcessingStatus::PendingApproval => "routed_for_approval",
+        ProcessingStatus::Approved
+        | ProcessingStatus::ReadyForPayment
+        | ProcessingStatus::Paid => "auto_approved",
+        _ => "exception",
+    };
+    metrics::observe_capture_to_approval_queue(&tenant_str, outcome, elapsed);
+
+    // Capture → terminal status (only for truly terminal states).
+    match final_status {
+        ProcessingStatus::Approved
+        | ProcessingStatus::ReadyForPayment
+        | ProcessingStatus::Paid
+        | ProcessingStatus::Rejected
+        | ProcessingStatus::Voided => {
+            metrics::observe_capture_to_final_status(
+                &tenant_str,
+                final_status.as_str(),
+                elapsed,
+            );
+        }
+        _ => {}
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OCR Exception Resolution
 // ---------------------------------------------------------------------------
@@ -2467,6 +2512,9 @@ async fn resolve_ocr_exception(
             let final_status = engine
                 .process_invoice(&tenant.tenant_id, &invoice)
                 .await?;
+
+            // Emit capture-to-approval/final-status timing metric.
+            emit_capture_timing_metrics(&tenant.tenant_id, final_status, invoice.created_at);
 
             // Update processing status.
             let invoice_repo =

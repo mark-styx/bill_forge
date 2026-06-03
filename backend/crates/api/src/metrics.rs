@@ -77,6 +77,26 @@ lazy_static! {
         &["field"],
         vec![0.1, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0]
     ).unwrap();
+
+    // --- End-to-end capture timing SLO metrics (#305) ---
+
+    /// Histogram tracking time from invoice capture (created_at) to approval queue
+    /// placement or auto-approval decision. Buckets aligned to the sub-5-minute SLO.
+    pub static ref CAPTURE_TO_APPROVAL_QUEUE_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+        "billforge_capture_to_approval_queue_seconds",
+        "Seconds from invoice capture to approval queue placement or auto-approval decision",
+        &["tenant_id", "outcome"],
+        vec![30.0, 60.0, 120.0, 180.0, 240.0, 300.0, 420.0, 600.0, 900.0, 1800.0, 3600.0]
+    ).unwrap();
+
+    /// Histogram tracking time from invoice capture (created_at) to a terminal
+    /// processing status (approved, rejected, posted, etc.).
+    pub static ref CAPTURE_TO_FINAL_STATUS_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+        "billforge_capture_to_final_status_seconds",
+        "Seconds from invoice capture to terminal processing status",
+        &["tenant_id", "final_status"],
+        vec![30.0, 60.0, 120.0, 180.0, 240.0, 300.0, 420.0, 600.0, 900.0, 1800.0, 3600.0]
+    ).unwrap();
 }
 
 /// Record request-level SLO telemetry: HTTP duration histogram + sub-200ms compliance.
@@ -89,6 +109,22 @@ pub fn record_request_slo(endpoint: &str, status: u16, elapsed_secs: f64) {
     API_SUB_200MS_COMPLIANCE_TOTAL
         .with_label_values(&[endpoint, compliant])
         .inc();
+}
+
+/// Observe capture-to-approval-queue duration (one-liner for call sites).
+/// `outcome` should be one of: `routed_for_approval`, `auto_approved`, `exception`.
+pub fn observe_capture_to_approval_queue(tenant_id: &str, outcome: &str, duration_secs: f64) {
+    CAPTURE_TO_APPROVAL_QUEUE_DURATION_SECONDS
+        .with_label_values(&[tenant_id, outcome])
+        .observe(duration_secs);
+}
+
+/// Observe capture-to-final-status duration (one-liner for call sites).
+/// `final_status` should be a known ProcessingStatus string (e.g. `approved`, `rejected`).
+pub fn observe_capture_to_final_status(tenant_id: &str, final_status: &str, duration_secs: f64) {
+    CAPTURE_TO_FINAL_STATUS_DURATION_SECONDS
+        .with_label_values(&[tenant_id, final_status])
+        .observe(duration_secs);
 }
 
 /// Export metrics in Prometheus text format
@@ -162,5 +198,97 @@ mod tests {
         assert!(metrics.contains("provider=\"tesseract\""));
         assert!(metrics.contains("outcome=\"success\""));
         assert!(metrics.contains("field=\"invoice_number\""));
+    }
+
+    #[test]
+    fn test_capture_to_approval_queue_histogram_registered_and_observed() {
+        // Exercise the helper
+        observe_capture_to_approval_queue("tenant-abc", "routed_for_approval", 250.0);
+        observe_capture_to_approval_queue("tenant-abc", "auto_approved", 45.0);
+
+        let metrics = export_metrics();
+
+        // Metric name present
+        assert!(
+            metrics.contains("billforge_capture_to_approval_queue_seconds"),
+            "missing capture-to-approval-queue metric"
+        );
+
+        // Label values present
+        assert!(
+            metrics.contains("outcome=\"routed_for_approval\""),
+            "missing routed_for_approval outcome label"
+        );
+        assert!(
+            metrics.contains("outcome=\"auto_approved\""),
+            "missing auto_approved outcome label"
+        );
+        assert!(
+            metrics.contains("tenant_id=\"tenant-abc\""),
+            "missing tenant_id label"
+        );
+
+        // _count should be 2 total observations across both outcomes
+        assert!(
+            metrics.contains("billforge_capture_to_approval_queue_seconds_count"),
+            "missing _count series"
+        );
+
+        // Bucket boundary 240.0 should have captured the auto_approved (45s) but not the other
+        assert!(
+            metrics.contains("billforge_capture_to_approval_queue_seconds_bucket"),
+            "missing _bucket series"
+        );
+    }
+
+    #[test]
+    fn test_capture_to_final_status_histogram_registered_and_observed() {
+        observe_capture_to_final_status("tenant-xyz", "approved", 300.0);
+        observe_capture_to_final_status("tenant-xyz", "rejected", 120.0);
+
+        let metrics = export_metrics();
+
+        assert!(
+            metrics.contains("billforge_capture_to_final_status_seconds"),
+            "missing capture-to-final-status metric"
+        );
+        assert!(
+            metrics.contains("final_status=\"approved\""),
+            "missing approved final_status label"
+        );
+        assert!(
+            metrics.contains("final_status=\"rejected\""),
+            "missing rejected final_status label"
+        );
+        assert!(
+            metrics.contains("tenant_id=\"tenant-xyz\""),
+            "missing tenant_id label"
+        );
+        assert!(
+            metrics.contains("billforge_capture_to_final_status_seconds_count"),
+            "missing _count series"
+        );
+        assert!(
+            metrics.contains("billforge_capture_to_final_status_seconds_bucket"),
+            "missing _bucket series"
+        );
+    }
+
+    #[test]
+    fn test_capture_to_approval_queue_empty_outcome_no_panic() {
+        // Observing with an empty/unknown outcome must not panic;
+        // it falls through as a label value (safe default).
+        observe_capture_to_approval_queue("tenant-empty", "", 60.0);
+
+        let metrics = export_metrics();
+        assert!(
+            metrics.contains("billforge_capture_to_approval_queue_seconds"),
+            "metric should still be present with empty outcome"
+        );
+        // The empty string becomes outcome="" in the output
+        assert!(
+            metrics.contains("outcome=\"\""),
+            "empty outcome label should appear"
+        );
     }
 }
