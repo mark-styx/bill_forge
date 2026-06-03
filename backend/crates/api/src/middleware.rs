@@ -83,7 +83,7 @@ pub async fn require_auth(
         Some(t) => t,
         None => {
             warn!(path = %path, "Missing or malformed Authorization header");
-            return json_error_response(StatusCode::UNAUTHORIZED, "unauthenticated");
+            return json_error_response(StatusCode::UNAUTHORIZED, "unauthenticated", "Authentication required.");
         }
     };
 
@@ -96,9 +96,9 @@ pub async fn require_auth(
             warn!(path = %path, error = %e, "Token validation failed");
             match e {
                 billforge_core::Error::TokenExpired => {
-                    json_error_response(StatusCode::UNAUTHORIZED, "token_expired")
+                    json_error_response(StatusCode::UNAUTHORIZED, "token_expired", "Authentication token has expired.")
                 }
-                _ => json_error_response(StatusCode::UNAUTHORIZED, "invalid_token"),
+                _ => json_error_response(StatusCode::UNAUTHORIZED, "invalid_token", "Authentication token is invalid."),
             }
         }
     }
@@ -132,6 +132,7 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
             return json_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "tenant_context_missing",
+                "Tenant context was not established for the authenticated request.",
             );
         }
     };
@@ -143,7 +144,7 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
             user_id = %user_context.user_id.as_uuid(),
             "tenant_id is nil on authenticated request"
         );
-        return json_error_response(StatusCode::UNAUTHORIZED, "tenant_unresolved");
+        return json_error_response(StatusCode::UNAUTHORIZED, "tenant_unresolved", "No tenant could be resolved for the authenticated user.");
     }
 
     info!(
@@ -159,11 +160,12 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
     next.run(request).await
 }
 
-fn json_error_response(status: StatusCode, error: &str) -> Response<Body> {
+fn json_error_response(status: StatusCode, code: &str, message: &str) -> Response<Body> {
+    let body = serde_json::json!({ "error": { "code": code, "message": message } });
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
-        .body(Body::from(format!(r#"{{"error":"{}"}}"#, error)))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap()
 }
 

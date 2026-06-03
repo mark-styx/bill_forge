@@ -99,6 +99,24 @@ async fn unauthenticated_api_request_returns_401() {
         StatusCode::UNAUTHORIZED,
         "Protected endpoint should reject unauthenticated requests with 401"
     );
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(
+        body["error"]["code"], "unauthenticated",
+        "error.code should be 'unauthenticated', got: {:?}",
+        body["error"]["code"]
+    );
+    assert!(
+        body["error"]["message"].is_string(),
+        "error.message should be a string"
+    );
+    assert!(
+        !body["error"]["message"].as_str().unwrap().is_empty(),
+        "error.message should be non-empty"
+    );
 }
 
 #[tokio::test]
@@ -288,5 +306,45 @@ async fn malformed_auth_header_rejected() {
         response.status(),
         StatusCode::UNAUTHORIZED,
         "Non-Bearer auth scheme should be rejected by middleware"
+    );
+}
+
+#[tokio::test]
+async fn invalid_token_returns_invalid_token_code() {
+    let app = build_test_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/invoices")
+                .header("authorization", "Bearer not-a-real-jwt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "Invalid JWT should be rejected with 401"
+    );
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(
+        body["error"]["code"], "invalid_token",
+        "error.code should be 'invalid_token', got: {:?}",
+        body["error"]["code"]
+    );
+    assert!(
+        body["error"]["message"].is_string(),
+        "error.message should be a string"
+    );
+    assert!(
+        !body["error"]["message"].as_str().unwrap().is_empty(),
+        "error.message should be non-empty"
     );
 }
