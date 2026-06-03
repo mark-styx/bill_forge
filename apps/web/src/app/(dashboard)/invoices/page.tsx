@@ -1,15 +1,16 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { invoicesApi } from '@/lib/api';
+import { invoicesApi, workflowsApi } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { useStatusConfig } from '@/hooks/useStatusConfig';
 import InvoicePanel from '@/components/InvoicePanel';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AdvancedDataTable, ColumnDef } from '@/components/ui/advanced-data-table';
 import { useInvoiceEvents } from '@/hooks/useInvoiceEvents';
+import { toast } from 'sonner';
 import {
   Plus,
   Download,
@@ -17,8 +18,16 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
+function escapeCsvField(value: string): string {
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
 export default function InvoicesPage() {
   useInvoiceEvents();
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -44,6 +53,51 @@ export default function InvoicesPage() {
 
   const invoices = data?.data ?? [];
   const pagination = data?.pagination;
+
+  const bulkApproveMutation = useMutation({
+    mutationFn: (invoiceIds: string[]) =>
+      workflowsApi.bulkOperation({ operation: 'approve', invoice_ids: invoiceIds }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      setSelectedIds([]);
+      if (result.failed === 0) {
+        toast.success(`${result.successful} invoice(s) approved`);
+      } else {
+        toast.warning(`${result.successful} approved, ${result.failed} failed`);
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Bulk approve failed');
+    },
+  });
+
+  const handleBulkExport = () => {
+    if (selectedIds.length === 0) return;
+    const selected = invoices.filter((inv: Record<string, any>) => selectedIds.includes(inv.id));
+    if (selected.length === 0) return;
+
+    const headers = ['id', 'vendor', 'invoice_number', 'amount', 'status', 'due_date'];
+    const rows = selected.map((inv: Record<string, any>) => [
+      inv.id,
+      inv.vendor_name ?? '',
+      inv.invoice_number ?? '',
+      inv.total_amount ? `${(inv.total_amount.amount / 100).toFixed(2)} ${inv.total_amount.currency}` : '',
+      inv.processing_status ?? '',
+      inv.due_date ?? inv.invoice_date ?? '',
+    ]);
+    const csv = [headers.join(','), ...rows.map((r: string[]) => r.map(escapeCsvField).join(','))].join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'invoices-export.csv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    setSelectedIds([]);
+  };
 
   // Check if invoice capture module is enabled for upload functionality
   const canUpload = hasModule('invoice_capture');
@@ -143,10 +197,21 @@ export default function InvoicesPage() {
 
   const toolbarActions = selectedIds.length > 0 ? (
     <div className="flex items-center gap-2 text-sm">
-      <button className="btn btn-secondary btn-sm" disabled>
-        Bulk Approve
+      <button
+        className="btn btn-secondary btn-sm"
+        disabled={selectedIds.length === 0 || bulkApproveMutation.isPending}
+        onClick={() => {
+          if (selectedIds.length === 0) return;
+          bulkApproveMutation.mutate(selectedIds);
+        }}
+      >
+        {bulkApproveMutation.isPending ? 'Loading...' : 'Bulk Approve'}
       </button>
-      <button className="btn btn-secondary btn-sm" disabled>
+      <button
+        className="btn btn-secondary btn-sm"
+        disabled={selectedIds.length === 0}
+        onClick={handleBulkExport}
+      >
         Bulk Export
       </button>
       <button

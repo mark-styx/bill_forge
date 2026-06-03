@@ -10,10 +10,23 @@ vi.mock('next/link', () => ({
 
 // Mock the API
 const mockListInvoices = vi.fn();
+const mockBulkOperation = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   invoicesApi: {
     list: (...args: unknown[]) => mockListInvoices(...args),
+  },
+  workflowsApi: {
+    bulkOperation: (...args: unknown[]) => mockBulkOperation(...args),
+  },
+}));
+
+// Mock sonner toast
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -58,6 +71,11 @@ vi.mock('@/components/ConfidenceBadge', () => ({
   ConfidenceBadge: ({ confidence }: { confidence: number }) => (
     <span data-testid="confidence-badge">{Math.round(confidence * 100)}%</span>
   ),
+}));
+
+// Mock useInvoiceEvents
+vi.mock('@/hooks/useInvoiceEvents', () => ({
+  useInvoiceEvents: vi.fn(),
 }));
 
 const mockInvoices = [
@@ -132,9 +150,11 @@ describe('InvoicesPage', () => {
       expect(selectedTexts.length).toBeGreaterThanOrEqual(1);
     });
 
-    // Bulk action buttons should be visible
-    expect(screen.getByText('Bulk Approve')).toBeInTheDocument();
-    expect(screen.getByText('Bulk Export')).toBeInTheDocument();
+    // Bulk action buttons should be visible and enabled (selection is active)
+    const bulkApproveBtn = screen.getByText('Bulk Approve').closest('button')!;
+    const bulkExportBtn = screen.getByText('Bulk Export').closest('button')!;
+    expect(bulkApproveBtn).not.toBeDisabled();
+    expect(bulkExportBtn).not.toBeDisabled();
     expect(screen.getByText('Clear')).toBeInTheDocument();
   });
 
@@ -216,5 +236,125 @@ describe('InvoicesPage', () => {
     await waitFor(() => {
       expect(screen.queryAllByText('3 selected')).toHaveLength(0);
     });
+  });
+
+  it('Bulk Approve calls bulkOperation and clears selection on success', async () => {
+    mockBulkOperation.mockResolvedValue({
+      total: 2,
+      successful: 2,
+      failed: 0,
+      errors: [],
+    });
+
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    // Select first two rows
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(checkboxes[2]);
+
+    await waitFor(() => {
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
+    });
+
+    // Click Bulk Approve
+    const bulkApproveBtn = screen.getByText('Bulk Approve').closest('button')!;
+    fireEvent.click(bulkApproveBtn);
+
+    await waitFor(() => {
+      expect(mockBulkOperation).toHaveBeenCalledWith({
+        operation: 'approve',
+        invoice_ids: [mockInvoices[0].id, mockInvoices[1].id],
+      });
+    });
+
+    // Selection should be cleared after success
+    await waitFor(() => {
+      expect(screen.queryAllByText('2 selected')).toHaveLength(0);
+    });
+  });
+
+  it('Bulk Approve shows error toast on failure', async () => {
+    mockBulkOperation.mockRejectedValue(new Error('Server error'));
+
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    // Select first row
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[1]);
+
+    await waitFor(() => {
+      expect(screen.getByText('1 selected')).toBeInTheDocument();
+    });
+
+    // Click Bulk Approve
+    const bulkApproveBtn = screen.getByText('Bulk Approve').closest('button')!;
+    fireEvent.click(bulkApproveBtn);
+
+    await waitFor(() => {
+      expect(mockBulkOperation).toHaveBeenCalled();
+    });
+  });
+
+  it('Bulk Export triggers CSV download and clears selection', async () => {
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    // Select all rows
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('3 selected')).toBeInTheDocument();
+    });
+
+    // Set up DOM mocks for the download AFTER rendering
+    const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
+    const mockRevokeObjectURL = vi.fn();
+    const originalCreateObjectURL = globalThis.URL.createObjectURL;
+    const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
+    globalThis.URL.createObjectURL = mockCreateObjectURL;
+    globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
+
+    // Mock anchor element click
+    const mockAnchorClick = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = originalCreateElement(tag);
+      if (tag === 'a') {
+        el.click = mockAnchorClick;
+      }
+      return el;
+    });
+
+    // Click Bulk Export
+    const bulkExportBtn = screen.getByText('Bulk Export').closest('button')!;
+    fireEvent.click(bulkExportBtn);
+
+    await waitFor(() => {
+      expect(mockCreateObjectURL).toHaveBeenCalled();
+    });
+    expect(mockAnchorClick).toHaveBeenCalled();
+
+    // Selection should be cleared after export
+    await waitFor(() => {
+      expect(screen.queryAllByText('3 selected')).toHaveLength(0);
+    });
+
+    // Restore mocks
+    globalThis.URL.createObjectURL = originalCreateObjectURL;
+    globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.restoreAllMocks();
   });
 });
