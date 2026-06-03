@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 sqlx = { workspace = true }
+sha2 = "0.10"
 
 # ML Categorization dependencies (Sprint 13)
 async-openai = { version = "0.20", default-features = false, features = ["native-tls"] }

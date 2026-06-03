@@ -30,6 +30,7 @@ pub mod predictive;
 pub mod purchase_orders;
 pub mod public_api;
 pub mod qbo;
+pub mod recurring_patterns;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
 pub(crate) mod reports;
@@ -286,6 +287,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/discounts", discounts::routes())
         // Budget guardrails (finance budget configuration & checks)
         .nest("/budgets", budgets::routes())
+        // Recurring-pattern detection & auto-approval policies
+        .nest("/recurring-patterns", recurring_patterns::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)

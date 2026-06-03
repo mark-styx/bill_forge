@@ -97,6 +97,113 @@ impl WorkflowEngine {
             .get_active_rules(tenant_id, WorkflowRuleType::Approval)
             .await?;
 
+        // Check recurring-pattern auto-approval before ML-confidence lane.
+        if let (Some(ref pool), Some(vendor_id)) = (&self.pool, invoice.vendor_id) {
+            if let Ok(Some(pattern)) =
+                crate::recurring_patterns::find_pattern(&**pool, *tenant_id.as_uuid(), vendor_id)
+                    .await
+            {
+                let line_items_json = serde_json::to_value(&invoice.line_items)
+                    .unwrap_or(serde_json::json!([]));
+                let match_result = crate::recurring_patterns::evaluate_pattern_match(
+                    invoice.total_amount.amount,
+                    invoice.invoice_date,
+                    &line_items_json,
+                    &pattern,
+                );
+
+                if pattern.auto_approve_enabled
+                    && matches!(match_result, crate::recurring_patterns::PatternMatchResult::Eligible)
+                {
+                    tracing::info!(
+                        invoice_id = %invoice.id.as_uuid(),
+                        pattern_id = %pattern.id,
+                        median_cents = pattern.trailing_median_cents,
+                        observed_cents = invoice.total_amount.amount,
+                        "Auto-approving invoice due to recurring pattern match"
+                    );
+
+                    // Audit-log the pattern-based auto-approval.
+                    let expected_date = pattern
+                        .last_invoice_date
+                        .map(|d| d + chrono::Duration::days(pattern.cadence_days as i64));
+                    let date_delta = match (invoice.invoice_date, expected_date) {
+                        (Some(inv), Some(exp)) => Some((inv - exp).num_days()),
+                        _ => None,
+                    };
+                    if let Err(e) = sqlx::query(
+                        r#"INSERT INTO invoice_audit_log
+                           (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                    )
+                    .bind(uuid::Uuid::new_v4())
+                    .bind(tenant_id.as_uuid())
+                    .bind(invoice.id.as_uuid())
+                    .bind(None::<uuid::Uuid>)
+                    .bind("received")
+                    .bind("approved")
+                    .bind("recurring_pattern_match")
+                    .bind(serde_json::json!({
+                        "pattern_id": pattern.id,
+                        "vendor_id": vendor_id,
+                        "trailing_median_cents": pattern.trailing_median_cents,
+                        "observed_amount_cents": invoice.total_amount.amount,
+                        "cadence_days": pattern.cadence_days,
+                        "date_delta_days": date_delta,
+                        "amount_tolerance_pct": pattern.amount_tolerance_pct,
+                        "window_tolerance_days": pattern.window_tolerance_days,
+                    }))
+                    .execute(&**pool)
+                    .await
+                    {
+                        tracing::warn!(error = %e, "Failed to write recurring-pattern auto-approval audit entry");
+                    }
+
+                    // Keep pattern current after approval.
+                    let _ = crate::recurring_patterns::detect_or_update_pattern(
+                        &**pool, *tenant_id.as_uuid(), vendor_id,
+                    )
+                    .await;
+
+                    return Ok(ProcessingStatus::Approved);
+                }
+
+                // Pattern exists but match failed or auto-approve disabled: audit the reason.
+                if let crate::recurring_patterns::PatternMatchResult::Ineligible(reason) =
+                    match_result
+                {
+                    tracing::info!(
+                        invoice_id = %invoice.id.as_uuid(),
+                        pattern_id = %pattern.id,
+                        reason = %reason,
+                        "Recurring pattern found but invoice ineligible for auto-approval"
+                    );
+                    if let Err(e) = sqlx::query(
+                        r#"INSERT INTO invoice_audit_log
+                           (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+                    )
+                    .bind(uuid::Uuid::new_v4())
+                    .bind(tenant_id.as_uuid())
+                    .bind(invoice.id.as_uuid())
+                    .bind(None::<uuid::Uuid>)
+                    .bind("received")
+                    .bind("submitted")
+                    .bind("recurring_pattern_ineligible")
+                    .bind(serde_json::json!({
+                        "pattern_id": pattern.id,
+                        "vendor_id": vendor_id,
+                        "reason": reason,
+                    }))
+                    .execute(&**pool)
+                    .await
+                    {
+                        tracing::warn!(error = %e, "Failed to write recurring-pattern ineligible audit entry");
+                    }
+                }
+            }
+        }
+
         // Check ML categorization auto-approval threshold.
         // Both OCR confidence and categorization confidence must meet their
         // thresholds, and all required fields must be present, to auto-approve.
