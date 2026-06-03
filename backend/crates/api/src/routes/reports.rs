@@ -1,7 +1,7 @@
 //! Reporting routes (Reporting module)
 
 use crate::error::ApiResult;
-use crate::extractors::{AuthUser, ReportingAccess, TenantCtx};
+use crate::extractors::ReportingAccess;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -48,8 +48,7 @@ pub fn routes() -> Router<AppState> {
 #[utoipa::path(get, path = "/api/v1/reports/dashboard/summary", tag = "Reports", responses((status = 200, description = "Dashboard summary")))]
 async fn dashboard_summary(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    ReportingAccess(user, tenant): ReportingAccess,
 ) -> ApiResult<Json<DashboardSummary>> {
     // Get real counts from the database
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -123,8 +122,7 @@ pub struct DashboardKpis {
 )]
 async fn dashboard_kpis(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    ReportingAccess(_user, tenant): ReportingAccess,
 ) -> ApiResult<Json<DashboardKpis>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
@@ -1387,8 +1385,7 @@ async fn ap_cash_flow_forecast_simulate(
 #[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]
 async fn list_digests(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    ReportingAccess(user, tenant): ReportingAccess,
 ) -> ApiResult<Json<Vec<billforge_reporting::ReportDigest>>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let reporting_service = billforge_reporting::ReportingService::new();
@@ -1403,8 +1400,7 @@ async fn list_digests(
 #[utoipa::path(post, path = "/api/v1/reports/digests", tag = "Reports", request_body = serde_json::Value, responses((status = 200, description = "Digest created")))]
 async fn create_digest(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    ReportingAccess(user, tenant): ReportingAccess,
     Json(request): Json<billforge_reporting::UpsertDigestRequest>,
 ) -> ApiResult<Json<billforge_reporting::ReportDigest>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -1435,8 +1431,7 @@ async fn create_digest(
 #[utoipa::path(delete, path = "/api/v1/reports/digests/{id}", tag = "Reports", params(("id" = String, Path,)), responses((status = 200, description = "Digest deleted")))]
 async fn delete_digest(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    ReportingAccess(user, tenant): ReportingAccess,
     Path(digest_id): Path<Uuid>,
 ) -> ApiResult<()> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;

@@ -1,7 +1,7 @@
 //! Document upload, download, and management routes
 
 use crate::error::ApiResult;
-use crate::extractors::{AuthUser, TenantCtx};
+use crate::extractors::DocumentsAccess;
 use crate::state::AppState;
 use axum::{
     body::Body,
@@ -50,8 +50,7 @@ pub struct UploadQuery {
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_document(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(user, tenant): DocumentsAccess,
     Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<UploadResponse>> {
@@ -158,8 +157,7 @@ async fn upload_document(
     responses((status = 200, description = "Document uploaded"), (status = 400, description = "Invalid file")))]
 async fn upload_invoice_document(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(user, tenant): DocumentsAccess,
     Path(invoice_id): Path<String>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<UploadResponse>> {
@@ -227,8 +225,7 @@ async fn upload_invoice_document(
     responses((status = 200, description = "Document file"), (status = 404, description = "Not found")))]
 async fn download_document(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(_user, tenant): DocumentsAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
     let document_id = Uuid::parse_str(&id)
@@ -273,8 +270,7 @@ async fn download_document(
     responses((status = 200, description = "Document metadata"), (status = 404, description = "Not found")))]
 async fn get_document_metadata(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(_user, tenant): DocumentsAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<DocumentMetadataResponse>> {
     let document_id = Uuid::parse_str(&id)
@@ -320,8 +316,7 @@ pub struct DocumentMetadataResponse {
     responses((status = 200, description = "Document deleted"), (status = 404, description = "Not found")))]
 async fn delete_document(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(_user, tenant): DocumentsAccess,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let document_id = Uuid::parse_str(&id)
@@ -344,8 +339,7 @@ async fn delete_document(
     responses((status = 200, description = "Invoice documents")))]
 async fn list_invoice_documents(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
-    TenantCtx(tenant): TenantCtx,
+    DocumentsAccess(_user, tenant): DocumentsAccess,
     Path(invoice_id): Path<String>,
 ) -> ApiResult<Json<Vec<DocumentMetadataResponse>>> {
     let invoice_uuid = Uuid::parse_str(&invoice_id)

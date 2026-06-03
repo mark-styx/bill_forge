@@ -221,3 +221,29 @@ where
         Ok(Self(user, tenant))
     }
 }
+
+/// Extractor for Documents module access (gated on InvoiceCapture, since
+/// document storage is bundled with the invoice-capture add-on).
+pub struct DocumentsAccess(pub UserContext, pub TenantContext);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for DocumentsAccess
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let TenantCtx(tenant) = TenantCtx::from_request_parts(parts, state).await?;
+        let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
+
+        if !tenant.has_module(Module::InvoiceCapture) {
+            return Err(ApiError(Error::ModuleNotAvailable(
+                "Documents".to_string(),
+            )));
+        }
+
+        Ok(Self(user, tenant))
+    }
+}
