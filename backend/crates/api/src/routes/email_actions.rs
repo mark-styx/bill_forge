@@ -303,6 +303,42 @@ async fn perform_approval(
         }
     }
 
+    // Budget guardrail check: block approval if budget is exceeded
+    let budget_check = super::budgets::check_invoice_against_budgets(
+        pool,
+        *tenant_id.as_uuid(),
+        invoice_id,
+    )
+    .await?;
+
+    if budget_check.blocked {
+        return Err(billforge_core::Error::Conflict(format!(
+            "BUDGET_EXCEEDED: {}",
+            serde_json::to_string(&budget_check.violations)
+                .unwrap_or_else(|_| "budget exceeded".to_string())
+        )));
+    }
+
+    // Log budget check audit entry for warnings
+    if !budget_check.warnings.is_empty() {
+        let _ = sqlx::query(
+            "INSERT INTO invoice_audit_log \
+             (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata) \
+             VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_approval', 'budget_check_performed', $5)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(*tenant_id.as_uuid())
+        .bind(invoice_id)
+        .bind(*user_id.as_uuid())
+        .bind(serde_json::json!({
+            "warnings": budget_check.warnings,
+            "violations": budget_check.violations,
+            "channel": "email",
+        }))
+        .execute(pool)
+        .await;
+    }
+
     update_approval_request(pool, tenant_id, invoice_id, user_id, "approved").await?;
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)

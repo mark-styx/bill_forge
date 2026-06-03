@@ -2979,3 +2979,76 @@ export const discountsApi = {
   capture: (invoiceId: string) =>
     api.post<DiscountCaptureResponse>(`/api/v1/discounts/${invoiceId}/capture`),
 };
+
+// ---------------------------------------------------------------------------
+// Budget Guardrails API
+// ---------------------------------------------------------------------------
+
+export interface Budget {
+  id: string;
+  tenant_id: string;
+  scope_type: 'department' | 'cost_center' | 'gl_account' | 'project';
+  scope_value: string;
+  period_type: 'monthly' | 'quarterly' | 'annual';
+  period_start: string;
+  period_end: string;
+  amount_cents: number;
+  enforcement: 'warn' | 'block';
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BudgetCheckResult {
+  scope_type: string;
+  scope_value: string;
+  budget_amount_cents: number;
+  committed_cents: number;
+  remaining_after_cents: number;
+  enforcement: string;
+  status: 'ok' | 'warn' | 'block';
+}
+
+export interface InvoiceBudgetCheckResult {
+  results: BudgetCheckResult[];
+  blocked: boolean;
+  warnings: BudgetCheckResult[];
+  violations: BudgetCheckResult[];
+}
+
+export interface CreateBudgetInput {
+  scope_type: string;
+  scope_value: string;
+  period_type: string;
+  period_start: string;
+  period_end: string;
+  amount_cents: number;
+  enforcement?: 'warn' | 'block';
+}
+
+export interface PatchBudgetInput {
+  amount_cents?: number;
+  enforcement?: 'warn' | 'block';
+}
+
+export const budgetsApi = {
+  list: () =>
+    api.get<Budget[]>('/api/v1/budgets'),
+
+  create: (data: CreateBudgetInput) =>
+    api.post<Budget>('/api/v1/budgets', data),
+
+  update: (id: string, data: PatchBudgetInput) =>
+    api.patch<Budget>(`/api/v1/budgets/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<null>(`/api/v1/budgets/${id}`),
+
+  check: (params: { scope_type: string; scope_value: string; date: string; amount_cents: number }) =>
+    api.get<BudgetCheckResult>('/api/v1/budgets/check', params),
+
+  checkInvoice: (invoiceId: string) =>
+    // This is a client-side convenience; the actual budget check happens server-side at approval time.
+    // Exposed for the pre-approval summary UI.
+    api.get<InvoiceBudgetCheckResult>(`/api/v1/budgets/check-invoice/${invoiceId}`),
+};

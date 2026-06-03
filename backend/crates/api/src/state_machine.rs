@@ -338,6 +338,54 @@ async fn transition_handler(
         }
     }
 
+    // Budget guardrail check: block or warn on approval transitions
+    if body.to_status == InvoiceStatus::Approved {
+        let budget_check = crate::routes::budgets::check_invoice_against_budgets(
+            &pool,
+            *tenant.tenant_id.as_uuid(),
+            invoice_id,
+        )
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Budget check failed: {}", e)))?;
+
+        if budget_check.blocked {
+            return Err(
+                billforge_core::Error::Conflict(format!(
+                    "BUDGET_EXCEEDED: {}",
+                    serde_json::to_string(&budget_check.violations)
+                        .unwrap_or_else(|_| "budget exceeded".to_string())
+                ))
+                .into(),
+            );
+        }
+
+        // Attach budget warnings to metadata for audit trail
+        if !budget_check.warnings.is_empty() || !budget_check.results.is_empty() {
+            // Log budget check audit entry
+            if let Ok(mut meta) = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(metadata.clone()) {
+                meta.insert(
+                    "budget_check".to_string(),
+                    serde_json::json!({
+                        "warnings": budget_check.warnings,
+                        "violations": budget_check.violations,
+                    }),
+                );
+                let _ = sqlx::query(
+                    "INSERT INTO invoice_audit_log \
+                     (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata) \
+                     VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_approval', 'budget_check_performed', $5)",
+                )
+                .bind(Uuid::new_v4())
+                .bind(*tenant.tenant_id.as_uuid())
+                .bind(invoice_id)
+                .bind(*user.user_id.as_uuid())
+                .bind(serde_json::Value::Object(meta))
+                .execute(&*pool)
+                .await;
+            }
+        }
+    }
+
     transition(
         &pool,
         &tenant.tenant_id,

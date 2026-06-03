@@ -281,6 +281,23 @@ async fn approve_via_link(
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
 
+    // Budget guardrail check: block approval if budget is exceeded
+    let budget_check = crate::routes::budgets::check_invoice_against_budgets(
+        &pool,
+        claims.tenant_id,
+        claims.invoice_id,
+    )
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Budget check failed: {}", e)))?;
+
+    if budget_check.blocked {
+        return Err(ApprovalError::Core(billforge_core::Error::Conflict(format!(
+            "BUDGET_EXCEEDED: {}",
+            serde_json::to_string(&budget_check.violations)
+                .unwrap_or_else(|_| "budget exceeded".to_string())
+        ))).into());
+    }
+
     // Atomically consume the token *before* performing the action.
     consume_token(
         &pool,

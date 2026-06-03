@@ -352,6 +352,58 @@ async fn slack_interactions(
 
                 match verb {
                     "bf_approve" => {
+                        // Budget guardrail check: block approval if budget is exceeded
+                        let budget_check = crate::routes::budgets::check_invoice_against_budgets(
+                            &tenant_pool,
+                            tenant_id,
+                            invoice_id,
+                        )
+                        .await
+                        .map_err(ApiError)?;
+
+                        if budget_check.blocked {
+                            write_chat_audit(
+                                &tenant_pool,
+                                tenant_id,
+                                invoice_id,
+                                user_id,
+                                "budget_check_blocked",
+                                "slack",
+                                msg_ts.as_deref(),
+                                serde_json::json!({
+                                    "action": "bf_approve",
+                                    "blocked": true,
+                                    "violations": budget_check.violations,
+                                }),
+                            )
+                            .await?;
+
+                            return Err(ApiError(billforge_core::Error::Conflict(format!(
+                                "BUDGET_EXCEEDED: {}",
+                                serde_json::to_string(&budget_check.violations)
+                                    .unwrap_or_else(|_| "budget exceeded".to_string())
+                            ))));
+                        }
+
+                        // Log budget warnings for audit trail
+                        if !budget_check.warnings.is_empty() {
+                            write_chat_audit(
+                                &tenant_pool,
+                                tenant_id,
+                                invoice_id,
+                                user_id,
+                                "budget_check_performed",
+                                "slack",
+                                msg_ts.as_deref(),
+                                serde_json::json!({
+                                    "warnings": budget_check.warnings,
+                                    "violations": budget_check.violations,
+                                    "channel": "slack",
+                                }),
+                            )
+                            .await?;
+                        }
+
                         transition_invoice(
                             &tenant_pool,
                             &TenantId(tenant_id),
@@ -850,6 +902,58 @@ async fn teams_actions(
 
     match action {
         "approve" => {
+            // Budget guardrail check: block approval if budget is exceeded
+            let budget_check = crate::routes::budgets::check_invoice_against_budgets(
+                &tenant_pool,
+                tenant_id,
+                invoice_id,
+            )
+            .await
+            .map_err(ApiError)?;
+
+            if budget_check.blocked {
+                write_chat_audit(
+                    &tenant_pool,
+                    tenant_id,
+                    invoice_id,
+                    actor_id,
+                    "budget_check_blocked",
+                    "teams",
+                    None,
+                    serde_json::json!({
+                        "action": "approve",
+                        "blocked": true,
+                        "violations": budget_check.violations,
+                    }),
+                )
+                .await?;
+
+                return Err(ApiError(billforge_core::Error::Conflict(format!(
+                    "BUDGET_EXCEEDED: {}",
+                    serde_json::to_string(&budget_check.violations)
+                        .unwrap_or_else(|_| "budget exceeded".to_string())
+                ))));
+            }
+
+            // Log budget warnings for audit trail
+            if !budget_check.warnings.is_empty() {
+                write_chat_audit(
+                    &tenant_pool,
+                    tenant_id,
+                    invoice_id,
+                    actor_id,
+                    "budget_check_performed",
+                    "teams",
+                    None,
+                    serde_json::json!({
+                        "warnings": budget_check.warnings,
+                        "violations": budget_check.violations,
+                        "channel": "teams",
+                    }),
+                )
+                .await?;
+            }
+
             transition_invoice(
                 &tenant_pool,
                 &TenantId(tenant_id),

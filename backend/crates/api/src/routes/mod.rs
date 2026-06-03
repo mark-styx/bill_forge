@@ -7,6 +7,7 @@ pub mod auth;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
 pub mod billing;
+pub mod budgets;
 pub mod chat_approvals;
 pub mod close_periods;
 pub mod contracts;
@@ -252,6 +253,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/contracts", contracts::routes())
         // Early-payment discount optimizer
         .nest("/discounts", discounts::routes())
+        // Budget guardrails (finance budget configuration & checks)
+        .nest("/budgets", budgets::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
