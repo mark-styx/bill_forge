@@ -623,6 +623,50 @@ impl ReportingService {
         })
     }
 
+    /// Median (p50) time in minutes from invoice capture to approval-queue arrival.
+    ///
+    /// Measures the duration from `invoices.created_at` to the earliest
+    /// `invoice_audit_log` entry whose `to_status = 'submitted'`, scoped to
+    /// the last 30 days. Returns 0.0 when no qualifying rows exist.
+    pub async fn get_median_capture_to_approval_minutes(
+        &self,
+        tenant_id: &TenantId,
+        pool: &Arc<PgPool>,
+    ) -> Result<f64> {
+        let median: f64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (al.created_at - i.created_at)) / 60.0
+                ),
+                0.0
+            )
+            FROM invoices i
+            JOIN LATERAL (
+                SELECT MIN(created_at) AS created_at
+                FROM invoice_audit_log
+                WHERE invoice_id = i.id
+                  AND tenant_id = i.tenant_id
+                  AND to_status = 'submitted'
+            ) al ON TRUE
+            WHERE i.tenant_id = $1
+              AND al.created_at IS NOT NULL
+              AND i.created_at >= NOW() - INTERVAL '30 days'
+            "#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .fetch_one(&**pool)
+        .await
+        .map_err(|e| {
+            Error::Database(format!(
+                "Failed to query median capture-to-approval time: {}",
+                e
+            ))
+        })?;
+
+        Ok(median)
+    }
+
     /// Get invoice status distribution
     pub async fn get_status_distribution(
         &self,
@@ -2249,6 +2293,167 @@ mod tests {
             items[0].item_id,
             invoice_pending.to_string(),
             "should be the pending invoice, not the approved one"
+        );
+    }
+
+    /// Create the invoice_audit_log table needed by the median metric tests.
+    async fn setup_audit_log_table(pool: &sqlx::PgPool) {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS invoice_audit_log (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                tenant_id UUID NOT NULL,
+                invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                from_status TEXT,
+                to_status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create invoice_audit_log table");
+    }
+
+    /// Seed an audit-log row for a given invoice, with an explicit created_at
+    /// offset from the invoice's created_at.
+    async fn seed_audit_log(
+        pool: &sqlx::PgPool,
+        tenant_id: Uuid,
+        invoice_id: Uuid,
+        to_status: &str,
+        created_at: chrono::DateTime<Utc>,
+    ) {
+        sqlx::query(
+            r#"INSERT INTO invoice_audit_log (tenant_id, invoice_id, to_status, created_at)
+               VALUES ($1, $2, $3, $4)"#,
+        )
+        .bind(tenant_id)
+        .bind(invoice_id)
+        .bind(to_status)
+        .bind(created_at)
+        .execute(pool)
+        .await
+        .expect("Failed to insert audit log row");
+    }
+
+    /// Verify median capture-to-approval-queue time is computed correctly
+    /// and respects tenant isolation.
+    #[sqlx::test]
+    #[ignore = "requires PostgreSQL database"]
+    async fn test_median_capture_to_approval_queue_minutes(pool: sqlx::PgPool) {
+        setup_test_tables(&pool).await;
+        setup_audit_log_table(&pool).await;
+
+        let tenant_a = TenantId::from_uuid(Uuid::new_v4());
+        let tenant_b = TenantId::from_uuid(Uuid::new_v4());
+        let tid_a = *tenant_a.as_uuid();
+        let tid_b = *tenant_b.as_uuid();
+
+        // Users + vendors for both tenants
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        seed_user(&pool, user_a, tid_a).await;
+        seed_user(&pool, user_b, tid_b).await;
+
+        let vendor_a = Uuid::new_v4();
+        let vendor_b = Uuid::new_v4();
+        seed_vendor(&pool, vendor_a, tid_a, "Vendor A").await;
+        seed_vendor(&pool, vendor_b, tid_b, "Vendor B").await;
+
+        let now = Utc::now();
+
+        // Tenant A: invoice 1 — 3 min from capture to submitted
+        let inv_a1 = Uuid::new_v4();
+        seed_invoice(
+            &pool, inv_a1, tid_a, vendor_a, "Vendor A", "INV-A1", 10_000, user_a,
+        )
+        .await;
+        let inv_a1_created: chrono::DateTime<Utc> = now - chrono::Duration::minutes(30);
+        sqlx::query("UPDATE invoices SET created_at = $1 WHERE id = $2")
+            .bind(inv_a1_created)
+            .bind(inv_a1)
+            .execute(&pool)
+            .await
+            .expect("Failed to set invoice created_at");
+        seed_audit_log(
+            &pool,
+            tid_a,
+            inv_a1,
+            "submitted",
+            inv_a1_created + chrono::Duration::minutes(3),
+        )
+        .await;
+
+        // Tenant A: invoice 2 — 9 min from capture to submitted
+        let inv_a2 = Uuid::new_v4();
+        seed_invoice(
+            &pool, inv_a2, tid_a, vendor_a, "Vendor A", "INV-A2", 20_000, user_a,
+        )
+        .await;
+        let inv_a2_created: chrono::DateTime<Utc> = now - chrono::Duration::minutes(60);
+        sqlx::query("UPDATE invoices SET created_at = $1 WHERE id = $2")
+            .bind(inv_a2_created)
+            .bind(inv_a2)
+            .execute(&pool)
+            .await
+            .expect("Failed to set invoice created_at");
+        seed_audit_log(
+            &pool,
+            tid_a,
+            inv_a2,
+            "submitted",
+            inv_a2_created + chrono::Duration::minutes(9),
+        )
+        .await;
+
+        // Tenant B: invoice with a 60 min delay — must not affect tenant A's median
+        let inv_b1 = Uuid::new_v4();
+        seed_invoice(
+            &pool, inv_b1, tid_b, vendor_b, "Vendor B", "INV-B1", 30_000, user_b,
+        )
+        .await;
+        let inv_b1_created: chrono::DateTime<Utc> = now - chrono::Duration::minutes(60);
+        sqlx::query("UPDATE invoices SET created_at = $1 WHERE id = $2")
+            .bind(inv_b1_created)
+            .bind(inv_b1)
+            .execute(&pool)
+            .await
+            .expect("Failed to set invoice created_at");
+        seed_audit_log(
+            &pool,
+            tid_b,
+            inv_b1,
+            "submitted",
+            inv_b1_created + chrono::Duration::minutes(60),
+        )
+        .await;
+
+        let service = ReportingService::new();
+        let pool_arc = Arc::new(pool);
+
+        // Tenant A median should be (3 + 9) / 2 = 6.0
+        let median_a = service
+            .get_median_capture_to_approval_minutes(&tenant_a, &pool_arc)
+            .await
+            .expect("median query should succeed");
+
+        assert!(
+            (median_a - 6.0).abs() < 0.1,
+            "expected median ≈ 6.0 minutes, got {}",
+            median_a,
+        );
+
+        // Tenant B median should be 60.0 (single row)
+        let median_b = service
+            .get_median_capture_to_approval_minutes(&tenant_b, &pool_arc)
+            .await
+            .expect("median query should succeed");
+
+        assert!(
+            (median_b - 60.0).abs() < 0.1,
+            "expected median ≈ 60.0 minutes, got {}",
+            median_b,
         );
     }
 

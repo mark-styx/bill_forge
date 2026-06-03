@@ -405,6 +405,8 @@ pub struct WorkflowMetrics {
     pub rejection_rate: f64,
     pub invoices_processed_today: u64,
     pub invoices_processed_this_week: u64,
+    /// Median (p50) minutes from invoice capture to approval-queue arrival.
+    pub median_capture_to_approval_queue_minutes: f64,
 }
 
 #[utoipa::path(get, path = "/api/v1/reports/workflows/metrics", tag = "Reports", responses((status = 200, description = "Workflow processing metrics")))]
@@ -429,6 +431,11 @@ async fn workflow_metrics(
         .get_invoices_processed_this_week(&tenant.tenant_id, &pool)
         .await?;
 
+    // Median capture → approval queue (northstar p50 metric)
+    let median_capture_to_approval_queue_minutes = reporting_service
+        .get_median_capture_to_approval_minutes(&tenant.tenant_id, &pool)
+        .await?;
+
     Ok(Json(WorkflowMetrics {
         avg_processing_time_hours: metrics.avg_total_processing_time_hours,
         avg_approval_time_hours: metrics.avg_approval_time_hours,
@@ -436,6 +443,7 @@ async fn workflow_metrics(
         rejection_rate: metrics.rejection_rate,
         invoices_processed_today: summary.invoices_processed_today,
         invoices_processed_this_week: invoices_this_week,
+        median_capture_to_approval_queue_minutes,
     }))
 }
 
