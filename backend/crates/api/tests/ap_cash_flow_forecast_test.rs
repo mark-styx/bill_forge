@@ -442,7 +442,7 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
     // Invoice A: pending_approval, due today+3, EPD deadline today+5
     // In baseline: effective_date = max(due, today+1) = today+3, EPD not triggered (deadline > effective)
     // In scenario: delayed +7 => today+10, capture_all_epd => EPD deadline today+5 is before today+10 => shifts to today+5
-    let inv_a = insert_invoice(
+    let _inv_a = insert_invoice(
         &pool,
         tenant_id,
         vendor_id,
@@ -473,7 +473,7 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
 
     // Baseline query: invoice A at today+3 (no EPD since deadline > effective), invoice B at today+2 (EPD triggers)
     let as_of = today;
-    let horizon_end = as_of + chrono::Duration::weeks(13);
+    let _horizon_end = as_of + chrono::Duration::weeks(13);
 
     let baseline_rows = sqlx::query(
         r#"
@@ -533,7 +533,7 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
     let expected_baseline_date_a = today + chrono::Duration::days(3);
 
     let expected_epd_amount_b = (2_000_00 as f64) * (1.0 - 3.0 / 100.0); // 194000
-    let expected_epd_date_b = today + chrono::Duration::days(2);
+    let _expected_epd_date_b = today + chrono::Duration::days(2);
 
     assert_eq!(expected_scenario_amount_a as i64, 98_000);
     assert_eq!(expected_baseline_amount_a, 100_000);
