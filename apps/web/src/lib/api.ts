@@ -2691,6 +2691,41 @@ export const vendorPortalApi = {
       }
       return res.json() as Promise<{ id: string; invoice_number: string }>;
     }),
+
+  submitOnboarding: (
+    token: string,
+    payload: {
+      legal_name: string;
+      dba?: string;
+      address?: Record<string, unknown>;
+      tax_form_type: 'w9' | 'w8ben';
+      banking?: Record<string, unknown>;
+      remit_contacts?: Record<string, unknown>[];
+    },
+    taxDocument?: File,
+  ) => {
+    const formData = new FormData();
+    formData.append('legal_name', payload.legal_name);
+    if (payload.dba) formData.append('dba', payload.dba);
+    if (payload.address) formData.append('address', JSON.stringify(payload.address));
+    formData.append('tax_form_type', payload.tax_form_type);
+    if (payload.banking) formData.append('banking', JSON.stringify(payload.banking));
+    if (payload.remit_contacts)
+      formData.append('remit_contacts', JSON.stringify(payload.remit_contacts));
+    if (taxDocument) formData.append('tax_document', taxDocument);
+
+    return fetch(`${API_BASE_URL}/api/v1/vendor-portal/onboarding`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<{ submission_id: string; status: string }>;
+    });
+  },
 };
 
 // ---------------------------------------------------------------------------

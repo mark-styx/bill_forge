@@ -43,6 +43,7 @@ pub(crate) mod sandbox;
 pub(crate) mod settings;
 pub mod theme;
 pub mod vendor_portal;
+pub mod vendor_portal_onboarding;
 pub mod vendor_statements;
 pub(crate) mod vendors;
 #[cfg(feature = "workday")]
@@ -169,7 +170,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
             invoices::routes().merge(crate::state_machine::routes()),
         )
         // Vendor Management module
-        .nest("/vendors", vendors::routes())
+        .nest("/vendors", vendors::routes().merge(vendor_portal_onboarding::review_routes()))
         // Invoice Processing module
         .nest("/workflows", workflows::routes())
         // Reporting module
@@ -274,6 +275,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest(
             "/vendor-portal",
             vendor_portal::routes()
+                .merge(vendor_portal_onboarding::portal_routes())
                 .layer(middleware::from_fn(rate_limit_auth))
                 .layer(Extension(RateLimiterState::new(30, 60))),
         )
