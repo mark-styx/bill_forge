@@ -51,7 +51,11 @@ pub(crate) mod workflows;
 pub mod xero;
 
 use crate::metrics;
-use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
+use crate::middleware::{
+    rate_limit_auth, require_auth, require_bill_com, require_edi,
+    require_quickbooks, require_sage_intacct, require_salesforce, require_tenant, require_workday,
+    require_xero, RateLimiterState,
+};
 use crate::routes::public_api::PublicApiRateLimiter;
 use crate::state::AppState;
 use axum::{middleware, routing::get, Extension, Router};
@@ -181,24 +185,51 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/sandbox", sandbox::routes())
         // Server-backed implementation wizard
         .nest("/implementation", implementation::routes());
-    // Conditionally include ERP/integration routes
+    // Conditionally include ERP/integration routes, gated by tenant subscription.
+    // Compile-time Cargo features control code inclusion; the route_layer gates
+    // access at runtime so only tenants with the matching Module add-on can reach
+    // the integration handlers.
     let router = {
         #[cfg(feature = "quickbooks")]
-        let router = router.nest("/quickbooks", quickbooks::routes());
+        let router = router.nest(
+            "/quickbooks",
+            quickbooks::routes().layer(middleware::from_fn(require_quickbooks)),
+        );
         #[cfg(feature = "xero")]
-        let router = router.nest("/xero", xero::routes());
+        let router = router.nest(
+            "/xero",
+            xero::routes().layer(middleware::from_fn(require_xero)),
+        );
         #[cfg(feature = "sage-intacct")]
-        let router = router.nest("/sage-intacct", sage_intacct::routes());
+        let router = router.nest(
+            "/sage-intacct",
+            sage_intacct::routes().layer(middleware::from_fn(require_sage_intacct)),
+        );
         #[cfg(feature = "salesforce")]
-        let router = router.nest("/salesforce", salesforce::routes());
+        let router = router.nest(
+            "/salesforce",
+            salesforce::routes().layer(middleware::from_fn(require_salesforce)),
+        );
         #[cfg(feature = "workday")]
-        let router = router.nest("/workday", workday::routes());
+        let router = router.nest(
+            "/workday",
+            workday::routes().layer(middleware::from_fn(require_workday)),
+        );
         #[cfg(feature = "bill-com")]
-        let router = router.nest("/bill-com", bill_com::routes());
+        let router = router.nest(
+            "/bill-com",
+            bill_com::routes().layer(middleware::from_fn(require_bill_com)),
+        );
         #[cfg(feature = "edi")]
-        let router = router.nest("/edi", edi::routes());
+        let router = router.nest(
+            "/edi",
+            edi::routes().layer(middleware::from_fn(require_edi)),
+        );
         #[cfg(feature = "edi")]
-        let router = router.nest("/edi/purchase-orders", purchase_orders::routes());
+        let router = router.nest(
+            "/edi/purchase-orders",
+            purchase_orders::routes().layer(middleware::from_fn(require_edi)),
+        );
         router
     };
     router

@@ -81,6 +81,106 @@ impl ModuleAddOn {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Integration add-on constructors
+    // -----------------------------------------------------------------------
+
+    pub fn quickbooks() -> Self {
+        Self {
+            module: Module::Quickbooks,
+            name: "QuickBooks Online".to_string(),
+            description: "Two-way sync with QuickBooks Online for bills, vendors, and payments".to_string(),
+            monthly_price_cents: 4900,
+            annual_price_cents: 47000,
+            stripe_monthly_price_id: Some("price_integration_quickbooks_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_quickbooks_annual".to_string()),
+        }
+    }
+
+    pub fn xero() -> Self {
+        Self {
+            module: Module::Xero,
+            name: "Xero".to_string(),
+            description: "Two-way sync with Xero for invoices, contacts, and bank transactions".to_string(),
+            monthly_price_cents: 4900,
+            annual_price_cents: 47000,
+            stripe_monthly_price_id: Some("price_integration_xero_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_xero_annual".to_string()),
+        }
+    }
+
+    pub fn net_suite() -> Self {
+        Self {
+            module: Module::NetSuite,
+            name: "NetSuite".to_string(),
+            description: "Enterprise integration with Oracle NetSuite for vendor bills and payments".to_string(),
+            monthly_price_cents: 9900,
+            annual_price_cents: 95000,
+            stripe_monthly_price_id: Some("price_integration_net_suite_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_net_suite_annual".to_string()),
+        }
+    }
+
+    pub fn sage_intacct() -> Self {
+        Self {
+            module: Module::SageIntacct,
+            name: "Sage Intacct".to_string(),
+            description: "Integration with Sage Intacct for AP automation and GL posting".to_string(),
+            monthly_price_cents: 7900,
+            annual_price_cents: 76000,
+            stripe_monthly_price_id: Some("price_integration_sage_intacct_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_sage_intacct_annual".to_string()),
+        }
+    }
+
+    pub fn salesforce() -> Self {
+        Self {
+            module: Module::Salesforce,
+            name: "Salesforce".to_string(),
+            description: "Sync vendors and purchase orders with Salesforce".to_string(),
+            monthly_price_cents: 5900,
+            annual_price_cents: 57000,
+            stripe_monthly_price_id: Some("price_integration_salesforce_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_salesforce_annual".to_string()),
+        }
+    }
+
+    pub fn workday() -> Self {
+        Self {
+            module: Module::Workday,
+            name: "Workday".to_string(),
+            description: "Integration with Workday Financial Management for expenses and payments".to_string(),
+            monthly_price_cents: 7900,
+            annual_price_cents: 76000,
+            stripe_monthly_price_id: Some("price_integration_workday_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_workday_annual".to_string()),
+        }
+    }
+
+    pub fn bill_com() -> Self {
+        Self {
+            module: Module::BillCom,
+            name: "Bill.com".to_string(),
+            description: "Sync invoices and payments with Bill.com for streamlined AP workflows".to_string(),
+            monthly_price_cents: 4900,
+            annual_price_cents: 47000,
+            stripe_monthly_price_id: Some("price_integration_bill_com_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_bill_com_annual".to_string()),
+        }
+    }
+
+    pub fn edi_addon() -> Self {
+        Self {
+            module: Module::Edi,
+            name: "EDI".to_string(),
+            description: "EDI (ANSI X12) integration for automated vendor invoice exchange".to_string(),
+            monthly_price_cents: 6900,
+            annual_price_cents: 66000,
+            stripe_monthly_price_id: Some("price_integration_edi_monthly".to_string()),
+            stripe_annual_price_id: Some("price_integration_edi_annual".to_string()),
+        }
+    }
+
     /// Returns the full add-on catalog (one entry per `Module` variant).
     pub fn catalog() -> Vec<Self> {
         vec![
@@ -89,6 +189,15 @@ impl ModuleAddOn {
             Self::vendor_management(),
             Self::reporting(),
             Self::ai_assistant(),
+            // Integration add-ons
+            Self::quickbooks(),
+            Self::xero(),
+            Self::net_suite(),
+            Self::sage_intacct(),
+            Self::salesforce(),
+            Self::workday(),
+            Self::bill_com(),
+            Self::edi_addon(),
         ]
     }
 
@@ -100,6 +209,14 @@ impl ModuleAddOn {
             Module::VendorManagement => Self::vendor_management(),
             Module::Reporting => Self::reporting(),
             Module::AiAssistant => Self::ai_assistant(),
+            Module::Quickbooks => Self::quickbooks(),
+            Module::Xero => Self::xero(),
+            Module::NetSuite => Self::net_suite(),
+            Module::SageIntacct => Self::sage_intacct(),
+            Module::Salesforce => Self::salesforce(),
+            Module::Workday => Self::workday(),
+            Module::BillCom => Self::bill_com(),
+            Module::Edi => Self::edi_addon(),
         }
     }
 
@@ -249,7 +366,7 @@ mod tests {
     #[test]
     fn test_catalog_covers_all_modules() {
         let catalog = ModuleAddOn::catalog();
-        assert_eq!(catalog.len(), 5);
+        assert_eq!(catalog.len(), 13);
         assert!(catalog.iter().any(|a| a.module == Module::InvoiceCapture));
         assert!(catalog
             .iter()
@@ -257,6 +374,15 @@ mod tests {
         assert!(catalog.iter().any(|a| a.module == Module::VendorManagement));
         assert!(catalog.iter().any(|a| a.module == Module::Reporting));
         assert!(catalog.iter().any(|a| a.module == Module::AiAssistant));
+        // Integration add-ons
+        assert!(catalog.iter().any(|a| a.module == Module::Quickbooks));
+        assert!(catalog.iter().any(|a| a.module == Module::Xero));
+        assert!(catalog.iter().any(|a| a.module == Module::NetSuite));
+        assert!(catalog.iter().any(|a| a.module == Module::SageIntacct));
+        assert!(catalog.iter().any(|a| a.module == Module::Salesforce));
+        assert!(catalog.iter().any(|a| a.module == Module::Workday));
+        assert!(catalog.iter().any(|a| a.module == Module::BillCom));
+        assert!(catalog.iter().any(|a| a.module == Module::Edi));
     }
 
     // ========================================================================
@@ -344,5 +470,91 @@ mod tests {
             addon.stripe_price_id(BillingCycle::Annual),
             Some("price_reporting_annual")
         );
+    }
+
+    // ========================================================================
+    // Integration add-on catalog & for_module tests
+    // ========================================================================
+
+    #[test]
+    fn test_integration_catalog_has_non_empty_pricing() {
+        let catalog = ModuleAddOn::catalog();
+        let integration_modules = [
+            Module::Quickbooks,
+            Module::Xero,
+            Module::NetSuite,
+            Module::SageIntacct,
+            Module::Salesforce,
+            Module::Workday,
+            Module::BillCom,
+            Module::Edi,
+        ];
+        for m in &integration_modules {
+            let addon = catalog.iter().find(|a| a.module == *m).unwrap_or_else(|| {
+                panic!("Integration module {:?} missing from catalog", m)
+            });
+            assert!(
+                addon.monthly_price_cents > 0,
+                "Integration {:?} must have non-zero monthly pricing",
+                m,
+            );
+            assert!(
+                addon.annual_price_cents > 0,
+                "Integration {:?} must have non-zero annual pricing",
+                m,
+            );
+            assert!(
+                !addon.name.is_empty(),
+                "Integration {:?} must have a non-empty display name",
+                m,
+            );
+            assert!(
+                !addon.description.is_empty(),
+                "Integration {:?} must have a non-empty description",
+                m,
+            );
+        }
+    }
+
+    #[test]
+    fn test_for_module_returns_matching_sku_for_integrations() {
+        for m in [
+            Module::Quickbooks,
+            Module::Xero,
+            Module::NetSuite,
+            Module::SageIntacct,
+            Module::Salesforce,
+            Module::Workday,
+            Module::BillCom,
+            Module::Edi,
+        ] {
+            let addon = ModuleAddOn::for_module(m);
+            assert_eq!(addon.module, m);
+            assert!(addon.monthly_price_cents > 0);
+            assert!(addon.stripe_monthly_price_id.is_some());
+        }
+    }
+
+    #[test]
+    fn test_module_from_str_round_trips_integrations() {
+        let cases = [
+            (Module::Quickbooks, "quickbooks"),
+            (Module::Xero, "xero"),
+            (Module::NetSuite, "net_suite"),
+            (Module::SageIntacct, "sage_intacct"),
+            (Module::Salesforce, "salesforce"),
+            (Module::Workday, "workday"),
+            (Module::BillCom, "bill_com"),
+            (Module::Edi, "edi"),
+        ];
+        for (module, slug) in &cases {
+            // FromStr
+            let parsed: Module = slug.parse().unwrap_or_else(|e| {
+                panic!("Failed to parse {:?} as Module: {}", slug, e)
+            });
+            assert_eq!(parsed, *module, "FromStr round-trip failed for {:?}", slug);
+            // as_str
+            assert_eq!(module.as_str(), *slug, "as_str mismatch for {:?}", module);
+        }
     }
 }

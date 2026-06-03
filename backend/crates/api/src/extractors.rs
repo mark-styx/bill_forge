@@ -85,6 +85,15 @@ impl<const M: u8> RequireModule<M> {
             2 => Module::VendorManagement,
             3 => Module::Reporting,
             4 => Module::AiAssistant,
+            // Integration modules
+            5 => Module::Quickbooks,
+            6 => Module::Xero,
+            7 => Module::NetSuite,
+            8 => Module::SageIntacct,
+            9 => Module::Salesforce,
+            10 => Module::Workday,
+            11 => Module::BillCom,
+            12 => Module::Edi,
             _ => Module::InvoiceCapture,
         }
     }

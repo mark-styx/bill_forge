@@ -86,6 +86,15 @@ pub enum Module {
     VendorManagement,
     Reporting,
     AiAssistant,
+    // Integration add-on modules
+    Quickbooks,
+    Xero,
+    NetSuite,
+    SageIntacct,
+    Salesforce,
+    Workday,
+    BillCom,
+    Edi,
 }
 
 impl Module {
@@ -96,6 +105,14 @@ impl Module {
             Module::VendorManagement => "vendor_management",
             Module::Reporting => "reporting",
             Module::AiAssistant => "ai_assistant",
+            Module::Quickbooks => "quickbooks",
+            Module::Xero => "xero",
+            Module::NetSuite => "net_suite",
+            Module::SageIntacct => "sage_intacct",
+            Module::Salesforce => "salesforce",
+            Module::Workday => "workday",
+            Module::BillCom => "bill_com",
+            Module::Edi => "edi",
         }
     }
 
@@ -106,6 +123,14 @@ impl Module {
             Module::VendorManagement => "Vendor Management",
             Module::Reporting => "Reporting & Analytics",
             Module::AiAssistant => "Winston AI Assistant",
+            Module::Quickbooks => "QuickBooks Online",
+            Module::Xero => "Xero",
+            Module::NetSuite => "NetSuite",
+            Module::SageIntacct => "Sage Intacct",
+            Module::Salesforce => "Salesforce",
+            Module::Workday => "Workday",
+            Module::BillCom => "Bill.com",
+            Module::Edi => "EDI",
         }
     }
 }
@@ -120,6 +145,14 @@ impl std::str::FromStr for Module {
             "vendor_management" => Ok(Self::VendorManagement),
             "reporting" => Ok(Self::Reporting),
             "ai_assistant" => Ok(Self::AiAssistant),
+            "quickbooks" => Ok(Self::Quickbooks),
+            "xero" => Ok(Self::Xero),
+            "net_suite" => Ok(Self::NetSuite),
+            "sage_intacct" => Ok(Self::SageIntacct),
+            "salesforce" => Ok(Self::Salesforce),
+            "workday" => Ok(Self::Workday),
+            "bill_com" => Ok(Self::BillCom),
+            "edi" => Ok(Self::Edi),
             _ => Err(format!("Unknown module: {}", s)),
         }
     }

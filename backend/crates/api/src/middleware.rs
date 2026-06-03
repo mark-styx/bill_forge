@@ -7,7 +7,7 @@ use axum::{
     middleware::Next,
 };
 use billforge_auth::AuthService;
-use billforge_core::UserContext;
+use billforge_core::{Module, UserContext};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -278,4 +278,70 @@ pub async fn rate_limit_auth(
     }
 
     Ok(next.run(request).await)
+}
+
+/// Gates access by checking that the tenant has the specified module in their subscription.
+async fn gate_module(request: Request<Body>, next: Next, module: Module) -> Response<Body> {
+    if let Some(tenant_ctx) = request.extensions().get::<billforge_core::TenantContext>() {
+        if tenant_ctx.has_module(module) {
+            return next.run(request).await;
+        } else {
+            return module_not_entitled_response(module);
+        }
+    }
+    // TenantContext not yet in extensions — fall through to handler's own checks.
+    next.run(request).await
+}
+
+fn module_not_entitled_response(module: Module) -> Response<Body> {
+    let body = serde_json::json!({
+        "error": {
+            "code": "module_not_entitled",
+            "message": format!(
+                "Module '{}' is not enabled for this tenant. Contact sales to add this integration.",
+                module.display_name()
+            )
+        }
+    });
+    Response::builder()
+        .status(StatusCode::PAYMENT_REQUIRED)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Per-integration middleware functions for use with middleware::from_fn(...)
+// ---------------------------------------------------------------------------
+
+pub async fn require_quickbooks(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Quickbooks).await
+}
+
+pub async fn require_xero(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Xero).await
+}
+
+pub async fn require_netsuite(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::NetSuite).await
+}
+
+pub async fn require_sage_intacct(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::SageIntacct).await
+}
+
+pub async fn require_salesforce(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Salesforce).await
+}
+
+pub async fn require_workday(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Workday).await
+}
+
+pub async fn require_bill_com(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::BillCom).await
+}
+
+pub async fn require_edi(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Edi).await
 }

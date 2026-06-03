@@ -70,6 +70,21 @@ fn module_info(m: billforge_core::Module) -> ModuleInfo {
             enabled_help: "Winston AI Assistant is active. Winston can answer questions, use tools, and assist with enabled modules.",
             disabled_boundary: "Winston AI Assistant is a paid add-on that is not enabled for this organization. The AI assistant cannot be used until it is added to the tenant plan.",
         },
+        // Integration modules — Winston does not have integration-specific tools,
+        // so these share a generic boundary message.
+        m @ (billforge_core::Module::Quickbooks
+        | billforge_core::Module::Xero
+        | billforge_core::Module::NetSuite
+        | billforge_core::Module::SageIntacct
+        | billforge_core::Module::Salesforce
+        | billforge_core::Module::Workday
+        | billforge_core::Module::BillCom
+        | billforge_core::Module::Edi) => ModuleInfo {
+            key: m.as_str(),
+            display_name: m.display_name(),
+            enabled_help: "This integration module is enabled for your organization.",
+            disabled_boundary: "This integration is not available for your organization. Contact your administrator to enable this module.",
+        },
     }
 }
 
