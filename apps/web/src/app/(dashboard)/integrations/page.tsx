@@ -18,17 +18,22 @@ import {
   Bell,
   MessageSquare,
   X,
+  Lock,
 } from 'lucide-react';
 import {
   api,
+  billingApi,
+  BillingModule,
+  BillingSubscription,
   billComApi,
   getIntegrationStatus,
   IntegrationStatusResponse,
   notificationsApi,
   sageIntacctApi,
 } from '@/lib/api';
+import { useAuthStore } from '@/stores/auth';
 
-type IntegrationStatus = 'connected' | 'disconnected' | 'available' | 'loading' | 'error';
+type IntegrationStatus = 'connected' | 'disconnected' | 'available' | 'loading' | 'error' | 'locked';
 type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'notifications' | 'all';
 
 interface IntegrationStatusState {
@@ -54,6 +59,7 @@ interface Integration {
     disconnect?: string;
   };
   docsUrl?: string;
+  requiredModule?: string;
 }
 
 interface SageCredentials {
@@ -95,6 +101,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/quickbooks/disconnect',
     },
     docsUrl: 'https://developer.intuit.com/app/developer/qbo/docs',
+    requiredModule: 'quickbooks',
   },
   {
     id: 'xero',
@@ -117,6 +124,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/xero/disconnect',
     },
     docsUrl: 'https://developer.xero.com/documentation',
+    requiredModule: 'xero',
   },
   {
     id: 'sage-intacct',
@@ -140,6 +148,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/sage-intacct/disconnect',
     },
     docsUrl: 'https://developer.intacct.com/api/',
+    requiredModule: 'sage_intacct',
   },
   {
     id: 'salesforce',
@@ -163,6 +172,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/salesforce/disconnect',
     },
     docsUrl: 'https://developer.salesforce.com/docs',
+    requiredModule: 'salesforce',
   },
   {
     id: 'workday',
@@ -186,6 +196,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/workday/disconnect',
     },
     docsUrl: 'https://developer.workday.com/documentation',
+    requiredModule: 'workday',
   },
   {
     id: 'bill-com',
@@ -209,6 +220,7 @@ const integrations: Integration[] = [
       disconnect: '/api/v1/bill-com/disconnect',
     },
     docsUrl: 'https://developer.bill.com/docs',
+    requiredModule: 'bill_com',
   },
   {
     id: 'slack',
@@ -285,6 +297,14 @@ function IntegrationLogo({ integration }: { integration: Integration }) {
 }
 
 function StatusBadge({ status }: { status: IntegrationStatus }) {
+  if (status === 'locked') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+        <Lock className="h-3.5 w-3.5" />
+        Upgrade required
+      </span>
+    );
+  }
   if (status === 'connected') {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
@@ -317,20 +337,23 @@ function StatusBadge({ status }: { status: IntegrationStatus }) {
   );
 }
 
-function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onRefresh }: {
+function IntegrationCard({ integration, liveStatus, subscriptionLoading, onConnect, onDisconnect, onRefresh, onUpgrade }: {
   integration: Integration;
   liveStatus?: IntegrationStatusState;
+  subscriptionLoading: boolean;
   onConnect: (id: string) => void;
   onDisconnect: (id: string) => void;
   onRefresh: (id: string) => void;
+  onUpgrade: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   const displayStatus = liveStatus?.status ?? 'loading';
+  const isLocked = displayStatus === 'locked';
   const lastSync = liveStatus?.liveStatus?.last_sync_at;
 
   return (
-    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+    <div className={`bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all ${isLocked ? 'opacity-75' : ''}`}>
       <div className="p-5">
         <div className="flex items-start gap-4">
           <IntegrationLogo integration={integration} />
@@ -344,6 +367,11 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
               {integration.description}
             </p>
+            {isLocked && integration.requiredModule && (
+              <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                Requires {integration.name} add-on
+              </p>
+            )}
             {lastSync && (
               <p className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">
                 Last synced: {new Date(lastSync).toLocaleString()}
@@ -434,7 +462,16 @@ function IntegrationCard({ integration, liveStatus, onConnect, onDisconnect, onR
               Docs
             </a>
           )}
-          {displayStatus === 'connected' ? (
+          {displayStatus === 'locked' ? (
+            <button
+              onClick={() => onUpgrade(integration.id)}
+              aria-label={`Upgrade required for ${integration.name}`}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              Upgrade required
+            </button>
+          ) : displayStatus === 'connected' ? (
             <button
               onClick={() => onDisconnect(integration.id)}
               aria-label={`Disconnect ${integration.name}`}
@@ -791,8 +828,39 @@ export default function IntegrationsPage() {
   const [teamsChannelName, setTeamsChannelName] = useState('');
   const [modalError, setModalError] = useState<string | null>(null);
   const [submittingModal, setSubmittingModal] = useState(false);
+  const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true);
+  const hasModule = useAuthStore((s) => s.hasModule);
+
+  const isIntegrationLocked = (integration: Integration): boolean => {
+    if (!integration.requiredModule) return false;
+    const subIncludes = subscription?.add_on_modules?.includes(integration.requiredModule as BillingModule) ?? false;
+    if (subIncludes) return false;
+    return !hasModule(integration.requiredModule);
+  };
+
+  // Fetch billing subscription once on mount
+  useEffect(() => {
+    let cancelled = false;
+    billingApi.getSubscription()
+      .then((data) => {
+        if (!cancelled) setSubscription(data.subscription);
+      })
+      .catch(() => {
+        // Subscription fetch failed - treat as no add-ons
+      })
+      .finally(() => {
+        if (!cancelled) setSubscriptionLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const getStatusForIntegration = async (integration: Integration): Promise<IntegrationStatusState> => {
+    // Short-circuit: locked integrations skip status API calls
+    if (isIntegrationLocked(integration)) {
+      return { status: 'locked' };
+    }
+
     if (integration.authType === 'slack') {
       const status = await notificationsApi.getSlackStatus();
       return status
@@ -852,8 +920,10 @@ export default function IntegrationsPage() {
       setStatuses(map);
       setLoading(false);
     }
+    // Wait for subscription to load before fetching statuses so locked state is accurate
+    if (subscriptionLoading) return;
     fetchStatuses();
-  }, []);
+  }, [subscriptionLoading]);
 
   const fetchSingleStatus = async (integrationId: string) => {
     const integration = integrations.find(i => i.id === integrationId);
@@ -912,6 +982,12 @@ export default function IntegrationsPage() {
   const handleConnect = async (integrationId: string) => {
     const integration = integrations.find((i) => i.id === integrationId);
     if (!integration) return;
+
+    // Block connect for locked integrations - redirect to billing upgrade
+    if (isIntegrationLocked(integration)) {
+      window.location.href = '/settings?tab=billing';
+      return;
+    }
 
     if (integration.authType === 'oauth' && integration.endpoints.connect) {
       // Redirect to OAuth flow
@@ -1074,9 +1150,11 @@ export default function IntegrationsPage() {
             key={integration.id}
             integration={integration}
             liveStatus={statuses[integration.id]}
+            subscriptionLoading={subscriptionLoading}
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
             onRefresh={fetchSingleStatus}
+            onUpgrade={handleConnect}
           />
         ))}
       </div>
