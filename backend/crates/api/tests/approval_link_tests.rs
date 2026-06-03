@@ -466,6 +466,7 @@ async fn test_approve_via_link_resolves_approval_request() {
     // Call resolve_approval_for_link with "approved"
     resolve_approval_for_link(
         &pool,
+        None,
         &TenantId(tenant_id),
         invoice_id,
         "approval-link-test@example.com",
@@ -524,6 +525,7 @@ async fn test_reject_via_link_resolves_approval_request() {
     // Call resolve_approval_for_link with "rejected"
     resolve_approval_for_link(
         &pool,
+        None,
         &TenantId(tenant_id),
         invoice_id,
         "approval-link-test@example.com",

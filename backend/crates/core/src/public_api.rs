@@ -185,7 +185,7 @@ pub async fn dispatch_webhook(
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
-                (status >= 200 && status < 300, Some(status as i32), Some(body))
+                ((200..300).contains(&status), Some(status as i32), Some(body))
             }
             Err(e) => {
                 tracing::warn!(

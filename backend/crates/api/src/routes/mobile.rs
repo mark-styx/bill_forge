@@ -743,7 +743,7 @@ async fn approve_invoice(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, &tenant.tenant_id, invoice_id)
+    super::workflows::resolve_invoice_approval_status(&mut conn, Some(&state.db.metadata()), &tenant.tenant_id, invoice_id)
         .await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
@@ -797,7 +797,7 @@ async fn reject_invoice(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, &tenant.tenant_id, invoice_id)
+    super::workflows::resolve_invoice_approval_status(&mut conn, Some(&state.db.metadata()), &tenant.tenant_id, invoice_id)
         .await?;
 
     Ok(Json(serde_json::json!({ "success": true })))

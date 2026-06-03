@@ -202,6 +202,7 @@ async fn transition_invoice(
 /// Resolve the approval request after a chat action, reusing the email-actions helper.
 async fn resolve_approval(
     pool: &sqlx::PgPool,
+    metadata_pool: Option<&std::sync::Arc<sqlx::PgPool>>,
     tenant_id: &TenantId,
     invoice_id: Uuid,
     user_id: &UserId,
@@ -215,6 +216,7 @@ async fn resolve_approval(
             .acquire()
             .await
             .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?,
+        metadata_pool,
         tenant_id,
         invoice_id,
     )
@@ -416,6 +418,7 @@ async fn slack_interactions(
                         .await?;
                         resolve_approval(
                             &tenant_pool,
+                            Some(&state.db.metadata()),
                             &TenantId(tenant_id),
                             invoice_id,
                             &UserId(user_id),
@@ -436,6 +439,7 @@ async fn slack_interactions(
                         .await?;
                         resolve_approval(
                             &tenant_pool,
+                            Some(&state.db.metadata()),
                             &TenantId(tenant_id),
                             invoice_id,
                             &UserId(user_id),

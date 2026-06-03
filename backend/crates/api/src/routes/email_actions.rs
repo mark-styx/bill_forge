@@ -129,6 +129,7 @@ async fn handle_email_action(
         EmailAction::ApproveInvoice => {
             perform_approval(
                 &tenant_pool,
+                Some(&state.db.metadata()),
                 &tenant_id,
                 token_data.resource_id,
                 &UserId(token_data.user_id),
@@ -139,6 +140,7 @@ async fn handle_email_action(
         EmailAction::RejectInvoice => {
             perform_rejection(
                 &tenant_pool,
+                Some(&state.db.metadata()),
                 &tenant_id,
                 token_data.resource_id,
                 &UserId(token_data.user_id),
@@ -279,6 +281,7 @@ pub(crate) async fn update_approval_request(
 /// Perform approval action
 async fn perform_approval(
     pool: &sqlx::PgPool,
+    metadata_pool: Option<&std::sync::Arc<sqlx::PgPool>>,
     tenant_id: &billforge_core::TenantId,
     invoice_id: uuid::Uuid,
     user_id: &UserId,
@@ -346,7 +349,7 @@ async fn perform_approval(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
 
     Ok(())
 }
@@ -354,6 +357,7 @@ async fn perform_approval(
 /// Perform rejection action
 async fn perform_rejection(
     pool: &sqlx::PgPool,
+    metadata_pool: Option<&std::sync::Arc<sqlx::PgPool>>,
     tenant_id: &billforge_core::TenantId,
     invoice_id: uuid::Uuid,
     user_id: &UserId,
@@ -365,7 +369,7 @@ async fn perform_rejection(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
 
     Ok(())
 }

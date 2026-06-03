@@ -210,6 +210,7 @@ struct CommentQuery {
 /// existing behaviour (tokens whose email is not a real user) is preserved.
 pub async fn resolve_approval_for_link(
     pool: &sqlx::PgPool,
+    metadata_pool: Option<&std::sync::Arc<sqlx::PgPool>>,
     tenant_id: &billforge_core::TenantId,
     invoice_id: Uuid,
     approver_email: &str,
@@ -248,7 +249,7 @@ pub async fn resolve_approval_for_link(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
 
     Ok(())
 }
@@ -331,6 +332,7 @@ async fn approve_via_link(
     // Resolve the matching approval_request row so multi-approver logic works.
     resolve_approval_for_link(
         &pool,
+        Some(&state.db.metadata()),
         &tenant_id,
         claims.invoice_id,
         &claims.approver_email,
@@ -393,6 +395,7 @@ async fn reject_via_link(
     // Resolve the matching approval_request row so multi-approver logic works.
     resolve_approval_for_link(
         &pool,
+        Some(&state.db.metadata()),
         &tenant_id,
         claims.invoice_id,
         &claims.approver_email,

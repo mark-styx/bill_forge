@@ -14,7 +14,7 @@ use billforge_core::{
         AuditEntry, BulkOperationError, BulkOperationInput, BulkOperationResult, BulkOperationType,
         CreateApprovalDelegationInput, CreateApprovalLimitInput, CreateAssignmentRuleInput,
         CreateWorkQueueInput, CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InboxItem,
-        QueueItem, ResourceType, WorkQueue, WorkflowRule, WorkflowTemplate,
+        ProcessingStatus, QueueItem, ResourceType, WorkQueue, WorkflowRule, WorkflowTemplate,
     },
     traits::{
         ApprovalDelegationRepository, ApprovalLimitRepository, AssignmentRuleRepository,
@@ -25,6 +25,8 @@ use billforge_core::{
 };
 use billforge_email::EmailTemplates;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Persist an audit entry or, if that fails, emit an ERROR-level log with a
@@ -49,6 +51,43 @@ pub(crate) async fn log_audit_or_record_gap(
             audit_entry = %fingerprint,
             "SOX: failed to persist audit entry — manual reconciliation required"
         );
+    }
+}
+
+/// Best-effort emit of a Stripe meter event when an invoice transitions to a
+/// billable processing status (Approved, ReadyForPayment, Paid).  The outbox
+/// UNIQUE(invoice_id, event_name) constraint prevents double-emit.
+pub(crate) async fn emit_meter_if_billable(
+    metadata_pool: &Arc<PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: uuid::Uuid,
+    status: Option<&billforge_core::domain::ProcessingStatus>,
+) {
+    let status = match status {
+        Some(s) => s,
+        None => return,
+    };
+    if !matches!(
+        status,
+        ProcessingStatus::Approved
+            | ProcessingStatus::ReadyForPayment
+            | ProcessingStatus::Paid
+    ) {
+        return;
+    }
+    let config = billforge_billing::BillingConfig::from_env();
+    if !config.enabled {
+        return;
+    }
+    let service = billforge_billing::BillingService::new(config, metadata_pool.clone());
+    if let Some(stripe) = service.stripe().as_deref() {
+        let _ = billforge_billing::record_invoice_meter_event(
+            metadata_pool,
+            Some(stripe),
+            tenant_id,
+            &invoice_id,
+        )
+        .await;
     }
 }
 
@@ -739,6 +778,7 @@ async fn delete_assignment_rule(
 /// `Ok(None)` when pending requests remain (no status change).
 pub(crate) async fn resolve_invoice_approval_status(
     executor: &mut sqlx::PgConnection,
+    metadata_pool: Option<&Arc<PgPool>>,
     tenant_id: &billforge_core::TenantId,
     invoice_id: uuid::Uuid,
 ) -> Result<Option<billforge_core::domain::ProcessingStatus>, billforge_core::Error> {
@@ -789,6 +829,11 @@ pub(crate) async fn resolve_invoice_approval_status(
         .execute(&mut *executor)
         .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+
+    // Emit meter event when the approval workflow resolves to a billable status.
+    if let Some(metadata_pool) = metadata_pool {
+        emit_meter_if_billable(metadata_pool, tenant_id, invoice_id, Some(&new_status)).await;
+    }
 
     Ok(Some(new_status))
 }
@@ -1115,7 +1160,7 @@ async fn approve(
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
     let new_status =
-        resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
+        resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -1277,7 +1322,7 @@ async fn reject(
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
     let new_status =
-        resolve_invoice_approval_status(&mut *tx, &tenant.tenant_id, info.invoice_id).await?;
+        resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -1616,6 +1661,27 @@ async fn bulk_operation(
         match result {
             Ok(_) => {
                 successful += 1;
+
+                // Emit meter event for billable bulk status transitions.
+                let billable_status = match input.operation {
+                    BulkOperationType::SubmitForPayment => {
+                        Some(ProcessingStatus::ReadyForPayment)
+                    }
+                    BulkOperationType::Approve => {
+                        Some(ProcessingStatus::Approved)
+                    }
+                    _ => None,
+                };
+                if let Some(status) = billable_status {
+                    emit_meter_if_billable(
+                        &state.db.metadata(),
+                        &tenant.tenant_id,
+                        *invoice_id.as_uuid(),
+                        Some(&status),
+                    )
+                    .await;
+                }
+
                 let action = match input.operation {
                     BulkOperationType::SubmitForPayment => AuditAction::InvoiceMarkedForPayment,
                     BulkOperationType::Approve => AuditAction::InvoiceApproved,
@@ -1789,6 +1855,15 @@ async fn mark_ready_for_payment(
         billforge_core::domain::ProcessingStatus::ReadyForPayment,
     )
     .await?;
+
+    // Emit meter event for ReadyForPayment transition.
+    emit_meter_if_billable(
+        &state.db.metadata(),
+        &tenant.tenant_id,
+        *invoice_id.as_uuid(),
+        Some(&ProcessingStatus::ReadyForPayment),
+    )
+    .await;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
