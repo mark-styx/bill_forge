@@ -1,9 +1,13 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, useCallback } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
-import { reportsApi, type ApCashFlowForecast } from '@/lib/api';
+import {
+  reportsApi,
+  type ApCashFlowForecast,
+  type ApCashFlowSimulation,
+} from '@/lib/api';
 import {
   ChartContainer,
   BillForgeBarChart,
@@ -15,6 +19,7 @@ import {
   Calendar,
   TrendingUp,
   ArrowLeft,
+  FlaskConical,
 } from 'lucide-react';
 
 const formatCents = (value: number, currency = 'USD') =>
@@ -34,12 +39,47 @@ type BreakdownTab = 'vendor' | 'gl';
 export default function CashFlowForecastPage() {
   const [breakdownTab, setBreakdownTab] = useState<BreakdownTab>('vendor');
 
+  // What-If Simulator state
+  const [simDelayDays, setSimDelayDays] = useState(0);
+  const [simCaptureEpd, setSimCaptureEpd] = useState(false);
+  const [simVendorShift, setSimVendorShift] = useState(0);
+  const [simResult, setSimResult] = useState<ApCashFlowSimulation | null>(null);
+  const [simError, setSimError] = useState<string | null>(null);
+
   const forecastQuery = useQuery({
     queryKey: ['ap-cash-flow-forecast', 13],
     queryFn: () => reportsApi.apCashFlowForecast({ horizon_weeks: 13 }),
   });
 
   const forecast = forecastQuery.data;
+
+  // Simulation mutation
+  const simMutation = useMutation({
+    mutationFn: () =>
+      reportsApi.simulateApCashFlowForecast({
+        horizon_weeks: 13,
+        scenario: {
+          pending_approval_delay_days: simDelayDays || null,
+          capture_all_epd: simCaptureEpd || null,
+          vendor_term_shift_days: simVendorShift || null,
+        },
+      }),
+    onSuccess: (data) => {
+      setSimResult(data);
+      setSimError(null);
+    },
+    onError: (err: Error) => {
+      setSimError(err.message || 'Simulation failed');
+    },
+  });
+
+  const handleResetSim = useCallback(() => {
+    setSimDelayDays(0);
+    setSimCaptureEpd(false);
+    setSimVendorShift(0);
+    setSimResult(null);
+    setSimError(null);
+  }, []);
 
   // Top KPIs
   const totalExpected = useMemo(
@@ -73,6 +113,44 @@ export default function CashFlowForecastPage() {
       })) ?? [],
     [forecast],
   );
+
+  // Scenario weekly chart data (overlay)
+  const scenarioWeeklyChartData = useMemo(
+    () =>
+      simResult?.scenario.weekly.map((w, i) => ({
+        name: `W${i + 1}`,
+        scenario: Math.round(w.expected_amount / 100),
+      })) ?? [],
+    [simResult],
+  );
+
+  // Merged chart data when simulation is active
+  const mergedWeeklyChartData = useMemo(() => {
+    if (!simResult) return weeklyChartData;
+    return weeklyChartData.map((w, i) => ({
+      ...w,
+      scenario: scenarioWeeklyChartData[i]?.scenario ?? 0,
+    }));
+  }, [weeklyChartData, scenarioWeeklyChartData, simResult]);
+
+  // Scenario KPI deltas
+  const scenarioDeltas = useMemo(() => {
+    if (!simResult) return null;
+    const baselineTotal = simResult.baseline.weekly.reduce((s, w) => s + w.expected_amount, 0);
+    const scenarioTotal = simResult.scenario.weekly.reduce((s, w) => s + w.expected_amount, 0);
+    const baselineAlertDays = simResult.baseline.daily.filter((d) => d.funding_required).length;
+    const scenarioAlertDays = simResult.scenario.daily.filter((d) => d.funding_required).length;
+    // EPD discount captured = sum of (baseline - scenario) for dates where scenario < baseline
+    let epdSavings = 0;
+    for (let i = 0; i < simResult.baseline.daily.length; i++) {
+      const bd = simResult.baseline.daily[i];
+      const sd = simResult.scenario.daily[i];
+      if (sd && sd.expected_amount < bd.expected_amount) {
+        epdSavings += bd.expected_amount - sd.expected_amount;
+      }
+    }
+    return { baselineTotal, scenarioTotal, baselineAlertDays, scenarioAlertDays, epdSavings };
+  }, [simResult]);
 
   // Aggregated vendor/GL breakdown across the horizon
   const vendorBreakdown = useMemo(() => {
@@ -211,14 +289,115 @@ export default function CashFlowForecastPage() {
         </div>
       </div>
 
+      {/* What-If Simulator */}
+      <div className="card overflow-hidden">
+        <div className="h-1.5 bg-gradient-to-r from-accent via-accent/70 to-transparent" />
+        <div className="p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-accent/10">
+              <FlaskConical className="w-5 h-5 text-accent" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">What-If Simulator</h2>
+              <p className="text-sm text-muted-foreground">
+                Explore scenarios against the baseline forecast
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="sim-delay">
+                Delay pending approvals by (days)
+              </label>
+              <input
+                id="sim-delay"
+                type="number"
+                min={0}
+                max={30}
+                value={simDelayDays}
+                onChange={(e) => setSimDelayDays(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
+                className="input input-bordered w-full"
+              />
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={simCaptureEpd}
+                  onChange={(e) => setSimCaptureEpd(e.target.checked)}
+                  className="checkbox checkbox-sm"
+                />
+                <span className="text-sm text-foreground">Capture every early-payment discount</span>
+              </label>
+            </div>
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="sim-vendor-shift">
+                Shift vendor terms by (days)
+              </label>
+              <input
+                id="sim-vendor-shift"
+                type="number"
+                min={-30}
+                max={30}
+                value={simVendorShift}
+                onChange={(e) => setSimVendorShift(Math.max(-30, Math.min(30, Number(e.target.value) || 0)))}
+                className="input input-bordered w-full"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => simMutation.mutate()}
+              disabled={simMutation.isPending}
+            >
+              {simMutation.isPending ? 'Running...' : 'Run simulation'}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleResetSim}
+            >
+              Reset
+            </button>
+          </div>
+          {simError && (
+            <p className="text-sm text-error mt-2">{simError}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Scenario KPI deltas */}
+      {scenarioDeltas && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="card p-4">
+            <p className="text-sm text-muted-foreground">Total expected (baseline vs scenario)</p>
+            <p className="text-lg font-semibold text-foreground">
+              {formatCents(scenarioDeltas.baselineTotal)} / {formatCents(scenarioDeltas.scenarioTotal)}
+            </p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-muted-foreground">Funding-alert days (baseline vs scenario)</p>
+            <p className="text-lg font-semibold text-foreground">
+              {scenarioDeltas.baselineAlertDays} / {scenarioDeltas.scenarioAlertDays}
+            </p>
+          </div>
+          <div className="card p-4">
+            <p className="text-sm text-muted-foreground">EPD discount captured</p>
+            <p className="text-lg font-semibold text-success">
+              {formatCents(scenarioDeltas.epdSavings)}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Weekly chart */}
       <ChartContainer title="Weekly Outflow Projection" description="Expected amount with confidence bands (in dollars)">
         <BillForgeBarChart
-          data={weeklyChartData}
-          dataKey={['expected']}
+          data={simResult ? mergedWeeklyChartData : weeklyChartData}
+          dataKey={simResult ? ['expected', 'scenario'] : ['expected']}
           xAxisKey="name"
           height={320}
-          colors={['hsl(var(--primary))']}
+          colors={simResult ? ['hsl(var(--primary))', 'hsl(var(--warning))'] : ['hsl(var(--primary))']}
           formatter={(v: number) => `$${v.toLocaleString()}`}
         />
       </ChartContainer>

@@ -5,7 +5,7 @@ use crate::extractors::{AuthUser, ReportingAccess, TenantCtx};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use billforge_reporting::DashboardSummary;
@@ -35,6 +35,7 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/sla", get(approval_sla))
         .route("/cash-flow/obligations", get(cash_flow_obligations))
         .route("/cash-flow/forecast", get(ap_cash_flow_forecast))
+        .route("/cash-flow/forecast/simulate", post(ap_cash_flow_forecast_simulate))
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
         .route("/digests/:id", delete(delete_digest))
@@ -919,6 +920,36 @@ pub struct ApCashFlowForecast {
     pub monthly: Vec<ForecastMonth>,
 }
 
+/// Scenario adjustments for the what-if simulator.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScenarioInputs {
+    /// Delay pending-approval invoices by N days (0-30).
+    pub pending_approval_delay_days: Option<i32>,
+    /// If true, force EPD capture whenever the discount deadline is still in the future.
+    pub capture_all_epd: Option<bool>,
+    /// Shift effective date for non-approved invoices by N days (-30 to +30).
+    pub vendor_term_shift_days: Option<i32>,
+    /// Override the daily funding-alert threshold (cents).
+    pub override_funding_threshold_cents: Option<i64>,
+}
+
+/// A simulated forecast paired with the baseline for comparison.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApCashFlowSimulation {
+    pub baseline: ApCashFlowForecast,
+    pub scenario: ApCashFlowForecast,
+    pub scenario_inputs: ScenarioInputs,
+}
+
+/// Request body for the simulate endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SimulateRequest {
+    pub horizon_weeks: Option<i32>,
+    pub as_of_date: Option<chrono::NaiveDate>,
+    pub min_daily_funding_threshold: Option<i64>,
+    pub scenario: ScenarioInputs,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForecastQuery {
     horizon_weeks: Option<i32>,
@@ -962,6 +993,29 @@ async fn ap_cash_flow_forecast(
     let as_of_date = params
         .as_of_date
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+    let forecast = compute_ap_forecast(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        horizon_weeks,
+        as_of_date,
+        params.min_daily_funding_threshold,
+        None,
+    )
+    .await?;
+
+    Ok(Json(forecast))
+}
+
+/// Core forecast computation shared by GET and simulate endpoints.
+async fn compute_ap_forecast(
+    pool: &sqlx::PgPool,
+    tenant_id: &Uuid,
+    horizon_weeks: i32,
+    as_of_date: chrono::NaiveDate,
+    min_daily_funding_threshold: Option<i64>,
+    scenario: Option<&ScenarioInputs>,
+) -> ApiResult<ApCashFlowForecast> {
     let horizon_end = as_of_date + chrono::Duration::weeks(horizon_weeks as i64);
 
     // Fetch active invoices with their EPD data and GL codes
@@ -1005,8 +1059,8 @@ async fn ap_cash_flow_forecast(
         LIMIT 1000
         "#,
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_all(&*pool)
+    .bind(tenant_id)
+    .fetch_all(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to query forecast data: {}", e)))?;
 
@@ -1048,19 +1102,79 @@ async fn ap_cash_flow_forecast(
                     _ => {}
                 }
 
-                // EPD: if discount deadline is still active and in the future, consider it
-                let epd_active = inv.discount_captured_at.is_none()
-                    && inv.discount_missed_at.is_none()
-                    && inv.discount_deadline.is_some()
-                    && inv.discount_percent.map_or(false, |p| p > 0.0);
+                // --- Scenario adjustments ---
+                if let Some(sc) = scenario {
+                    // pending_approval_delay_days: shift pending-approval invoices
+                    if let Some(delay) = sc.pending_approval_delay_days {
+                        if delay > 0 && inv.processing_status == "pending_approval" {
+                            effective_date = effective_date + chrono::Duration::days(delay as i64);
+                        }
+                    }
 
-                if epd_active {
-                    if let Some(dd) = inv.discount_deadline {
-                        if dd >= today && dd <= effective_date {
-                            // Economically beneficial: pay early to get discount
-                            effective_date = dd;
-                            if let Some(pct) = inv.discount_percent {
-                                effective_amount = inv.amount_cents as f64 * (1.0 - pct / 100.0);
+                    // capture_all_epd: force EPD capture when deadline is in the future
+                    if sc.capture_all_epd.unwrap_or(false) {
+                        let epd_eligible = inv.discount_captured_at.is_none()
+                            && inv.discount_missed_at.is_none()
+                            && inv.discount_deadline.is_some()
+                            && inv.discount_percent.map_or(false, |p| p > 0.0);
+                        if epd_eligible {
+                            if let Some(dd) = inv.discount_deadline {
+                                if dd >= today {
+                                    // Force capture regardless of deadline vs effective_date
+                                    effective_date = dd;
+                                    if let Some(pct) = inv.discount_percent {
+                                        effective_amount =
+                                            inv.amount_cents as f64 * (1.0 - pct / 100.0);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Standard EPD logic
+                        let epd_active = inv.discount_captured_at.is_none()
+                            && inv.discount_missed_at.is_none()
+                            && inv.discount_deadline.is_some()
+                            && inv.discount_percent.map_or(false, |p| p > 0.0);
+
+                        if epd_active {
+                            if let Some(dd) = inv.discount_deadline {
+                                if dd >= today && dd <= effective_date {
+                                    effective_date = dd;
+                                    if let Some(pct) = inv.discount_percent {
+                                        effective_amount =
+                                            inv.amount_cents as f64 * (1.0 - pct / 100.0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // vendor_term_shift_days: shift effective date for non-approved invoices
+                    if let Some(shift) = sc.vendor_term_shift_days {
+                        if !matches!(
+                            inv.processing_status.as_str(),
+                            "approved" | "ready_for_payment"
+                        ) {
+                            effective_date =
+                                effective_date + chrono::Duration::days(shift as i64);
+                            effective_date = effective_date.max(today);
+                        }
+                    }
+                } else {
+                    // Standard EPD logic (no scenario)
+                    let epd_active = inv.discount_captured_at.is_none()
+                        && inv.discount_missed_at.is_none()
+                        && inv.discount_deadline.is_some()
+                        && inv.discount_percent.map_or(false, |p| p > 0.0);
+
+                    if epd_active {
+                        if let Some(dd) = inv.discount_deadline {
+                            if dd >= today && dd <= effective_date {
+                                effective_date = dd;
+                                if let Some(pct) = inv.discount_percent {
+                                    effective_amount =
+                                        inv.amount_cents as f64 * (1.0 - pct / 100.0);
+                                }
                             }
                         }
                     }
@@ -1112,18 +1226,22 @@ async fn ap_cash_flow_forecast(
         }
     }
 
-    // Compute funding threshold: if provided use it, otherwise compute median
-    let nonzero_amounts: Vec<i64> = daily_expected.iter().copied().filter(|&a| a > 0).collect();
-    let median_amount = if nonzero_amounts.is_empty() {
-        0i64
-    } else {
-        let mut sorted = nonzero_amounts.clone();
-        sorted.sort();
-        sorted[sorted.len() / 2]
-    };
-    let funding_threshold = params
-        .min_daily_funding_threshold
-        .unwrap_or_else(|| (median_amount as f64 * 1.5) as i64);
+    // Compute funding threshold: if provided use it, otherwise compute median.
+    // Scenario may override the threshold.
+    let threshold_override = scenario.and_then(|s| s.override_funding_threshold_cents);
+    let funding_threshold = threshold_override.unwrap_or_else(|| {
+        let nonzero_amounts: Vec<i64> =
+            daily_expected.iter().copied().filter(|&a| a > 0).collect();
+        let median_amount = if nonzero_amounts.is_empty() {
+            0i64
+        } else {
+            let mut sorted = nonzero_amounts.clone();
+            sorted.sort();
+            sorted[sorted.len() / 2]
+        };
+        min_daily_funding_threshold
+            .unwrap_or_else(|| (median_amount as f64 * 1.5) as i64)
+    });
 
     // Build daily forecast
     let daily: Vec<ForecastDay> = (0..num_days)
@@ -1206,12 +1324,59 @@ async fn ap_cash_flow_forecast(
         })
         .collect();
 
-    Ok(Json(ApCashFlowForecast {
+    Ok(ApCashFlowForecast {
         as_of_date,
         horizon_weeks,
         daily,
         weekly,
         monthly,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/reports/cash-flow/forecast/simulate",
+    tag = "Reports",
+    request_body = SimulateRequest,
+    responses((status = 200, description = "Cash flow simulation with baseline comparison"))
+)]
+async fn ap_cash_flow_forecast_simulate(
+    State(state): State<AppState>,
+    ReportingAccess(_user, tenant): ReportingAccess,
+    Json(body): Json<SimulateRequest>,
+) -> ApiResult<Json<ApCashFlowSimulation>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let horizon_weeks = body.horizon_weeks.unwrap_or(13).clamp(1, 52);
+    let as_of_date = body
+        .as_of_date
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+    // Run baseline (no scenario)
+    let baseline = compute_ap_forecast(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        horizon_weeks,
+        as_of_date,
+        body.min_daily_funding_threshold,
+        None,
+    )
+    .await?;
+
+    // Run scenario
+    let scenario_forecast = compute_ap_forecast(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        horizon_weeks,
+        as_of_date,
+        body.min_daily_funding_threshold,
+        Some(&body.scenario),
+    )
+    .await?;
+
+    Ok(Json(ApCashFlowSimulation {
+        baseline,
+        scenario: scenario_forecast,
+        scenario_inputs: body.scenario,
     }))
 }
 

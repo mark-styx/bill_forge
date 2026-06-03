@@ -689,6 +689,13 @@ export const reportsApi = {
     return api.get<ApCashFlowForecast>(`/api/v1/reports/cash-flow/forecast?${qs}`);
   },
 
+  simulateApCashFlowForecast: (body: {
+    horizon_weeks?: number;
+    as_of_date?: string;
+    min_daily_funding_threshold?: number;
+    scenario: ScenarioInputs;
+  }) => api.post<ApCashFlowSimulation>('/api/v1/reports/cash-flow/forecast/simulate', body),
+
   mlAccuracy: () =>
     api.get<{ accuracy_rate: number; total_suggestions: number; accepted: number; corrected: number; rejected: number }>('/api/v1/invoices/ml-accuracy'),
 };
@@ -1145,6 +1152,20 @@ export interface ApCashFlowForecast {
   daily: ForecastDay[];
   weekly: ForecastWeek[];
   monthly: ForecastMonth[];
+}
+
+// What-If Simulator types
+export interface ScenarioInputs {
+  pending_approval_delay_days?: number | null;
+  capture_all_epd?: boolean | null;
+  vendor_term_shift_days?: number | null;
+  override_funding_threshold_cents?: number | null;
+}
+
+export interface ApCashFlowSimulation {
+  baseline: ApCashFlowForecast;
+  scenario: ApCashFlowForecast;
+  scenario_inputs: ScenarioInputs;
 }
 
 // Workflow Template types

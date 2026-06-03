@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CashFlowForecastPage from '../page';
-import type { ApCashFlowForecast } from '@/lib/api';
+import type { ApCashFlowForecast, ApCashFlowSimulation } from '@/lib/api';
 
 // Mock the API modules
 vi.mock('@/lib/api', () => ({
   reportsApi: {
     apCashFlowForecast: vi.fn(),
+    simulateApCashFlowForecast: vi.fn(),
   },
 }));
 
@@ -18,8 +19,8 @@ vi.mock('@/components/ui/charts', () => ({
       {children}
     </div>
   ),
-  BillForgeBarChart: ({ data }: { data: unknown[] }) => (
-    <div data-testid="bar-chart" data-bar-count={data.length} />
+  BillForgeBarChart: ({ data, dataKey }: { data: unknown[]; dataKey: string[] }) => (
+    <div data-testid="bar-chart" data-bar-count={data.length} data-keys={dataKey.join(',')} />
   ),
 }));
 
@@ -38,6 +39,7 @@ vi.mock('lucide-react', () => ({
   Calendar: () => <span>Calendar</span>,
   TrendingUp: () => <span>TrendingUp</span>,
   ArrowLeft: () => <span>ArrowLeft</span>,
+  FlaskConical: () => <span>FlaskConical</span>,
 }));
 
 import { reportsApi } from '@/lib/api';
@@ -158,5 +160,72 @@ describe('CashFlowForecastPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Forecast unavailable')).toBeInTheDocument();
     });
+  });
+
+  it('runs simulation and shows scenario overlay with KPI deltas', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+
+    const mockSimulation: ApCashFlowSimulation = {
+      baseline: mockForecast,
+      scenario: {
+        ...mockForecast,
+        weekly: mockForecast.weekly.map((w, i) => ({
+          ...w,
+          expected_amount: i === 0 ? 500_00_00 : w.expected_amount,
+        })),
+        daily: mockForecast.daily.map((d, i) => ({
+          ...d,
+          expected_amount: i === 5 ? 400_00_00 : d.expected_amount,
+        })),
+      },
+      scenario_inputs: {
+        pending_approval_delay_days: 7,
+        capture_all_epd: true,
+        vendor_term_shift_days: 0,
+      },
+    };
+    vi.mocked(reportsApi.simulateApCashFlowForecast).mockResolvedValue(mockSimulation);
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('What-If Simulator')).toBeInTheDocument();
+    });
+
+    // Fill delay input
+    const delayInput = screen.getByLabelText('Delay pending approvals by (days)');
+    fireEvent.change(delayInput, { target: { value: '7' } });
+
+    // Check the EPD checkbox
+    const epdCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(epdCheckbox);
+
+    // Click Run simulation
+    const runButton = screen.getByText('Run simulation');
+    fireEvent.click(runButton);
+
+    // Assert the simulate API was called
+    await waitFor(() => {
+      expect(reportsApi.simulateApCashFlowForecast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scenario: expect.objectContaining({
+            pending_approval_delay_days: 7,
+            capture_all_epd: true,
+          }),
+        }),
+      );
+    });
+
+    // Assert scenario KPI deltas rendered
+    await waitFor(() => {
+      expect(screen.getByText('Total expected (baseline vs scenario)')).toBeInTheDocument();
+      expect(screen.getByText('Funding-alert days (baseline vs scenario)')).toBeInTheDocument();
+      expect(screen.getByText('EPD discount captured')).toBeInTheDocument();
+    });
+
+    // Assert chart now uses both data keys
+    const chart = screen.getByTestId('bar-chart');
+    expect(chart.dataset.keys).toContain('expected');
+    expect(chart.dataset.keys).toContain('scenario');
   });
 });
