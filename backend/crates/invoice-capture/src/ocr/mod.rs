@@ -12,7 +12,7 @@ mod tesseract;
 
 pub use self::aws_textract::AwsTextractOcr;
 pub use self::google_vision::GoogleVisionOcr;
-pub use self::ocr_comparison::{OcrComparison, OcrProvider};
+pub use self::ocr_comparison::{OcrComparison, OcrComparisonResult, OcrProvider, ProviderResult};
 pub use self::tesseract::TesseractOcr;
 
 use billforge_core::traits::OcrService;

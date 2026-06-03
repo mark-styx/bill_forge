@@ -1,7 +1,7 @@
 //! Invoice capture service
 
 use crate::calibration::{calibrated_confidence, OcrCalibrationStore};
-use crate::ocr;
+use crate::ocr::{self, OcrComparison};
 use billforge_core::{
     domain::{
         CaptureStatus, CreateInvoiceInput, CreateLineItemInput, Invoice, OcrExtractionResult,
@@ -73,6 +73,7 @@ pub struct InvoiceCaptureService {
     invoice_repo: Arc<dyn InvoiceRepository>,
     storage: Arc<dyn StorageService>,
     calibration: Option<Arc<dyn OcrCalibrationStore>>,
+    comparison: Option<Arc<OcrComparison>>,
 }
 
 impl InvoiceCaptureService {
@@ -86,6 +87,7 @@ impl InvoiceCaptureService {
             invoice_repo,
             storage,
             calibration: None,
+            comparison: None,
         }
     }
 
@@ -100,6 +102,7 @@ impl InvoiceCaptureService {
             invoice_repo,
             storage,
             calibration: None,
+            comparison: None,
         }
     }
 
@@ -107,6 +110,44 @@ impl InvoiceCaptureService {
     pub fn with_calibration(mut self, store: Arc<dyn OcrCalibrationStore>) -> Self {
         self.calibration = Some(store);
         self
+    }
+
+    /// Attach an OCR comparison engine for multi-provider extraction.
+    pub fn with_comparison(mut self, comparison: Arc<OcrComparison>) -> Self {
+        self.comparison = Some(comparison);
+        self
+    }
+
+    /// Run OCR extraction, using multi-provider comparison when configured.
+    ///
+    /// Returns the extraction result and the name of the provider that produced it.
+    async fn run_ocr(
+        &self,
+        bytes: &[u8],
+        mime: &str,
+    ) -> Result<(OcrExtractionResult, String)> {
+        if let Some(ref comparison) = self.comparison {
+            let cmp_result = comparison.compare(bytes, mime).await?;
+            let best_key = &cmp_result.best_provider;
+            if let Some(pr) = cmp_result.providers.get(best_key) {
+                if let Some(ref extraction) = pr.result {
+                    tracing::info!(
+                        best_provider = %best_key,
+                        "OCR comparison selected best provider"
+                    );
+                    return Ok((extraction.clone(), best_key.clone()));
+                }
+            }
+            // All providers in comparison failed; fall back to default provider
+            tracing::warn!(
+                "All comparison providers failed, falling back to default provider"
+            );
+            let extraction = self.ocr_provider.extract(bytes, mime).await?;
+            Ok((extraction, self.ocr_provider.provider_name().to_string()))
+        } else {
+            let extraction = self.ocr_provider.extract(bytes, mime).await?;
+            Ok((extraction, self.ocr_provider.provider_name().to_string()))
+        }
     }
 
     /// Upload and process a new invoice document
@@ -124,8 +165,8 @@ impl InvoiceCaptureService {
             .upload(tenant_id, file_name, file_bytes, mime_type)
             .await?;
 
-        // 2. Run OCR
-        let ocr_result = self.ocr_provider.extract(file_bytes, mime_type).await?;
+        // 2. Run OCR (single provider or multi-provider comparison)
+        let (ocr_result, _best_provider) = self.run_ocr(file_bytes, mime_type).await?;
 
         // 3. Create invoice from OCR result
         let invoice = self
@@ -312,11 +353,9 @@ impl InvoiceCaptureService {
             .update_capture_status(tenant_id, invoice_id, CaptureStatus::Processing)
             .await?;
 
-        // Run OCR
-        let ocr_result = self
-            .ocr_provider
-            .extract(&document_bytes, "application/pdf")
-            .await?;
+        // Run OCR (single provider or multi-provider comparison)
+        let (ocr_result, _best_provider) =
+            self.run_ocr(&document_bytes, "application/pdf").await?;
 
         let confidence = self
             .calculate_confidence_with_calibration(tenant_id, &ocr_result)
