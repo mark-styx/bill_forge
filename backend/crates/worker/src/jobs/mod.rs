@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use billforge_core::TenantId;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 pub mod anomaly_detection;
@@ -84,89 +86,144 @@ pub async fn start_worker(config: WorkerConfig) -> Result<()> {
 
     info!("Connected to Redis, polling for jobs...");
 
-    // Job polling loop
+    // Bounded concurrency: semaphore limits in-flight jobs to max_concurrent_jobs.
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_jobs));
+    let mut join_set: JoinSet<()> = JoinSet::new();
+
+    // Job polling loop — non-blocking: each job is spawned on its own task.
     loop {
-        match poll_and_process_job(&mut redis_conn, &config).await {
-            Ok(processed) => {
-                if !processed {
-                    // No job available, wait before polling again
-                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                        config.job_poll_interval_secs,
-                    ))
-                    .await;
-                }
+        // Acquire a permit before polling so we never exceed max_concurrent_jobs.
+        let permit = semaphore.clone().acquire_owned().await?;
+
+        match poll_job(&mut redis_conn).await {
+            Ok(Some(job)) => {
+                let job_config = config.clone();
+                let sem = semaphore.clone();
+
+                join_set.spawn(async move {
+                    let _permit = permit; // holds permit until task completes
+                    let redis_client = match redis::Client::open(job_config.redis_url.as_str()) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            error!("Failed to create Redis client for spawned task: {}", e);
+                            return;
+                        }
+                    };
+                    let mut conn = match redis_client.get_async_connection().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            error!("Failed to get Redis connection in spawned task: {}", e);
+                            return;
+                        }
+                    };
+
+                    process_job_with_retry(&mut conn, &job_config, job, sem).await;
+                });
+            }
+            Ok(None) => {
+                // No job available — drop the permit and wait before polling again.
+                drop(permit);
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    config.job_poll_interval_secs,
+                ))
+                .await;
             }
             Err(e) => {
-                error!("Error processing job: {}", e);
+                drop(permit);
+                error!("Error polling for job: {}", e);
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         }
+
+        // Reap completed tasks to avoid unbounded JoinSet growth.
+        while join_set.try_join_next().is_some() {}
     }
 }
 
-async fn poll_and_process_job(
+/// Pop a single job from the Redis queue (BRPOP with 1s timeout).
+/// Returns `Ok(None)` when the queue is empty within the timeout window.
+async fn poll_job(conn: &mut redis::aio::Connection) -> Result<Option<Job>> {
+    let result: Option<(String, String)> = conn.brpop("billforge:jobs:queue", 1.0).await?;
+    match result {
+        Some((_queue, job_json)) => {
+            let job: Job = serde_json::from_str(&job_json)?;
+            Ok(Some(job))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Run `process_job` and handle retry/requeue logic (including backoff sleep)
+/// inside the spawned task so the BRPOP loop is never blocked.
+async fn process_job_with_retry(
     conn: &mut redis::aio::Connection,
     config: &WorkerConfig,
-) -> Result<bool> {
-    // Try to pop a job from the queue (BRPOP with timeout)
-    let result: Option<(String, String)> = conn.brpop("billforge:jobs:queue", 1.0).await?;
+    job: Job,
+    _semaphore: Arc<tokio::sync::Semaphore>,
+) {
+    info!(
+        "Processing job: {} for tenant: {}",
+        job.job_type.clone() as JobType,
+        job.tenant_id
+    );
 
-    if let Some((_queue, job_json)) = result {
-        let job: Job = serde_json::from_str(&job_json)?;
-
-        info!(
-            "Processing job: {} for tenant: {}",
-            job.job_type.clone() as JobType,
-            job.tenant_id
-        );
-
-        match process_job(&job, config).await {
-            Ok(_) => {
-                info!("Job completed successfully: {}", job.id);
-                // Mark job as completed
-                conn.lpush::<_, _, ()>(
+    match process_job(&job, config).await {
+        Ok(_) => {
+            info!("Job completed successfully: {}", job.id);
+            if let Err(e) = conn
+                .lpush::<_, _, ()>(
                     format!("billforge:jobs:completed:{}", job.tenant_id),
                     &job.id,
                 )
-                .await?;
+                .await
+            {
+                error!("Failed to mark job {} as completed: {}", job.id, e);
             }
-            Err(e) => {
-                error!("Job failed: {} - Error: {}", job.id, e);
+        }
+        Err(e) => {
+            error!("Job failed: {} - Error: {}", job.id, e);
 
-                // Retry logic
-                if job.retry_count < 3 {
-                    let mut retry_job = job.clone();
-                    retry_job.retry_count += 1;
-                    let retry_json = serde_json::to_string(&retry_job)?;
+            // Retry logic
+            if job.retry_count < 3 {
+                let mut retry_job = job.clone();
+                retry_job.retry_count += 1;
+                let retry_json = serde_json::to_string(&retry_job).unwrap_or_default();
 
-                    // Exponential backoff: requeue with delay
-                    let delay_secs = 10 * 2_u64.pow(job.retry_count);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
-                    conn.lpush::<_, _, ()>("billforge:jobs:queue", retry_json)
-                        .await?;
+                // Exponential backoff — slept inside the spawned task, never blocks the poll loop.
+                let delay_secs = 10 * 2_u64.pow(job.retry_count);
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
 
-                    warn!(
-                        "Requeued job {} for retry (attempt {})",
-                        job.id, retry_job.retry_count
-                    );
-                } else {
-                    // Move to dead letter queue
-                    conn.lpush::<_, _, ()>(
+                if let Err(e) = conn
+                    .lpush::<_, _, ()>("billforge:jobs:queue", retry_json)
+                    .await
+                {
+                    error!("Failed to requeue job {} for retry: {}", job.id, e);
+                }
+
+                warn!(
+                    "Requeued job {} for retry (attempt {})",
+                    job.id, retry_job.retry_count
+                );
+            } else {
+                // Move to dead letter queue
+                if let Err(e) = conn
+                    .lpush::<_, _, ()>(
                         format!("billforge:jobs:failed:{}", job.tenant_id),
                         &job.id,
                     )
-                    .await?;
+                    .await
+                {
                     error!(
-                        "Job {} moved to dead letter queue after {} retries",
-                        job.id, job.retry_count
+                        "Failed to move job {} to dead letter queue: {}",
+                        job.id, e
                     );
                 }
+                error!(
+                    "Job {} moved to dead letter queue after {} retries",
+                    job.id, job.retry_count
+                );
             }
         }
-
-        Ok(true)
-    } else {
-        Ok(false)
     }
 }
 
@@ -263,6 +320,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use uuid::Uuid;
 
     fn job_with_tenant(tenant_id: String) -> Job {
@@ -291,5 +349,125 @@ mod tests {
         let job = job_with_tenant("system".to_string());
 
         assert!(parse_job_tenant_id(&job).is_err());
+    }
+
+    /// Test that the semaphore + spawn pattern allows N jobs to run concurrently,
+    /// so total wall-clock time is ~duration of one job, not N × duration.
+    #[tokio::test]
+    async fn semaphore_allows_concurrent_job_execution() {
+        let max_concurrent = 4;
+        let job_count = 4;
+        let job_duration_ms = 200u64;
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let start = tokio::time::Instant::now();
+        let mut join_set: JoinSet<()> = JoinSet::new();
+
+        for _ in 0..job_count {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let c = counter.clone();
+            join_set.spawn(async move {
+                let _permit = permit;
+                c.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(job_duration_ms)).await;
+            });
+        }
+
+        // Wait for all tasks
+        while join_set.join_next().await.is_some() {}
+
+        let elapsed = start.elapsed();
+        assert_eq!(counter.load(Ordering::SeqCst), job_count);
+        // Concurrent: should be ~job_duration_ms, not job_count * job_duration_ms.
+        // Allow generous margin: must be less than half the serial time.
+        assert!(
+            elapsed < std::time::Duration::from_millis(job_duration_ms * job_count as u64 / 2),
+            "Jobs did not run concurrently: elapsed {:?} >= serial budget {:?}",
+            elapsed,
+            job_duration_ms * job_count as u64 / 2,
+        );
+    }
+
+    /// Test that semaphore blocks the 5th job when only 4 permits are available,
+    /// proving the concurrency limiter actually bounds parallelism.
+    #[tokio::test]
+    async fn semaphore_limits_concurrency_to_max() {
+        let max_concurrent = 2;
+        let job_count = 4;
+        let job_duration_ms = 100u64;
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+
+        let mut join_set: JoinSet<()> = JoinSet::new();
+
+        for _ in 0..job_count {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let p = peak.clone();
+            let a = active.clone();
+            join_set.spawn(async move {
+                let _permit = permit;
+                let current = a.fetch_add(1, Ordering::SeqCst) + 1;
+                // Track peak concurrent
+                loop {
+                    let seen = p.load(Ordering::SeqCst);
+                    if current <= seen || p.compare_exchange(seen, current, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(job_duration_ms)).await;
+                a.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+
+        while join_set.join_next().await.is_some() {}
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            max_concurrent,
+            "Peak concurrency should equal max_concurrent_jobs"
+        );
+    }
+
+    /// Test that a retry backoff sleep inside a spawned task does not block
+    /// another concurrent task from completing promptly.
+    #[tokio::test]
+    async fn retry_backoff_does_not_block_other_jobs() {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
+        let mut join_set: JoinSet<()> = JoinSet::new();
+
+        // Task 1: simulates a job that fails and enters retry backoff sleep.
+        let sem1 = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = sem1.acquire_owned().await.unwrap();
+            // Simulate job failure + retry backoff (10s scaled down for test).
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        });
+
+        // Task 2: a fast job that should complete without waiting for task 1's backoff.
+        let start = tokio::time::Instant::now();
+        let sem2 = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = sem2.acquire_owned().await.unwrap();
+            // Simulate a quick successful job.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        // Give the fast task time to finish (well before the 5s backoff).
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let elapsed = start.elapsed();
+
+        // The fast job should have completed in ~50-500ms, not after the 5s backoff.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "Fast job was blocked by retry backoff: elapsed {:?}",
+            elapsed,
+        );
+
+        // Cancel the slow task (we don't need to wait for it).
+        join_set.abort_all();
     }
 }

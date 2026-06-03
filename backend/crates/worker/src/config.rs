@@ -8,7 +8,6 @@ use std::sync::Arc;
 pub struct WorkerConfig {
     pub redis_url: String,
     pub job_poll_interval_secs: u64,
-    #[allow(dead_code)]
     pub max_concurrent_jobs: usize,
     /// Multi-tenant database manager
     pub pg_manager: Arc<PgManager>,
