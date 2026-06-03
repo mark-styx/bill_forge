@@ -1301,7 +1301,7 @@ impl ReportingService {
                     COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
                         NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
                 FROM approval_requests ar
-                LEFT JOIN users u ON ar.approver_id = u.id
+                LEFT JOIN users u ON ar.approver_id = u.id AND u.tenant_id = ar.tenant_id
                 WHERE ar.tenant_id = $1 AND ar.created_at >= $2 AND ar.created_at <= $3
                 GROUP BY ar.approver_id, u.email
                 ORDER BY approvals_completed DESC
@@ -1326,7 +1326,7 @@ impl ReportingService {
                     COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
                         NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
                 FROM approval_requests ar
-                LEFT JOIN users u ON ar.approver_id = u.id
+                LEFT JOIN users u ON ar.approver_id = u.id AND u.tenant_id = ar.tenant_id
                 WHERE ar.tenant_id = $1 AND ar.created_at >= $2
                 GROUP BY ar.approver_id, u.email
                 ORDER BY approvals_completed DESC
@@ -1350,7 +1350,7 @@ impl ReportingService {
                     COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
                         NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
                 FROM approval_requests ar
-                LEFT JOIN users u ON ar.approver_id = u.id
+                LEFT JOIN users u ON ar.approver_id = u.id AND u.tenant_id = ar.tenant_id
                 WHERE ar.tenant_id = $1 AND ar.created_at <= $2
                 GROUP BY ar.approver_id, u.email
                 ORDER BY approvals_completed DESC
@@ -1374,7 +1374,7 @@ impl ReportingService {
                     COUNT(*) FILTER (WHERE ar.status = 'approved')::float /
                         NULLIF(COUNT(*) FILTER (WHERE ar.status IN ('approved', 'rejected')), 0) as approval_rate
                 FROM approval_requests ar
-                LEFT JOIN users u ON ar.approver_id = u.id
+                LEFT JOIN users u ON ar.approver_id = u.id AND u.tenant_id = ar.tenant_id
                 WHERE ar.tenant_id = $1
                 GROUP BY ar.approver_id, u.email
                 ORDER BY approvals_completed DESC
