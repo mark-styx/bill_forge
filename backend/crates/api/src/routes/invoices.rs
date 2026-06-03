@@ -2425,9 +2425,152 @@ async fn resolve_ocr_exception(
         "action": "ocr_exception_resolve",
         "resolution": new_status,
     }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log OCR exception resolution audit entry");
+    }
+
+    // When the exception is approved (cleared), advance the invoice through the
+    // workflow pipeline so it leaves the Exception queue automatically.
+    if action == "approve" {
+        // Re-read the invoice to check current state (idempotency guard).
+        let invoice = repo
+            .get_by_id(&tenant.tenant_id, &invoice_id)
+            .await?
+            .ok_or_else(|| billforge_core::Error::NotFound {
+                resource_type: "Invoice".to_string(),
+                id: id.clone(),
+            })?;
+
+        // Only advance if still in a pre-submission capture state.
+        if invoice.capture_status == CaptureStatus::ReadyForReview {
+            // Build the workflow engine (same construction as submit_for_processing).
+            let engine = billforge_invoice_processing::WorkflowEngine::new(
+                Arc::new(billforge_db::repositories::InvoiceRepositoryImpl::new(
+                    pool.clone(),
+                )) as Arc<dyn billforge_core::traits::InvoiceRepository>,
+                Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+                    pool.clone(),
+                )) as Arc<dyn billforge_core::traits::WorkflowRuleRepository>,
+                Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+                    pool.clone(),
+                )) as Arc<dyn billforge_core::traits::ApprovalRepository>,
+            )
+            .with_routing(Arc::new(billforge_db::RoutingRepository::new(
+                pool.as_ref().clone(),
+            )))
+            .with_pool(pool.clone())
+            .with_tenant_settings_provider(Arc::new(
+                billforge_db::TenantSettingsFromDb::new(state.db.metadata()),
+            ));
+
+            let final_status = engine
+                .process_invoice(&tenant.tenant_id, &invoice)
+                .await?;
+
+            // Update processing status.
+            let invoice_repo =
+                billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+            invoice_repo
+                .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
+                .await?;
+
+            emit_invoice_event(
+                &state,
+                &tenant.tenant_id,
+                invoice_id.as_uuid(),
+                &format!("{:?}", final_status),
+                "status_changed",
+            );
+
+            // Determine target queue from workflow decision.
+            let target_queue_type = match final_status {
+                ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment => {
+                    QueueType::Payment
+                }
+                ProcessingStatus::PendingApproval => QueueType::Approval,
+                ProcessingStatus::Rejected
+                | ProcessingStatus::Voided
+                | ProcessingStatus::Paid => {
+                    // Terminal states — no queue assignment needed.
+                    return Ok(Json(ResolveOcrExceptionResponse {
+                        id,
+                        ocr_exception_status: new_status.to_string(),
+                    }));
+                }
+                _ => QueueType::Review,
+            };
+
+            let queue_repo =
+                billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+            if let Ok(Some(queue)) =
+                billforge_core::traits::WorkQueueRepository::get_by_type(
+                    &queue_repo,
+                    &tenant.tenant_id,
+                    target_queue_type,
+                )
+                .await
+            {
+                // Move item off Exception queue onto the target queue.
+                if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(
+                    &queue_repo,
+                    &tenant.tenant_id,
+                    &invoice_id,
+                    &queue.id,
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        invoice_id = %invoice_id,
+                        queue_id = %queue.id,
+                        error = %e,
+                        "Failed to move invoice off exception queue after OCR resolve"
+                    );
+                }
+
+                // Update current_queue_id on the invoice row.
+                sqlx::query(
+                    "UPDATE invoices SET current_queue_id = $1, updated_at = NOW() WHERE id = $2",
+                )
+                .bind(queue.id.0)
+                .bind(invoice_id.as_uuid())
+                .execute(&*pool)
+                .await
+                .ok();
+
+                // Audit the queue transition.
+                let route_audit = AuditEntry::new(
+                    tenant.tenant_id.clone(),
+                    Some(user.user_id.clone()),
+                    AuditAction::Update,
+                    ResourceType::Invoice,
+                    id.clone(),
+                    format!(
+                        "OCR exception routed from Exception queue to {:?} queue",
+                        target_queue_type
+                    ),
+                )
+                .with_user_email(&user.email)
+                .with_metadata(serde_json::json!({
+                    "action": "ocr_exception.routed",
+                    "from_queue": "Exception",
+                    "to_queue": format!("{:?}", target_queue_type),
+                    "processing_status": format!("{:?}", final_status),
+                }));
+                let audit_repo2 =
+                    billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+                if let Err(e) = audit_repo2.log(route_audit).await {
+                    tracing::warn!(error = %e, "Failed to log OCR exception routing audit entry");
+                }
+            } else {
+                tracing::warn!(
+                    invoice_id = %invoice_id,
+                    queue_type = ?target_queue_type,
+                    "No queue found for tenant after OCR exception resolve"
+                );
+            }
+        }
     }
 
     Ok(Json(ResolveOcrExceptionResponse {
