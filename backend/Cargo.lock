@@ -1059,6 +1059,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "mockall",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",

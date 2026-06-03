@@ -27,6 +27,7 @@ pub mod notifications;
 pub mod predictive;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
+pub mod public_api;
 pub mod qbo;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
@@ -50,6 +51,7 @@ pub mod xero;
 
 use crate::metrics;
 use crate::middleware::{rate_limit_auth, require_auth, require_tenant, RateLimiterState};
+use crate::routes::public_api::PublicApiRateLimiter;
 use crate::state::AppState;
 use axum::{middleware, routing::get, Extension, Router};
 use std::time::Instant;
@@ -77,6 +79,15 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/integrations", chat_approvals::routes())
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
+        // Public API (PAT auth, not session JWT) — rate limiter attached via extension
+        .nest(
+            "/api/external/v1",
+            public_api::router()
+                .layer(Extension(PublicApiRateLimiter(
+                    billforge_core::public_api::RateLimiter::new(),
+                )))
+                .layer(Extension(state.clone())),
+        )
         .with_state(state)
 }
 

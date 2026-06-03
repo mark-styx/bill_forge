@@ -353,6 +353,23 @@ async fn create_invoice(
         tracing::warn!(error = %e, "Failed to populate discount columns for invoice");
     }
 
+    // Fire outbound webhook for invoice.created (best-effort, non-blocking)
+    if let Err(e) = tokio::spawn({
+        let metadata_pool = state.db.metadata();
+        let tenant_uuid = *tenant.tenant_id.as_uuid();
+        let invoice_json = serde_json::to_value(&invoice).unwrap_or_default();
+        async move {
+            billforge_core::public_api::dispatch_webhook(
+                &metadata_pool,
+                tenant_uuid,
+                "invoice.created",
+                invoice_json,
+            ).await;
+        }
+    }).await {
+        tracing::warn!(error = %e, "Webhook dispatch task panicked");
+    }
+
     Ok(Json(CreateInvoiceResponse {
         invoice,
         potential_duplicates,

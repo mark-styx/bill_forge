@@ -10,6 +10,7 @@ pub mod error;
 pub mod http_retry;
 pub mod intelligent_routing;
 pub mod personas;
+pub mod public_api;
 pub mod services;
 pub mod sync;
 pub mod traits;

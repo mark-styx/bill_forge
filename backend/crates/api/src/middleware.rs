@@ -43,6 +43,7 @@ const PUBLIC_PATHS: &[&str] = &[
     "/api/v1/vendor-portal/",
     "/api/v1/billing/plans",
     "/api/v1/billing/module-addons",
+    "/api/external/",
 ];
 
 fn is_public_path(path: &str) -> bool {
