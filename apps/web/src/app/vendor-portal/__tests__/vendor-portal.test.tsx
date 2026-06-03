@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+
 import { ReactNode } from 'react';
 
 // Mock next/navigation
@@ -48,16 +48,16 @@ const mockInvoices = [
 
 let submitInvoiceMock: ReturnType<typeof vi.fn>;
 let listInvoicesMock: ReturnType<typeof vi.fn>;
+let uploadInvoicePdfMock: ReturnType<typeof vi.fn>;
 
 vi.mock('@/lib/api', () => ({
   vendorPortalApi: {
     get submitInvoice() { return submitInvoiceMock; },
     get listInvoices() { return listInvoicesMock; },
+    get uploadInvoicePdf() { return uploadInvoicePdfMock; },
   },
 }));
 
-// Need to import page component after mocks
-const VendorPortalPage = vi.fn();
 
 describe('Vendor Portal', () => {
   beforeEach(() => {
@@ -65,6 +65,7 @@ describe('Vendor Portal', () => {
 
     submitInvoiceMock = vi.fn().mockResolvedValue({ id: 'inv-new', invoice_number: 'NEW-001' });
     listInvoicesMock = vi.fn().mockResolvedValue(mockInvoices);
+    uploadInvoicePdfMock = vi.fn().mockResolvedValue({ id: 'inv-pdf-1', invoice_number: 'PDF-001' });
   });
 
   it('vendorPortalApi.submitInvoice is callable with token and body', async () => {
@@ -99,5 +100,20 @@ describe('Vendor Portal', () => {
 
     expect(statuses).toContain('paid');
     expect(statuses).toContain('pending_approval');
+  });
+
+  it('vendorPortalApi.uploadInvoicePdf sends FormData with file and invoice_number', async () => {
+    const { vendorPortalApi } = await import('@/lib/api');
+    uploadInvoicePdfMock.mockResolvedValue({ id: 'inv-pdf-1', invoice_number: 'PDF-001' });
+
+    const formData = new FormData();
+    const file = new File(['%PDF-1.4 test'], 'invoice.pdf', { type: 'application/pdf' });
+    formData.append('file', file);
+    formData.append('invoice_number', 'PDF-001');
+
+    const result = await vendorPortalApi.uploadInvoicePdf('test-token', formData);
+
+    expect(uploadInvoicePdfMock).toHaveBeenCalledWith('test-token', formData);
+    expect(result).toEqual({ id: 'inv-pdf-1', invoice_number: 'PDF-001' });
   });
 });

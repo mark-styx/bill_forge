@@ -2661,6 +2661,19 @@ export const vendorPortalApi = {
         processing_status: string;
       }>>;
     }),
+
+  uploadInvoicePdf: (token: string, formData: FormData) =>
+    fetch(`${API_BASE_URL}/api/v1/vendor-portal/invoices/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<{ id: string; invoice_number: string }>;
+    }),
 };
 
 // ---------------------------------------------------------------------------

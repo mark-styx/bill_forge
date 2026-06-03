@@ -53,6 +53,9 @@ export default function VendorPortalPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'form' | 'upload'>('form');
+
   // Form state
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState('');
@@ -61,6 +64,13 @@ export default function VendorPortalPage() {
   const [currency, setCurrency] = useState('USD');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Upload state
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [uploadInvoiceNumber, setUploadInvoiceNumber] = useState('');
+  const [uploadAmount, setUploadAmount] = useState('');
+  const [uploadNotes, setUploadNotes] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   // Extract and store token
   useEffect(() => {
@@ -139,6 +149,50 @@ export default function VendorPortalPage() {
     }
   };
 
+  const handlePdfUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !pdfFile) return;
+
+    if (pdfFile.type !== 'application/pdf') {
+      setError('Only PDF files are accepted');
+      return;
+    }
+    if (pdfFile.size > 15 * 1024 * 1024) {
+      setError('File size must be under 15 MB');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', pdfFile);
+      formData.append('invoice_number', uploadInvoiceNumber);
+      if (uploadAmount) {
+        const cents = Math.round(parseFloat(uploadAmount) * 100);
+        if (!isNaN(cents) && cents > 0) {
+          formData.append('amount', String(cents));
+        }
+      }
+      if (uploadNotes) {
+        formData.append('notes', uploadNotes);
+      }
+
+      await vendorPortalApi.uploadInvoicePdf(token, formData);
+
+      setPdfFile(null);
+      setUploadInvoiceNumber('');
+      setUploadAmount('');
+      setUploadNotes('');
+      await fetchInvoices();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to upload invoice');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   if (!token) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
@@ -173,7 +227,27 @@ export default function VendorPortalPage() {
         )}
 
         <div className="bg-card border border-border rounded-xl shadow-lg p-6 mb-6">
-          <h2 className="text-lg font-semibold text-foreground mb-4">Submit Invoice</h2>
+          <div className="flex items-center gap-4 mb-4">
+            <h2 className="text-lg font-semibold text-foreground">Submit Invoice</h2>
+            <div className="flex rounded-lg border border-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setActiveTab('form')}
+                className={`px-3 py-1.5 text-sm font-medium transition-colors ${activeTab === 'form' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+              >
+                Structured Form
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('upload')}
+                className={`px-3 py-1.5 text-sm font-medium transition-colors ${activeTab === 'upload' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+              >
+                Upload PDF
+              </button>
+            </div>
+          </div>
+
+          {activeTab === 'form' && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -209,6 +283,45 @@ export default function VendorPortalPage() {
               {submitting ? 'Submitting...' : 'Submit Invoice'}
             </Button>
           </form>
+          )}
+
+          {activeTab === 'upload' && (
+          <form onSubmit={handlePdfUpload} className="space-y-4">
+            <div>
+              <Label htmlFor="pdfFile">PDF Invoice</Label>
+              <input
+                id="pdfFile"
+                type="file"
+                accept="application/pdf"
+                onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+                required
+                className="mt-1 block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+              />
+              {pdfFile && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {pdfFile.name} ({(pdfFile.size / 1024 / 1024).toFixed(2)} MB)
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="uploadInvoiceNumber">Invoice Number</Label>
+                <Input id="uploadInvoiceNumber" placeholder="INV-001" value={uploadInvoiceNumber} onChange={(e) => setUploadInvoiceNumber(e.target.value)} required className="mt-1" />
+              </div>
+              <div>
+                <Label htmlFor="uploadAmount">Amount (optional)</Label>
+                <Input id="uploadAmount" type="number" step="0.01" min="0.01" placeholder="0.00" value={uploadAmount} onChange={(e) => setUploadAmount(e.target.value)} className="mt-1" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="uploadNotes">Notes (optional)</Label>
+              <Input id="uploadNotes" placeholder="Additional details" value={uploadNotes} onChange={(e) => setUploadNotes(e.target.value)} className="mt-1" />
+            </div>
+            <Button type="submit" disabled={uploading || !pdfFile} className="w-full md:w-auto">
+              {uploading ? 'Uploading...' : 'Upload PDF Invoice'}
+            </Button>
+          </form>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-lg p-6">

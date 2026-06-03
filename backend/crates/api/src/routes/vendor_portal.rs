@@ -7,14 +7,14 @@
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use axum::{
-    extract::State,
+    extract::{Multipart, State},
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateInvoiceInput, InvoiceId, ResourceType, VendorId},
-    traits::{AuditService, InvoiceRepository, VendorRepository},
+    domain::{AuditAction, AuditEntry, CreateInvoiceInput, ResourceType, VendorId},
+    traits::{AuditService, InvoiceRepository, VendorRepository, StorageService},
     types::{Money, TenantId},
     Error,
 };
@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/invoices", get(list_invoices))
         .route("/invoices", post(submit_invoice))
+        .route("/invoices/upload", post(upload_invoice_pdf))
 }
 
 // ---------------------------------------------------------------------------
@@ -228,5 +229,216 @@ async fn submit_invoice(
     Ok(Json(SubmitInvoiceResponse {
         id: invoice.id.to_string(),
         invoice_number: body.invoice_number,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// PDF upload handler
+// ---------------------------------------------------------------------------
+
+const MAX_PDF_SIZE: usize = 15 * 1024 * 1024; // 15 MB
+
+async fn upload_invoice_pdf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> ApiResult<Json<SubmitInvoiceResponse>> {
+    let (tenant_id, vendor_id) = vendor_ctx(&headers, &state.auth)?;
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut original_filename: Option<String> = None;
+    let mut invoice_number: Option<String> = None;
+    let mut invoice_date: Option<String> = None;
+    let mut due_date: Option<String> = None;
+    let mut amount: Option<i64> = None;
+    let mut currency: Option<String> = None;
+    let mut notes: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| Error::Validation(format!("Failed to read multipart data: {}", e)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+
+        match name.as_str() {
+            "file" => {
+                let ct = field
+                    .content_type()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if ct != "application/pdf" {
+                    return Err(Error::Validation("Only PDF files are accepted".to_string()).into());
+                }
+                original_filename = field.file_name().map(|s| s.to_string());
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| Error::Validation(format!("Failed to read file: {}", e)))?;
+                if data.len() > MAX_PDF_SIZE {
+                    return Err(
+                        Error::Validation("PDF exceeds maximum size (15 MB)".to_string()).into(),
+                    );
+                }
+                file_bytes = Some(data.to_vec());
+            }
+            "invoice_number" => {
+                invoice_number = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            "invoice_date" => {
+                invoice_date = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            "due_date" => {
+                due_date = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            "amount" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?;
+                amount = Some(text.parse::<i64>().map_err(|_| {
+                    Error::Validation("Invalid amount value".to_string())
+                })?);
+            }
+            "currency" => {
+                currency = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            "notes" => {
+                notes = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            _ => {} // ignore unknown fields
+        }
+    }
+
+    let file_data = file_bytes.ok_or_else(|| {
+        Error::Validation("Missing required field: file".to_string())
+    })?;
+    let invoice_number_val = invoice_number.ok_or_else(|| {
+        Error::Validation("Missing required field: invoice_number".to_string())
+    })?;
+
+    // Persist PDF via storage service (upload generates and returns the document_id)
+    let document_id = state
+        .storage
+        .upload(
+            &tenant_id,
+            "invoice.pdf",
+            &file_data,
+            "application/pdf",
+        )
+        .await
+        .map_err(|e| Error::Database(format!("Failed to store PDF: {}", e)))?;
+
+    // Look up vendor name
+    let pool = state.db.tenant(&tenant_id).await?;
+    let vendor_repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
+    let vendor = vendor_repo
+        .get_by_id(&tenant_id, &vendor_id)
+        .await?
+        .ok_or_else(|| Error::NotFound {
+            resource_type: "Vendor".to_string(),
+            id: vendor_id.to_string(),
+        })?;
+
+    let parsed_invoice_date = invoice_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let parsed_due_date = due_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let currency_val = currency.unwrap_or_else(|| "USD".to_string());
+    let byte_size = file_data.len();
+
+    let fname = original_filename.clone().unwrap_or_default();
+    let combined_notes = match notes {
+        Some(ref n) if !n.is_empty() => format!("Uploaded PDF: {} | {}", fname, n),
+        _ => format!("Uploaded PDF: {}", fname),
+    };
+
+    let input = CreateInvoiceInput {
+        document_id,
+        vendor_id: Some(vendor_id.0),
+        vendor_name: vendor.name.clone(),
+        invoice_number: invoice_number_val.clone(),
+        invoice_date: parsed_invoice_date,
+        due_date: parsed_due_date,
+        po_number: None,
+        subtotal: None,
+        tax_amount: None,
+        total_amount: Money {
+            amount: amount.unwrap_or(0),
+            currency: currency_val.clone(),
+        },
+        currency: currency_val,
+        line_items: vec![],
+        ocr_confidence: None,
+        department: None,
+        gl_code: None,
+        cost_center: None,
+        notes: Some(combined_notes),
+        tags: vec![],
+    };
+
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoice = invoice_repo.create(&tenant_id, input, None).await?;
+
+    // Set processing_status to 'submitted'
+    sqlx::query(
+        "UPDATE invoices SET processing_status = 'submitted', updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice.id.0)
+    .bind(*tenant_id.as_uuid())
+    .execute(&*pool)
+    .await
+    .map_err(|e| Error::Database(format!("Failed to set submitted status: {}", e)))?;
+
+    // Audit entry
+    let audit_entry = AuditEntry::new(
+        tenant_id.clone(),
+        None,
+        AuditAction::Create,
+        ResourceType::Invoice,
+        invoice.id.to_string(),
+        format!(
+            "Vendor portal PDF upload by vendor {} ({})",
+            vendor.name, vendor_id
+        ),
+    )
+    .with_metadata(serde_json::json!({
+        "source": "vendor_portal_pdf",
+        "vendor_id": vendor_id.to_string(),
+        "original_filename": original_filename,
+        "byte_size": byte_size,
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log vendor portal PDF audit entry");
+    }
+
+    Ok(Json(SubmitInvoiceResponse {
+        id: invoice.id.to_string(),
+        invoice_number: invoice_number_val,
     }))
 }
