@@ -256,9 +256,11 @@ pub async fn rate_limit_auth(
         }
 
         if bucket.tokens == 0 {
+            let path = request.uri().path().to_string();
             warn!(
                 client_ip = %client_ip,
-                "Rate limit exceeded on auth endpoint"
+                path = %path,
+                "Rate limit exceeded"
             );
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }

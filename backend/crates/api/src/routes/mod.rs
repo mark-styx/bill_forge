@@ -204,8 +204,13 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/organization/theme", theme::org_routes())
         // User theme preferences
         .nest("/user/theme", theme::user_routes())
-        // Email actions (approve/reject via email)
-        .nest("/actions", email_actions::routes())
+        // Email actions (approve/reject via email) — rate limited: 30 req / 60 s per IP to prevent brute force of opaque tokens
+        .nest(
+            "/actions",
+            email_actions::routes()
+                .layer(middleware::from_fn(rate_limit_auth))
+                .layer(Extension(RateLimiterState::new(30, 60))),
+        )
         // AI Assistant (Winston)
         .nest("/ai", ai::routes())
         // Billing & Subscription
@@ -214,10 +219,20 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .merge(vendor_statements::routes())
         // Intelligent Routing & Workload Balancing
         .nest("/routing", routing::routes())
-        // Approval magic links (email-based approve/reject/comment)
-        .nest("/approval-links", approval_links::routes())
-        // Vendor self-service portal (public, validates own vendor-portal JWT)
-        .nest("/vendor-portal", vendor_portal::routes())
+        // Approval magic links — rate limited: 30 req / 60 s per IP to prevent brute force of opaque tokens
+        .nest(
+            "/approval-links",
+            approval_links::routes()
+                .layer(middleware::from_fn(rate_limit_auth))
+                .layer(Extension(RateLimiterState::new(30, 60))),
+        )
+        // Vendor self-service portal — rate limited: 30 req / 60 s per IP to prevent brute force of opaque tokens
+        .nest(
+            "/vendor-portal",
+            vendor_portal::routes()
+                .layer(middleware::from_fn(rate_limit_auth))
+                .layer(Extension(RateLimiterState::new(30, 60))),
+        )
         // Lightweight QBO integration (OAuth + vendor pull)
         .nest("/qbo", qbo::routes())
         // Month-end close periods
