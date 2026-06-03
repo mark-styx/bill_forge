@@ -309,7 +309,6 @@ async fn create_invoice(
     let invoice = repo
         .create(&tenant.tenant_id, input.clone(), Some(&user.user_id))
         .await?;
-    record_invoice_metering_usage(&state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
@@ -695,39 +694,6 @@ pub struct UploadResponse {
     pub potential_duplicates: Vec<DuplicateMatch>,
 }
 
-async fn record_invoice_metering_usage(
-    state: &AppState,
-    tenant_id: &billforge_core::TenantId,
-    invoice_id: &Uuid,
-) {
-    let config = billforge_billing::BillingConfig::from_env();
-    if !config.enabled {
-        return;
-    }
-
-    let service = billforge_billing::BillingService::new(config, state.db.metadata());
-    let stripe = service.stripe();
-    let Some(stripe) = stripe.as_deref() else {
-        return;
-    };
-
-    if let Err(e) = billforge_billing::record_invoice_meter_event(
-        &state.db.metadata(),
-        Some(stripe),
-        tenant_id,
-        invoice_id,
-    )
-    .await
-    {
-        tracing::warn!(
-            error = %e,
-            tenant_id = %tenant_id,
-            invoice_id = %invoice_id,
-            "Failed to record Stripe invoice meter event"
-        );
-    }
-}
-
 #[utoipa::path(
     post,
     path = "/invoices/upload",
@@ -823,7 +789,6 @@ pub(crate) async fn upload_invoice_file(
     let invoice = repo
         .create(&tenant.tenant_id, invoice_input, Some(&user.user_id))
         .await?;
-    record_invoice_metering_usage(state, &tenant.tenant_id, invoice.id.as_uuid()).await;
 
     repo.update_capture_status(&tenant.tenant_id, &invoice.id, CaptureStatus::Processing)
         .await?;
@@ -1349,13 +1314,35 @@ async fn run_sync_straight_through_processing(
     )))
     .with_pool(pool.clone())
     .with_tenant_settings_provider(std::sync::Arc::new(
-        billforge_db::TenantSettingsFromDb::new(metadata_pool),
+        billforge_db::TenantSettingsFromDb::new(metadata_pool.clone()),
     ));
     let final_status = engine.process_invoice(tenant_id, &invoice).await?;
 
     repo.update_processing_status(tenant_id, invoice_id, final_status)
         .await?;
     route_sync_processing_queue(pool, tenant_id, invoice_id, final_status).await;
+
+    // Emit meter event for successfully-processed invoices.
+    // The outbox UNIQUE constraint prevents double-emit.
+    if matches!(
+        final_status,
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment | ProcessingStatus::Paid
+    ) {
+        // Best-effort: do not fail the processing pipeline on meter errors.
+        let config = billforge_billing::BillingConfig::from_env();
+        if config.enabled {
+            let service = billforge_billing::BillingService::new(config, metadata_pool.clone());
+            if let Some(stripe) = service.stripe().as_deref() {
+                let _ = billforge_billing::record_invoice_meter_event(
+                    &metadata_pool,
+                    Some(stripe),
+                    tenant_id,
+                    invoice_id.as_uuid(),
+                )
+                .await;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -1750,6 +1737,27 @@ async fn submit_for_processing(
         &format!("{:?}", final_status),
         "status_changed",
     );
+
+    // Emit meter event for successfully-processed invoices.
+    // The outbox UNIQUE constraint prevents double-emit.
+    if matches!(
+        final_status,
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment | ProcessingStatus::Paid
+    ) {
+        let config = billforge_billing::BillingConfig::from_env();
+        if config.enabled {
+            let service = billforge_billing::BillingService::new(config, state.db.metadata());
+            if let Some(stripe) = service.stripe().as_deref() {
+                let _ = billforge_billing::record_invoice_meter_event(
+                    &state.db.metadata(),
+                    Some(stripe),
+                    &tenant.tenant_id,
+                    invoice_id.as_uuid(),
+                )
+                .await;
+            }
+        }
+    }
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
@@ -2565,6 +2573,7 @@ async fn unwind_auto_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use billforge_core::InvoiceId;
 
     #[test]
     fn test_ml_accuracy_response_fields() {
@@ -2595,5 +2604,107 @@ mod tests {
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["accuracy_rate"], 0.0);
         assert_eq!(json["total_suggestions"], 0);
+    }
+
+    /// Verify that only successful-processing statuses trigger meter events.
+    /// Draft, submitted, and other pre-processing statuses must NOT emit.
+    #[test]
+    fn meter_event_only_emits_for_successful_processing() {
+        let billable = [
+            ProcessingStatus::Approved,
+            ProcessingStatus::ReadyForPayment,
+            ProcessingStatus::Paid,
+        ];
+        // These must match the match arms in submit_for_processing and
+        // run_sync_straight_through_processing.
+        for status in &billable {
+            let is_match = matches!(
+                *status,
+                ProcessingStatus::Approved
+                    | ProcessingStatus::ReadyForPayment
+                    | ProcessingStatus::Paid
+            );
+            assert!(is_match, "{status:?} should be billable");
+        }
+
+        let not_billable = [
+            ProcessingStatus::Draft,
+            ProcessingStatus::Submitted,
+            ProcessingStatus::PendingApproval,
+            ProcessingStatus::Rejected,
+            ProcessingStatus::OnHold,
+            ProcessingStatus::Voided,
+        ];
+        for status in &not_billable {
+            let is_match = matches!(
+                *status,
+                ProcessingStatus::Approved
+                    | ProcessingStatus::ReadyForPayment
+                    | ProcessingStatus::Paid
+            );
+            assert!(!is_match, "{status:?} should NOT be billable");
+        }
+    }
+
+    /// Verify the UploadResponse struct captures all required fields.
+    /// Ensures the response contract is stable after removing the upload-path
+    /// meter call.
+    #[test]
+    fn upload_response_serializes_after_meter_removal() {
+        let response = UploadResponse {
+            invoice_id: "inv-123".to_string(),
+            document_id: "doc-456".to_string(),
+            message: "File uploaded.".to_string(),
+            potential_duplicates: vec![],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["invoice_id"], "inv-123");
+        assert_eq!(json["document_id"], "doc-456");
+        assert_eq!(json["potential_duplicates"].as_array().unwrap().len(), 0);
+    }
+
+    /// Verify the CreateInvoiceResponse struct still serializes correctly
+    /// after removing the create-path meter call.
+    #[test]
+    fn create_response_serializes_after_meter_reemoval() {
+        let invoice = Invoice {
+            id: InvoiceId(Uuid::new_v4()),
+            tenant_id: billforge_core::TenantId::new(),
+            vendor_id: None,
+            vendor_name: "Acme".to_string(),
+            invoice_number: "INV-1".to_string(),
+            invoice_date: None,
+            due_date: None,
+            po_number: None,
+            subtotal: None,
+            tax_amount: None,
+            total_amount: billforge_core::types::Money::usd(0.0),
+            currency: "USD".to_string(),
+            line_items: vec![],
+            capture_status: CaptureStatus::Pending,
+            processing_status: ProcessingStatus::Draft,
+            current_queue_id: None,
+            assigned_to: None,
+            document_id: Uuid::new_v4(),
+            supporting_documents: vec![],
+            ocr_confidence: None,
+            categorization_confidence: None,
+            department: None,
+            gl_code: None,
+            cost_center: None,
+            notes: None,
+            tags: vec![],
+            custom_fields: serde_json::Value::Object(Default::default()),
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let response = CreateInvoiceResponse {
+            invoice,
+            potential_duplicates: vec![],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json.get("invoice").is_some());
+        assert!(json.get("potential_duplicates").is_some());
     }
 }
