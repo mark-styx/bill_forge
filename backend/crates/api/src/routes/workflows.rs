@@ -16,6 +16,7 @@ use billforge_core::{
         CreateWorkQueueInput, CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InboxItem,
         ProcessingStatus, QueueItem, ResourceType, WorkQueue, WorkflowRule, WorkflowTemplate,
     },
+    services::{EmailAction, EmailActionTokenService},
     traits::{
         ApprovalDelegationRepository, ApprovalLimitRepository, AssignmentRuleRepository,
         AuditService, InvoiceRepository, WorkQueueRepository, WorkflowRuleRepository,
@@ -123,6 +124,8 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/:id", get(get_approval))
         .route("/approvals/:id/approve", post(approve))
         .route("/approvals/:id/reject", post(reject))
+        .route("/approvals/:id/approval-link", post(get_approval_link))
+        .route("/approvals/:id/resend-approval-email", post(resend_approval_email))
         // Bulk operations
         .route("/bulk", post(bulk_operation))
         // Workflow templates
@@ -1159,8 +1162,7 @@ async fn approve(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let new_status =
-        resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
+    resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -1321,8 +1323,7 @@ async fn reject(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    let new_status =
-        resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
+    resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -2307,4 +2308,309 @@ async fn delete_approval_limit(
     }
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Approval link minting & email resend
+// ---------------------------------------------------------------------------
+
+/// Shared query: fetch approval request + invoice details for a pending approval.
+/// Returns (invoice_id, invoice_number, vendor_name, total_amount_cents, approver_email, approver_user_id).
+async fn fetch_approval_for_link(
+    pool: &sqlx::PgPool,
+    approval_id: uuid::Uuid,
+    tenant_uuid: uuid::Uuid,
+) -> Result<
+    (uuid::Uuid, String, String, i64, Option<String>, Option<uuid::Uuid>),
+    billforge_core::Error,
+> {
+    #[derive(sqlx::FromRow)]
+    struct ApprovalLinkInfo {
+        invoice_id: uuid::Uuid,
+        invoice_number: String,
+        vendor_name: String,
+        total_amount_cents: i64,
+        approver_email: Option<String>,
+        approver_user_id: Option<uuid::Uuid>,
+    }
+
+    let info = sqlx::query_as::<_, ApprovalLinkInfo>(
+        r#"SELECT
+            ar.invoice_id,
+            i.invoice_number,
+            COALESCE(i.vendor_name, 'Unknown') as vendor_name,
+            COALESCE(i.total_amount_cents, 0) as total_amount_cents,
+            (SELECT u.email FROM users u
+             WHERE u.id = (ar.requested_from->>'user_id')::uuid
+             LIMIT 1) as approver_email,
+            (ar.requested_from->>'user_id')::uuid as approver_user_id
+        FROM approval_requests ar
+        JOIN invoices i ON ar.invoice_id = i.id
+        WHERE ar.id = $1 AND ar.tenant_id = $2 AND ar.status = 'pending'"#,
+    )
+    .bind(approval_id)
+    .bind(tenant_uuid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Database error: {}", e)))?
+    .ok_or_else(|| billforge_core::Error::NotFound {
+        resource_type: "ApprovalRequest".to_string(),
+        id: approval_id.to_string(),
+    })?;
+
+    Ok((
+        info.invoice_id,
+        info.invoice_number,
+        info.vendor_name,
+        info.total_amount_cents,
+        info.approver_email,
+        info.approver_user_id,
+    ))
+}
+
+/// Helper: build an EmailActionTokenService from the shared metadata pool + env.
+fn make_token_service(pool: Arc<sqlx::PgPool>) -> EmailActionTokenService {
+    EmailActionTokenService::new(
+        pool,
+        std::env::var("TOKEN_SECRET_KEY").unwrap_or_else(|_| "secret".to_string()),
+    )
+}
+
+#[derive(Serialize)]
+struct ApprovalLinkResponse {
+    approve_url: String,
+    reject_url: String,
+    hold_url: String,
+    view_url: String,
+    expires_at: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/approvals/{id}/approval-link",
+    tag = "Workflows",
+    params(("id" = String, Path,)),
+    responses((status = 200, description = "Approval link minted"))
+)]
+async fn get_approval_link(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ApprovalLinkResponse>> {
+    let approval_id = id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let tenant_uuid = *tenant.tenant_id.as_uuid();
+
+    let (invoice_id, _inv_num, _vendor, _amount, _, approver_user_id) =
+        fetch_approval_for_link(&pool, approval_id, tenant_uuid).await?;
+
+    let metadata_pool = state.db.metadata();
+    let token_service = make_token_service(metadata_pool.clone());
+    let base_url = state.config.frontend_url.clone();
+
+    let tenant_id_ref = &tenant.tenant_id;
+    // Use the assignee's user_id so the token binds to the actual approver,
+    // not the caller. Falls back to caller if requested_from has no user_id.
+    let approver_uid = approver_user_id
+        .map(billforge_core::UserId)
+        .unwrap_or_else(|| user.user_id.clone());
+    let resource_type = "approval_request";
+
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(72);
+
+    let approve_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::ApproveInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+    let reject_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::RejectInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+    let hold_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::HoldInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+    let view_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::ViewInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+
+    let approve_url = token_service.generate_action_url(&base_url, &approve_token, "approve");
+    let reject_url = token_service.generate_action_url(&base_url, &reject_token, "reject");
+    let hold_url = token_service.generate_action_url(&base_url, &hold_token, "hold");
+    let view_url = token_service.generate_action_url(&base_url, &view_token, "view");
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::ApprovalLinkMinted,
+        ResourceType::ApprovalRequest,
+        id.clone(),
+        format!("Minted approval link for invoice {}", invoice_id),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "approval_request_id": approval_id.to_string(),
+        "invoice_id": invoice_id.to_string(),
+    }));
+    log_audit_or_record_gap(&pool, audit_entry).await;
+
+    Ok(Json(ApprovalLinkResponse {
+        approve_url,
+        reject_url,
+        hold_url,
+        view_url,
+        expires_at: expires_at.to_rfc3339(),
+    }))
+}
+
+#[derive(Serialize)]
+struct ResendApprovalEmailResponse {
+    sent_to: String,
+    expires_at: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/workflows/approvals/{id}/resend-approval-email",
+    tag = "Workflows",
+    params(("id" = String, Path,)),
+    responses((status = 200, description = "Approval email resent"))
+)]
+async fn resend_approval_email(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ResendApprovalEmailResponse>> {
+    let approval_id = id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| billforge_core::Error::Validation("Invalid approval ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let tenant_uuid = *tenant.tenant_id.as_uuid();
+
+    let (invoice_id, invoice_number, vendor_name, total_amount_cents, approver_email, approver_user_id) =
+        fetch_approval_for_link(&pool, approval_id, tenant_uuid).await?;
+
+    let approver_email = approver_email
+        .ok_or_else(|| billforge_core::Error::Validation("Approver has no email address".to_string()))?;
+
+    let metadata_pool = state.db.metadata();
+    let token_service = make_token_service(metadata_pool.clone());
+    let base_url = state.config.frontend_url.clone();
+
+    let tenant_id_ref = &tenant.tenant_id;
+    // Use the assignee's user_id so the token binds to the actual approver,
+    // not the caller. Falls back to caller if requested_from has no user_id.
+    let approver_uid = approver_user_id
+        .map(billforge_core::UserId)
+        .unwrap_or_else(|| user.user_id.clone());
+    let resource_type = "approval_request";
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(72);
+
+    let approve_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::ApproveInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+    let reject_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::RejectInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+    let view_token = token_service
+        .generate_token(
+            tenant_id_ref,
+            &approver_uid,
+            EmailAction::ViewInvoice,
+            invoice_id,
+            resource_type,
+            serde_json::json!({ "approval_request_id": approval_id.to_string() }),
+        )
+        .await?;
+
+    let approve_url = token_service.generate_action_url(&base_url, &approve_token, "approve");
+    let reject_url = token_service.generate_action_url(&base_url, &reject_token, "reject");
+    let view_url = token_service.generate_action_url(&base_url, &view_token, "view");
+
+    let amount_formatted = format!("${:.2}", total_amount_cents as f64 / 100.0);
+
+    let (html, text) = EmailTemplates::invoice_pending_approval_with_actions(
+        &invoice_number,
+        &vendor_name,
+        &amount_formatted,
+        &user.email,
+        &view_url,
+        Some(&approve_url),
+        Some(&reject_url),
+    );
+
+    let subject = format!(
+        "Approval Required: Invoice {} from {}",
+        invoice_number, vendor_name
+    );
+
+    state
+        .email
+        .send(&approver_email, &subject, &html, &text)
+        .await
+        .map_err(|e| billforge_core::Error::Internal(format!("Failed to send email: {}", e)))?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::ApprovalEmailResent,
+        ResourceType::ApprovalRequest,
+        id.clone(),
+        format!("Resent approval email for invoice {}", invoice_id),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "approval_request_id": approval_id.to_string(),
+        "invoice_id": invoice_id.to_string(),
+        "sent_to": approver_email.clone(),
+    }));
+    log_audit_or_record_gap(&pool, audit_entry).await;
+
+    Ok(Json(ResendApprovalEmailResponse {
+        sent_to: approver_email,
+        expires_at: expires_at.to_rfc3339(),
+    }))
 }

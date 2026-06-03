@@ -177,6 +177,10 @@ pub enum AuditAction {
     UserInvited,
     UserDeactivated,
     RoleChanged,
+
+    // Approval link operations
+    ApprovalLinkMinted,
+    ApprovalEmailResent,
 }
 
 impl AuditAction {
@@ -225,6 +229,8 @@ impl AuditAction {
             AuditAction::UserInvited => "Invited user",
             AuditAction::UserDeactivated => "Deactivated user",
             AuditAction::RoleChanged => "Changed user role",
+            AuditAction::ApprovalLinkMinted => "Minted approval link",
+            AuditAction::ApprovalEmailResent => "Resent approval email",
         }
     }
 }

@@ -18,6 +18,8 @@ import {
   Search,
   ChevronRight,
   ListChecks,
+  Mail,
+  Link2,
 } from 'lucide-react';
 
 interface ApprovalItem {
@@ -69,6 +71,33 @@ export default function ApprovalsPage() {
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to reject invoice');
       setProcessingId(null);
+    },
+  });
+
+  const [emailActionId, setEmailActionId] = useState<string | null>(null);
+
+  const copyLinkMutation = useMutation({
+    mutationFn: (approvalId: string) => workflowsApi.getApprovalLink(approvalId),
+    onSuccess: (data) => {
+      navigator.clipboard.writeText(data.approve_url);
+      toast.success('Approval link copied to clipboard');
+      setEmailActionId(null);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to copy approval link');
+      setEmailActionId(null);
+    },
+  });
+
+  const resendEmailMutation = useMutation({
+    mutationFn: (approvalId: string) => workflowsApi.resendApprovalEmail(approvalId),
+    onSuccess: (data) => {
+      toast.success(`Approval email resent to ${data.sent_to}`);
+      setEmailActionId(null);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to resend approval email');
+      setEmailActionId(null);
     },
   });
 
@@ -245,6 +274,12 @@ export default function ApprovalsPage() {
         </div>
       </div>
 
+      {/* Email inbox hint */}
+      <p className="text-sm text-muted-foreground">
+        <Mail className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+        Approvers can also act directly from their email inbox. Use the link or resend actions below.
+      </p>
+
       {/* Approvals List */}
       <div className="card overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-processing to-processing/50" />
@@ -412,6 +447,36 @@ export default function ApprovalsPage() {
 
                       {/* Right side - Actions */}
                       <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => {
+                            setEmailActionId(approval.id);
+                            copyLinkMutation.mutate(approval.id);
+                          }}
+                          disabled={emailActionId === approval.id && copyLinkMutation.isPending}
+                          className="btn px-2 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                          title="Copy approval link"
+                        >
+                          {emailActionId === approval.id && copyLinkMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Link2 className="w-4 h-4" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEmailActionId(approval.id);
+                            resendEmailMutation.mutate(approval.id);
+                          }}
+                          disabled={emailActionId === approval.id && resendEmailMutation.isPending}
+                          className="btn px-2 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                          title="Resend approval email"
+                        >
+                          {emailActionId === approval.id && resendEmailMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Mail className="w-4 h-4" />
+                          )}
+                        </button>
                         <button
                           onClick={() => handleReject(approval.id)}
                           disabled={isProcessing}

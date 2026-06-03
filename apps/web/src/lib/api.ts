@@ -572,6 +572,10 @@ export const workflowsApi = {
     api.post(`/api/v1/workflows/approvals/${id}/approve`, { comments }),
   reject: (id: string, comments?: string) =>
     api.post(`/api/v1/workflows/approvals/${id}/reject`, { comments }),
+  getApprovalLink: (id: string) =>
+    api.post<ApprovalLinkResponse>(`/api/v1/workflows/approvals/${id}/approval-link`),
+  resendApprovalEmail: (id: string) =>
+    api.post<ResendApprovalEmailResponse>(`/api/v1/workflows/approvals/${id}/resend-approval-email`),
 
   // Bulk Operations
   bulkOperation: (data: BulkOperationInput) =>
@@ -929,6 +933,19 @@ export interface ApprovalRequest {
   requester?: string;
   notes?: string;
   priority?: 'low' | 'normal' | 'medium' | 'high';
+}
+
+export interface ApprovalLinkResponse {
+  approve_url: string;
+  reject_url: string;
+  hold_url: string;
+  view_url: string;
+  expires_at: string;
+}
+
+export interface ResendApprovalEmailResponse {
+  sent_to: string;
+  expires_at: string;
 }
 
 export interface BulkOperationInput {
