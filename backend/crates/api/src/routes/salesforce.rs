@@ -15,6 +15,7 @@
 //! - POST /sync/contacts — Sync vendor contacts
 //! - GET /mappings/accounts — Get account-to-vendor mappings
 //! - POST /mappings/accounts — Update mappings
+//! - POST /push/invoices/:invoice_id/payment-status — Push invoice payment status to Salesforce
 
 use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
@@ -53,6 +54,11 @@ pub fn routes() -> Router<AppState> {
         .route("/webhook/configure", post(configure_salesforce_webhook))
         // Webhook (no auth - verified via HMAC signature; tenant_id in path)
         .route("/webhook/:tenant_id", post(salesforce_webhook))
+        // Payment status push-back
+        .route(
+            "/push/invoices/:invoice_id/payment-status",
+            post(push_invoice_payment_status),
+        )
 }
 
 // ──────────────────────────── Types ────────────────────────────
@@ -103,6 +109,36 @@ pub struct SalesforceAccountMapping {
     pub account_name: String,
     /// Account type in Salesforce
     pub account_type: Option<String>,
+}
+
+/// Push payment status request
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PushPaymentStatusRequest {
+    /// Payment status: must be one of `paid`, `partial`, or `void`
+    pub status: String,
+    /// ISO-8601 timestamp when payment was made
+    pub paid_at: Option<String>,
+    /// Amount paid (for partial payments)
+    pub amount_paid: Option<f64>,
+    /// External payment reference / confirmation number
+    pub payment_reference: Option<String>,
+    /// Salesforce custom field name to update (defaults to `BillForge_Payment_Status__c`)
+    pub salesforce_field: Option<String>,
+}
+
+/// Push payment status response
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PushPaymentStatusResponse {
+    /// The BillForge invoice ID that was pushed
+    pub invoice_id: String,
+    /// The Salesforce Account ID that was updated
+    pub salesforce_account_id: String,
+    /// The Salesforce field that was set
+    pub salesforce_field: String,
+    /// The value written to the field
+    pub value: serde_json::Value,
+    /// ISO-8601 timestamp of the push
+    pub pushed_at: String,
 }
 
 // ──────────────────────────── Handlers ────────────────────────────
@@ -878,4 +914,240 @@ async fn salesforce_webhook(
     );
 
     Ok(StatusCode::OK)
+}
+
+// ──────────────────── Salesforce Client Helper ────────────────────
+
+/// Fetch the stored Salesforce connection for the tenant, refreshing the
+/// access token if it has expired, and return a ready-to-use
+/// [`SalesforceClient`].
+async fn ensure_salesforce_client(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    config: &crate::config::SalesforceConfig,
+) -> Result<SalesforceClient, billforge_core::Error> {
+    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT instance_url, access_token, access_token_expires_at
+         FROM salesforce_connections
+         WHERE tenant_id = $1 AND sync_enabled = true",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (instance_url, mut access_token, token_expires_at) = connection.ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string())
+    })?;
+
+    // Refresh token if expired
+    if token_expires_at <= Utc::now() {
+        let refresh_result: Option<(String,)> =
+            sqlx::query_as("SELECT refresh_token FROM salesforce_connections WHERE tenant_id = $1")
+                .bind(tenant_id.as_uuid())
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+
+        if let Some((refresh_token,)) = refresh_result {
+            let oauth = SalesforceOAuth::new(SalesforceOAuthConfig {
+                client_id: config.client_id.clone(),
+                client_secret: config.client_secret.clone(),
+                redirect_uri: config.redirect_uri.clone(),
+                environment: match config.environment {
+                    crate::config::SalesforceEnvironment::Sandbox => SalesforceEnvironment::Sandbox,
+                    crate::config::SalesforceEnvironment::Production => {
+                        SalesforceEnvironment::Production
+                    }
+                },
+            });
+
+            match oauth.refresh_token(&refresh_token).await {
+                Ok(new_tokens) => {
+                    let new_expires = Utc::now() + Duration::hours(2);
+                    sqlx::query(
+                        "UPDATE salesforce_connections SET access_token = $2, access_token_expires_at = $3, updated_at = NOW() WHERE tenant_id = $1"
+                    )
+                    .bind(tenant_id.as_uuid())
+                    .bind(&new_tokens.access_token)
+                    .bind(new_expires)
+                    .execute(pool)
+                    .await
+                    .ok();
+
+                    access_token = new_tokens.access_token;
+                }
+                Err(_) => {
+                    return Err(billforge_core::Error::Validation(
+                        "Salesforce token expired. Please reconnect.".to_string(),
+                    ));
+                }
+            }
+        } else {
+            return Err(billforge_core::Error::Validation(
+                "Salesforce token expired. Please reconnect.".to_string(),
+            ));
+        }
+    }
+
+    Ok(SalesforceClient::new(access_token, instance_url))
+}
+
+// ──────────────────── Payment Status Push-Back ────────────────────
+
+/// Push invoice payment status back to the linked Salesforce Account.
+#[utoipa::path(
+    post,
+    path = "/api/v1/salesforce/push/invoices/{invoice_id}/payment-status",
+    tag = "Salesforce",
+    request_body = PushPaymentStatusRequest,
+    params(
+        ("invoice_id" = String, Path, description = "BillForge invoice ID")
+    ),
+    responses(
+        (status = 200, description = "Payment status pushed", body = PushPaymentStatusResponse),
+        (status = 400, description = "Bad request (vendor not mapped, invalid status)"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Invoice not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+async fn push_invoice_payment_status(
+    State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
+    axum::extract::Path(invoice_id): axum::extract::Path<Uuid>,
+    Json(request): Json<PushPaymentStatusRequest>,
+) -> ApiResult<impl IntoResponse> {
+    // Validate status
+    if !matches!(request.status.as_str(), "paid" | "partial" | "void") {
+        return Err(billforge_core::Error::Validation(
+            "status must be one of: paid, partial, void".to_string(),
+        )
+        .into());
+    }
+
+    let sf_config = state.config.salesforce.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Salesforce integration not configured".to_string())
+    })?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Load invoice (vendor_id needed for mapping lookup)
+    let invoice: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, vendor_id FROM invoices WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(invoice_id)
+    .fetch_optional(&*pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (_inv_id, vendor_id_opt) = invoice.ok_or_else(|| {
+        billforge_core::Error::NotFound {
+            resource_type: "invoice".to_string(),
+            id: invoice_id.to_string(),
+        }
+    })?;
+
+    let vendor_id = vendor_id_opt.ok_or_else(|| {
+        billforge_core::Error::Validation("Invoice has no vendor".to_string())
+    })?;
+
+    // Look up Salesforce Account mapping
+    let mapping: Option<(String,)> = sqlx::query_as(
+        "SELECT salesforce_account_id FROM salesforce_account_mappings
+         WHERE tenant_id = $1 AND billforge_vendor_id = $2",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(vendor_id)
+    .fetch_optional(&*pool)
+    .await
+    .ok()
+    .flatten();
+
+    let salesforce_account_id = mapping.map(|(id,)| id).ok_or_else(|| {
+        billforge_core::Error::Validation(
+            "Vendor not mapped to Salesforce Account".to_string(),
+        )
+    })?;
+
+    // Get an authenticated Salesforce client (refreshes token if needed)
+    let client = ensure_salesforce_client(&pool, &tenant.tenant_id, sf_config).await?;
+
+    // Build the value to write
+    let salesforce_field = request
+        .salesforce_field
+        .unwrap_or_else(|| "BillForge_Payment_Status__c".to_string());
+
+    let has_extras = request.paid_at.is_some()
+        || request.amount_paid.is_some()
+        || request.payment_reference.is_some();
+
+    let value = if has_extras {
+        let mut obj = serde_json::Map::new();
+        obj.insert("status".to_string(), serde_json::Value::String(request.status.clone()));
+        if let Some(ref paid_at) = request.paid_at {
+            obj.insert("paid_at".to_string(), serde_json::Value::String(paid_at.clone()));
+        }
+        if let Some(amount) = request.amount_paid {
+            obj.insert(
+                "amount_paid".to_string(),
+                serde_json::Value::Number(
+                    serde_json::Number::from_f64(amount).unwrap_or_else(|| serde_json::Number::from(0)),
+                ),
+            );
+        }
+        if let Some(ref reference) = request.payment_reference {
+            obj.insert(
+                "payment_reference".to_string(),
+                serde_json::Value::String(reference.clone()),
+            );
+        }
+        serde_json::Value::Object(obj)
+    } else {
+        serde_json::Value::String(request.status.clone())
+    };
+
+    // Push to Salesforce
+    let push_result = client
+        .update_account_field(&salesforce_account_id, &salesforce_field, &value)
+        .await;
+
+    let now = Utc::now().to_rfc3339();
+    let sync_log_status = if push_result.is_ok() {
+        "success"
+    } else {
+        "failed"
+    };
+
+    // Insert audit row
+    let sync_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO salesforce_sync_log (id, tenant_id, sync_type, status, records_processed, started_at, completed_at)
+         VALUES ($1, $2, 'payment_status_push', $3, 1, NOW(), NOW())",
+    )
+    .bind(sync_id)
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(sync_log_status)
+    .execute(&*pool)
+    .await
+    .ok();
+
+    push_result.map_err(|e| {
+        billforge_core::Error::ExternalService {
+            service: "Salesforce".to_string(),
+            message: format!("Failed to push payment status: {}", e),
+        }
+    })?;
+
+    Ok(Json(PushPaymentStatusResponse {
+        invoice_id: invoice_id.to_string(),
+        salesforce_account_id,
+        salesforce_field,
+        value,
+        pushed_at: now,
+    }))
 }

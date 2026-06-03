@@ -376,16 +376,25 @@ struct SageIntacctApiDoc;
 
 #[cfg(feature = "salesforce")]
 #[derive(OpenApi)]
-#[openapi(paths(
-    crate::routes::salesforce::salesforce_connect,
-    crate::routes::salesforce::salesforce_callback,
-    crate::routes::salesforce::salesforce_disconnect,
-    crate::routes::salesforce::salesforce_status,
-    crate::routes::salesforce::sync_accounts,
-    crate::routes::salesforce::sync_contacts,
-    crate::routes::salesforce::get_account_mappings,
-    crate::routes::salesforce::update_account_mappings,
-))]
+#[openapi(
+    paths(
+        crate::routes::salesforce::salesforce_connect,
+        crate::routes::salesforce::salesforce_callback,
+        crate::routes::salesforce::salesforce_disconnect,
+        crate::routes::salesforce::salesforce_status,
+        crate::routes::salesforce::sync_accounts,
+        crate::routes::salesforce::sync_contacts,
+        crate::routes::salesforce::get_account_mappings,
+        crate::routes::salesforce::update_account_mappings,
+        crate::routes::salesforce::push_invoice_payment_status
+    ),
+    components(
+        schemas(
+            crate::routes::salesforce::PushPaymentStatusRequest,
+            crate::routes::salesforce::PushPaymentStatusResponse,
+        )
+    )
+)]
 struct SalesforceApiDoc;
 
 #[cfg(feature = "workday")]
