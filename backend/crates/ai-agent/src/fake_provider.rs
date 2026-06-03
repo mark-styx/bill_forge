@@ -30,6 +30,9 @@ pub struct FakeAiProvider {
     tool_calls: Option<Vec<ProviderToolCall>>,
     error: Option<ProviderChatError>,
     request_log: Arc<Mutex<Vec<ProviderChatRequest>>>,
+    /// Optional sequence of scripted responses. Each call pops the next one.
+    /// Once exhausted, falls back to the single-response fields above.
+    response_sequence: Arc<Mutex<Vec<ProviderChatResponse>>>,
 }
 
 impl Default for FakeAiProvider {
@@ -48,6 +51,7 @@ impl FakeAiProvider {
             tool_calls: None,
             error: None,
             request_log: Arc::new(Mutex::new(Vec::new())),
+            response_sequence: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -78,6 +82,18 @@ impl FakeAiProvider {
     /// Configure the provider to always return this error.
     pub fn with_error(mut self, error: ProviderChatError) -> Self {
         self.error = Some(error);
+        self
+    }
+
+    /// Script a sequence of responses. Each `chat_completion` call pops the
+    /// next response from the front of the list. Once the sequence is
+    /// exhausted, falls back to the single-response fields (`response_text`,
+    /// `tool_calls`, etc.).
+    pub fn with_response_sequence(self, responses: Vec<ProviderChatResponse>) -> Self {
+        *self
+            .response_sequence
+            .lock()
+            .expect("response_sequence lock poisoned") = responses;
         self
     }
 
@@ -147,6 +163,22 @@ impl AiProvider for FakeAiProvider {
 
         if let Some(ref err) = self.error {
             return Err(err.clone());
+        }
+
+        // If a scripted response sequence has entries, pop and return the next one.
+        let scripted = {
+            let mut seq = self
+                .response_sequence
+                .lock()
+                .expect("response_sequence lock poisoned");
+            if seq.is_empty() {
+                None
+            } else {
+                Some(seq.remove(0))
+            }
+        };
+        if let Some(response) = scripted {
+            return Ok(response);
         }
 
         let configured_tool_calls = if request.tools.is_some() {

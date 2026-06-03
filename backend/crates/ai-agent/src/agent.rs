@@ -26,6 +26,10 @@ use billforge_db::repositories::{
 };
 use sqlx::PgPool;
 
+/// Maximum number of tool-execution iterations before forcing a final
+/// text-only completion. This is the agentic-loop safety bound.
+const MAX_TOOL_ITERATIONS: usize = 5;
+
 /// Truncate `s` to at most `max_bytes`, falling back to the nearest
 /// UTF-8 character boundary so multibyte sequences are never split.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> Option<String> {
@@ -307,8 +311,11 @@ impl WinstonAgent {
     /// Separated so tests can pass a synthetic [`AgentContext`] without
     /// hitting the database via [`inject_context`] or requiring persistence.
     /// Returns both the [`ChatResponse`] and telemetry data.
+    ///
+    /// This is intentionally `pub` so integration tests in `tests/` can
+    /// exercise the agentic loop without a database.
     #[cfg(test)]
-    async fn chat_with_context(
+    pub async fn chat_with_context(
         &self,
         request: ChatRequest,
         context: AgentContext,
@@ -389,7 +396,7 @@ impl WinstonAgent {
             temperature: Some(0.7),
             max_tokens: None,
             stop: None,
-            tools: provider_tools,
+            tools: provider_tools.clone(),
         };
 
         // Call provider with latency measurement
@@ -444,7 +451,11 @@ impl WinstonAgent {
         };
 
         let mut tool_traces = Vec::new();
-        let provider_response = if let Some(tool_calls) = provider_response.tool_calls.clone() {
+        let mut iterations: usize = 0;
+        let mut provider_response = provider_response;
+
+        while provider_response.tool_calls.is_some() && iterations < MAX_TOOL_ITERATIONS {
+            let tool_calls = provider_response.tool_calls.clone().unwrap();
             let mut tool_result_lines = Vec::new();
             for call in tool_calls {
                 let args = match call.arguments {
@@ -461,11 +472,10 @@ impl WinstonAgent {
                 tool_result_lines.push(format!("Tool {} returned:\n{}", call.name, result));
             }
 
-            let mut followup_messages = messages.clone();
             if !provider_response.message.content.is_empty() {
-                followup_messages.push(provider_response.message.clone());
+                messages.push(provider_response.message.clone());
             }
-            followup_messages.push(ProviderChatMessage {
+            messages.push(ProviderChatMessage {
                 role: ProviderMessageRole::System,
                 content: format!(
                     "Use these read-only tool results to answer the user's original question. Do not claim any mutation occurred.\n\n{}",
@@ -473,40 +483,81 @@ impl WinstonAgent {
                 ),
             });
 
-            let followup_request = ProviderChatRequest {
+            let next_request = ProviderChatRequest {
                 model: selected_model.clone(),
                 model_route: selected_route,
-                messages: followup_messages,
+                messages: messages.clone(),
+                temperature: Some(0.7),
+                max_tokens: None,
+                stop: None,
+                tools: provider_tools.clone(),
+            };
+
+            provider_response = self.provider.chat_completion(next_request).await.map_err(|e| {
+                warn!(
+                    selected_provider = %selected_provider,
+                    selected_model = %selected_model,
+                    model_route = ?selected_route,
+                    conversation_id = %conversation_id,
+                    tenant_id = %tenant_id,
+                    user_id = %user_id,
+                    error_kind = ?e.kind,
+                    iteration = iterations,
+                    "AI follow-up turn after tool call failed"
+                );
+                ProviderTurnError {
+                    selected_provider: selected_provider.clone(),
+                    selected_model: selected_model.clone(),
+                    selected_route,
+                    latency_ms,
+                    provider_error: e,
+                }
+            })?;
+            iterations += 1;
+        }
+
+        // If we hit the iteration cap and the model still wants tool calls,
+        // force one final text-only completion so we never return tool calls
+        // to the caller.
+        if provider_response.tool_calls.is_some() {
+            warn!(
+                max_tool_iterations_reached = true,
+                iterations = iterations,
+                conversation_id = %conversation_id,
+                "Agentic loop hit MAX_TOOL_ITERATIONS; forcing text-only terminator"
+            );
+            if !provider_response.message.content.is_empty() {
+                messages.push(provider_response.message.clone());
+            }
+            let terminator_request = ProviderChatRequest {
+                model: selected_model.clone(),
+                model_route: selected_route,
+                messages: messages.clone(),
                 temperature: Some(0.7),
                 max_tokens: None,
                 stop: None,
                 tools: None,
             };
-            self.provider
-                .chat_completion(followup_request)
-                .await
-                .map_err(|e| {
-                    warn!(
-                        selected_provider = %selected_provider,
-                        selected_model = %selected_model,
-                        model_route = ?selected_route,
-                        conversation_id = %conversation_id,
-                        tenant_id = %tenant_id,
-                        user_id = %user_id,
-                        error_kind = ?e.kind,
-                        "AI follow-up turn after tool call failed"
-                    );
-                    ProviderTurnError {
-                        selected_provider: selected_provider.clone(),
-                        selected_model: selected_model.clone(),
-                        selected_route,
-                        latency_ms,
-                        provider_error: e,
-                    }
-                })?
-        } else {
-            provider_response
-        };
+            provider_response = self.provider.chat_completion(terminator_request).await.map_err(|e| {
+                warn!(
+                    selected_provider = %selected_provider,
+                    selected_model = %selected_model,
+                    model_route = ?selected_route,
+                    conversation_id = %conversation_id,
+                    tenant_id = %tenant_id,
+                    user_id = %user_id,
+                    error_kind = ?e.kind,
+                    "AI terminator turn after max iterations failed"
+                );
+                ProviderTurnError {
+                    selected_provider: selected_provider.clone(),
+                    selected_model: selected_model.clone(),
+                    selected_route,
+                    latency_ms,
+                    provider_error: e,
+                }
+            })?;
+        }
 
         let assistant_content = provider_response.message.content.clone();
 
@@ -843,7 +894,8 @@ mod tests {
     use crate::fake_provider::FakeAiProvider;
     use crate::models::{
         AgentContext, BugReportDraftRequest, BugReportPriority, FeatureRequestDraftRequest,
-        FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind, ProviderToolCall,
+        FeatureRequestPriority, ProviderChatError, ProviderChatErrorKind, ProviderChatResponse,
+        ProviderToolCall,
     };
     use serde_json::json;
     use sqlx::PgPool;
@@ -1062,15 +1114,34 @@ mod tests {
 
     #[tokio::test]
     async fn chat_with_context_executes_read_only_tool_directly() {
+        let tool_call_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: String::new(),
+            },
+            tool_calls: Some(vec![ProviderToolCall {
+                id: Some("call-001".to_string()),
+                name: "get_module_capabilities".to_string(),
+                arguments: json!({}),
+            }]),
+            finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-001".to_string()),
+        };
+        let final_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: "final answer".to_string(),
+            },
+            tool_calls: None,
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-002".to_string()),
+        };
         let provider = Arc::new(
             FakeAiProvider::new()
                 .with_tools_supported(true)
-                .with_response_text("final answer")
-                .with_tool_calls(vec![ProviderToolCall {
-                    id: Some("call-001".to_string()),
-                    name: "get_module_capabilities".to_string(),
-                    arguments: json!({}),
-                }]),
+                .with_response_sequence(vec![tool_call_response, final_response]),
         );
         let agent = test_agent(provider.clone());
 
@@ -1091,7 +1162,12 @@ mod tests {
             .expect("initial request should include tools")
             .iter()
             .any(|tool| tool.name == "get_module_capabilities"));
-        assert_eq!(requests[1].tools, None);
+        // After the agentic-loop change, the follow-up request carries tools
+        // so the model can request additional tools on the next hop.
+        assert!(
+            requests[1].tools.is_some(),
+            "follow-up request should include tools for agentic iteration"
+        );
 
         let tool_result_message = requests[1]
             .messages
@@ -1117,15 +1193,34 @@ mod tests {
 
     #[tokio::test]
     async fn chat_with_context_blocks_mutating_tool_from_normal_turn() {
+        let tool_call_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: String::new(),
+            },
+            tool_calls: Some(vec![ProviderToolCall {
+                id: Some("call-001".to_string()),
+                name: "synthetic_mutating_test_tool".to_string(),
+                arguments: json!({}),
+            }]),
+            finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-001".to_string()),
+        };
+        let final_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: "final answer".to_string(),
+            },
+            tool_calls: None,
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-002".to_string()),
+        };
         let provider = Arc::new(
             FakeAiProvider::new()
                 .with_tools_supported(true)
-                .with_response_text("final answer")
-                .with_tool_calls(vec![ProviderToolCall {
-                    id: Some("call-001".to_string()),
-                    name: "synthetic_mutating_test_tool".to_string(),
-                    arguments: json!({}),
-                }]),
+                .with_response_sequence(vec![tool_call_response, final_response]),
         );
         let agent = test_agent(provider.clone());
 
@@ -1146,7 +1241,12 @@ mod tests {
             .expect("initial request should include tools")
             .iter()
             .any(|tool| tool.name == "synthetic_mutating_test_tool"));
-        assert_eq!(requests[1].tools, None);
+        // After the agentic-loop change, the follow-up request carries tools
+        // so the model can request additional tools on the next hop.
+        assert!(
+            requests[1].tools.is_some(),
+            "follow-up request should include tools for agentic iteration"
+        );
 
         let tool_result_message = requests[1]
             .messages
@@ -1564,5 +1664,159 @@ mod tests {
         assert_eq!(meta.source_conversation_link, None);
         assert_eq!(meta.intake_channel, "winston_ai");
         assert_eq!(meta.issue_kind, "bug");
+    }
+
+    // -------------------------------------------------------------------------
+    // Agentic loop iteration tests
+    // -------------------------------------------------------------------------
+
+    /// Proves the agent iterates over tool calls across multiple hops until the
+    /// model produces a final text-only answer.
+    #[tokio::test]
+    async fn agent_iterates_tool_calls_until_final_answer() {
+        let tool_call_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: String::new(),
+            },
+            tool_calls: Some(vec![ProviderToolCall {
+                id: Some("call-001".to_string()),
+                name: "get_module_capabilities".to_string(),
+                arguments: json!({}),
+            }]),
+            finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-001".to_string()),
+        };
+        let final_text_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: "the final answer".to_string(),
+            },
+            tool_calls: None,
+            finish_reason: Some("stop".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-002".to_string()),
+        };
+
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_tools_supported(true)
+                .with_response_sequence(vec![
+                    tool_call_response.clone(),
+                    tool_call_response.clone(),
+                    tool_call_response.clone(),
+                    final_text_response,
+                ]),
+        );
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("Tell me about modules");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(request, ctx, conversation_id)
+            .await
+            .expect("chat_with_context should succeed");
+
+        // 3 tool-call responses + 1 final text = 4 total provider requests
+        let requests = provider.take_requests();
+        assert_eq!(
+            requests.len(),
+            4,
+            "expected 4 provider requests (3 tool + 1 final)"
+        );
+
+        // 3 tool traces (one per tool execution)
+        assert_eq!(response.trace.tools_used.len(), 3);
+        for trace in &response.trace.tools_used {
+            assert_eq!(trace.tool_name, "get_module_capabilities");
+        }
+
+        // Final content is the terminating text
+        assert_eq!(response.message.content, "the final answer");
+
+        // Every intermediate request must carry tools
+        for (i, req) in requests.iter().enumerate() {
+            assert!(
+                req.tools.is_some(),
+                "request {} should carry tools for agentic iteration",
+                i
+            );
+        }
+    }
+
+    /// Proves the agentic loop stops at MAX_TOOL_ITERATIONS and forces a final
+    /// text-only completion with tools: None.
+    #[tokio::test]
+    async fn agent_stops_at_max_tool_iterations() {
+        let tool_call_response = ProviderChatResponse {
+            message: ProviderChatMessage {
+                role: ProviderMessageRole::Assistant,
+                content: String::new(),
+            },
+            tool_calls: Some(vec![ProviderToolCall {
+                id: Some("call-001".to_string()),
+                name: "get_module_capabilities".to_string(),
+                arguments: json!({}),
+            }]),
+            finish_reason: Some("tool_calls".to_string()),
+            usage: None,
+            provider_request_id: Some("fake-req-001".to_string()),
+        };
+
+        // 6 scripted tool-call responses: 1 initial + 5 loop iterations
+        let mut sequence: Vec<ProviderChatResponse> = Vec::new();
+        for _ in 0..6 {
+            sequence.push(tool_call_response.clone());
+        }
+        let provider = Arc::new(
+            FakeAiProvider::new()
+                .with_tools_supported(true)
+                .with_response_text("forced terminator answer")
+                .with_response_sequence(sequence),
+        );
+        let agent = test_agent(provider.clone());
+
+        let ctx = synthetic_context();
+        let request = chat_request("Keep using tools");
+        let conversation_id = Uuid::new_v4();
+
+        let response = agent
+            .chat_with_context(request, ctx, conversation_id)
+            .await
+            .expect("chat_with_context should succeed");
+
+        let requests = provider.take_requests();
+        // 6 scripted calls (initial + 5 loop iterations) + 1 terminator = 7 total
+        assert_eq!(
+            requests.len(),
+            7,
+            "expected 7 provider requests (6 loop + 1 terminator), got {}",
+            requests.len()
+        );
+
+        // The final request must have tools: None (the terminator)
+        let last_request = requests.last().expect("should have a last request");
+        assert!(
+            last_request.tools.is_none(),
+            "terminator request must have tools: None"
+        );
+
+        // All prior requests must have tools
+        for (i, req) in requests.iter().enumerate().take(requests.len() - 1) {
+            assert!(
+                req.tools.is_some(),
+                "non-terminator request {} should carry tools",
+                i
+            );
+        }
+
+        // The response content should be from the forced terminator
+        assert!(
+            !response.message.content.is_empty(),
+            "response should have content from the forced terminator"
+        );
     }
 }
