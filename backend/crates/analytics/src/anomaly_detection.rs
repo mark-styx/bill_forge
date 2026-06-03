@@ -311,70 +311,12 @@ impl InvoiceRecord {
     }
 }
 
-/// OCR character substitution pairs — treating these as zero-cost substitutions
-/// handles common OCR misreads in invoice numbers.
-const OCR_CONFUSABLE: &[(char, char)] = &[
-    ('O', '0'),
-    ('0', 'O'),
-    ('I', '1'),
-    ('1', 'I'),
-    ('l', '1'),
-    ('1', 'l'),
-    ('I', 'l'),
-    ('l', 'I'),
-    ('S', '5'),
-    ('5', 'S'),
-    ('B', '8'),
-    ('8', 'B'),
-];
-
-/// Returns true when two characters are an OCR confusable pair.
-fn ocr_char_eq(a: char, b: char) -> bool {
-    if a == b {
-        return true;
-    }
-    a.to_ascii_uppercase() == b.to_ascii_uppercase()
-        || OCR_CONFUSABLE
-            .iter()
-            .any(|&(ca, cb)| (a == ca && b == cb) || (a == cb && b == ca))
-}
-
 /// OCR-aware normalized Levenshtein similarity (0.0 - 1.0).
 /// OCR confusable substitutions cost 0 instead of 1.
+///
+/// Delegates to the shared implementation in `billforge_core::text_similarity`.
 fn ocr_levenshtein_similarity(s1: &str, s2: &str) -> f64 {
-    if s1.is_empty() && s2.is_empty() {
-        return 1.0;
-    }
-    let c1: Vec<char> = s1.chars().collect();
-    let c2: Vec<char> = s2.chars().collect();
-    let len1 = c1.len();
-    let len2 = c2.len();
-    if len1 == 0 || len2 == 0 {
-        return 0.0;
-    }
-    // Single-row DP
-    let mut prev = vec![0usize; len2 + 1];
-    let mut curr = vec![0usize; len2 + 1];
-    for j in 0..=len2 {
-        prev[j] = j;
-    }
-    for i in 1..=len1 {
-        curr[0] = i;
-        for j in 1..=len2 {
-            let sub_cost = if ocr_char_eq(c1[i - 1], c2[j - 1]) {
-                0
-            } else {
-                1
-            };
-            curr[j] = (prev[j] + 1) // delete
-                .min(curr[j - 1] + 1) // insert
-                .min(prev[j - 1] + sub_cost); // substitute
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    let dist = prev[len2] as f64;
-    let max_len = len1.max(len2) as f64;
-    1.0 - dist / max_len
+    billforge_core::text_similarity::ocr_levenshtein_similarity(s1, s2)
 }
 
 /// Per-signal breakdown returned by `score_pair`.

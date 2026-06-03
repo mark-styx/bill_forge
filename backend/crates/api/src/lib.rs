@@ -7,6 +7,7 @@
 pub mod config;
 pub mod error;
 pub mod extractors;
+pub mod fraud_guard;
 pub mod invoice_capture;
 pub mod metrics;
 pub mod middleware;

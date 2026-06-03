@@ -40,6 +40,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_ai_rls_migrations(pool).await?;
     run_theme_migrations(pool).await?;
     run_implementation_migrations(pool).await?;
+    run_banking_verification_migrations(pool).await?;
 
     Ok(())
 }
@@ -600,6 +601,32 @@ pub async fn run_theme_migrations(pool: &PgPool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_user_theme_prefs_user
             ON user_theme_preferences(user_id);
         "#,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Run banking verification, dual-approval, and fraud-guard domain migrations.
+pub async fn run_banking_verification_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "097_vendor_banking_verification.sql",
+        include_str!("../../../migrations/097_vendor_banking_verification.sql"),
+    )
+    .await?;
+
+    apply_migration(
+        pool,
+        "103_vendor_banking_dual_approval.sql",
+        include_str!("../../../migrations/103_vendor_banking_dual_approval.sql"),
+    )
+    .await?;
+
+    apply_migration(
+        pool,
+        "118_vendor_domain_first_seen.sql",
+        include_str!("../../../migrations/118_vendor_domain_first_seen.sql"),
     )
     .await?;
 

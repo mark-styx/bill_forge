@@ -13,6 +13,7 @@ pub mod personas;
 pub mod public_api;
 pub mod services;
 pub mod sync;
+pub mod text_similarity;
 pub mod traits;
 pub mod types;
 pub mod webhook;

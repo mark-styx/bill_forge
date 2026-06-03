@@ -389,11 +389,16 @@ async fn first_approval_does_not_clear_payment_hold(pool: sqlx::PgPool) {
 
     assert_eq!(verification.status, BankingVerificationStatus::Pending);
 
-    // Simulate first approval with screening results
+    // Simulate first approval with screening results (including fraud-guard keys)
     let screening = serde_json::json!({
         "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
+        "lookalike": { "risk": "low", "top_match": null },
+        "bank_change": { "risk": "low", "recent_changes": 0 },
+        "country_mismatch": { "risk": "unknown", "vendor_country": null, "bank_country": null },
+        "overall_risk": "low",
     });
 
     let first_approved = repo
@@ -434,6 +439,27 @@ async fn first_approval_does_not_clear_payment_hold(pool: sqlx::PgPool) {
     assert!(
         sr.get("plaid").is_some(),
         "screening_results should have plaid"
+    );
+    // Fraud-guard keys should be present
+    assert!(
+        sr.get("domain_age").is_some(),
+        "screening_results should have domain_age"
+    );
+    assert!(
+        sr.get("lookalike").is_some(),
+        "screening_results should have lookalike"
+    );
+    assert!(
+        sr.get("bank_change").is_some(),
+        "screening_results should have bank_change"
+    );
+    assert!(
+        sr.get("country_mismatch").is_some(),
+        "screening_results should have country_mismatch"
+    );
+    assert!(
+        sr.get("overall_risk").is_some(),
+        "screening_results should have overall_risk"
     );
 
     // Vendor payment_hold should STILL be true
@@ -495,6 +521,11 @@ async fn same_user_cannot_dual_approve(pool: sqlx::PgPool) {
         "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
+        "lookalike": { "risk": "low", "top_match": null },
+        "bank_change": { "risk": "low", "recent_changes": 0 },
+        "country_mismatch": { "risk": "unknown", "vendor_country": null, "bank_country": null },
+        "overall_risk": "low",
     });
 
     repo.record_first_approval(
@@ -573,6 +604,11 @@ async fn second_distinct_approver_clears_hold(pool: sqlx::PgPool) {
         "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
         "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
+        "lookalike": { "risk": "low", "top_match": null },
+        "bank_change": { "risk": "low", "recent_changes": 0 },
+        "country_mismatch": { "risk": "unknown", "vendor_country": null, "bank_country": null },
+        "overall_risk": "low",
     });
 
     repo.record_first_approval(

@@ -2,6 +2,7 @@
 
 use crate::error::ApiResult;
 use crate::extractors::VendorMgmtAccess;
+use crate::fraud_guard;
 use crate::state::AppState;
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -153,7 +154,44 @@ async fn create_vendor(
 ) -> ApiResult<Json<Vendor>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
-    let vendor = repo.create(&tenant.tenant_id, input).await?;
+
+    // Run fraud-guard checks before creating the vendor
+    let domain = fraud_guard::extract_domain(
+        input.email.as_deref(),
+        input.website.as_deref(),
+    );
+    let vendor_country = input.address.as_ref().map(|a| a.country.as_str());
+    let signals = fraud_guard::run_fraud_guard(
+        &tenant.tenant_id,
+        None, // no vendor_id yet
+        &input.name,
+        &domain,
+        vendor_country,
+        None, // no bank country at creation time
+        &pool,
+    )
+    .await;
+
+    // Upsert domain so future checks can compare age
+    fraud_guard::upsert_domain_first_seen(&tenant.tenant_id, &domain, &pool).await;
+
+    // If overall risk is high, the vendor should start on payment_hold
+    let vendor = if signals.overall_risk == fraud_guard::RiskLevel::High {
+        // Create vendor, then set payment_hold via direct query
+        let v = repo.create(&tenant.tenant_id, input).await?;
+        sqlx::query(
+            "UPDATE vendors SET payment_hold = true, payment_hold_reason = 'Fraud guard: high-risk signals detected', updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(v.id.0)
+        .bind(*tenant.tenant_id.as_uuid())
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to set payment_hold: {}", e)))?;
+        // Re-fetch to get updated payment_hold
+        repo.get_by_id(&tenant.tenant_id, &v.id).await?.unwrap_or(v)
+    } else {
+        repo.create(&tenant.tenant_id, input).await?
+    };
 
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
@@ -161,10 +199,13 @@ async fn create_vendor(
         AuditAction::Create,
         ResourceType::Vendor,
         vendor.id.to_string(),
-        format!("Created vendor {}", vendor.name),
+        format!("Created vendor {} (fraud guard: {})", vendor.name, serde_json::to_string(&signals.overall_risk).unwrap_or_default()),
     )
     .with_user_email(&user.email)
-    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
+    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default())
+    .with_metadata(serde_json::json!({
+        "fraud_signals": fraud_guard::fraud_signals_to_json(&signals),
+    }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
@@ -1034,6 +1075,10 @@ pub struct UpdateBankingRequest {
     pub account_type: String,
     pub account_number: String,
     pub routing_number: String,
+    /// ISO country code for the bank account (e.g. "US", "NG").
+    /// Used by fraud guard for country-mismatch detection.
+    #[serde(default)]
+    pub bank_country: Option<String>,
 }
 
 /// Request body for POST /:id/banking-verifications/:vid/verify
@@ -1107,6 +1152,46 @@ async fn update_banking(
         )
         .await?;
 
+    // Run fraud-guard checks for this banking change
+    let domain = fraud_guard::extract_domain(
+        vendor.email.as_deref(),
+        vendor.website.as_deref(),
+    );
+    let vendor_country = vendor.address.as_ref().map(|a| a.country.as_str());
+    let signals = fraud_guard::run_fraud_guard(
+        &tenant.tenant_id,
+        Some(&vendor_id),
+        &vendor.name,
+        &domain,
+        vendor_country,
+        req.bank_country.as_deref(),
+        &pool,
+    )
+    .await;
+
+    // If country mismatch or lookalike is high, force the dual-approver path
+    // by adding a note to the hold reason
+    let hold_reason = if signals.country_mismatch.risk == fraud_guard::RiskLevel::High
+        || signals.lookalike.risk == fraud_guard::RiskLevel::High
+    {
+        "Banking details changed - fraud guard flagged high risk - dual approval required"
+    } else {
+        "Banking details changed - pending verification"
+    };
+
+    // Update hold reason if fraud guard escalated
+    if hold_reason != "Banking details changed - pending verification" {
+        sqlx::query(
+            "UPDATE vendors SET payment_hold_reason = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(vendor_id.0)
+        .bind(*tenant.tenant_id.as_uuid())
+        .bind(hold_reason)
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to update hold reason: {}", e)))?;
+    }
+
     // Audit entry
     let audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
@@ -1124,6 +1209,7 @@ async fn update_banking(
         "verification_id": verification.id.to_string(),
         "prev_last_four": prev_last_four,
         "new_last_four": new_last_four,
+        "fraud_signals": fraud_guard::fraud_signals_to_json(&signals),
     }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
@@ -1135,6 +1221,7 @@ async fn update_banking(
         "verification_id": verification.id,
         "message": "Banking details updated. Payments are frozen until verified.",
         "payment_hold": true,
+        "fraud_signals": fraud_guard::fraud_signals_to_json(&signals),
     })))
 }
 
@@ -1201,10 +1288,29 @@ async fn verify_banking(
 
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
 
+    // Fetch vendor for fraud-guard context
+    let vendor = repo
+        .get_by_id(&tenant.tenant_id, &vendor_id)
+        .await?
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Vendor".to_string(),
+            id: id.clone(),
+        })?;
+
     if verification.first_approver_id.is_none() {
         // ---- FIRST APPROVAL ----
-        // Run screening stubs (deterministic Pass results)
-        let screening = run_screening_stubs();
+        // Run screening checks (fraud guard + legacy stubs)
+        let screening = run_screening_with_fraud_guard(
+            &tenant.tenant_id,
+            &vendor_id,
+            &vendor.name,
+            vendor.email.as_deref(),
+            vendor.website.as_deref(),
+            vendor.address.as_ref().map(|a| a.country.as_str()),
+            None, // bank country not available at verification time
+            &pool,
+        )
+        .await;
 
         let updated = repo
             .record_first_approval(
@@ -1299,25 +1405,31 @@ async fn verify_banking(
     }
 }
 
-/// Run screening stubs: OFAC, AVS, Plaid.
-/// Returns deterministic Pass results with checked_at timestamps.
-/// Real integrations will be wired in separately.
-fn run_screening_stubs() -> serde_json::Value {
-    let now = Utc::now().to_rfc3339();
-    serde_json::json!({
-        "ofac": {
-            "status": "pass",
-            "checked_at": now,
-        },
-        "avs": {
-            "status": "pass",
-            "checked_at": now,
-        },
-        "plaid": {
-            "status": "pass",
-            "checked_at": now,
-        },
-    })
+/// Run screening checks: legacy OFAC/AVS/Plaid stubs plus fraud-guard signals.
+/// Returns a merged JSON value with both legacy keys and new fraud-guard keys.
+/// The `pool` argument is used for the async fraud-guard checks.
+async fn run_screening_with_fraud_guard(
+    tenant_id: &TenantId,
+    vendor_id: &VendorId,
+    vendor_name: &str,
+    email: Option<&str>,
+    website: Option<&str>,
+    vendor_country: Option<&str>,
+    bank_country: Option<&str>,
+    pool: &sqlx::PgPool,
+) -> serde_json::Value {
+    let domain = fraud_guard::extract_domain(email, website);
+    let signals = fraud_guard::run_fraud_guard(
+        tenant_id,
+        Some(vendor_id),
+        vendor_name,
+        &domain,
+        vendor_country,
+        bank_country,
+        pool,
+    )
+    .await;
+    fraud_guard::build_screening_results(&signals)
 }
 
 /// GET /api/v1/vendors/:id/banking-verifications
