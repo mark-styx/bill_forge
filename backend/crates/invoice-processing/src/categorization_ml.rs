@@ -355,6 +355,157 @@ impl MLCategorizer {
             .cloned()
     }
 
+    // ------------------------------------------------------------------
+    // Per-line-item ML categorization (issue #315)
+    // ------------------------------------------------------------------
+
+    /// Generate embedding for a single line description (no joining).
+    pub async fn generate_line_embedding(
+        &self,
+        line_description: &str,
+        vendor_id: Uuid,
+    ) -> Result<Vec<f32>> {
+        let text = format!("Vendor: {} | {}", vendor_id, line_description);
+        self.generate_embedding(&text).await
+    }
+
+    /// Suggest per-line categorizations using per-line embeddings against
+    /// the embedding_cache nearest-neighbor lookup.
+    ///
+    /// Split detection: if the top-K nearest historical codings for one line
+    /// are split roughly evenly across distinct GLs (cosine deltas within
+    /// 0.05), emit a split suggestion with amounts allocated by similarity
+    /// weight.
+    pub async fn suggest_line_categorizations_ml(
+        &self,
+        tenant_id: &str,
+        invoice_id: Uuid,
+        vendor_id: Option<Uuid>,
+        line_items: &[super::categorization::LineItemInput],
+    ) -> Result<super::categorization::PerLineInvoiceCategorization> {
+        use super::categorization::{
+            LineCategorization, LineSplitSuggestion, PerLineInvoiceCategorization, SuggestionSource,
+        };
+
+        let mut lines = Vec::with_capacity(line_items.len());
+
+        for (idx, item) in line_items.iter().enumerate() {
+            let line_embedding = self.generate_line_embedding(
+                &item.description,
+                vendor_id.unwrap_or(Uuid::nil()),
+            ).await?;
+
+            // Find top-K similar GL categories
+            let similar = self
+                .find_similar_categories(tenant_id, &line_embedding, CategoryType::GlCode, 5)
+                .await?;
+
+            // Group by distinct GL code, keeping best similarity per GL
+            let mut gl_groups: Vec<(String, f32)> = Vec::new();
+            for m in &similar {
+                if !gl_groups.iter().any(|(g, _)| g == &m.value) {
+                    gl_groups.push((m.value.clone(), m.similarity));
+                }
+            }
+
+            if gl_groups.is_empty() {
+                lines.push(LineCategorization {
+                    line_item_id: format!("line-{}", idx),
+                    line_index: idx,
+                    gl_code: "0000-General".to_string(),
+                    department: None,
+                    cost_center: None,
+                    confidence: 0.40,
+                    rationale: "No similar embeddings found".to_string(),
+                    source: SuggestionSource::Default,
+                    splits: vec![],
+                });
+                continue;
+            }
+
+            let best = &gl_groups[0];
+            let confidence = self
+                .calculate_embedding_confidence(best.1, None)
+                .min(CONFIDENCE_CEILING) as f64;
+
+            // Detect split: if >=2 distinct GLs have similarity within 0.05
+            let splits = if gl_groups.len() >= 2 {
+                let top_sim = gl_groups[0].1;
+                let split_candidates: Vec<_> = gl_groups
+                    .iter()
+                    .filter(|(_, sim)| (top_sim - sim).abs() <= 0.05)
+                    .collect();
+
+                if split_candidates.len() >= 2 {
+                    let total_weight: f32 = split_candidates.iter().map(|(_, s)| *s).sum();
+                    if total_weight > 0.0 {
+                        split_candidates
+                            .into_iter()
+                            .map(|(gl, sim)| LineSplitSuggestion {
+                                gl_code: gl.clone(),
+                                department: None,
+                                cost_center: None,
+                                amount: item.amount * (sim / total_weight) as f64,
+                                percentage: (sim / total_weight) as f64,
+                                confidence: (sim * 0.85).min(CONFIDENCE_CEILING) as f64,
+                                rationale: format!(
+                                    "Semantic match (similarity: {:.2})",
+                                    sim
+                                ),
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+
+            // Also find department and cost center
+            let dept_match = self
+                .find_similar_categories(tenant_id, &line_embedding, CategoryType::Department, 1)
+                .await
+                .ok()
+                .and_then(|v| v.into_iter().next());
+
+            let cc_match = self
+                .find_similar_categories(tenant_id, &line_embedding, CategoryType::CostCenter, 1)
+                .await
+                .ok()
+                .and_then(|v| v.into_iter().next());
+
+            lines.push(LineCategorization {
+                line_item_id: format!("line-{}", idx),
+                line_index: idx,
+                gl_code: best.0.clone(),
+                department: dept_match.map(|m| m.value),
+                cost_center: cc_match.map(|m| m.value),
+                confidence,
+                rationale: format!(
+                    "Semantic match (similarity: {:.2})",
+                    best.1
+                ),
+                source: SuggestionSource::LineItemAnalysis,
+                splits,
+            });
+        }
+
+        let overall_confidence = if lines.is_empty() {
+            0.0
+        } else {
+            lines.iter().map(|l| l.confidence).sum::<f64>() / lines.len() as f64
+        };
+
+        Ok(PerLineInvoiceCategorization {
+            invoice_id,
+            lines,
+            overall_confidence,
+        })
+    }
+
     /// Calculate overall confidence score.
     ///
     /// Uses a fixed denominator of 3 so missing fields contribute 0.0 to the

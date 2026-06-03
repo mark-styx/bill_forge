@@ -360,6 +360,184 @@ impl CategorizationEngine {
 
         (gl_score + dept_score + cc_score) / 3.0
     }
+
+    // ------------------------------------------------------------------
+    // Per-line-item categorization (issue #315)
+    // ------------------------------------------------------------------
+
+    /// Suggest GL/department/cost-center for each line item independently.
+    ///
+    /// For each line:
+    ///  1. Look up vendor+description-based correction rules (feedback loop).
+    ///  2. Fall back to keyword heuristics (`categorize_line_by_keywords`).
+    ///  3. If the line description matches >1 distinct GL signal, or vendor
+    ///     history shows a consistent split, emit split suggestions.
+    pub async fn suggest_per_line_categorizations(
+        &self,
+        tenant_id: &str,
+        invoice_id: Uuid,
+        _vendor_id: Option<Uuid>,
+        line_items: &[LineItemInput],
+        vendor_history: Option<&VendorHistory>,
+        prior_codings: &[PriorLineCoding],
+    ) -> Result<PerLineInvoiceCategorization> {
+        let feedback = FeedbackLearning::new(self.pool.clone());
+        let correction_rules = feedback
+            .get_active_correction_rules(tenant_id)
+            .await
+            .unwrap_or_default();
+
+        let mut lines = Vec::with_capacity(line_items.len());
+
+        for (idx, item) in line_items.iter().enumerate() {
+            let line_item_id = format!("line-{}", idx);
+
+            // 1. Try vendor history match
+            let mut gl_code = None;
+            let mut department = None;
+            let mut cost_center = None;
+            let mut source = SuggestionSource::Default;
+            let mut confidence = 0.40;
+            let mut rationale = "Default fallback".to_string();
+
+            if let Some(history) = vendor_history {
+                if let Some(prior) = find_matching_prior(&item.description, &history.prior_codings)
+                {
+                    gl_code = Some(prior.gl_code.clone());
+                    department = prior.department.clone();
+                    cost_center = prior.cost_center.clone();
+                    source = SuggestionSource::VendorHistory;
+                    confidence = 0.90;
+                    rationale = format!(
+                        "Based on prior approved coding for vendor ({})",
+                        prior.gl_code
+                    );
+                }
+            }
+
+            // Also check generic prior_codings
+            if gl_code.is_none() {
+                if let Some(prior) = find_matching_prior(&item.description, prior_codings) {
+                    gl_code = Some(prior.gl_code.clone());
+                    department = prior.department.clone();
+                    cost_center = prior.cost_center.clone();
+                    source = SuggestionSource::VendorHistory;
+                    confidence = 0.85;
+                    rationale = format!(
+                        "Based on prior approved coding ({})",
+                        prior.gl_code
+                    );
+                }
+            }
+
+            // 2. Keyword fallback
+            if gl_code.is_none() {
+                let kw = categorize_line_by_keywords(&item.description);
+                gl_code = Some(kw.gl_code);
+                department = kw.department;
+                cost_center = kw.cost_center;
+                source = SuggestionSource::LineItemAnalysis;
+                confidence = kw.confidence;
+                rationale = kw.rationale;
+            }
+
+            // Apply correction rules
+            let gl_code_val = gl_code.unwrap_or_else(|| "0000-General".to_string());
+            let corrected_gl = apply_line_correction(
+                &gl_code_val,
+                &correction_rules,
+            );
+
+            let (final_gl, final_conf, final_source) = if corrected_gl != gl_code_val {
+                (corrected_gl, (confidence * 1.1).min(0.99), SuggestionSource::VendorHistory)
+            } else {
+                (gl_code_val, confidence, source)
+            };
+
+            // 3. Detect splits
+            let splits = detect_line_splits(
+                &item.description,
+                item.amount,
+                vendor_history,
+            );
+
+            lines.push(LineCategorization {
+                line_item_id,
+                line_index: idx,
+                gl_code: final_gl,
+                department,
+                cost_center,
+                confidence: final_conf,
+                rationale,
+                source: final_source,
+                splits,
+            });
+        }
+
+        // Overall confidence = mean of line confidences
+        let overall_confidence = if lines.is_empty() {
+            0.0
+        } else {
+            lines.iter().map(|l| l.confidence).sum::<f64>() / lines.len() as f64
+        };
+
+        Ok(PerLineInvoiceCategorization {
+            invoice_id,
+            lines,
+            overall_confidence,
+        })
+    }
+
+    /// Look up per-line prior approved codings for a vendor.
+    pub async fn vendor_history_lookup(
+        &self,
+        tenant_id: &str,
+        vendor_id: Uuid,
+    ) -> Result<VendorHistory> {
+        // Fetch prior approved codings from invoices for this vendor.
+        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, i64)>(
+            r#"
+            SELECT
+                li->>'description' AS description,
+                i.gl_code,
+                i.department,
+                i.cost_center,
+                (li->>'amount_cents')::bigint AS amount_cents
+            FROM invoices i, LATERAL jsonb_array_elements(i.line_items) AS li
+            WHERE i.tenant_id = $1
+              AND i.vendor_id = $2
+              AND i.gl_code IS NOT NULL
+            ORDER BY i.created_at DESC
+            LIMIT 100
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(vendor_id)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let prior_codings: Vec<PriorLineCoding> = rows
+            .into_iter()
+            .map(|(desc, gl, dept, cc, cents)| PriorLineCoding {
+                description: desc,
+                gl_code: gl,
+                department: dept,
+                cost_center: cc,
+                amount: cents as f64 / 100.0,
+            })
+            .collect();
+
+        // Detect historical splits: group by description, then look for
+        // distinct GL codes with consistent ratios.
+        let splits = detect_historical_splits(&prior_codings);
+
+        Ok(VendorHistory {
+            vendor_id,
+            prior_codings,
+            splits,
+        })
+    }
 }
 
 /// Input for line items
@@ -368,6 +546,409 @@ pub struct LineItemInput {
     pub description: String,
     pub quantity: Option<f64>,
     pub amount: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Per-line-item categorization types (issue #315)
+// ---------------------------------------------------------------------------
+
+/// A single split allocation within one line item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineSplitSuggestion {
+    pub gl_code: String,
+    pub department: Option<String>,
+    pub cost_center: Option<String>,
+    pub amount: f64,
+    pub percentage: f64,
+    pub confidence: f64,
+    pub rationale: String,
+}
+
+/// Per-line categorization result for a single line item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineCategorization {
+    pub line_item_id: String,
+    pub line_index: usize,
+    pub gl_code: String,
+    pub department: Option<String>,
+    pub cost_center: Option<String>,
+    pub confidence: f64,
+    pub rationale: String,
+    pub source: SuggestionSource,
+    pub splits: Vec<LineSplitSuggestion>,
+}
+
+/// Complete per-line categorization result for an entire invoice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerLineInvoiceCategorization {
+    pub invoice_id: Uuid,
+    pub lines: Vec<LineCategorization>,
+    pub overall_confidence: f64,
+}
+
+/// Historical per-line coding from a prior approved invoice.
+#[derive(Debug, Clone)]
+pub struct PriorLineCoding {
+    pub description: String,
+    pub gl_code: String,
+    pub department: Option<String>,
+    pub cost_center: Option<String>,
+    pub amount: f64,
+}
+
+/// A historical split ratio observed for a vendor/description pair.
+#[derive(Debug, Clone)]
+pub struct HistoricalSplit {
+    pub gl_code: String,
+    pub department: Option<String>,
+    pub cost_center: Option<String>,
+    pub ratio: f64,
+}
+
+/// Vendor history summary used by per-line categorization.
+#[derive(Debug, Clone)]
+pub struct VendorHistory {
+    pub vendor_id: Uuid,
+    pub prior_codings: Vec<PriorLineCoding>,
+    pub splits: Vec<HistoricalSplit>,
+}
+
+// ---------------------------------------------------------------------------
+// Free helper functions used by per-line categorization
+// ---------------------------------------------------------------------------
+
+/// Keyword-based GL categorization for a single line description.
+pub struct KeywordResult {
+    pub gl_code: String,
+    pub department: Option<String>,
+    pub cost_center: Option<String>,
+    pub confidence: f64,
+    pub rationale: String,
+}
+
+pub fn categorize_line_by_keywords(description: &str) -> KeywordResult {
+    let lower = description.to_lowercase();
+
+    if lower.contains("software")
+        || lower.contains("subscription")
+        || lower.contains("saas")
+        || lower.contains("license")
+        || lower.contains("aws")
+        || lower.contains("ec2")
+        || lower.contains("cloud")
+    {
+        return KeywordResult {
+            gl_code: "6000-Software & Subscriptions".to_string(),
+            department: Some("Engineering".to_string()),
+            cost_center: None,
+            confidence: 0.85,
+            rationale: "Keyword match: software/subscription/cloud".to_string(),
+        };
+    }
+
+    if lower.contains("marketing")
+        || lower.contains("advertising")
+        || lower.contains(" ad")
+        || lower.contains("ads")
+    {
+        return KeywordResult {
+            gl_code: "7000-Marketing".to_string(),
+            department: Some("Marketing".to_string()),
+            cost_center: None,
+            confidence: 0.80,
+            rationale: "Keyword match: marketing/advertising".to_string(),
+        };
+    }
+
+    if lower.contains("travel") || lower.contains("flight") || lower.contains("hotel") || lower.contains("meals") {
+        return KeywordResult {
+            gl_code: "8000-Travel & Entertainment".to_string(),
+            department: None,
+            cost_center: None,
+            confidence: 0.80,
+            rationale: "Keyword match: travel/entertainment".to_string(),
+        };
+    }
+
+    if lower.contains("office")
+        || lower.contains("supplies")
+        || lower.contains("equipment")
+        || lower.contains("chairs")
+        || lower.contains("furniture")
+    {
+        return KeywordResult {
+            gl_code: "5000-Office Supplies & Equipment".to_string(),
+            department: None,
+            cost_center: None,
+            confidence: 0.75,
+            rationale: "Keyword match: office/supplies/equipment".to_string(),
+        };
+    }
+
+    if lower.contains("consulting")
+        || lower.contains("professional")
+        || lower.contains("services")
+    {
+        return KeywordResult {
+            gl_code: "9000-Professional Services".to_string(),
+            department: None,
+            cost_center: None,
+            confidence: 0.75,
+            rationale: "Keyword match: consulting/services".to_string(),
+        };
+    }
+
+    KeywordResult {
+        gl_code: "0000-General".to_string(),
+        department: None,
+        cost_center: None,
+        confidence: 0.40,
+        rationale: "No keyword match; default".to_string(),
+    }
+}
+
+/// Find the best matching prior coding for a line description.
+pub fn find_matching_prior<'a>(
+    description: &str,
+    codings: &'a [PriorLineCoding],
+) -> Option<&'a PriorLineCoding> {
+    let lower = description.to_lowercase();
+    codings.iter().find(|c| {
+        let desc_lower = c.description.to_lowercase();
+        // Match if either contains the other or shares key words
+        lower.contains(&desc_lower)
+            || desc_lower.contains(&lower)
+            || shares_significant_words(&lower, &desc_lower)
+    })
+}
+
+/// Check if two descriptions share at least 2 significant words (>3 chars).
+fn shares_significant_words(a: &str, b: &str) -> bool {
+    let words_a: Vec<&str> = a.split_whitespace().filter(|w| w.len() > 3).collect();
+    let words_b: Vec<&str> = b.split_whitespace().filter(|w| w.len() > 3).collect();
+    let shared = words_a.iter().filter(|w| words_b.contains(w)).count();
+    shared >= 2
+}
+
+/// Apply correction rules to a single line GL code.
+pub fn apply_line_correction(gl_code: &str, rules: &[CorrectionRule]) -> String {
+    rules
+        .iter()
+        .find(|r| r.category_type == CategoryType::GlCode && r.suggested_value == gl_code)
+        .map(|r| r.correct_value.clone())
+        .unwrap_or_else(|| gl_code.to_string())
+}
+
+/// Detect whether a line should be split across multiple GL accounts.
+///
+/// Checks:
+///  1. Vendor history splits (consistent ratios from `HistoricalSplit`).
+///  2. Compound description containing keywords for >1 distinct GL.
+pub fn detect_line_splits(
+    description: &str,
+    line_amount: f64,
+    vendor_history: Option<&VendorHistory>,
+) -> Vec<LineSplitSuggestion> {
+    // 1. Vendor history splits
+    if let Some(history) = vendor_history {
+        if !history.splits.is_empty() {
+            let total_ratio: f64 = history.splits.iter().map(|s| s.ratio).sum();
+            if total_ratio > 0.0 {
+                return history
+                    .splits
+                    .iter()
+                    .map(|s| LineSplitSuggestion {
+                        gl_code: s.gl_code.clone(),
+                        department: s.department.clone(),
+                        cost_center: s.cost_center.clone(),
+                        amount: (line_amount * s.ratio / total_ratio),
+                        percentage: s.ratio / total_ratio,
+                        confidence: 0.85,
+                        rationale: format!(
+                            "Historical vendor split (ratio {:.2})",
+                            s.ratio / total_ratio
+                        ),
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    // 2. Compound description heuristic
+    let lower = description.to_lowercase();
+    let gl_signals = collect_gl_signals(&lower);
+    if gl_signals.len() >= 2 {
+        let n = gl_signals.len() as f64;
+        return gl_signals
+            .into_iter()
+            .map(|(gl, dept, rationale)| LineSplitSuggestion {
+                gl_code: gl,
+                department: dept,
+                cost_center: None,
+                amount: line_amount / n,
+                percentage: 1.0 / n,
+                confidence: 0.70,
+                rationale,
+            })
+            .collect();
+    }
+
+    Vec::new()
+}
+
+/// Collect distinct GL signals from a description string.
+pub fn collect_gl_signals(lower: &str) -> Vec<(String, Option<String>, String)> {
+    let mut signals = Vec::new();
+
+    if lower.contains("software")
+        || lower.contains("subscription")
+        || lower.contains("saas")
+        || lower.contains("license")
+        || lower.contains("aws")
+        || lower.contains("ec2")
+        || lower.contains("cloud")
+    {
+        signals.push((
+            "6000-Software & Subscriptions".to_string(),
+            Some("Engineering".to_string()),
+            "Software keyword detected".to_string(),
+        ));
+    }
+    if lower.contains("marketing")
+        || lower.contains("advertising")
+        || lower.contains(" ad")
+        || lower.contains("ads")
+    {
+        signals.push((
+            "7000-Marketing".to_string(),
+            Some("Marketing".to_string()),
+            "Marketing keyword detected".to_string(),
+        ));
+    }
+    if lower.contains("travel") || lower.contains("flight") || lower.contains("hotel") {
+        signals.push((
+            "8000-Travel & Entertainment".to_string(),
+            None,
+            "Travel keyword detected".to_string(),
+        ));
+    }
+    if lower.contains("meals") || lower.contains("food") || lower.contains("dining") {
+        signals.push((
+            "8000-Travel & Entertainment".to_string(),
+            None,
+            "Meals keyword detected".to_string(),
+        ));
+    }
+    if lower.contains("office")
+        || lower.contains("supplies")
+        || lower.contains("equipment")
+        || lower.contains("chairs")
+    {
+        signals.push((
+            "5000-Office Supplies & Equipment".to_string(),
+            None,
+            "Office keyword detected".to_string(),
+        ));
+    }
+    if lower.contains("consulting")
+        || lower.contains("professional")
+        || lower.contains("services")
+    {
+        signals.push((
+            "9000-Professional Services".to_string(),
+            None,
+            "Services keyword detected".to_string(),
+        ));
+    }
+
+    // Deduplicate by GL code (keep first occurrence)
+    let mut seen = std::collections::HashSet::new();
+    signals.retain(|(gl, _, _)| seen.insert(gl.clone()));
+
+    signals
+}
+
+/// Detect historical split ratios from prior codings.
+///
+/// Groups prior codings by (description, gl_code), computes relative
+/// frequencies, and returns splits when a single description maps to
+/// multiple GL codes with a consistent ratio.
+pub fn detect_historical_splits(codings: &[PriorLineCoding]) -> Vec<HistoricalSplit> {
+    use std::collections::HashMap;
+
+    // Group amounts by GL code across all codings
+    let mut gl_totals: HashMap<String, (f64, Option<String>, Option<String>)> = HashMap::new();
+    for c in codings {
+        let entry = gl_totals
+            .entry(c.gl_code.clone())
+            .or_insert((0.0, c.department.clone(), c.cost_center.clone()));
+        entry.0 += c.amount;
+    }
+
+    if gl_totals.len() < 2 {
+        return Vec::new();
+    }
+
+    let total: f64 = gl_totals.values().map(|(amt, _, _)| *amt).sum();
+    if total <= 0.0 {
+        return Vec::new();
+    }
+
+    gl_totals
+        .into_iter()
+        .map(|(gl, (amt, dept, cc))| HistoricalSplit {
+            gl_code: gl,
+            department: dept,
+            cost_center: cc,
+            ratio: amt / total,
+        })
+        .collect()
+}
+
+/// Persist per-line categorization results into `invoice_line_categorizations`.
+///
+/// One row per `LineCategorization`. The `splits` column stores the
+/// `Vec<LineSplitSuggestion>` as JSONB. All writes are tenant-scoped.
+pub async fn persist_line_categorizations(
+    pool: &sqlx::PgPool,
+    tenant_id: &str,
+    categorization: &PerLineInvoiceCategorization,
+) -> anyhow::Result<()> {
+    for line in &categorization.lines {
+        let splits_json = serde_json::to_value(&line.splits).unwrap_or(serde_json::json!([]));
+        let source_str = match line.source {
+            SuggestionSource::VendorHistory => "vendor_history",
+            SuggestionSource::LineItemAnalysis => "line_item_analysis",
+            SuggestionSource::SimilarInvoices => "similar_invoices",
+            SuggestionSource::Default => "default",
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO invoice_line_categorizations (
+                tenant_id, invoice_id, line_item_id, line_index,
+                suggested_gl_code, suggested_department, suggested_cost_center,
+                confidence, rationale, source, splits
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(categorization.invoice_id)
+        .bind(&line.line_item_id)
+        .bind(line.line_index as i32)
+        .bind(&line.gl_code)
+        .bind(&line.department)
+        .bind(&line.cost_center)
+        .bind(line.confidence)
+        .bind(&line.rationale)
+        .bind(source_str)
+        .bind(&splits_json)
+        .execute(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to persist line categorization: {}", e))?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

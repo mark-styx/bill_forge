@@ -1962,6 +1962,60 @@ async fn suggest_categories(
             .map_err(|e| billforge_core::Error::Database(format!("Categorization failed: {}", e)))?
     };
 
+    // Persist per-line categorization suggestions alongside the invoice-level
+    // result. Best-effort: failures are logged but do not block the response.
+    let engine = billforge_invoice_processing::CategorizationEngine::new((*pool).clone());
+    let invoice_uuid: Uuid = match _id.parse() {
+        Ok(u) => u,
+        Err(_) => {
+            tracing::warn!(invoice_id = %_id, "Cannot parse invoice ID for per-line persistence");
+            return Ok(Json(categorization));
+        }
+    };
+
+    let vendor_history = if let Some(vid) = req.vendor_id {
+        engine.vendor_history_lookup(&tenant_id_str, vid).await.ok()
+    } else {
+        None
+    };
+
+    match engine
+        .suggest_per_line_categorizations(
+            &tenant_id_str,
+            invoice_uuid,
+            req.vendor_id,
+            &req.line_items,
+            vendor_history.as_ref(),
+            &[],
+        )
+        .await
+    {
+        Ok(per_line) => {
+            if let Err(e) = billforge_invoice_processing::categorization::persist_line_categorizations(
+                &*pool,
+                &tenant_id_str,
+                &per_line,
+            )
+            .await
+            {
+                tracing::warn!(
+                    tenant_id = %tenant_id_str,
+                    invoice_id = %invoice_uuid,
+                    error = %e,
+                    "Failed to persist per-line categorizations"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                tenant_id = %tenant_id_str,
+                invoice_id = %invoice_uuid,
+                error = %e,
+                "Per-line categorization suggestion failed"
+            );
+        }
+    }
+
     Ok(Json(categorization))
 }
 

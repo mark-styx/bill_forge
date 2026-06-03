@@ -12,7 +12,14 @@ pub mod feedback_loop;
 pub mod recurring_patterns;
 pub mod rules;
 
-pub use categorization::{CategorizationEngine, CategorySuggestion, InvoiceCategorization};
+pub use categorization::{
+    CategorizationEngine, CategorySuggestion, InvoiceCategorization, LineCategorization,
+    LineSplitSuggestion, PerLineInvoiceCategorization, PriorLineCoding, VendorHistory,
+    HistoricalSplit, KeywordResult,
+    categorize_line_by_keywords, collect_gl_signals, detect_historical_splits,
+    detect_line_splits, find_matching_prior, apply_line_correction,
+    persist_line_categorizations,
+};
 pub use categorization_ml::MLCategorizer;
 pub use contract_matching::{match_invoice_to_contract, ContractMatchInput, ContractMatchOutcome};
 pub use embedding_cache::{CacheStats, EmbeddingCache};

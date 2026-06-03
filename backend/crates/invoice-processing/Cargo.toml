@@ -23,3 +23,7 @@ sha2 = "0.10"
 
 # ML Categorization dependencies (Sprint 13)
 async-openai = { version = "0.20", default-features = false, features = ["native-tls"] }
+
+[[test]]
+name = "line_categorization_test"
+path = "tests/line_categorization_test.rs"
