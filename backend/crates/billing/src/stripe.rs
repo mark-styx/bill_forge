@@ -143,6 +143,13 @@ impl StripeClient {
             ("cancel_url".to_string(), params.cancel_url),
         ];
 
+        for (i, item) in params.additional_line_items.iter().enumerate() {
+            let idx = i + 1; // base plan is [0], add-ons start at [1]
+            form.push((format!("line_items[{}][price]", idx), item.price_id.clone()));
+            form.push((format!("line_items[{}][quantity]", idx), item.quantity.to_string()));
+        }
+        info!(additional_line_items = params.additional_line_items.len(), "Checkout session line items");
+
         for (k, v) in &params.metadata {
             form.push((format!("metadata[{}]", k), v.clone()));
         }
@@ -495,6 +502,13 @@ pub struct CreateCustomerParams {
     pub metadata: std::collections::HashMap<String, String>,
 }
 
+/// A single line item in a Stripe checkout session.
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckoutLineItem {
+    pub price_id: String,
+    pub quantity: u64,
+}
+
 /// Parameters for creating a checkout session
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateCheckoutSessionParams {
@@ -504,6 +518,8 @@ pub struct CreateCheckoutSessionParams {
     pub cancel_url: String,
     pub mode: String,
     pub metadata: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub additional_line_items: Vec<CheckoutLineItem>,
 }
 
 /// Parameters for creating a Stripe Billing Meter Event.
@@ -676,5 +692,92 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("missing webhook secret"));
+    }
+
+    /// Pure helper that builds the form body for a checkout session without
+    /// making any HTTP call. Returns `(key, value)` pairs for assertions.
+    fn build_checkout_form_body(params: &CreateCheckoutSessionParams) -> Vec<(String, String)> {
+        let mut form: Vec<(String, String)> = vec![
+            ("customer".to_string(), params.customer_id.clone()),
+            ("line_items[0][price]".to_string(), params.price_id.clone()),
+            ("line_items[0][quantity]".to_string(), "1".to_string()),
+            ("mode".to_string(), params.mode.clone()),
+            ("success_url".to_string(), params.success_url.clone()),
+            ("cancel_url".to_string(), params.cancel_url.clone()),
+        ];
+
+        for (i, item) in params.additional_line_items.iter().enumerate() {
+            let idx = i + 1;
+            form.push((format!("line_items[{}][price]", idx), item.price_id.clone()));
+            form.push((format!("line_items[{}][quantity]", idx), item.quantity.to_string()));
+        }
+
+        for (k, v) in &params.metadata {
+            form.push((format!("metadata[{}]", k), v.clone()));
+        }
+
+        form
+    }
+
+    #[test]
+    fn test_additional_line_items_produce_correct_form_body() {
+        use std::collections::HashMap;
+
+        let params = CreateCheckoutSessionParams {
+            customer_id: "cus_test123".to_string(),
+            price_id: "price_starter_monthly".to_string(),
+            mode: "subscription".to_string(),
+            success_url: "https://example.com/success".to_string(),
+            cancel_url: "https://example.com/cancel".to_string(),
+            metadata: HashMap::new(),
+            additional_line_items: vec![
+                CheckoutLineItem {
+                    price_id: "price_reporting_monthly".to_string(),
+                    quantity: 1,
+                },
+                CheckoutLineItem {
+                    price_id: "price_ai_assistant_monthly".to_string(),
+                    quantity: 1,
+                },
+            ],
+        };
+
+        let form = build_checkout_form_body(&params);
+
+        // Base plan at [0]
+        assert!(form.contains(&("line_items[0][price]".to_string(), "price_starter_monthly".to_string())));
+        assert!(form.contains(&("line_items[0][quantity]".to_string(), "1".to_string())));
+
+        // Add-on 1 at [1]
+        assert!(form.contains(&("line_items[1][price]".to_string(), "price_reporting_monthly".to_string())));
+        assert!(form.contains(&("line_items[1][quantity]".to_string(), "1".to_string())));
+
+        // Add-on 2 at [2]
+        assert!(form.contains(&("line_items[2][price]".to_string(), "price_ai_assistant_monthly".to_string())));
+        assert!(form.contains(&("line_items[2][quantity]".to_string(), "1".to_string())));
+
+        // Total: 6 base fields + 4 add-on fields = 10
+        assert_eq!(form.len(), 10);
+    }
+
+    #[test]
+    fn test_no_additional_line_items_produces_only_base() {
+        use std::collections::HashMap;
+
+        let params = CreateCheckoutSessionParams {
+            customer_id: "cus_test".to_string(),
+            price_id: "price_starter_monthly".to_string(),
+            mode: "subscription".to_string(),
+            success_url: "https://example.com/success".to_string(),
+            cancel_url: "https://example.com/cancel".to_string(),
+            metadata: HashMap::new(),
+            additional_line_items: vec![],
+        };
+
+        let form = build_checkout_form_body(&params);
+
+        // Only the 6 base fields, no add-on entries
+        assert_eq!(form.len(), 6);
+        assert!(form.iter().all(|(k, _)| !k.starts_with("line_items[1]")));
     }
 }

@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::addons::effective_features;
+use crate::addons::{effective_features, quote_subscription, ModuleAddOn};
 use crate::plans::{Plan, PlanId};
-use crate::stripe::{CreateCheckoutSessionParams, CreateCustomerParams, StripeClient};
+use crate::stripe::{CheckoutLineItem, CreateCheckoutSessionParams, CreateCustomerParams, StripeClient};
 use crate::subscription::{BillingCycle, Subscription, SubscriptionId, SubscriptionStatus};
 
 /// Outcome of a checkout flow
@@ -189,6 +189,24 @@ impl BillingService {
             .ok_or_else(|| Error::Validation(format!("No Stripe price ID for plan {}", plan_id)))?
             .to_string();
 
+        // Derive chargeable add-ons: reuse quote_subscription to skip
+        // modules already bundled in the base plan (prevents double-billing).
+        let quote = quote_subscription(plan_id, add_on_modules);
+        let mut additional_line_items: Vec<CheckoutLineItem> = Vec::new();
+        for m in &quote.addon_modules {
+            let addon = ModuleAddOn::for_module(*m);
+            let addon_price = addon
+                .stripe_price_id(billing_cycle)
+                .ok_or_else(|| {
+                    Error::Validation(format!("No Stripe price ID for add-on {}", m.as_str()))
+                })?
+                .to_string();
+            additional_line_items.push(CheckoutLineItem {
+                price_id: addon_price,
+                quantity: 1,
+            });
+        }
+
         let customer = stripe
             .create_customer(CreateCustomerParams {
                 email: email.to_string(),
@@ -216,6 +234,7 @@ impl BillingService {
                             .join(","),
                     ),
                 ]),
+                additional_line_items,
             })
             .await?;
 

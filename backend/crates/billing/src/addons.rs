@@ -5,6 +5,7 @@
 //! downstream integrations (API, UI, Stripe) will consume.
 
 use crate::plans::{Plan, PlanFeatures, PlanId};
+use crate::subscription::BillingCycle;
 use billforge_core::Module;
 
 /// A purchasable add-on module with its own pricing independent of base plans.
@@ -27,8 +28,8 @@ impl ModuleAddOn {
             description: "OCR-based invoice scanning and data extraction".to_string(),
             monthly_price_cents: 1900, // $19/mo
             annual_price_cents: 18200, // $182/yr
-            stripe_monthly_price_id: None,
-            stripe_annual_price_id: None,
+            stripe_monthly_price_id: Some("price_invoice_capture_monthly".to_string()),
+            stripe_annual_price_id: Some("price_invoice_capture_annual".to_string()),
         }
     }
 
@@ -39,8 +40,8 @@ impl ModuleAddOn {
             description: "Automated invoice coding, approval routing, and GL posting".to_string(),
             monthly_price_cents: 3900, // $39/mo
             annual_price_cents: 37400, // $374/yr
-            stripe_monthly_price_id: None,
-            stripe_annual_price_id: None,
+            stripe_monthly_price_id: Some("price_invoice_processing_monthly".to_string()),
+            stripe_annual_price_id: Some("price_invoice_processing_annual".to_string()),
         }
     }
 
@@ -51,8 +52,8 @@ impl ModuleAddOn {
             description: "Vendor portal, 1099 tracking, and compliance management".to_string(),
             monthly_price_cents: 2900, // $29/mo
             annual_price_cents: 27800, // $278/yr
-            stripe_monthly_price_id: None,
-            stripe_annual_price_id: None,
+            stripe_monthly_price_id: Some("price_vendor_management_monthly".to_string()),
+            stripe_annual_price_id: Some("price_vendor_management_annual".to_string()),
         }
     }
 
@@ -63,8 +64,8 @@ impl ModuleAddOn {
             description: "Dashboards, spend analytics, and custom report builder".to_string(),
             monthly_price_cents: 2500, // $25/mo
             annual_price_cents: 24000, // $240/yr
-            stripe_monthly_price_id: None,
-            stripe_annual_price_id: None,
+            stripe_monthly_price_id: Some("price_reporting_monthly".to_string()),
+            stripe_annual_price_id: Some("price_reporting_annual".to_string()),
         }
     }
 
@@ -75,8 +76,8 @@ impl ModuleAddOn {
             description: "Paid conversational AI assistant add-on powered by Winston".to_string(),
             monthly_price_cents: 29900, // $299/mo fixed monthly
             annual_price_cents: 358800, // $299/mo * 12 = $3,588/yr fixed
-            stripe_monthly_price_id: None,
-            stripe_annual_price_id: None,
+            stripe_monthly_price_id: Some("price_ai_assistant_monthly".to_string()),
+            stripe_annual_price_id: Some("price_ai_assistant_annual".to_string()),
         }
     }
 
@@ -99,6 +100,14 @@ impl ModuleAddOn {
             Module::VendorManagement => Self::vendor_management(),
             Module::Reporting => Self::reporting(),
             Module::AiAssistant => Self::ai_assistant(),
+        }
+    }
+
+    /// Resolve the Stripe price ID for this add-on given a billing cycle.
+    pub fn stripe_price_id(&self, cycle: BillingCycle) -> Option<&str> {
+        match cycle {
+            BillingCycle::Monthly => self.stripe_monthly_price_id.as_deref(),
+            BillingCycle::Annual => self.stripe_annual_price_id.as_deref(),
         }
     }
 }
@@ -302,5 +311,38 @@ mod tests {
                 plan.id,
             );
         }
+    }
+
+    // ========================================================================
+    // Stripe price ID coverage
+    // ========================================================================
+
+    #[test]
+    fn test_addon_catalog_has_stripe_price_ids() {
+        for addon in ModuleAddOn::catalog() {
+            assert!(
+                addon.stripe_monthly_price_id.is_some(),
+                "Add-on {:?} missing monthly Stripe price ID",
+                addon.module,
+            );
+            assert!(
+                addon.stripe_annual_price_id.is_some(),
+                "Add-on {:?} missing annual Stripe price ID",
+                addon.module,
+            );
+        }
+    }
+
+    #[test]
+    fn test_stripe_price_id_resolves_by_cycle() {
+        let addon = ModuleAddOn::reporting();
+        assert_eq!(
+            addon.stripe_price_id(BillingCycle::Monthly),
+            Some("price_reporting_monthly")
+        );
+        assert_eq!(
+            addon.stripe_price_id(BillingCycle::Annual),
+            Some("price_reporting_annual")
+        );
     }
 }
