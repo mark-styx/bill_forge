@@ -535,11 +535,15 @@ async fn push_blocked_by_quiet_hours() {
         .with_push_token_store(Arc::new(store));
 
     // Set quiet hours spanning the current UTC time so the notification is blocked.
-    // We use a wide window that covers the current hour regardless of when the test runs.
+    // Use a 3-hour window (start-1 → end+1) wide enough to absorb any clock motion
+    // between the test sampling Utc::now() and the router doing the same, and to
+    // cover the entire current hour (end is exclusive in is_quiet_hours_at).
     let now = chrono::Utc::now();
-    let start_hour: u32 = now.format("%H").to_string().parse().unwrap();
+    let current_hour: u32 = now.format("%H").to_string().parse().unwrap();
+    let start_hour = (current_hour + 23) % 24; // 1 hour before now
+    let end_hour   = (current_hour + 2) % 24;  // 2 hours after now
     let start = format!("{start_hour:02}:00");
-    let end = format!("{start_hour:02}:59");
+    let end   = format!("{end_hour:02}:00");
 
     let prefs = NotificationPreference {
         user_id: user_id.clone(),
