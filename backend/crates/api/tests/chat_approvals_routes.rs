@@ -100,10 +100,17 @@ async fn test_slack_events_url_verification_challenge() {
 // Issue 1: Teams actions must be gated behind TEAMS_ACTIONS_ENABLED
 // ---------------------------------------------------------------------------
 
+/// Shared lock to prevent races between tests that read/write the
+/// `TEAMS_ACTIONS_ENABLED` process-global env var.
+static TEAMS_ACTIONS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// When TEAMS_ACTIONS_ENABLED is not set, the route should reject with an
 /// error rather than accepting unauthenticated action callbacks.
 #[tokio::test]
 async fn test_teams_actions_disabled_by_default() {
+    let _guard = TEAMS_ACTIONS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // Ensure the env var is NOT set
     std::env::remove_var("TEAMS_ACTIONS_ENABLED");
 
@@ -122,6 +129,9 @@ async fn test_teams_actions_disabled_by_default() {
 /// When TEAMS_ACTIONS_ENABLED=true, the route should be active.
 #[tokio::test]
 async fn test_teams_actions_enabled_when_flag_set() {
+    let _guard = TEAMS_ACTIONS_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // Temporarily set the flag
     std::env::set_var("TEAMS_ACTIONS_ENABLED", "true");
     let enabled = std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true");
