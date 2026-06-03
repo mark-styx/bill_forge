@@ -8,7 +8,7 @@
 use crate::error::ApiResult;
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State},
+    extract::{Form, Query, State},
     response::{Html, IntoResponse, Redirect},
     routing::get,
     Router,
@@ -20,12 +20,13 @@ use billforge_core::{
     UserId,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/approve", get(handle_approve))
-        .route("/reject", get(handle_reject))
-        .route("/hold", get(handle_hold))
+        .route("/approve", get(handle_approve).post(handle_approve_confirm))
+        .route("/reject", get(handle_reject).post(handle_reject_confirm))
+        .route("/hold", get(handle_hold).post(handle_hold_confirm))
         .route("/view", get(handle_view))
 }
 
@@ -35,37 +36,74 @@ pub struct ActionQuery {
     t: String,
 }
 
-/// Handle approve action from email
+/// Form body for POST confirm actions
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct ActionForm {
+    /// The email action token
+    t: String,
+}
+
+/// Handle approve action from email - renders confirmation interstitial (GET)
 #[utoipa::path(get, path = "/api/v1/actions/approve", tag = "Email Actions",
     params(("t" = String, Query, description = "Action token")),
-    responses((status = 200, description = "Invoice approved"), (status = 400, description = "Invalid token")))]
+    responses((status = 200, description = "Renders confirmation page"), (status = 400, description = "Invalid token")))]
 async fn handle_approve(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    handle_email_action(&state, &query.t, EmailAction::ApproveInvoice).await
+    Ok(Html(render_confirmation_page(&query.t, EmailAction::ApproveInvoice)))
 }
 
-/// Handle reject action from email
+/// Handle reject action from email - renders confirmation interstitial (GET)
 #[utoipa::path(get, path = "/api/v1/actions/reject", tag = "Email Actions",
     params(("t" = String, Query, description = "Action token")),
-    responses((status = 200, description = "Invoice rejected"), (status = 400, description = "Invalid token")))]
+    responses((status = 200, description = "Renders confirmation page"), (status = 400, description = "Invalid token")))]
 async fn handle_reject(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    handle_email_action(&state, &query.t, EmailAction::RejectInvoice).await
+    Ok(Html(render_confirmation_page(&query.t, EmailAction::RejectInvoice)))
 }
 
-/// Handle hold action from email
+/// Handle hold action from email - renders confirmation interstitial (GET)
 #[utoipa::path(get, path = "/api/v1/actions/hold", tag = "Email Actions",
     params(("t" = String, Query, description = "Action token")),
-    responses((status = 200, description = "Invoice placed on hold"), (status = 400, description = "Invalid token")))]
+    responses((status = 200, description = "Renders confirmation page"), (status = 400, description = "Invalid token")))]
 async fn handle_hold(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    handle_email_action(&state, &query.t, EmailAction::HoldInvoice).await
+    Ok(Html(render_confirmation_page(&query.t, EmailAction::HoldInvoice)))
+}
+
+/// POST confirm: approve invoice (performs the actual mutation)
+#[utoipa::path(post, path = "/api/v1/actions/approve", tag = "Email Actions",
+    responses((status = 200, description = "Invoice approved"), (status = 400, description = "Invalid token")))]
+async fn handle_approve_confirm(
+    State(state): State<AppState>,
+    Form(form): Form<ActionForm>,
+) -> ApiResult<impl IntoResponse> {
+    handle_email_action(&state, &form.t, EmailAction::ApproveInvoice).await
+}
+
+/// POST confirm: reject invoice (performs the actual mutation)
+#[utoipa::path(post, path = "/api/v1/actions/reject", tag = "Email Actions",
+    responses((status = 200, description = "Invoice rejected"), (status = 400, description = "Invalid token")))]
+async fn handle_reject_confirm(
+    State(state): State<AppState>,
+    Form(form): Form<ActionForm>,
+) -> ApiResult<impl IntoResponse> {
+    handle_email_action(&state, &form.t, EmailAction::RejectInvoice).await
+}
+
+/// POST confirm: hold invoice (performs the actual mutation)
+#[utoipa::path(post, path = "/api/v1/actions/hold", tag = "Email Actions",
+    responses((status = 200, description = "Invoice placed on hold"), (status = 400, description = "Invalid token")))]
+async fn handle_hold_confirm(
+    State(state): State<AppState>,
+    Form(form): Form<ActionForm>,
+) -> ApiResult<impl IntoResponse> {
+    handle_email_action(&state, &form.t, EmailAction::HoldInvoice).await
 }
 
 /// Handle view action from email (redirects to invoice detail page)
@@ -494,4 +532,208 @@ fn generate_success_page(action: &EmailAction, invoice_id: uuid::Uuid) -> String
         app_url = app_url,
         invoice_id = invoice_id
     )
+}
+
+/// HTML-escape the minimal set of characters that could break an HTML attribute value.
+fn html_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Render a confirmation interstitial page with a POST form.
+/// The GET handler returns this page; the user must click the confirm button
+/// to submit a POST that performs the actual mutation.
+pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> String {
+    let action_path = match action {
+        EmailAction::ApproveInvoice => "approve",
+        EmailAction::RejectInvoice => "reject",
+        EmailAction::HoldInvoice => "hold",
+        _ => "approve",
+    };
+
+    let action_label = match action {
+        EmailAction::ApproveInvoice => "Approve",
+        EmailAction::RejectInvoice => "Reject",
+        EmailAction::HoldInvoice => "Place on Hold",
+        _ => "Confirm",
+    };
+
+    let action_color = match action {
+        EmailAction::ApproveInvoice => "#10b981",
+        EmailAction::RejectInvoice => "#ef4444",
+        EmailAction::HoldInvoice => "#f59e0b",
+        _ => "#6b7280",
+    };
+
+    let escaped_token = html_escape_attr(token);
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm {action_label}</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 40px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }}
+        .icon {{
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background-color: {action_color};
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            color: white;
+            font-size: 30px;
+        }}
+        h1 {{
+            color: #1f2937;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }}
+        p {{
+            color: #6b7280;
+            margin-bottom: 30px;
+        }}
+        .button {{
+            display: inline-block;
+            background-color: {action_color};
+            color: #ffffff;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 16px;
+            cursor: pointer;
+        }}
+        .footer {{
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #9ca3af;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">?</div>
+        <h1>Confirm {action_label}</h1>
+        <p>Click confirm to {action_label_lower} this invoice.</p>
+        <form method="post" action="/api/v1/actions/{action_path}">
+            <input type="hidden" name="t" value="{escaped_token}" />
+            <button type="submit" class="button">Confirm {action_label}</button>
+        </form>
+        <div class="footer">
+            <p>This action was requested via email. If you did not expect this, close this page.</p>
+        </div>
+    </div>
+</body>
+</html>"#,
+        action_label = action_label,
+        action_label_lower = action_label.to_lowercase(),
+        action_path = action_path,
+        action_color = action_color,
+        escaped_token = escaped_token,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_confirmation_page(html: &str, expected_action_path: &str, token: &str) {
+        let lower = html.to_lowercase();
+
+        // Must contain a POST form
+        assert!(
+            lower.contains("method=\"post\""),
+            "confirmation page must contain method=\"post\""
+        );
+
+        // Form must POST to the correct action path
+        assert!(
+            html.contains(&format!("action=\"/api/v1/actions/{}\"", expected_action_path)),
+            "confirmation page must contain action=\"/api/v1/actions/{}\"",
+            expected_action_path
+        );
+
+        // Must contain the token in a hidden input
+        assert!(
+            html.contains("name=\"t\""),
+            "confirmation page must contain hidden input with name=\"t\""
+        );
+        assert!(
+            html.contains(&format!("value=\"{}\"", token)),
+            "confirmation page must contain hidden input with value=\"{}\"",
+            token
+        );
+
+        // Must NOT contain auto-submitting JavaScript
+        assert!(
+            !lower.contains("onload"),
+            "confirmation page must not contain onload"
+        );
+        assert!(
+            !lower.contains("document.forms"),
+            "confirmation page must not contain document.forms"
+        );
+        assert!(
+            !lower.contains("submit()"),
+            "confirmation page must not contain submit()"
+        );
+    }
+
+    #[test]
+    fn test_render_confirmation_page_approve() {
+        let html = render_confirmation_page("sample-token", EmailAction::ApproveInvoice);
+        assert_confirmation_page(&html, "approve", "sample-token");
+    }
+
+    #[test]
+    fn test_render_confirmation_page_reject() {
+        let html = render_confirmation_page("sample-token", EmailAction::RejectInvoice);
+        assert_confirmation_page(&html, "reject", "sample-token");
+    }
+
+    #[test]
+    fn test_render_confirmation_page_hold() {
+        let html = render_confirmation_page("sample-token", EmailAction::HoldInvoice);
+        assert_confirmation_page(&html, "hold", "sample-token");
+    }
+
+    #[test]
+    fn test_render_confirmation_page_html_escapes_token() {
+        let html = render_confirmation_page("tok&en\"<>val", EmailAction::ApproveInvoice);
+        // The token should be escaped in the hidden input value
+        assert!(
+            html.contains("value=\"tok&amp;en&quot;&lt;&gt;val\""),
+            "token must be HTML-escaped in hidden input: {}",
+            html
+        );
+        // Raw unescaped characters must NOT appear in the value attribute
+        assert!(
+            !html.contains("value=\"tok&en"),
+            "unescaped & must not appear in value attribute"
+        );
+    }
 }

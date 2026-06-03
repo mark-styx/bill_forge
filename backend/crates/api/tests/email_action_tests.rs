@@ -53,7 +53,9 @@ fn test_email_action_enum_variants() {
 
 #[test]
 fn test_generate_action_url() {
-    // Test URL construction logic
+    // Test URL construction logic.
+    // GET URL now serves an interstitial confirmation page (no mutation);
+    // the user must submit the POST form rendered on that page to perform the action.
     let base_url = "http://localhost:3000";
     let token = "test_token_123";
     let action = "approve";
