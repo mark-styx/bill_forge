@@ -3,6 +3,10 @@
 //! Provides endpoints for AP to define cutoff dates per period, run close to
 //! generate accrual journal entries from unapproved invoices, attempt QBO posting,
 //! and lock the period so no late entries shift prior-period numbers.
+//!
+//! NOTE: Real QBO JournalEntry posting is not yet implemented. When a sync_enabled
+//! QBO connection exists the close flow returns `ErpPostResult::Unsupported` instead
+//! of fabricating a synthetic journal id. Follow-up tracked in issue #339.
 
 use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
@@ -98,22 +102,23 @@ pub async fn find_locked_period_for_date(
     Ok(row.map(|(id,)| id))
 }
 
-/// Attempt to post accrual entries to QBO. Returns (journal_id, error_message).
-/// If no QBO connection exists, returns a synthetic id and marks as pending.
+/// Attempt to post accrual entries to QBO. Returns an `ErpPostResult` indicating
+/// the outcome. Real QBO JournalEntry posting is not yet implemented (issue #339);
+/// when a sync_enabled connection exists we return `Unsupported` instead of
+/// fabricating a success.
 async fn post_accrual_entries_to_erp(
     state: &AppState,
     tenant_id: &TenantId,
     _entries: &[AccrualEntryStub],
-) -> (Option<String>, Option<String>) {
+) -> ErpPostResult {
     // Try to get an authenticated QBO client. If it fails (no connection),
-    // return a synthetic journal id and leave entries as pending.
+    // return NoConnection so entries stay pending.
     let pool = match state.db.tenant(tenant_id).await {
         Ok(p) => p,
         Err(_) => {
-            return (
-                None,
-                Some("Could not connect to tenant database".to_string()),
-            )
+            return ErpPostResult::Failed {
+                error: "Could not connect to tenant database".to_string(),
+            }
         }
     };
 
@@ -129,16 +134,16 @@ async fn post_accrual_entries_to_erp(
 
     match has_connection {
         Some(_) => {
-            // QBO connection exists. In a full implementation we would build a
-            // QBO JournalEntry object and call the QBO API. For this MVP slice
-            // we log a synthetic success since QBO journal entry posting requires
-            // account mapping configuration that may not be set up yet.
-            tracing::info!(
+            // QBO connection exists but JournalEntry posting is not implemented.
+            // Do NOT fabricate a synthetic journal id.
+            tracing::warn!(
                 tenant_id = %tenant_id,
-                "QBO connection found but journal entry posting is stubbed for MVP"
+                "QBO connection found but journal entry posting is not implemented; \
+                 returning Unsupported (issue #339)"
             );
-            let synthetic_id = format!("QB-JE-{}", Uuid::new_v4());
-            (Some(synthetic_id), None)
+            ErpPostResult::Unsupported {
+                reason: "QBO journal entry posting not implemented".to_string(),
+            }
         }
         None => {
             // No QBO connection - entries stay pending
@@ -146,9 +151,21 @@ async fn post_accrual_entries_to_erp(
                 tenant_id = %tenant_id,
                 "No QBO connection found; accrual entries remain pending"
             );
-            (None, None)
+            ErpPostResult::NoConnection
         }
     }
+}
+
+/// Result of attempting to post accrual entries to the ERP.
+enum ErpPostResult {
+    /// Successfully posted; contains the real journal id from the ERP.
+    Posted { journal_id: String },
+    /// No ERP connection configured; entries stay pending.
+    NoConnection,
+    /// ERP posting is not yet supported for this connection type.
+    Unsupported { reason: String },
+    /// ERP posting attempted but failed.
+    Failed { error: String },
 }
 
 struct AccrualEntryStub {
@@ -469,43 +486,75 @@ async fn run_close(
     }
 
     // 4. Attempt ERP posting
-    let (erp_journal_id, erp_error) =
+    let erp_result =
         post_accrual_entries_to_erp(&state, &tenant.tenant_id, &entry_stubs).await;
 
-    let (erp_post_status, period_status) = match (&erp_journal_id, &erp_error) {
-        (Some(_journal_id), None) => ("posted", "locked"),
-        (None, None) => ("pending", "locked"), // No ERP connection, but still lock
-        (None, Some(_err)) => ("failed", "cutoff_passed"), // ERP error, don't lock
-        (Some(_), Some(_)) => ("failed", "cutoff_passed"),
-    };
+    // Derive (erp_post_status, period_status, erp_post_error) from the result.
+    let (erp_post_status, period_status, erp_post_error): (String, &str, Option<String>) =
+        match &erp_result {
+            ErpPostResult::Posted { journal_id } => {
+                ("posted".to_string(), "locked", None)
+            }
+            ErpPostResult::NoConnection => {
+                // No ERP connection configured - still lock the period.
+                ("pending".to_string(), "locked", None)
+            }
+            ErpPostResult::Unsupported { reason } => {
+                // ERP posting not implemented - do NOT lock the period.
+                ("unsupported".to_string(), "cutoff_passed", Some(reason.clone()))
+            }
+            ErpPostResult::Failed { error } => {
+                ("failed".to_string(), "cutoff_passed", Some(error.clone()))
+            }
+        };
 
     // 5. Update accrual entries with ERP result
-    if let Some(ref journal_id) = erp_journal_id {
-        sqlx::query(
-            "UPDATE close_accrual_entries \
-             SET erp_journal_id = $1, erp_post_status = 'posted' \
-             WHERE close_period_id = $2 AND erp_post_status = 'pending'",
-        )
-        .bind(journal_id)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to update accrual entries: {}", e))
-        })?;
-    } else if let Some(ref err) = erp_error {
-        sqlx::query(
-            "UPDATE close_accrual_entries \
-             SET erp_post_status = 'failed', erp_post_error = $1 \
-             WHERE close_period_id = $2 AND erp_post_status = 'pending'",
-        )
-        .bind(err)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to update accrual entries: {}", e))
-        })?;
+    match &erp_result {
+        ErpPostResult::Posted { journal_id } => {
+            sqlx::query(
+                "UPDATE close_accrual_entries \
+                 SET erp_journal_id = $1, erp_post_status = 'posted' \
+                 WHERE close_period_id = $2 AND erp_post_status = 'pending'",
+            )
+            .bind(journal_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to update accrual entries: {}", e))
+            })?;
+        }
+        ErpPostResult::Unsupported { reason } => {
+            sqlx::query(
+                "UPDATE close_accrual_entries \
+                 SET erp_post_status = 'unsupported', erp_post_error = $1 \
+                 WHERE close_period_id = $2 AND erp_post_status = 'pending'",
+            )
+            .bind(reason)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to update accrual entries: {}", e))
+            })?;
+        }
+        ErpPostResult::Failed { error } => {
+            sqlx::query(
+                "UPDATE close_accrual_entries \
+                 SET erp_post_status = 'failed', erp_post_error = $1 \
+                 WHERE close_period_id = $2 AND erp_post_status = 'pending'",
+            )
+            .bind(error)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to update accrual entries: {}", e))
+            })?;
+        }
+        ErpPostResult::NoConnection => {
+            // Entries already inserted as 'pending'; nothing to update.
+        }
     }
 
     // 6. Update period status
@@ -545,8 +594,8 @@ async fn run_close(
     Ok(Json(RunCloseResponse {
         period_id: id,
         accrual_entries_created: entry_count,
-        erp_post_status: erp_post_status.to_string(),
-        erp_post_error: erp_error,
+        erp_post_status,
+        erp_post_error,
     }))
 }
 
@@ -598,5 +647,55 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["accrual_entries_created"], 5);
         assert_eq!(json["erp_post_status"], "posted");
+    }
+
+    #[test]
+    fn test_run_close_response_unsupported() {
+        let period_id = Uuid::new_v4();
+        let resp = RunCloseResponse {
+            period_id,
+            accrual_entries_created: 2,
+            erp_post_status: "unsupported".to_string(),
+            erp_post_error: Some("QBO journal entry posting not implemented".to_string()),
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["period_id"], period_id.to_string());
+        assert_eq!(val["accrual_entries_created"], 2);
+        assert_eq!(val["erp_post_status"], "unsupported");
+        assert_eq!(
+            val["erp_post_error"],
+            "QBO journal entry posting not implemented"
+        );
+    }
+
+    /// Verify the ErpPostResult::Unsupported variant produces the right field
+    /// values when mapped through the run_close match arm (unit-level, no DB).
+    #[test]
+    fn test_erp_post_result_unsupported_maps_correctly() {
+        let erp_result = ErpPostResult::Unsupported {
+            reason: "QBO journal entry posting not implemented".to_string(),
+        };
+
+        let (erp_post_status, period_status, erp_post_error) = match &erp_result {
+            ErpPostResult::Posted { journal_id: _ } => {
+                ("posted".to_string(), "locked", None)
+            }
+            ErpPostResult::NoConnection => {
+                ("pending".to_string(), "locked", None)
+            }
+            ErpPostResult::Unsupported { reason } => {
+                ("unsupported".to_string(), "cutoff_passed", Some(reason.clone()))
+            }
+            ErpPostResult::Failed { error } => {
+                ("failed".to_string(), "cutoff_passed", Some(error.clone()))
+            }
+        };
+
+        assert_eq!(erp_post_status, "unsupported");
+        assert_eq!(period_status, "cutoff_passed");
+        assert_eq!(
+            erp_post_error,
+            Some("QBO journal entry posting not implemented".to_string())
+        );
     }
 }

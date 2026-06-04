@@ -73,6 +73,25 @@ mod tests {
     }
 
     #[test]
+    fn test_run_close_response_unsupported() {
+        let period_id = uuid::Uuid::new_v4();
+        let resp = billforge_api::routes::close_periods::RunCloseResponse {
+            period_id,
+            accrual_entries_created: 2,
+            erp_post_status: "unsupported".to_string(),
+            erp_post_error: Some("QBO journal entry posting not implemented".to_string()),
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["erp_post_status"], "unsupported");
+        assert_eq!(
+            val["erp_post_error"],
+            "QBO journal entry posting not implemented"
+        );
+        // The period should NOT be reported as locked when unsupported
+        assert_ne!(val["erp_post_status"], "posted");
+    }
+
+    #[test]
     fn test_run_close_response_with_error() {
         let resp = billforge_api::routes::close_periods::RunCloseResponse {
             period_id: uuid::Uuid::new_v4(),

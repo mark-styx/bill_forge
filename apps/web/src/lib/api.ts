@@ -3030,7 +3030,7 @@ export interface ClosePeriod {
 export interface RunCloseResponse {
   period_id: string;
   accrual_entries_created: number;
-  erp_post_status: string;
+  erp_post_status: 'pending' | 'posted' | 'failed' | 'unsupported';
   erp_post_error: string | null;
 }
 

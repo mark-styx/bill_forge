@@ -151,11 +151,10 @@ function ConfirmCloseDialog({
         <h3 className="text-lg font-semibold text-foreground mb-2">Run Month-End Close</h3>
         <p className="text-sm text-muted-foreground mb-4">
           This will generate accrual entries for unapproved invoices dated on or before{' '}
-          <strong className="text-foreground">{period.period_end}</strong>, attempt to post them to your ERP, and lock
-          the period.
+          <strong className="text-foreground">{period.period_end}</strong> and attempt to post them to your ERP.
         </p>
-        <p className="text-sm text-muted-foreground mb-4">
-          Once locked, no further invoice changes can be made for this period.
+        <p className="text-sm text-amber-700 dark:text-amber-400 mb-4">
+          Note: QBO journal entry posting is not yet available, so the period will remain unlocked until posting is supported.
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -261,22 +260,39 @@ export default function CloseCalendarPage() {
           className={`rounded-lg border p-4 flex items-start gap-3 ${
             closeResult.erp_post_status === 'posted' || closeResult.erp_post_status === 'pending'
               ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800'
-              : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'
+              : closeResult.erp_post_status === 'unsupported'
+                ? 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800'
+                : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'
           }`}
         >
           {closeResult.erp_post_status === 'posted' || closeResult.erp_post_status === 'pending' ? (
             <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+          ) : closeResult.erp_post_status === 'unsupported' ? (
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
           ) : (
             <XCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
           )}
           <div>
-            <p className="text-sm font-medium text-foreground">
-              Close completed: {closeResult.accrual_entries_created} accrual entries created.
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              ERP post status: {closeResult.erp_post_status}
-              {closeResult.erp_post_error && ` - ${closeResult.erp_post_error}`}
-            </p>
+            {closeResult.erp_post_status === 'unsupported' ? (
+              <>
+                <p className="text-sm font-medium text-foreground">
+                  Accruals generated ({closeResult.accrual_entries_created} entries), but ERP posting is unavailable.
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The period was not locked. {closeResult.erp_post_error ?? ''}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-foreground">
+                  Close completed: {closeResult.accrual_entries_created} accrual entries created.
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  ERP post status: {closeResult.erp_post_status}
+                  {closeResult.erp_post_error && ` - ${closeResult.erp_post_error}`}
+                </p>
+              </>
+            )}
           </div>
           <button
             onClick={() => setCloseResult(null)}
