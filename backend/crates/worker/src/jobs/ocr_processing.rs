@@ -18,10 +18,10 @@ use billforge_db::{
     repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl},
     LocalStorageService, TenantSettingsFromDb,
 };
-use billforge_invoice_capture::ocr::ocr_comparison::OcrWithFallback;
+use billforge_invoice_capture::ocr::ocr_comparison::{OcrComparison, OcrWithFallback};
 use billforge_invoice_capture::{
     calibrated_confidence, ocr, ocr_routing_decision, resolve_ocr_provider_name,
-    OcrCalibrationStore, OcrRoutingDecision, PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
+    OcrCalibrationStore, OcrProvider, OcrRoutingDecision, PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
@@ -30,6 +30,101 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::WorkerConfig;
+
+#[derive(Debug, Clone)]
+pub struct ComparisonOutcome {
+    pub extraction: OcrExtractionResult,
+    pub selected_provider: String,
+}
+
+/// Given an `OcrComparisonResult`, apply the worker's confidence-threshold
+/// selection logic and return the chosen extraction together with the provider
+/// name that produced it.
+///
+/// This is extracted from `process_ocr` so that the threshold logic can be
+/// unit-tested without database infrastructure.
+pub fn select_from_comparison(
+    cmp_result: &billforge_invoice_capture::OcrComparisonResult,
+    primary_provider: &str,
+    fallback_provider: &str,
+    min_confidence: f32,
+) -> Result<ComparisonOutcome, String> {
+    let best_key = &cmp_result.best_provider;
+    let pr = cmp_result.providers.get(best_key).ok_or_else(|| {
+        format!("Comparison best_provider '{}' not found in results", best_key)
+    })?;
+
+    if !pr.success {
+        // Best provider failed; try any other successful one.
+        let any_ok = cmp_result.providers.values().find(|r| r.success);
+        return match any_ok {
+            Some(ok_pr) => match &ok_pr.result {
+                Some(extraction) => Ok(ComparisonOutcome {
+                    extraction: extraction.clone(),
+                    selected_provider: ok_pr.provider.clone(),
+                }),
+                None => Err("No successful OCR result in comparison".to_string()),
+            },
+            None => Err("All OCR providers failed in comparison".to_string()),
+        };
+    }
+
+    let extraction = pr.result.as_ref().ok_or_else(|| {
+        "Comparison best provider returned no result".to_string()
+    })?;
+
+    let primary_conf = cmp_result
+        .providers
+        .get(primary_provider)
+        .map(|r| r.confidence_score)
+        .unwrap_or(0.0);
+    let fallback_conf = cmp_result
+        .providers
+        .get(fallback_provider)
+        .map(|r| r.confidence_score)
+        .unwrap_or(0.0);
+
+    // Confidence-threshold swap: if the primary provider won but its
+    // confidence is below the configured threshold and the fallback
+    // scored higher, use the fallback instead.
+    if best_key == primary_provider
+        && primary_conf < min_confidence
+        && fallback_conf > primary_conf
+    {
+        if let Some(fallback_pr) = cmp_result.providers.get(fallback_provider) {
+            if let Some(ref fb_extraction) = fallback_pr.result {
+                tracing::info!(
+                    primary_provider = %primary_provider,
+                    fallback_provider = %fallback_provider,
+                    primary_confidence = primary_conf,
+                    fallback_confidence = fallback_conf,
+                    conflict_count = cmp_result.comparison_metrics.fields_in_conflict.len(),
+                    agreement_pct = cmp_result.comparison_metrics.agreement_percentage,
+                    min_confidence = min_confidence,
+                    "OCR comparison: primary below threshold, using fallback"
+                );
+                return Ok(ComparisonOutcome {
+                    extraction: fb_extraction.clone(),
+                    selected_provider: fallback_provider.to_string(),
+                });
+            }
+        }
+    }
+
+    tracing::info!(
+        selected_provider = %best_key,
+        primary_confidence = primary_conf,
+        fallback_confidence = fallback_conf,
+        conflict_count = cmp_result.comparison_metrics.fields_in_conflict.len(),
+        agreement_pct = cmp_result.comparison_metrics.agreement_percentage,
+        "OCR comparison: selected provider"
+    );
+
+    Ok(ComparisonOutcome {
+        extraction: extraction.clone(),
+        selected_provider: best_key.clone(),
+    })
+}
 
 #[derive(Debug, Deserialize)]
 struct OcrJobPayload {
@@ -69,7 +164,7 @@ pub async fn process_ocr(
     let pool = config.pg_manager.tenant(&tenant_id).await?;
     let repo = InvoiceRepositoryImpl::new(pool.clone());
     let tenant_settings = load_tenant_settings(config, &tenant_id).await?;
-    let effective_ocr_provider = resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
+    let mut effective_ocr_provider = resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
     let privacy_mode = if tenant_settings.features.local_ocr_required {
         "local_only"
     } else {
@@ -123,7 +218,56 @@ pub async fn process_ocr(
         ocr_provider
             .extract(&doc_bytes, &payload.content_type)
             .await
+    } else if config.ocr_comparison_enabled {
+        // Branch A: comparison mode — run both providers and pick the
+        // confidence-weighted winner.
+        if let Some(ref fallback_name) = config.ocr_fallback_provider {
+            let resolved_fallback = resolve_ocr_provider_name(fallback_name, &tenant_settings);
+            if resolved_fallback != effective_ocr_provider {
+                let primary_type = OcrProvider::from_str(&effective_ocr_provider)
+                    .unwrap_or(OcrProvider::Tesseract);
+                let fallback_type = OcrProvider::from_str(&resolved_fallback)
+                    .unwrap_or(OcrProvider::Tesseract);
+                let comparison = OcrComparison::new(vec![
+                    (primary_type, ocr::create_provider(&effective_ocr_provider)),
+                    (fallback_type, ocr::create_provider(&resolved_fallback)),
+                ]);
+                let primary_key = primary_type.as_str().to_string();
+                let fallback_key = fallback_type.as_str().to_string();
+                match comparison
+                    .compare(&doc_bytes, &payload.content_type)
+                    .await
+                {
+                    Ok(cmp_result) => {
+                        match select_from_comparison(
+                            &cmp_result,
+                            &primary_key,
+                            &fallback_key,
+                            config.ocr_min_confidence,
+                        ) {
+                            Ok(outcome) => {
+                                effective_ocr_provider = outcome.selected_provider.clone();
+                                Ok(outcome.extraction)
+                            }
+                            Err(msg) => Err(billforge_core::Error::Ocr(msg)),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                let ocr_provider = ocr::create_provider(&effective_ocr_provider);
+                ocr_provider
+                    .extract(&doc_bytes, &payload.content_type)
+                    .await
+            }
+        } else {
+            let ocr_provider = ocr::create_provider(&effective_ocr_provider);
+            ocr_provider
+                .extract(&doc_bytes, &payload.content_type)
+                .await
+        }
     } else if let Some(ref fallback_name) = config.ocr_fallback_provider {
+        // Branch B: existing OcrWithFallback path — tries fallback only on error.
         if fallback_name != &effective_ocr_provider {
             let primary = ocr::create_provider(&effective_ocr_provider);
             let fallback = ocr::create_provider(fallback_name);
@@ -138,6 +282,7 @@ pub async fn process_ocr(
                 .await
         }
     } else {
+        // Branch C: single provider, no fallback.
         let ocr_provider = ocr::create_provider(&effective_ocr_provider);
         ocr_provider
             .extract(&doc_bytes, &payload.content_type)
