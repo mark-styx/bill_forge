@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { workflowsApi } from '@/lib/api';
+import { workflowsApi, dashboardApi } from '@/lib/api';
 import {
   ClipboardCheck,
   Clock,
@@ -26,11 +26,21 @@ export default function ProcessingPage() {
     queryFn: () => workflowsApi.listQueues(),
   });
 
+  const { data: metrics } = useQuery({
+    queryKey: ['dashboard-metrics'],
+    queryFn: () => dashboardApi.getMetrics(),
+  });
+
+  const { data: kpis } = useQuery({
+    queryKey: ['dashboard-kpis'],
+    queryFn: () => dashboardApi.getKpis(),
+  });
+
   const stats = [
     { name: 'Pending Approval', count: approvals?.length ?? 0, icon: Clock, color: 'text-warning', bg: 'bg-warning/10' },
-    { name: 'Approved Today', count: 12, icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
-    { name: 'Rejected Today', count: 2, icon: XCircle, color: 'text-error', bg: 'bg-error/10' },
-    { name: 'In Queues', count: 25, icon: Layers, color: 'text-primary', bg: 'bg-primary/10' },
+    { name: 'Approved Today', count: metrics?.approvals?.approved_today ?? 0, icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
+    { name: 'Rejected Today', count: metrics?.approvals?.rejected_today ?? 0, icon: XCircle, color: 'text-error', bg: 'bg-error/10' },
+    { name: 'In Queues', count: kpis?.queue_count ?? 0, icon: Layers, color: 'text-primary', bg: 'bg-primary/10' },
   ];
 
   return (
