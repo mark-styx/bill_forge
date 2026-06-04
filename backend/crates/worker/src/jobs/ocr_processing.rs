@@ -21,7 +21,8 @@ use billforge_db::{
 use billforge_invoice_capture::ocr::ocr_comparison::{OcrComparison, OcrWithFallback};
 use billforge_invoice_capture::{
     calibrated_confidence, ocr, ocr_routing_decision, resolve_ocr_provider_name,
-    OcrCalibrationStore, OcrProvider, OcrRoutingDecision, PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
+    OcrCalibrationStore, OcrProvider, OcrRoutingDecision,
+    PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
 use serde::Deserialize;
@@ -338,18 +339,58 @@ pub async fn process_ocr(
             {
                 warn!(error = %e, "Failed to record extraction for calibration");
             }
+
+            // Record per-bucket extraction outcomes for bucket-based calibration.
+            let raw_fields: [(&str, f32); 4] = [
+                ("invoice_number", result.invoice_number.confidence),
+                ("invoice_date", result.invoice_date.confidence),
+                ("vendor_name", result.vendor_name.confidence),
+                ("total_amount", result.total_amount.confidence),
+            ];
+            for (field, conf) in &raw_fields {
+                let b = billforge_invoice_capture::bucket_for(*conf as f64);
+                if let Err(e) = calibration_store
+                    .record_field_outcome(&tenant_id, &effective_ocr_provider, field, b, false)
+                    .await
+                {
+                    warn!(
+                        error = %e,
+                        field = field,
+                        bucket = b,
+                        "Failed to record bucket extraction outcome"
+                    );
+                }
+                // Persist pending correction so the correction handler can
+                // debit the right bucket when a user edits this field.
+                if let Err(e) = calibration_store
+                    .record_pending_correction(
+                        &tenant_id,
+                        &effective_ocr_provider,
+                        invoice_id.as_uuid(),
+                        field,
+                        b,
+                    )
+                    .await
+                {
+                    warn!(
+                        error = %e,
+                        field = field,
+                        bucket = b,
+                        "Failed to record pending correction bucket"
+                    );
+                }
+            }
+
             let confidence = match calibration_store
                 .get_field_weights(&tenant_id, &effective_ocr_provider)
                 .await
             {
                 Ok(weights) => {
-                    let raw: &[(&str, f32)] = &[
-                        ("invoice_number", result.invoice_number.confidence),
-                        ("invoice_date", result.invoice_date.confidence),
-                        ("vendor_name", result.vendor_name.confidence),
-                        ("total_amount", result.total_amount.confidence),
-                    ];
-                    calibrated_confidence(raw, &weights)
+                    let bucket_result = calibration_store
+                        .get_field_buckets(&tenant_id, &effective_ocr_provider, OCR_CALIBRATED_FIELDS)
+                        .await;
+                    let buckets = bucket_result.unwrap_or_default();
+                    calibrated_confidence(&raw_fields, &weights, &buckets)
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to fetch calibration weights, using unweighted mean");

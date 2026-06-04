@@ -19,8 +19,9 @@ fn calibrated_confidence_equals_unweighted_mean_when_no_weights() {
         ("total_amount", 0.85),
     ];
     let weights = HashMap::new();
+    let buckets = HashMap::new();
 
-    let result = calibrated_confidence(raw, &weights);
+    let result = calibrated_confidence(raw, &weights, &buckets);
     let expected = (0.95 + 0.80 + 0.90 + 0.85) / 4.0;
 
     assert!(
@@ -52,7 +53,9 @@ fn calibrated_score_lower_when_vendor_name_weight_drops() {
     weights.insert("vendor_name".to_string(), 0.27); // heavily corrected
     weights.insert("total_amount".to_string(), 0.86);
 
-    let calibrated = calibrated_confidence(raw, &weights);
+    let buckets = HashMap::new();
+
+    let calibrated = calibrated_confidence(raw, &weights, &buckets);
     let unweighted = (0.90 + 0.90 + 0.95 + 0.90) / 4.0f32;
 
     assert!(
@@ -108,11 +111,91 @@ fn laplace_smoothed_weights_match_formula() {
     weights.insert("invoice_date".to_string(), 0.90);
     weights.insert("total_amount".to_string(), 0.88);
 
-    let result = calibrated_confidence(raw, &weights);
+    let buckets = HashMap::new();
+    let result = calibrated_confidence(raw, &weights, &buckets);
     // All weights are reasonable, so the result should be between 0 and 1.
     assert!(
         result > 0.0 && result <= 1.0,
         "calibrated result should be in (0, 1], got {}",
         result
+    );
+}
+
+/// Test 4: Bucket corrections reduce the calibrated confidence.
+///
+/// Simulates the full extraction-then-correction cycle at the algorithm level:
+/// - Start with a high-confidence bucket (bucket 9, raw 0.95) that has many
+///   extractions and zero corrections, producing a calibrated value near 1.0.
+/// - Then simulate recording corrections (as would happen when
+///   `record_field_outcome(was_corrected=true)` is called), which should
+///   materially lower the calibrated value for all four fields.
+///
+/// This test validates that the correction signal flowing into the bucket table
+/// actually reduces calibrated confidence, proving the fix for the "bucket
+/// corrections never recorded" gap.
+#[test]
+fn bucket_corrections_materially_lower_calibrated_confidence() {
+    use billforge_invoice_capture::BucketCalibration;
+
+    let raw: &[(&str, f32)] = &[
+        ("invoice_number", 0.95),
+        ("invoice_date", 0.95),
+        ("vendor_name", 0.95),
+        ("total_amount", 0.95),
+    ];
+
+    // Phase 1: 100 extractions, 0 corrections per bucket => calibrated ≈ 0.99
+    let mut buckets_before = HashMap::new();
+    for field in &["invoice_number", "invoice_date", "vendor_name", "total_amount"] {
+        buckets_before.insert(
+            (field.to_string(), 9),
+            BucketCalibration {
+                extractions: 100,
+                corrections: 0,
+            },
+        );
+    }
+    let weights = HashMap::new();
+    let before = calibrated_confidence(raw, &weights, &buckets_before);
+
+    // (100 - 0 + 1) / (100 + 2) ≈ 0.990
+    let expected_before = (101f32) / (102f32);
+    assert!(
+        (before - expected_before).abs() < 0.01,
+        "before corrections: expected ~{}, got {}",
+        expected_before,
+        before
+    );
+
+    // Phase 2: After 80 corrections land in each bucket (simulating the
+    // correction handler calling record_field_outcome(was_corrected=true)),
+    // the calibrated value should drop dramatically.
+    let mut buckets_after = HashMap::new();
+    for field in &["invoice_number", "invoice_date", "vendor_name", "total_amount"] {
+        buckets_after.insert(
+            (field.to_string(), 9),
+            BucketCalibration {
+                extractions: 100,
+                corrections: 80,
+            },
+        );
+    }
+    let after = calibrated_confidence(raw, &weights, &buckets_after);
+
+    // (100 - 80 + 1) / (100 + 2) ≈ 0.206
+    let expected_after = (21f32) / (102f32);
+    assert!(
+        (after - expected_after).abs() < 0.01,
+        "after corrections: expected ~{}, got {}",
+        expected_after,
+        after
+    );
+
+    // The after value must be materially lower than the before value.
+    assert!(
+        after < before - 0.5,
+        "corrections should materially reduce calibrated confidence: before={}, after={}",
+        before,
+        after
     );
 }

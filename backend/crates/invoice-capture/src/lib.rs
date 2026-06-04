@@ -6,7 +6,10 @@ pub mod calibration;
 pub mod ocr;
 pub mod service;
 
-pub use calibration::{calibrated_confidence, OcrCalibrationStore, PgOcrCalibrationStore};
+pub use calibration::{
+    calibrated_confidence, BucketCalibration, OcrCalibrationStore, PgOcrCalibrationStore,
+    bucket_for,
+};
 pub use ocr::{
     HealthStatus, OcrComparison, OcrComparisonResult, OcrProvider, PrivateInferenceConfig,
     PrivateInferenceError, ProviderResult, check_health, load_for_tenant, mark_unhealthy,

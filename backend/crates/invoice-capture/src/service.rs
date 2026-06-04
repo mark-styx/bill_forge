@@ -234,9 +234,42 @@ impl InvoiceCaptureService {
             tags: Vec::new(),
         };
 
-        self.invoice_repo
+        let invoice = self
+            .invoice_repo
             .create(tenant_id, input, Some(user_id))
-            .await
+            .await?;
+
+        // Persist per-field buckets so future corrections can debit the right bucket.
+        if let Some(ref store) = self.calibration {
+            let fields: [(&str, f32); 4] = [
+                ("invoice_number", ocr_result.invoice_number.confidence),
+                ("invoice_date", ocr_result.invoice_date.confidence),
+                ("vendor_name", ocr_result.vendor_name.confidence),
+                ("total_amount", ocr_result.total_amount.confidence),
+            ];
+            for (field, conf) in &fields {
+                let b = crate::calibration::bucket_for(*conf as f64);
+                if let Err(e) = store
+                    .record_pending_correction(
+                        tenant_id,
+                        self.ocr_provider.provider_name(),
+                        invoice.id.as_uuid(),
+                        field,
+                        b,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        field = field,
+                        bucket = b,
+                        "Failed to record pending correction bucket"
+                    );
+                }
+            }
+        }
+
+        Ok(invoice)
     }
 
     /// Calculate overall confidence score from OCR result (unweighted, for backwards compat)
@@ -282,11 +315,43 @@ impl InvoiceCaptureService {
                 tracing::warn!(error = %e, "Failed to record extraction for calibration");
             }
 
+            // Record per-bucket extraction outcomes for bucket-based calibration.
+            for (field, conf) in raw {
+                let b = crate::calibration::bucket_for(*conf as f64);
+                if let Err(e) = store
+                    .record_field_outcome(
+                        tenant_id,
+                        self.ocr_provider.provider_name(),
+                        field,
+                        b,
+                        false,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        field = field,
+                        bucket = b,
+                        "Failed to record bucket extraction outcome"
+                    );
+                }
+            }
+
             match store
                 .get_field_weights(tenant_id, self.ocr_provider.provider_name())
                 .await
             {
-                Ok(weights) => return calibrated_confidence(raw, &weights),
+                Ok(weights) => {
+                    let bucket_result = store
+                        .get_field_buckets(
+                            tenant_id,
+                            self.ocr_provider.provider_name(),
+                            OCR_CALIBRATED_FIELDS,
+                        )
+                        .await
+                        .unwrap_or_default();
+                    return calibrated_confidence(raw, &weights, &bucket_result);
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to fetch calibration weights, falling back to unweighted");
                 }
@@ -302,10 +367,12 @@ impl InvoiceCaptureService {
     ///
     /// Persists the correction signal into the calibration store so that future
     /// confidence calculations reflect the provider's empirical accuracy.
+    /// Also records the bucket-level correction so per-bucket calibration
+    /// tracks observed correctness rates.
     pub async fn record_field_correction(
         &self,
         tenant_id: &TenantId,
-        _invoice_id: &billforge_core::domain::InvoiceId,
+        invoice_id: &billforge_core::domain::InvoiceId,
         field_name: &str,
     ) -> Result<()> {
         // Whitelist the field name.
@@ -318,9 +385,55 @@ impl InvoiceCaptureService {
         }
 
         if let Some(ref store) = self.calibration {
+            // Record correction on the aggregate table (existing path).
             store
                 .record_correction(tenant_id, self.ocr_provider.provider_name(), field_name)
                 .await?;
+
+            // Look up the pending bucket recorded at extraction time and
+            // debit the bucket calibration table.
+            match store
+                .consume_pending_correction(
+                    tenant_id,
+                    self.ocr_provider.provider_name(),
+                    invoice_id.as_uuid(),
+                    field_name,
+                )
+                .await
+            {
+                Ok(Some(bucket)) => {
+                    if let Err(e) = store
+                        .record_field_outcome(
+                            tenant_id,
+                            self.ocr_provider.provider_name(),
+                            field_name,
+                            bucket,
+                            true, // was_corrected
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            field = field_name,
+                            bucket = bucket,
+                            "Failed to record bucket correction outcome"
+                        );
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        field = field_name,
+                        "No pending correction bucket found; bucket calibration not updated"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        field = field_name,
+                        "Failed to look up pending correction bucket"
+                    );
+                }
+            }
         }
 
         Ok(())
