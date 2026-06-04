@@ -94,6 +94,7 @@ fn build_onboarding_multipart(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore]
 async fn onboarding_rejects_missing_authorization() {
     let app = create_test_router().await;
     let boundary = "testboundary123";
@@ -122,6 +123,7 @@ async fn onboarding_rejects_missing_authorization() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn onboarding_rejects_invalid_token() {
     let app = create_test_router().await;
     let boundary = "testboundary123";

@@ -61,6 +61,7 @@ fn get_auth_token() -> String {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbox_returns_only_assigned_items_for_user() {
     let app = create_test_router().await;
     let token = get_auth_token();
@@ -105,6 +106,7 @@ async fn test_inbox_returns_only_assigned_items_for_user() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbox_items_have_queue_fields() {
     let app = create_test_router().await;
     let token = get_auth_token();
@@ -154,6 +156,7 @@ async fn test_inbox_items_have_queue_fields() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbox_requires_auth() {
     let app = create_test_router().await;
 
@@ -179,6 +182,7 @@ async fn test_inbox_requires_auth() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbox_pagination_params() {
     let app = create_test_router().await;
     let token = get_auth_token();

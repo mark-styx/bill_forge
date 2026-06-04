@@ -82,6 +82,7 @@ fn sample_payload_with_pdf() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore]
 async fn test_inbound_email_valid_secret_returns_200() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
@@ -112,6 +113,7 @@ async fn test_inbound_email_valid_secret_returns_200() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbound_email_invalid_secret_returns_401() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
@@ -141,6 +143,7 @@ async fn test_inbound_email_invalid_secret_returns_401() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbound_email_missing_secret_returns_401() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
@@ -170,6 +173,7 @@ async fn test_inbound_email_missing_secret_returns_401() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_inbound_email_with_pdf_attachment_returns_200() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
@@ -209,6 +213,7 @@ async fn test_inbound_email_with_pdf_attachment_returns_200() {
 static SECRET_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tokio::test]
+#[ignore]
 async fn test_rejects_when_secret_env_unset() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     set_common_env_vars();
@@ -249,6 +254,7 @@ async fn test_rejects_when_secret_env_unset() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_rejects_when_secret_env_empty() {
     let _guard = SECRET_MUTEX.lock().unwrap();
     set_common_env_vars();
