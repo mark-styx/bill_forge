@@ -10,8 +10,10 @@ import {
   Flag,
   GitBranch,
   Loader2,
+  Mail,
   Rocket,
   ScanLine,
+  Shield,
   Upload,
 } from 'lucide-react';
 import {
@@ -19,6 +21,7 @@ import {
   type ImplementationErpProvider,
   type ImplementationErpSubItems,
   type ImplementationGoLiveChecks,
+  type ImplementationModuleEntitlement,
   type ImplementationPhaseStatus,
   type ImplementationStatus,
 } from '@/lib/api';
@@ -30,11 +33,12 @@ const APPROVAL_TEMPLATES = [
   { id: 'gl', label: 'By GL code', description: 'Assign approval paths by general ledger account.' },
 ];
 
-const GO_LIVE_ITEMS: { key: keyof ImplementationGoLiveChecks; label: string }[] = [
-  { key: 'notify_ap_team', label: 'Notify AP team of go-live date' },
-  { key: 'set_email_forwarding', label: 'Set production email forwarding' },
-  { key: 'enable_approval_routing', label: 'Enable approval routing' },
-  { key: 'confirm_cutover_date', label: 'Confirm cutover date' },
+const GO_LIVE_ITEMS: { key: keyof ImplementationGoLiveChecks; label: string; manual: boolean }[] = [
+  { key: 'forwarding_email_verified', label: 'Email forwarding verified', manual: false },
+  { key: 'sample_invoice_routed', label: 'Sample invoice routed end-to-end', manual: false },
+  { key: 'notifications_acknowledged', label: 'Notifications acknowledged', manual: false },
+  { key: 'privacy_mode_confirmed', label: 'Privacy mode confirmed', manual: false },
+  { key: 'confirm_cutover_date', label: 'Confirm cutover date', manual: true },
 ];
 
 function statusLabel(status: ImplementationPhaseStatus): string {
@@ -205,6 +209,70 @@ export default function GettingStartedPage() {
       setPending(`go-live-${key}`);
       setError(null);
       setStatus(await implementationApi.updateChecklist(checks));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const configurePrivacyMode = async (enabled: boolean, scope?: string) => {
+    try {
+      setPending('config-privacy');
+      setError(null);
+      setStatus(await implementationApi.updatePrivacyMode(enabled, scope));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const configureCaptureChannels = async (params: {
+    email_forwarding_address?: string;
+    manual_upload_enabled?: boolean;
+    erp_sync_enabled?: boolean;
+  }) => {
+    try {
+      setPending('config-channels');
+      setError(null);
+      setStatus(await implementationApi.updateCaptureChannels(params));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const verifyEmail = async () => {
+    try {
+      setPending('config-email-verify');
+      setError(null);
+      setStatus(await implementationApi.verifyEmailForwarding(true, 'Admin attestation from implementation wizard'));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const ackModules = async (entitlements: ImplementationModuleEntitlement[]) => {
+    try {
+      setPending('config-modules');
+      setError(null);
+      setStatus(await implementationApi.ackModuleEntitlements(entitlements));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const configureNotifications = async (apTeam: string[], escalation: string[]) => {
+    try {
+      setPending('config-notifications');
+      setError(null);
+      setStatus(await implementationApi.updateNotificationApprovals(apTeam, escalation));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -389,6 +457,127 @@ export default function GettingStartedPage() {
       </PhaseCard>
 
       <PhaseCard
+        title="Configuration"
+        dayRange="Days 10-12"
+        description="Configure privacy mode, capture channels, module entitlements, and notification approvals."
+        status={phases.configuration.status}
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              <Shield className="w-4 h-4" />
+              Privacy mode
+            </h4>
+            <div className="flex items-center gap-3">
+              <SubItemToggle
+                checked={phases.configuration.configuration.privacy_mode.enabled}
+                label="Require local OCR processing"
+                disabled={pending !== null}
+                onChange={() => configurePrivacyMode(!phases.configuration.configuration.privacy_mode.enabled)}
+              />
+              {phases.configuration.configuration.privacy_mode.confirmed_at && (
+                <span className="text-xs text-green-600 dark:text-green-400">Confirmed</span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              <Mail className="w-4 h-4" />
+              Capture channels
+            </h4>
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <SubItemToggle
+                  checked={phases.configuration.configuration.capture_channels.email_forwarding.verified_at !== null}
+                  label="Email forwarding"
+                  disabled={pending !== null}
+                  onChange={() => {
+                    if (!phases.configuration.configuration.capture_channels.email_forwarding.verified_at) {
+                      void configureCaptureChannels({ email_forwarding_address: `forwarding@tenant.example.com` });
+                    }
+                  }}
+                />
+                {!phases.configuration.configuration.capture_channels.email_forwarding.verified_at && (
+                  <button
+                    type="button"
+                    disabled={pending !== null}
+                    onClick={() => verifyEmail()}
+                    className="text-xs text-primary hover:underline disabled:opacity-60"
+                  >
+                    Verify
+                  </button>
+                )}
+                {phases.configuration.configuration.capture_channels.email_forwarding.verified_at && (
+                  <span className="text-xs text-green-600 dark:text-green-400">Verified</span>
+                )}
+              </div>
+              <SubItemToggle
+                checked={phases.configuration.configuration.capture_channels.manual_upload_enabled}
+                label="Manual upload"
+                disabled={pending !== null}
+                onChange={() => configureCaptureChannels({ manual_upload_enabled: !phases.configuration.configuration.capture_channels.manual_upload_enabled })}
+              />
+              <SubItemToggle
+                checked={phases.configuration.configuration.capture_channels.erp_sync_enabled}
+                label="ERP sync"
+                disabled={pending !== null}
+                onChange={() => configureCaptureChannels({ erp_sync_enabled: !phases.configuration.configuration.capture_channels.erp_sync_enabled })}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-foreground">Module entitlements</h4>
+            {phases.configuration.configuration.module_entitlements.length === 0 ? (
+              <button
+                type="button"
+                disabled={pending !== null}
+                onClick={() => {
+                  const modules: ImplementationModuleEntitlement[] = (tenant?.enabled_modules ?? []).map((m: string) => ({
+                    module_key: m,
+                    enabled: true,
+                  }));
+                  void ackModules(modules);
+                }}
+                className="text-sm text-primary hover:underline disabled:opacity-60"
+              >
+                Acknowledge assigned modules
+              </button>
+            ) : (
+              <div className="space-y-1">
+                {phases.configuration.configuration.module_entitlements.map((ent) => (
+                  <div key={ent.module_key} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                    {ent.module_key}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium text-foreground">Notification approvals</h4>
+            {phases.configuration.configuration.notification_approvals.approved_at ? (
+              <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Approved
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={pending !== null}
+                onClick={() => configureNotifications([], [])}
+                className="text-sm text-primary hover:underline disabled:opacity-60"
+              >
+                Acknowledge notification routing
+              </button>
+            )}
+          </div>
+        </div>
+      </PhaseCard>
+
+      <PhaseCard
         title="Go-live checklist"
         dayRange="Days 11-14"
         description="Complete these final steps before your first production processing cycle."
@@ -396,13 +585,24 @@ export default function GettingStartedPage() {
       >
         <div className="space-y-2">
           {GO_LIVE_ITEMS.map((item) => (
-            <SubItemToggle
-              key={item.key}
-              checked={phases.go_live.checks[item.key]}
-              label={item.label}
-              disabled={pending !== null}
-              onChange={() => updateGoLiveCheck(item.key)}
-            />
+            item.manual ? (
+              <SubItemToggle
+                key={item.key}
+                checked={phases.go_live.checks[item.key]}
+                label={item.label}
+                disabled={pending !== null}
+                onChange={() => updateGoLiveCheck(item.key)}
+              />
+            ) : (
+              <div key={item.key} className="flex items-center gap-2 text-sm">
+                {phases.go_live.checks[item.key]
+                  ? <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                  : <div className="w-4 h-4 rounded-full border border-border" />}
+                <span className={phases.go_live.checks[item.key] ? 'text-foreground' : 'text-muted-foreground'}>
+                  {item.label}
+                </span>
+              </div>
+            )
           ))}
         </div>
       </PhaseCard>

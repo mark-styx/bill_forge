@@ -38,10 +38,11 @@ fn openapi_paths_exclude_payment_requests() {
 #[test]
 fn go_live_checks_excludes_payment_run_key() {
     let checks = GoLiveChecks {
-        notify_ap_team: true,
-        set_email_forwarding: true,
-        enable_approval_routing: true,
         confirm_cutover_date: true,
+        forwarding_email_verified: true,
+        sample_invoice_routed: true,
+        notifications_acknowledged: true,
+        privacy_mode_confirmed: true,
     };
 
     let json = serde_json::to_string(&checks).expect("serialize GoLiveChecks");
@@ -54,8 +55,9 @@ fn go_live_checks_excludes_payment_run_key() {
     );
 
     // Sanity: the expected keys are all present and true.
-    assert_eq!(parsed["notify_ap_team"], true);
-    assert_eq!(parsed["set_email_forwarding"], true);
-    assert_eq!(parsed["enable_approval_routing"], true);
     assert_eq!(parsed["confirm_cutover_date"], true);
+    assert_eq!(parsed["forwarding_email_verified"], true);
+    assert_eq!(parsed["sample_invoice_routed"], true);
+    assert_eq!(parsed["notifications_acknowledged"], true);
+    assert_eq!(parsed["privacy_mode_confirmed"], true);
 }

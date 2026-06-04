@@ -244,9 +244,9 @@ pub struct UpdatePrivacyModeRequest {
 pub struct UpdateCaptureChannelsRequest {
     pub email_forwarding_address: Option<String>,
     #[serde(default)]
-    pub manual_upload_enabled: bool,
+    pub manual_upload_enabled: Option<bool>,
     #[serde(default)]
-    pub erp_sync_enabled: bool,
+    pub erp_sync_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -544,8 +544,12 @@ pub async fn update_capture_channels(
     if let Some(address) = request.email_forwarding_address {
         wizard.phases.configuration.configuration.capture_channels.email_forwarding.address = address;
     }
-    wizard.phases.configuration.configuration.capture_channels.manual_upload_enabled = request.manual_upload_enabled;
-    wizard.phases.configuration.configuration.capture_channels.erp_sync_enabled = request.erp_sync_enabled;
+    if let Some(manual_upload_enabled) = request.manual_upload_enabled {
+        wizard.phases.configuration.configuration.capture_channels.manual_upload_enabled = manual_upload_enabled;
+    }
+    if let Some(erp_sync_enabled) = request.erp_sync_enabled {
+        wizard.phases.configuration.configuration.capture_channels.erp_sync_enabled = erp_sync_enabled;
+    }
 
     tracing::info!(
         tenant_id = %tenant.tenant_id,

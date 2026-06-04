@@ -10,6 +10,11 @@ const apiMocks = vi.hoisted(() => ({
   selectApprovalTemplate: vi.fn(),
   uploadSampleInvoices: vi.fn(),
   updateChecklist: vi.fn(),
+  updatePrivacyMode: vi.fn(),
+  updateCaptureChannels: vi.fn(),
+  verifyEmailForwarding: vi.fn(),
+  ackModuleEntitlements: vi.fn(),
+  updateNotificationApprovals: vi.fn(),
 }));
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -23,13 +28,18 @@ vi.mock('@/lib/api', async (importOriginal) => {
       selectApprovalTemplate: apiMocks.selectApprovalTemplate,
       uploadSampleInvoices: apiMocks.uploadSampleInvoices,
       updateChecklist: apiMocks.updateChecklist,
+      updatePrivacyMode: apiMocks.updatePrivacyMode,
+      updateCaptureChannels: apiMocks.updateCaptureChannels,
+      verifyEmailForwarding: apiMocks.verifyEmailForwarding,
+      ackModuleEntitlements: apiMocks.ackModuleEntitlements,
+      updateNotificationApprovals: apiMocks.updateNotificationApprovals,
     },
   };
 });
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: vi.fn(() => ({
-    tenant: { id: 'test-tenant-1', name: 'Test Org' },
+    tenant: { id: 'test-tenant-1', name: 'Test Org', enabled_modules: [] },
   })),
 }));
 
@@ -64,13 +74,31 @@ function makeStatus(overrides: Partial<ImplementationStatus> = {}): Implementati
         count: 0,
         sample_invoice_ids: [],
       },
+      configuration: {
+        status: 'not_started',
+        configuration: {
+          privacy_mode: { enabled: false, scope: null, confirmed_at: null },
+          capture_channels: {
+            email_forwarding: { address: '', verified_at: null },
+            manual_upload_enabled: false,
+            erp_sync_enabled: false,
+          },
+          module_entitlements: [],
+          notification_approvals: {
+            ap_team_distribution: [],
+            escalation_distribution: [],
+            approved_at: null,
+          },
+        },
+      },
       go_live: {
         status: 'not_started',
         checks: {
-          notify_ap_team: false,
-          set_email_forwarding: false,
-          enable_approval_routing: false,
           confirm_cutover_date: false,
+          forwarding_email_verified: false,
+          sample_invoice_routed: false,
+          notifications_acknowledged: false,
+          privacy_mode_confirmed: false,
         },
       },
     },
@@ -88,13 +116,14 @@ describe('GettingStartedPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders backend implementation status and the four phase headings', async () => {
+  it('renders backend implementation status and the phase headings including Configuration', async () => {
     render(<GettingStartedPage />);
 
     expect(await screen.findByText('Implementation Wizard')).toBeInTheDocument();
     expect(screen.getByText('Connect your accounting system')).toBeInTheDocument();
     expect(screen.getByText('Choose an approval-chain template')).toBeInTheDocument();
     expect(screen.getByText('Validate OCR with 10 sample invoices')).toBeInTheDocument();
+    expect(screen.getByText('Configuration')).toBeInTheDocument();
     expect(screen.getByText('Go-live checklist')).toBeInTheDocument();
     expect(screen.getByTestId('progress-percent')).toHaveTextContent('0% complete');
     expect(apiMocks.status).toHaveBeenCalledTimes(1);
@@ -116,7 +145,7 @@ describe('GettingStartedPage', () => {
   it('runs backend ERP sync and updates progress', async () => {
     const user = userEvent.setup();
     const synced = makeStatus({
-      percent_complete: 25,
+      percent_complete: 20,
       phases: {
         ...makeStatus().phases,
         erp: {
@@ -134,13 +163,13 @@ describe('GettingStartedPage', () => {
     await user.click(await screen.findByRole('button', { name: /sync quickbooks/i }));
 
     expect(apiMocks.syncErp).toHaveBeenCalledWith('quickbooks');
-    expect(screen.getByTestId('progress-percent')).toHaveTextContent('25% complete');
+    expect(screen.getByTestId('progress-percent')).toHaveTextContent('20% complete');
   });
 
   it('selects an approval template through the implementation API', async () => {
     const user = userEvent.setup();
     const selected = makeStatus({
-      percent_complete: 25,
+      percent_complete: 20,
       phases: {
         ...makeStatus().phases,
         approvals: { status: 'complete', template: 'department', template_id: 'template-1' },
@@ -177,7 +206,7 @@ describe('GettingStartedPage', () => {
     expect(screen.getByTestId('ocr-count')).toHaveTextContent('2 / 10 uploaded');
   });
 
-  it('persists go-live checklist changes through the implementation API', async () => {
+  it('persists go-live cutover date toggle through the implementation API', async () => {
     const user = userEvent.setup();
     const updated = makeStatus({
       phases: {
@@ -185,10 +214,11 @@ describe('GettingStartedPage', () => {
         go_live: {
           status: 'in_progress',
           checks: {
-            notify_ap_team: true,
-            set_email_forwarding: false,
-            enable_approval_routing: false,
-            confirm_cutover_date: false,
+            confirm_cutover_date: true,
+            forwarding_email_verified: false,
+            sample_invoice_routed: false,
+            notifications_acknowledged: false,
+            privacy_mode_confirmed: false,
           },
         },
       },
@@ -197,8 +227,39 @@ describe('GettingStartedPage', () => {
 
     render(<GettingStartedPage />);
     const card = (await screen.findByText('Go-live checklist')).closest('.border')!;
-    await user.click(within(card as HTMLElement).getByLabelText('Notify AP team of go-live date'));
+    await user.click(within(card as HTMLElement).getByLabelText('Confirm cutover date'));
 
     expect(apiMocks.updateChecklist).toHaveBeenCalledWith(updated.phases.go_live.checks);
+  });
+
+  it('renders derived go-live signals as read-only status indicators, not toggles', async () => {
+    render(<GettingStartedPage />);
+
+    const card = (await screen.findByText('Go-live checklist')).closest('.border')!;
+    const goLiveSection = card as HTMLElement;
+
+    // Derived items should NOT have checkboxes
+    const checkboxes = within(goLiveSection).getAllByRole('checkbox');
+    // Only the manual "Confirm cutover date" toggle should be a checkbox
+    expect(checkboxes).toHaveLength(1);
+    expect(checkboxes[0]).toHaveAccessibleName('Confirm cutover date');
+
+    // Derived items should appear as read-only text
+    expect(screen.getByText('Email forwarding verified')).toBeInTheDocument();
+    expect(screen.getByText('Sample invoice routed end-to-end')).toBeInTheDocument();
+    expect(screen.getByText('Notifications acknowledged')).toBeInTheDocument();
+    expect(screen.getByText('Privacy mode confirmed')).toBeInTheDocument();
+  });
+
+  it('renders the Configuration phase card with privacy mode and capture channels', async () => {
+    render(<GettingStartedPage />);
+
+    const card = (await screen.findByText('Configuration')).closest('.border')!;
+    const configSection = card as HTMLElement;
+
+    expect(within(configSection).getByText('Privacy mode')).toBeInTheDocument();
+    expect(within(configSection).getByText('Capture channels')).toBeInTheDocument();
+    expect(within(configSection).getByText('Module entitlements')).toBeInTheDocument();
+    expect(within(configSection).getByText('Notification approvals')).toBeInTheDocument();
   });
 });

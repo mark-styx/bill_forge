@@ -403,6 +403,7 @@ export interface ImplementationStatus {
       count: number;
       sample_invoice_ids: string[];
     };
+    configuration: ImplementationConfigurationPhase;
     go_live: {
       status: ImplementationPhaseStatus;
       checks: ImplementationGoLiveChecks;
@@ -411,10 +412,49 @@ export interface ImplementationStatus {
 }
 
 export interface ImplementationGoLiveChecks {
-  notify_ap_team: boolean;
-  set_email_forwarding: boolean;
-  enable_approval_routing: boolean;
   confirm_cutover_date: boolean;
+  forwarding_email_verified: boolean;
+  sample_invoice_routed: boolean;
+  notifications_acknowledged: boolean;
+  privacy_mode_confirmed: boolean;
+}
+
+export interface ImplementationPrivacyModeConfig {
+  enabled: boolean;
+  scope: string | null;
+  confirmed_at: string | null;
+}
+
+export interface ImplementationCaptureChannelsConfig {
+  email_forwarding: {
+    address: string;
+    verified_at: string | null;
+  };
+  manual_upload_enabled: boolean;
+  erp_sync_enabled: boolean;
+}
+
+export interface ImplementationModuleEntitlement {
+  module_key: string;
+  enabled: boolean;
+}
+
+export interface ImplementationNotificationApprovalsConfig {
+  ap_team_distribution: string[];
+  escalation_distribution: string[];
+  approved_at: string | null;
+}
+
+export interface ImplementationConfigurationSection {
+  privacy_mode: ImplementationPrivacyModeConfig;
+  capture_channels: ImplementationCaptureChannelsConfig;
+  module_entitlements: ImplementationModuleEntitlement[];
+  notification_approvals: ImplementationNotificationApprovalsConfig;
+}
+
+export interface ImplementationConfigurationPhase {
+  status: ImplementationPhaseStatus;
+  configuration: ImplementationConfigurationSection;
 }
 
 export interface ImplementationSampleUploadResponse {
@@ -441,6 +481,22 @@ export const implementationApi = {
   },
   updateChecklist: (checks: ImplementationGoLiveChecks) =>
     api.patch<ImplementationStatus>('/api/v1/implementation/checklist', { checks }),
+  updatePrivacyMode: (enabled: boolean, scope?: string) =>
+    api.put<ImplementationStatus>('/api/v1/implementation/configuration/privacy-mode', { enabled, scope }),
+  updateCaptureChannels: (params: {
+    email_forwarding_address?: string;
+    manual_upload_enabled?: boolean;
+    erp_sync_enabled?: boolean;
+  }) => api.put<ImplementationStatus>('/api/v1/implementation/configuration/capture-channels', params),
+  verifyEmailForwarding: (verified: boolean, evidence?: string) =>
+    api.post<ImplementationStatus>('/api/v1/implementation/configuration/capture-channels/email/verify', { verified, evidence }),
+  ackModuleEntitlements: (entitlements: ImplementationModuleEntitlement[]) =>
+    api.put<ImplementationStatus>('/api/v1/implementation/configuration/module-entitlements/ack', { entitlements }),
+  updateNotificationApprovals: (apTeamDistribution: string[], escalationDistribution: string[]) =>
+    api.put<ImplementationStatus>('/api/v1/implementation/configuration/notification-approvals', {
+      ap_team_distribution: apTeamDistribution,
+      escalation_distribution: escalationDistribution,
+    }),
 };
 
 // Invoices API
