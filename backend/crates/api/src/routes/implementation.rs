@@ -5,7 +5,7 @@ use crate::extractors::{AuthUser, InvoiceCaptureAccess, InvoiceProcessingAccess,
 use crate::state::AppState;
 use axum::{
     extract::{Multipart, State},
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use billforge_core::{
@@ -37,6 +37,20 @@ pub fn routes() -> Router<AppState> {
         .route("/approval-template", post(select_approval_template))
         .route("/sample-invoices", post(upload_sample_invoices))
         .route("/checklist", patch(update_checklist))
+        .route("/configuration/privacy-mode", put(update_privacy_mode))
+        .route("/configuration/capture-channels", put(update_capture_channels))
+        .route(
+            "/configuration/capture-channels/email/verify",
+            post(verify_email_forwarding),
+        )
+        .route(
+            "/configuration/module-entitlements/ack",
+            put(acknowledge_module_entitlements),
+        )
+        .route(
+            "/configuration/notification-approvals",
+            put(update_notification_approvals),
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -97,10 +111,15 @@ pub struct OcrPhase {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GoLiveChecks {
-    pub notify_ap_team: bool,
-    pub set_email_forwarding: bool,
-    pub enable_approval_routing: bool,
     pub confirm_cutover_date: bool,
+    #[serde(default)]
+    pub forwarding_email_verified: bool,
+    #[serde(default)]
+    pub sample_invoice_routed: bool,
+    #[serde(default)]
+    pub notifications_acknowledged: bool,
+    #[serde(default)]
+    pub privacy_mode_confirmed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -110,10 +129,67 @@ pub struct GoLivePhase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PrivacyModeConfig {
+    pub enabled: bool,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub confirmed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EmailForwardingConfig {
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub verified_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CaptureChannelsConfig {
+    pub email_forwarding: EmailForwardingConfig,
+    #[serde(default)]
+    pub manual_upload_enabled: bool,
+    #[serde(default)]
+    pub erp_sync_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ModuleEntitlement {
+    pub module_key: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct NotificationApprovalsConfig {
+    #[serde(default)]
+    pub ap_team_distribution: Vec<String>,
+    #[serde(default)]
+    pub escalation_distribution: Vec<String>,
+    #[serde(default)]
+    pub approved_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ConfigurationSection {
+    pub privacy_mode: PrivacyModeConfig,
+    pub capture_channels: CaptureChannelsConfig,
+    pub module_entitlements: Vec<ModuleEntitlement>,
+    pub notification_approvals: NotificationApprovalsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ConfigurationPhase {
+    pub status: PhaseStatus,
+    pub configuration: ConfigurationSection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ImplementationPhases {
     pub erp: ErpPhase,
     pub approvals: ApprovalsPhase,
     pub ocr: OcrPhase,
+    pub configuration: ConfigurationPhase,
     pub go_live: GoLivePhase,
 }
 
@@ -157,6 +233,40 @@ pub struct UpdateChecklistRequest {
     pub checks: GoLiveChecks,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdatePrivacyModeRequest {
+    pub enabled: bool,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateCaptureChannelsRequest {
+    pub email_forwarding_address: Option<String>,
+    #[serde(default)]
+    pub manual_upload_enabled: bool,
+    #[serde(default)]
+    pub erp_sync_enabled: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct VerifyEmailForwardingRequest {
+    pub verified: bool,
+    #[serde(default)]
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AckModuleEntitlementsRequest {
+    pub entitlements: Vec<ModuleEntitlement>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateNotificationApprovalsRequest {
+    pub ap_team_distribution: Vec<String>,
+    pub escalation_distribution: Vec<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/implementation/status",
@@ -170,7 +280,8 @@ pub async fn get_status(
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
-    Ok(Json(status_response(wizard)))
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    Ok(Json(status_response_with_routed(wizard, routed)))
 }
 
 #[utoipa::path(
@@ -200,10 +311,11 @@ pub async fn sync_erp(
         Some(summary.message.clone())
     };
     wizard.phases.erp.last_sync = Some(summary);
-    recompute_statuses(&mut wizard);
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response(wizard)))
+    Ok(Json(status_response_with_routed(wizard, routed)))
 }
 
 #[utoipa::path(
@@ -222,9 +334,10 @@ pub async fn update_erp_sub_items(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
     wizard.phases.erp.sub_items = request.sub_items;
-    recompute_statuses(&mut wizard);
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response(wizard)))
+    Ok(Json(status_response_with_routed(wizard, routed)))
 }
 
 #[utoipa::path(
@@ -257,10 +370,11 @@ pub async fn select_approval_template(
 
     wizard.phases.approvals.template = Some(request.template);
     wizard.phases.approvals.template_id = Some(template.id.0);
-    recompute_statuses(&mut wizard);
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response(wizard)))
+    Ok(Json(status_response_with_routed(wizard, routed)))
 }
 
 #[utoipa::path(
@@ -278,9 +392,10 @@ pub async fn upload_sample_invoices(
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
     let remaining = 10usize.saturating_sub(wizard.phases.ocr.sample_invoice_ids.len());
     if remaining == 0 {
+        let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
         return Ok(Json(SampleInvoiceUploadResponse {
             uploaded: Vec::new(),
-            status: status_response(wizard),
+            status: status_response_with_routed(wizard, routed),
         }));
     }
 
@@ -330,12 +445,13 @@ pub async fn upload_sample_invoices(
     }
 
     wizard.phases.ocr.count = wizard.phases.ocr.sample_invoice_ids.len().min(10) as u8;
-    recompute_statuses(&mut wizard);
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
     Ok(Json(SampleInvoiceUploadResponse {
         uploaded,
-        status: status_response(wizard),
+        status: status_response_with_routed(wizard, routed),
     }))
 }
 
@@ -354,27 +470,190 @@ pub async fn update_checklist(
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
-    wizard.phases.go_live.checks = request.checks;
+    wizard.phases.go_live.checks.confirm_cutover_date = request.checks.confirm_cutover_date;
 
-    // Auto-provision forwarding address when the checkbox is toggled on
-    if wizard.phases.go_live.checks.set_email_forwarding {
-        let email_domain =
-            std::env::var("INBOUND_EMAIL_DOMAIN").unwrap_or_else(|_| "billforge.com".to_string());
-        let metadata_pool = state.db.metadata();
-        let _ = billforge_email::InboundEmailHandler::ensure_forwarding_address(
-            &metadata_pool,
-            *tenant.tenant_id.as_uuid(),
-            &email_domain,
-        )
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+    Ok(Json(status_response_with_routed(wizard, routed)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/implementation/configuration/privacy-mode",
+    tag = "Implementation",
+    request_body = UpdatePrivacyModeRequest,
+    responses((status = 200, description = "Privacy mode configuration updated", body = ImplementationStatusResponse))
+)]
+pub async fn update_privacy_mode(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<UpdatePrivacyModeRequest>,
+) -> ApiResult<Json<ImplementationStatusResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    // Write through to the existing tenant privacy setting
+    let mut settings = tenant.settings.clone();
+    settings.features.local_ocr_required = request.enabled;
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| billforge_core::Error::Internal("DATABASE_URL missing".into()))?;
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
         .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, "Failed to auto-provision forwarding address");
-        });
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e)))?;
+    metadata_db
+        .update_tenant_settings(&tenant.tenant_id, &settings)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to persist privacy settings: {}", e)))?;
+
+    wizard.phases.configuration.configuration.privacy_mode = PrivacyModeConfig {
+        enabled: request.enabled,
+        scope: request.scope,
+        confirmed_at: Some(Utc::now()),
+    };
+
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        enabled = request.enabled,
+        "Implementation wizard: privacy mode configured"
+    );
+
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+    Ok(Json(status_response_with_routed(wizard, routed)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/implementation/configuration/capture-channels",
+    tag = "Implementation",
+    request_body = UpdateCaptureChannelsRequest,
+    responses((status = 200, description = "Capture channels updated", body = ImplementationStatusResponse))
+)]
+pub async fn update_capture_channels(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<UpdateCaptureChannelsRequest>,
+) -> ApiResult<Json<ImplementationStatusResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    if let Some(address) = request.email_forwarding_address {
+        wizard.phases.configuration.configuration.capture_channels.email_forwarding.address = address;
+    }
+    wizard.phases.configuration.configuration.capture_channels.manual_upload_enabled = request.manual_upload_enabled;
+    wizard.phases.configuration.configuration.capture_channels.erp_sync_enabled = request.erp_sync_enabled;
+
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        "Implementation wizard: capture channels updated"
+    );
+
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+    Ok(Json(status_response_with_routed(wizard, routed)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/implementation/configuration/capture-channels/email/verify",
+    tag = "Implementation",
+    request_body = VerifyEmailForwardingRequest,
+    responses((status = 200, description = "Email forwarding verified", body = ImplementationStatusResponse))
+)]
+pub async fn verify_email_forwarding(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<VerifyEmailForwardingRequest>,
+) -> ApiResult<Json<ImplementationStatusResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    if request.verified {
+        wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
+    } else {
+        wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = None;
     }
 
-    recompute_statuses(&mut wizard);
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        verified = request.verified,
+        evidence = ?request.evidence,
+        "Implementation wizard: email forwarding verification attestation"
+    );
+
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response(wizard)))
+    Ok(Json(status_response_with_routed(wizard, routed)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/implementation/configuration/module-entitlements/ack",
+    tag = "Implementation",
+    request_body = AckModuleEntitlementsRequest,
+    responses((status = 200, description = "Module entitlements acknowledged", body = ImplementationStatusResponse))
+)]
+pub async fn acknowledge_module_entitlements(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<AckModuleEntitlementsRequest>,
+) -> ApiResult<Json<ImplementationStatusResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    // Mirror from tenant's gated modules: only record acknowledgement, not new entitlements
+    wizard.phases.configuration.configuration.module_entitlements = request.entitlements;
+
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        "Implementation wizard: module entitlements acknowledged"
+    );
+
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+    Ok(Json(status_response_with_routed(wizard, routed)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/implementation/configuration/notification-approvals",
+    tag = "Implementation",
+    request_body = UpdateNotificationApprovalsRequest,
+    responses((status = 200, description = "Notification approvals updated", body = ImplementationStatusResponse))
+)]
+pub async fn update_notification_approvals(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(request): Json<UpdateNotificationApprovalsRequest>,
+) -> ApiResult<Json<ImplementationStatusResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    wizard.phases.configuration.configuration.notification_approvals = NotificationApprovalsConfig {
+        ap_team_distribution: request.ap_team_distribution,
+        escalation_distribution: request.escalation_distribution,
+        approved_at: Some(Utc::now()),
+    };
+
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        "Implementation wizard: notification approvals configured"
+    );
+
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+    Ok(Json(status_response_with_routed(wizard, routed)))
 }
 
 async fn load_or_create_state(
@@ -393,7 +672,7 @@ async fn load_or_create_state(
         let mut state = serde_json::from_value::<ImplementationWizardState>(state_value)
             .unwrap_or_else(|_| default_state(started_at));
         state.started_at = started_at;
-        recompute_statuses(&mut state);
+        recompute_statuses(&mut state, false);
         return Ok(state);
     }
 
@@ -1512,7 +1791,7 @@ fn stage(
     }
 }
 
-fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
+pub fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
     ImplementationWizardState {
         started_at,
         phases: ImplementationPhases {
@@ -1537,20 +1816,66 @@ fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
                 count: 0,
                 sample_invoice_ids: Vec::new(),
             },
+            configuration: ConfigurationPhase {
+                status: PhaseStatus::NotStarted,
+                configuration: ConfigurationSection {
+                    privacy_mode: PrivacyModeConfig {
+                        enabled: false,
+                        scope: None,
+                        confirmed_at: None,
+                    },
+                    capture_channels: CaptureChannelsConfig {
+                        email_forwarding: EmailForwardingConfig {
+                            address: String::new(),
+                            verified_at: None,
+                        },
+                        manual_upload_enabled: false,
+                        erp_sync_enabled: false,
+                    },
+                    module_entitlements: Vec::new(),
+                    notification_approvals: NotificationApprovalsConfig {
+                        ap_team_distribution: Vec::new(),
+                        escalation_distribution: Vec::new(),
+                        approved_at: None,
+                    },
+                },
+            },
             go_live: GoLivePhase {
                 status: PhaseStatus::NotStarted,
                 checks: GoLiveChecks {
-                    notify_ap_team: false,
-                    set_email_forwarding: false,
-                    enable_approval_routing: false,
                     confirm_cutover_date: false,
+                    forwarding_email_verified: false,
+                    sample_invoice_routed: false,
+                    notifications_acknowledged: false,
+                    privacy_mode_confirmed: false,
                 },
             },
         },
     }
 }
 
-fn recompute_statuses(state: &mut ImplementationWizardState) {
+/// Check whether at least one invoice in the tenant has reached an approved/posted
+/// status via the approval routing system. This is the measurable readiness signal
+/// for the go-live `sample_invoice_routed` check.
+pub async fn has_routed_invoice(pool: &sqlx::PgPool, tenant_id: &TenantId) -> bool {
+    let result: Option<(bool,)> = sqlx::query_as(
+        "SELECT EXISTS(
+            SELECT 1 FROM invoices i
+            INNER JOIN approval_requests ar ON ar.invoice_id = i.id AND ar.tenant_id = i.tenant_id
+            WHERE i.tenant_id = $1
+            AND i.processing_status IN ('approved', 'ready_for_payment')
+            AND ar.status = 'approved'
+        )",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .ok();
+
+    result.map_or(false, |(exists,)| exists)
+}
+
+pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_routed: bool) {
     let erp = &state.phases.erp.sub_items;
     state.phases.erp.status = if erp.chart_of_accounts && erp.vendors && erp.open_pos {
         PhaseStatus::Complete
@@ -1581,6 +1906,33 @@ fn recompute_statuses(state: &mut ImplementationWizardState) {
         PhaseStatus::NotStarted
     };
 
+    // Configuration phase: derived from sub-sections
+    let config = &state.phases.configuration.configuration;
+    let privacy_done = config.privacy_mode.confirmed_at.is_some();
+    let channels_done = config.capture_channels.email_forwarding.verified_at.is_some()
+        || config.capture_channels.manual_upload_enabled
+        || config.capture_channels.erp_sync_enabled;
+    let modules_done = !config.module_entitlements.is_empty();
+    let notifications_done = config.notification_approvals.approved_at.is_some();
+    let config_done = privacy_done && channels_done && modules_done && notifications_done;
+    let config_started = privacy_done || channels_done || modules_done || notifications_done;
+    state.phases.configuration.status = if config_done {
+        PhaseStatus::Complete
+    } else if config_started {
+        PhaseStatus::InProgress
+    } else {
+        PhaseStatus::NotStarted
+    };
+
+    // Derive measurable go-live signals from observable state
+    state.phases.go_live.checks.forwarding_email_verified =
+        state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at.is_some();
+    state.phases.go_live.checks.notifications_acknowledged =
+        state.phases.configuration.configuration.notification_approvals.approved_at.is_some();
+    state.phases.go_live.checks.privacy_mode_confirmed =
+        state.phases.configuration.configuration.privacy_mode.confirmed_at.is_some();
+    state.phases.go_live.checks.sample_invoice_routed = sample_invoice_routed;
+
     state.phases.go_live.status = if go_live_complete(&state.phases.go_live.checks) {
         PhaseStatus::Complete
     } else if go_live_started(&state.phases.go_live.checks) {
@@ -1590,8 +1942,8 @@ fn recompute_statuses(state: &mut ImplementationWizardState) {
     };
 }
 
-fn status_response(mut state: ImplementationWizardState) -> ImplementationStatusResponse {
-    recompute_statuses(&mut state);
+fn status_response_with_routed(mut state: ImplementationWizardState, sample_invoice_routed: bool) -> ImplementationStatusResponse {
+    recompute_statuses(&mut state, sample_invoice_routed);
     ImplementationStatusResponse {
         day_number: day_number(state.started_at),
         percent_complete: percent_complete(&state),
@@ -1605,31 +1957,34 @@ fn day_number(started_at: DateTime<Utc>) -> u8 {
     elapsed.clamp(1, 14) as u8
 }
 
-fn percent_complete(state: &ImplementationWizardState) -> u8 {
+pub fn percent_complete(state: &ImplementationWizardState) -> u8 {
     let complete = [
         state.phases.erp.status,
         state.phases.approvals.status,
         state.phases.ocr.status,
+        state.phases.configuration.status,
         state.phases.go_live.status,
     ]
     .into_iter()
     .filter(|status| *status == PhaseStatus::Complete)
     .count();
-    ((complete * 100) / 4) as u8
+    ((complete * 100) / 5) as u8
 }
 
 fn go_live_started(checks: &GoLiveChecks) -> bool {
-    checks.notify_ap_team
-        || checks.set_email_forwarding
-        || checks.enable_approval_routing
-        || checks.confirm_cutover_date
+    checks.confirm_cutover_date
+        || checks.forwarding_email_verified
+        || checks.sample_invoice_routed
+        || checks.notifications_acknowledged
+        || checks.privacy_mode_confirmed
 }
 
 fn go_live_complete(checks: &GoLiveChecks) -> bool {
-    checks.notify_ap_team
-        && checks.set_email_forwarding
-        && checks.enable_approval_routing
-        && checks.confirm_cutover_date
+    checks.confirm_cutover_date
+        && checks.forwarding_email_verified
+        && checks.sample_invoice_routed
+        && checks.notifications_acknowledged
+        && checks.privacy_mode_confirmed
 }
 
 #[cfg(test)]
@@ -1645,16 +2000,17 @@ mod tests {
             open_pos: true,
         };
         state.phases.approvals.template_id = Some(Uuid::new_v4());
-        recompute_statuses(&mut state);
+        recompute_statuses(&mut state, false);
 
-        assert_eq!(percent_complete(&state), 50);
+        // 2 of 5 phases complete = 40%
+        assert_eq!(percent_complete(&state), 40);
     }
 
     #[test]
     fn ocr_phase_completes_at_ten_samples() {
         let mut state = default_state(Utc::now());
         state.phases.ocr.sample_invoice_ids = (0..10).map(|_| Uuid::new_v4()).collect();
-        recompute_statuses(&mut state);
+        recompute_statuses(&mut state, false);
 
         assert_eq!(state.phases.ocr.count, 10);
         assert_eq!(state.phases.ocr.status, PhaseStatus::Complete);
