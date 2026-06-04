@@ -36,6 +36,8 @@ pub struct RecurringPattern {
     pub sample_count: i32,
     pub last_invoice_date: Option<NaiveDate>,
     pub last_line_items_hash: Option<String>,
+    pub last_line_items_signature: Option<serde_json::Value>,
+    pub line_item_tolerance_pct: f64,
     pub auto_approve_enabled: bool,
     pub amount_tolerance_pct: f64,
     pub window_tolerance_days: i32,
@@ -138,6 +140,8 @@ pub async fn detect_or_update_pattern(
 
     // Line-items hash of the most recent invoice (rows[0] = newest).
     let last_line_items_hash = hash_line_items(&rows[0].line_items);
+    let last_line_items_signature =
+        serde_json::to_value(compute_line_items_signature(&rows[0].line_items)).ok();
     let last_invoice_date = rows[0].invoice_date;
     let sample_count = rows.len() as i32;
 
@@ -145,18 +149,22 @@ pub async fn detect_or_update_pattern(
     let pattern = sqlx::query_as::<_, RecurringPattern>(
         r#"INSERT INTO recurring_patterns
                (tenant_id, vendor_id, cadence_days, trailing_median_cents,
-                sample_count, last_invoice_date, last_line_items_hash)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+                sample_count, last_invoice_date, last_line_items_hash,
+                last_line_items_signature)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (tenant_id, vendor_id) DO UPDATE
-               SET cadence_days          = EXCLUDED.cadence_days,
-                   trailing_median_cents = EXCLUDED.trailing_median_cents,
-                   sample_count          = EXCLUDED.sample_count,
-                   last_invoice_date     = EXCLUDED.last_invoice_date,
-                   last_line_items_hash  = EXCLUDED.last_line_items_hash,
-                   updated_at            = NOW()
+               SET cadence_days              = EXCLUDED.cadence_days,
+                   trailing_median_cents     = EXCLUDED.trailing_median_cents,
+                   sample_count              = EXCLUDED.sample_count,
+                   last_invoice_date         = EXCLUDED.last_invoice_date,
+                   last_line_items_hash      = EXCLUDED.last_line_items_hash,
+                   last_line_items_signature = EXCLUDED.last_line_items_signature,
+                   updated_at                = NOW()
            RETURNING id, tenant_id, vendor_id, cadence_days,
                      trailing_median_cents, sample_count,
                      last_invoice_date, last_line_items_hash,
+                     last_line_items_signature,
+                     CAST(line_item_tolerance_pct AS DOUBLE PRECISION) AS line_item_tolerance_pct,
                      auto_approve_enabled,
                      CAST(amount_tolerance_pct AS DOUBLE PRECISION) AS amount_tolerance_pct,
                      window_tolerance_days,
@@ -169,6 +177,7 @@ pub async fn detect_or_update_pattern(
     .bind(sample_count)
     .bind(last_invoice_date)
     .bind(&last_line_items_hash)
+    .bind(&last_line_items_signature)
     .fetch_one(pool)
     .await?;
 
@@ -209,8 +218,20 @@ pub fn evaluate_pattern_match(
         ));
     }
 
-    // (b) Line-items hash check.
-    if let Some(ref expected_hash) = pattern.last_line_items_hash {
+    // (b) Line-items check: use structured signature comparison when available,
+    //     fall back to hash comparison for legacy rows.
+    if let Some(ref expected_signature) = pattern.last_line_items_signature {
+        let current_signature =
+            serde_json::to_value(compute_line_items_signature(invoice_line_items)).ok();
+        if let Some(ref curr) = current_signature {
+            if !signatures_match_within_tolerance(expected_signature, curr, pattern.line_item_tolerance_pct) {
+                return PatternMatchResult::Ineligible(
+                    "Line items changed since last pattern sample".to_string(),
+                );
+            }
+        }
+    } else if let Some(ref expected_hash) = pattern.last_line_items_hash {
+        // Legacy row: fall back to strict hash comparison.
         let actual_hash = hash_line_items(invoice_line_items);
         if actual_hash != *expected_hash {
             return PatternMatchResult::Ineligible(
@@ -250,6 +271,8 @@ pub async fn find_pattern(
         r#"SELECT id, tenant_id, vendor_id, cadence_days,
                   trailing_median_cents, sample_count,
                   last_invoice_date, last_line_items_hash,
+                  last_line_items_signature,
+                  CAST(line_item_tolerance_pct AS DOUBLE PRECISION) AS line_item_tolerance_pct,
                   auto_approve_enabled,
                   CAST(amount_tolerance_pct AS DOUBLE PRECISION) AS amount_tolerance_pct,
                   window_tolerance_days,
@@ -290,6 +313,99 @@ fn normalize_line_items(items: &serde_json::Value) -> String {
     }
 }
 
+/// Normalize a description string: lowercase, strip non-alphanumeric, collapse whitespace.
+fn normalize_description(desc: &str) -> String {
+    let lower = desc.to_lowercase();
+    let stripped: String = lower
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    let mut result = String::with_capacity(stripped.len());
+    let mut prev_space = true; // trim leading spaces
+    for c in stripped.chars() {
+        if c == ' ' {
+            if !prev_space {
+                result.push(' ');
+                prev_space = true;
+            }
+        } else {
+            result.push(c);
+            prev_space = false;
+        }
+    }
+    let trimmed = result.trim_end();
+    trimmed.to_string()
+}
+
+/// Compute a structured signature from line-item JSON: aggregate amounts by
+/// normalized description, then sort by key. Returns `Vec<(String, i64)>`
+/// where each entry is `(normalized_description, total_amount_cents)`.
+fn compute_line_items_signature(items: &serde_json::Value) -> Vec<(String, i64)> {
+    let arr = match items.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    let mut map: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for item in arr {
+        let desc = item
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let key = normalize_description(desc);
+        // Accept both "amount" (cents integer) and "amount_cents".
+        let cents = item
+            .get("amount_cents")
+            .and_then(|v| v.as_i64())
+            .or_else(|| item.get("amount").and_then(|v| v.as_i64()))
+            .unwrap_or(0);
+        *map.entry(key).or_insert(0) += cents;
+    }
+
+    map.into_iter().collect()
+}
+
+/// Check whether two line-item signatures match within tolerance.
+///
+/// Two signatures match when:
+/// 1. They contain the same set of normalized description keys.
+/// 2. Each paired amount is within `tolerance_pct` percent **or** within 1 cent absolute.
+fn signatures_match_within_tolerance(
+    prev: &serde_json::Value,
+    curr: &serde_json::Value,
+    tolerance_pct: f64,
+) -> bool {
+    let prev_sig: Vec<(String, i64)> = match serde_json::from_value(prev.clone()) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let curr_sig: Vec<(String, i64)> = match serde_json::from_value(curr.clone()) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    if prev_sig.len() != curr_sig.len() {
+        return false;
+    }
+
+    for (i, (p_desc, p_amt)) in prev_sig.iter().enumerate() {
+        let (c_desc, c_amt) = &curr_sig[i];
+        if p_desc != c_desc {
+            return false;
+        }
+        // Within tolerance percent OR within 1 cent absolute.
+        let delta = (*p_amt - *c_amt).abs() as f64;
+        if delta > 1.0 {
+            let max_delta = (*p_amt as f64) * tolerance_pct;
+            if delta > max_delta {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 /// Median of a sorted slice of i64 values.
 fn median_i64(sorted: &[i64]) -> i64 {
     assert!(!sorted.is_empty(), "cannot compute median of empty slice");
@@ -326,6 +442,8 @@ mod tests {
             sample_count: 5,
             last_invoice_date,
             last_line_items_hash,
+            last_line_items_signature: None,
+            line_item_tolerance_pct: 0.05,
             auto_approve_enabled: true,
             amount_tolerance_pct,
             window_tolerance_days,
@@ -495,5 +613,144 @@ mod tests {
         let h2 = hash_line_items(&items);
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64); // SHA-256 hex
+    }
+
+    // -- Helper for signature-based pattern tests --
+
+    fn make_pattern_with_signature(
+        cadence_days: i32,
+        trailing_median_cents: i64,
+        amount_tolerance_pct: f64,
+        window_tolerance_days: i32,
+        last_invoice_date: Option<NaiveDate>,
+        signature_items: &serde_json::Value,
+        line_item_tolerance_pct: f64,
+    ) -> RecurringPattern {
+        let sig = serde_json::to_value(compute_line_items_signature(signature_items)).ok();
+        RecurringPattern {
+            id: Uuid::new_v4(),
+            tenant_id: Uuid::new_v4(),
+            vendor_id: Uuid::new_v4(),
+            cadence_days,
+            trailing_median_cents,
+            sample_count: 5,
+            last_invoice_date,
+            last_line_items_hash: None,
+            last_line_items_signature: sig,
+            line_item_tolerance_pct,
+            auto_approve_enabled: true,
+            amount_tolerance_pct,
+            window_tolerance_days,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    // -- Signature-based line-item tests --
+
+    #[test]
+    fn line_items_with_minor_wording_change_still_eligible() {
+        let original = serde_json::json!([
+            {"description": "Monthly Rent - Suite 200", "amount": 100_00}
+        ]);
+        // OCR introduced case change, punctuation differences, extra spacing
+        let ocr_variant = serde_json::json!([
+            {"description": "monthly rent   suite 200", "amount": 100_00}
+        ]);
+        let pattern =
+            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let result = evaluate_pattern_match(100_00, None, &ocr_variant, &pattern);
+        assert_eq!(result, PatternMatchResult::Eligible);
+    }
+
+    #[test]
+    fn line_items_split_into_multiple_rows_still_eligible() {
+        let original = serde_json::json!([
+            {"description": "Rent", "amount": 100_00}
+        ]);
+        // One $100 row split into two $50 rows with same normalized description
+        let split = serde_json::json!([
+            {"description": "Rent", "amount": 50_00},
+            {"description": "Rent", "amount": 50_00}
+        ]);
+        let pattern =
+            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let result = evaluate_pattern_match(100_00, None, &split, &pattern);
+        assert_eq!(result, PatternMatchResult::Eligible);
+    }
+
+    #[test]
+    fn line_items_with_sub_tolerance_amount_drift_still_eligible() {
+        let original = serde_json::json!([
+            {"description": "Rent", "amount": 100_00}
+        ]);
+        // $100.00 -> $100.30 (0.3% drift, well within 5% tolerance)
+        let drifted = serde_json::json!([
+            {"description": "Rent", "amount": 100_30}
+        ]);
+        let pattern =
+            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let result = evaluate_pattern_match(100_00, None, &drifted, &pattern);
+        assert_eq!(result, PatternMatchResult::Eligible);
+    }
+
+    #[test]
+    fn line_items_with_real_change_still_ineligible() {
+        let original = serde_json::json!([
+            {"description": "Rent", "amount": 100_00}
+        ]);
+        // Completely different description — real change
+        let changed = serde_json::json!([
+            {"description": "Parking", "amount": 100_00}
+        ]);
+        let pattern =
+            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let result = evaluate_pattern_match(100_00, None, &changed, &pattern);
+        match result {
+            PatternMatchResult::Ineligible(reason) => {
+                assert!(reason.contains("Line items"));
+            }
+            PatternMatchResult::Eligible => panic!("Should be ineligible"),
+        }
+    }
+
+    #[test]
+    fn line_items_with_amount_exceeding_tolerance_still_ineligible() {
+        let original = serde_json::json!([
+            {"description": "Rent", "amount": 100_00}
+        ]);
+        // $100.00 -> $110.00 (10% drift, exceeds 5% tolerance)
+        let changed = serde_json::json!([
+            {"description": "Rent", "amount": 110_00}
+        ]);
+        let pattern =
+            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let result = evaluate_pattern_match(100_00, None, &changed, &pattern);
+        match result {
+            PatternMatchResult::Ineligible(reason) => {
+                assert!(reason.contains("Line items"));
+            }
+            PatternMatchResult::Eligible => panic!("Should be ineligible"),
+        }
+    }
+
+    // -- Signature unit tests --
+
+    #[test]
+    fn compute_signature_aggregates_by_normalized_description() {
+        let items = serde_json::json!([
+            {"description": "Rent", "amount": 50_00},
+            {"description": "rent!", "amount": 50_00}
+        ]);
+        let sig = compute_line_items_signature(&items);
+        assert_eq!(sig.len(), 1);
+        assert_eq!(sig[0].0, "rent");
+        assert_eq!(sig[0].1, 100_00);
+    }
+
+    #[test]
+    fn normalize_description_strips_punctuation_and_case() {
+        assert_eq!(normalize_description("Monthly Rent - Suite #200"), "monthly rent suite 200");
+        assert_eq!(normalize_description("  WEB   HOSTING  "), "web hosting");
     }
 }
