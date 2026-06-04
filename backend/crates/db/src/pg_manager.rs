@@ -37,25 +37,33 @@ impl PgManager {
                 Error::Database(format!("Failed to connect to metadata database: {}", e))
             })?;
 
-        // Warn if the application is running as a superuser or bypass-RLS role,
-        // which would undermine RLS guarantees.
-        if let Ok(row) = sqlx::query_as::<_, (String, bool, bool)>(
+        // Fail-closed RLS guard: refuse to start when the connected role can bypass
+        // row-level security (superuser / BYPASSRLS).  Without this check tenant
+        // isolation depends on deployment hygiene rather than a hard startup gate.
+        let (user, is_super, bypass_rls) = sqlx::query_as::<_, (String, bool, bool)>(
             "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
         )
         .fetch_one(&metadata_pool)
         .await
-        {
-            let (user, is_super, bypass_rls) = row;
-            if is_super || bypass_rls {
-                tracing::warn!(
-                    current_user = %user,
-                    is_super,
-                    bypass_rls,
-                    "Database role has superuser or BYPASSRLS privilege; RLS is NOT enforced. \
-                     Use a dedicated NOSUPERUSER NOBYPASSRLS role (e.g. billforge_app)."
-                );
-            }
+        .map_err(|e| {
+            Error::Database(format!(
+                "Failed to verify database role RLS status: {}. \
+                 Cannot confirm RLS is enforced; refusing to start.",
+                e
+            ))
+        })?;
+
+        if is_super || bypass_rls {
+            return Err(Error::Database(format!(
+                "Refusing to start: database role '{}' has superuser={} bypassrls={}; \
+                 RLS is not enforced. Connect as a NOSUPERUSER NOBYPASSRLS role such as billforge_app.",
+                user, is_super, bypass_rls
+            )));
         }
+        tracing::info!(
+            current_user = %user,
+            "Connected as restricted role; RLS enforcement confirmed"
+        );
 
         Ok(Self {
             metadata_pool,
