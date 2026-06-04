@@ -288,15 +288,43 @@ export default function ExportPage() {
                 policy version, and a tamper-evident signed manifest. SOC/SOX-ready.
               </p>
               <button
-                onClick={() => {
-                  const from = `${auditFrom}T00:00:00Z`;
-                  const to = `${auditTo}T23:59:59Z`;
-                  window.location.assign(`/api/v1/audit/evidence_bundle?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+                onClick={async () => {
+                  try {
+                    setIsExporting(true);
+                    const from = `${auditFrom}T00:00:00Z`;
+                    const to = `${auditTo}T23:59:59Z`;
+                    const blob = await api.downloadBlob(
+                      `/api/v1/audit/evidence_bundle?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+                    );
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `evidence_bundle_${auditFrom}_${auditTo}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    toast.success('Evidence bundle downloaded');
+                  } catch (e: any) {
+                    toast.error(e?.message || 'Failed to generate evidence bundle');
+                  } finally {
+                    setIsExporting(false);
+                  }
                 }}
-                className="btn bg-blue-600 text-white hover:bg-blue-700 w-full py-3"
+                disabled={isExporting}
+                className="btn bg-blue-600 text-white hover:bg-blue-700 w-full py-3 disabled:opacity-50"
               >
-                <Shield className="w-5 h-5 mr-2" />
-                Generate Signed Evidence Bundle
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Generating Bundle...
+                  </>
+                ) : (
+                  <>
+                    <Shield className="w-5 h-5 mr-2" />
+                    Generate Signed Evidence Bundle
+                  </>
+                )}
               </button>
             </div>
           </div>
