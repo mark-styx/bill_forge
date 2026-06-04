@@ -48,6 +48,7 @@ export default function InvoicesPage() {
       page,
       per_page: 25,
       ...(statusFilter && { processing_status: statusFilter }),
+      ...(search && { search }),
     }),
   });
 
@@ -272,7 +273,7 @@ export default function InvoicesPage() {
         selectedRows={selectedIds}
         onSelectionChange={setSelectedIds}
         searchValue={search}
-        onSearchChange={setSearch}
+        onSearchChange={(value) => { setSearch(value); setPage(1); }}
         searchPlaceholder="Search invoices..."
         pagination={
           pagination

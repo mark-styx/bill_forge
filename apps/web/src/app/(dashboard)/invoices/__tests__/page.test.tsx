@@ -304,6 +304,53 @@ describe('InvoicesPage', () => {
     });
   });
 
+  it('passes search term to invoicesApi.list', async () => {
+    renderInvoicesPage();
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(mockListInvoices).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, per_page: 25 }),
+      );
+    });
+
+    // Find the search input and type into it
+    const searchInput = screen.getByPlaceholderText('Search invoices...');
+    fireEvent.change(searchInput, { target: { value: 'Acme' } });
+
+    // Wait for the debounced search to fire (AdvancedDataTable debounces at 300ms)
+    await waitFor(() => {
+      expect(mockListInvoices).toHaveBeenCalledWith(
+        expect.objectContaining({ search: 'Acme' }),
+      );
+    }, { timeout: 2000 });
+  });
+
+  it('resets page to 1 when search changes', async () => {
+    // Simulate being on page 2 initially by returning paginated data
+    mockListInvoices.mockResolvedValue({
+      data: mockInvoices,
+      pagination: { page: 2, per_page: 25, total_items: 30, total_pages: 2 },
+    });
+
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(mockListInvoices).toHaveBeenCalled();
+    });
+
+    // Type into search to trigger onSearchChange
+    const searchInput = screen.getByPlaceholderText('Search invoices...');
+    fireEvent.change(searchInput, { target: { value: 'test' } });
+
+    // After search changes, the API should be called with page: 1
+    await waitFor(() => {
+      expect(mockListInvoices).toHaveBeenCalledWith(
+        expect.objectContaining({ search: 'test', page: 1 }),
+      );
+    }, { timeout: 2000 });
+  });
+
   it('Bulk Export triggers CSV download and clears selection', async () => {
     renderInvoicesPage();
 
