@@ -492,8 +492,8 @@ export const implementationApi = {
     manual_upload_enabled?: boolean;
     erp_sync_enabled?: boolean;
   }) => api.put<ImplementationStatus>('/api/v1/implementation/configuration/capture-channels', params),
-  verifyEmailForwarding: (verified: boolean, evidence?: string) =>
-    api.post<ImplementationStatus>('/api/v1/implementation/configuration/capture-channels/email/verify', { verified, evidence }),
+  verifyEmailForwarding: (evidence?: string) =>
+    api.post<ImplementationStatus>('/api/v1/implementation/configuration/capture-channels/email/verify', { evidence }),
   ackModuleEntitlements: (entitlements: ImplementationModuleEntitlement[]) =>
     api.put<ImplementationStatus>('/api/v1/implementation/configuration/module-entitlements/ack', { entitlements }),
   updateNotificationApprovals: (apTeamDistribution: string[], escalationDistribution: string[]) =>

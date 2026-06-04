@@ -127,6 +127,8 @@ export default function GettingStartedPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [apTeamEmail, setApTeamEmail] = useState('');
+  const [escalationEmail, setEscalationEmail] = useState('');
 
   const loadStatus = useCallback(async () => {
     try {
@@ -248,7 +250,7 @@ export default function GettingStartedPage() {
     try {
       setPending('config-email-verify');
       setError(null);
-      setStatus(await implementationApi.verifyEmailForwarding(true, 'Admin attestation from implementation wizard'));
+      setStatus(await implementationApi.verifyEmailForwarding());
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -493,20 +495,29 @@ export default function GettingStartedPage() {
                   label="Email forwarding"
                   disabled={pending !== null}
                   onChange={() => {
-                    if (!phases.configuration.configuration.capture_channels.email_forwarding.verified_at) {
-                      void configureCaptureChannels({ email_forwarding_address: `forwarding@tenant.example.com` });
-                    }
+                    // noop - verification is now server-driven
                   }}
                 />
                 {!phases.configuration.configuration.capture_channels.email_forwarding.verified_at && (
-                  <button
-                    type="button"
-                    disabled={pending !== null}
-                    onClick={() => verifyEmail()}
-                    className="text-xs text-primary hover:underline disabled:opacity-60"
-                  >
-                    Verify
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {phases.configuration.configuration.capture_channels.email_forwarding.address ? (
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          Send a test email to <strong>{phases.configuration.configuration.capture_channels.email_forwarding.address}</strong>, then
+                        </span>
+                        <button
+                          type="button"
+                          disabled={pending !== null}
+                          onClick={() => verifyEmail()}
+                          className="text-xs text-primary hover:underline disabled:opacity-60"
+                        >
+                          Verify
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">No forwarding address configured</span>
+                    )}
+                  </div>
                 )}
                 {phases.configuration.configuration.capture_channels.email_forwarding.verified_at && (
                   <span className="text-xs text-green-600 dark:text-green-400">Verified</span>
@@ -534,11 +545,7 @@ export default function GettingStartedPage() {
                 type="button"
                 disabled={pending !== null}
                 onClick={() => {
-                  const modules: ImplementationModuleEntitlement[] = (tenant?.enabled_modules ?? []).map((m: string) => ({
-                    module_key: m,
-                    enabled: true,
-                  }));
-                  void ackModules(modules);
+                  void ackModules([]);
                 }}
                 className="text-sm text-primary hover:underline disabled:opacity-60"
               >
@@ -564,14 +571,37 @@ export default function GettingStartedPage() {
                 Approved
               </div>
             ) : (
-              <button
-                type="button"
-                disabled={pending !== null}
-                onClick={() => configureNotifications([], [])}
-                className="text-sm text-primary hover:underline disabled:opacity-60"
-              >
-                Acknowledge notification routing
-              </button>
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">AP team distribution emails</label>
+                  <input
+                    type="text"
+                    placeholder="ap-team@company.com"
+                    onChange={(e) => setApTeamEmail(e.target.value)}
+                    className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Escalation distribution emails</label>
+                  <input
+                    type="text"
+                    placeholder="manager@company.com"
+                    onChange={(e) => setEscalationEmail(e.target.value)}
+                    className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm"
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={pending !== null || !apTeamEmail.includes('@') || !escalationEmail.includes('@')}
+                  onClick={() => configureNotifications(
+                    apTeamEmail.split(',').map((s) => s.trim()).filter(Boolean),
+                    escalationEmail.split(',').map((s) => s.trim()).filter(Boolean),
+                  )}
+                  className="text-sm text-primary hover:underline disabled:opacity-60"
+                >
+                  Save notification routing
+                </button>
+              </div>
             )}
           </div>
         </div>

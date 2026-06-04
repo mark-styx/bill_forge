@@ -585,22 +585,34 @@ pub async fn verify_email_forwarding(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-    Json(request): Json<VerifyEmailForwardingRequest>,
+    Json(_request): Json<VerifyEmailForwardingRequest>,
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let metadata_pool = state.db.metadata();
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 
-    if request.verified {
-        wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
-    } else {
-        wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = None;
-    }
+    // Query metadata DB for an actual inbound message for this tenant
+    let inbound: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, received_at FROM inbound_email_messages WHERE tenant_id = $1 ORDER BY received_at DESC LIMIT 1",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_optional(&*metadata_pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query inbound messages: {}", e)))?;
+
+    let Some((message_id, received_at)) = inbound else {
+        return Err(billforge_core::Error::Validation(
+            "No test email received yet. Send a test email to your forwarding address and try again.".to_string(),
+        ).into());
+    };
+
+    wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
 
     tracing::info!(
         tenant_id = %tenant.tenant_id,
-        verified = request.verified,
-        evidence = ?request.evidence,
-        "Implementation wizard: email forwarding verification attestation"
+        inbound_message_id = %message_id,
+        received_at = %received_at,
+        "Implementation wizard: email forwarding verified via inbound message evidence"
     );
 
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
@@ -620,17 +632,40 @@ pub async fn acknowledge_module_entitlements(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-    Json(request): Json<AckModuleEntitlementsRequest>,
+    Json(_request): Json<AckModuleEntitlementsRequest>,
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 
-    // Mirror from tenant's gated modules: only record acknowledgement, not new entitlements
-    wizard.phases.configuration.configuration.module_entitlements = request.entitlements;
+    // Derive entitlements from the tenant's metadata DB enabled_modules,
+    // ignoring any client-supplied values.
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| billforge_core::Error::Internal("DATABASE_URL missing".into()))?;
+    let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e)))?;
+
+    let tenant_record = metadata_db
+        .get_tenant(&tenant.tenant_id)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to load tenant: {}", e)))?;
+
+    let server_entitlements: Vec<ModuleEntitlement> = if let Some(record) = tenant_record {
+        let modules: Vec<billforge_core::Module> = serde_json::from_value(record.enabled_modules.0.clone())
+            .unwrap_or_default();
+        modules.into_iter().map(|m| ModuleEntitlement {
+            module_key: m.as_str().to_string(),
+            enabled: true,
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
+    wizard.phases.configuration.configuration.module_entitlements = server_entitlements;
 
     tracing::info!(
         tenant_id = %tenant.tenant_id,
-        "Implementation wizard: module entitlements acknowledged"
+        "Implementation wizard: module entitlements acknowledged (server-derived)"
     );
 
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
@@ -652,6 +687,20 @@ pub async fn update_notification_approvals(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<UpdateNotificationApprovalsRequest>,
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
+    // Validate distributions are non-empty with at least one syntactically valid email each
+    let validate_email = |s: &str| s.contains('@') && !s.trim().is_empty() && !s.chars().any(|c| c.is_whitespace());
+
+    if request.ap_team_distribution.is_empty() || !request.ap_team_distribution.iter().any(|e| validate_email(e)) {
+        return Err(billforge_core::Error::Validation(
+            "At least one valid AP team distribution email is required.".to_string(),
+        ).into());
+    }
+    if request.escalation_distribution.is_empty() || !request.escalation_distribution.iter().any(|e| validate_email(e)) {
+        return Err(billforge_core::Error::Validation(
+            "At least one valid escalation distribution email is required.".to_string(),
+        ).into());
+    }
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 
@@ -1964,16 +2013,6 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
     } else {
         PhaseStatus::NotStarted
     };
-}
-
-fn status_response_with_routed(mut state: ImplementationWizardState, sample_invoice_routed: bool) -> ImplementationStatusResponse {
-    recompute_statuses(&mut state, sample_invoice_routed);
-    ImplementationStatusResponse {
-        day_number: day_number(state.started_at),
-        percent_complete: percent_complete(&state),
-        started_at: state.started_at,
-        phases: state.phases,
-    }
 }
 
 async fn status_response_with_accuracy(
