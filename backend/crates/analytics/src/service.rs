@@ -21,6 +21,12 @@ impl AnalyticsService {
         }
     }
 
+    /// Construct from a pre-built repository (allows the API layer to
+    /// supply a tenant-scoped pool obtained from `state.db.tenant(...)`).
+    pub fn with_repository(repo: AnalyticsRepository) -> Self {
+        Self { repo }
+    }
+
     /// Record an analytics event
     pub async fn track_event(
         &self,

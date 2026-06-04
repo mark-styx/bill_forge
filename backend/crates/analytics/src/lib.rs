@@ -18,7 +18,7 @@ pub mod service;
 
 pub use anomaly_detection::*;
 pub use forecasting::*;
-pub use handlers::create_router;
+pub use handlers::*;
 pub use models::*;
 pub use predictive_models::*;
 pub use predictive_repository::{ForecastAccuracySummary, PredictiveRepository};

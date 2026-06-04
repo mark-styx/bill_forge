@@ -1,6 +1,7 @@
 //! API routes
 
 pub mod ai;
+pub mod analytics;
 pub mod ap_command_center;
 pub mod approval_links;
 pub(crate) mod audit;
@@ -252,6 +253,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/notifications", notifications::routes())
         // Predictive Analytics (Forecasting & Anomaly Detection)
         .nest("/analytics/predictive", predictive::routes())
+        // Analytics (Usage, Performance, Trends - tenant-scoped via AuthUser)
+        .nest("/analytics", analytics::routes())
         // Mobile App Backend (Device management, dashboard, approvals)
         .nest("/mobile", mobile::routes())
         // Tenant settings
