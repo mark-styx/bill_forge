@@ -89,6 +89,11 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/integrations", chat_approvals::routes())
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
+        // Stripe webhook - bypasses tenant auth (tenant identity from session metadata)
+        .nest(
+            "/api/v1/billing",
+            billing::public_routes(),
+        )
         // Public API (PAT auth, not session JWT) — rate limiter attached via extension
         .nest(
             "/api/external/v1",

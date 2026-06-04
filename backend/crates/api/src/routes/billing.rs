@@ -1,7 +1,10 @@
-//! Billing API routes - exposes plan definitions, subscription status, and usage metering
+//! Billing API routes - exposes plan definitions, subscription status, usage metering,
+//! and a Stripe webhook endpoint for payment-confirmed module activation.
 
 use axum::{
+    body::Bytes,
     extract::State,
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
@@ -212,6 +215,75 @@ pub async fn create_checkout(
         "mode": outcome.mode,
         "url": outcome.url,
     })))
+}
+
+/// Public routes that bypass tenant auth (used by Stripe webhook callbacks).
+/// The billing::routes() set is nested inside the tenant-authenticated API layer,
+/// so these must be mounted separately on the public router.
+pub fn public_routes() -> Router<AppState> {
+    Router::new().route("/stripe/webhook", post(stripe_webhook))
+}
+
+/// POST /billing/stripe/webhook - receive Stripe webhook events
+///
+/// Verifies the Stripe signature, then delegates to the billing service.
+/// Returns 200 on success or ignored event types, 400 on bad signature.
+/// Tenant identity is extracted from the Stripe session metadata (set by us
+/// at checkout creation), not from request auth.
+async fn stripe_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let signature = match headers
+        .get("Stripe-Signature")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(s) => s.to_string(),
+        None => return StatusCode::BAD_REQUEST,
+    };
+
+    let config = BillingConfig::from_env();
+    let service = BillingService::new(config.clone(), state.db.metadata());
+
+    let stripe = match service.stripe() {
+        Some(s) => s,
+        None => {
+            tracing::warn!("Stripe webhook received but billing is not enabled");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let webhook_secret = match config.stripe_webhook_secret.as_deref() {
+        Some(s) => s,
+        None => {
+            tracing::warn!("Stripe webhook received but webhook secret is not configured");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    // Verify signature
+    let valid = match stripe.verify_webhook_signature(&body, &signature, webhook_secret) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    if !valid {
+        return StatusCode::BAD_REQUEST;
+    }
+
+    // Parse event
+    let event = match stripe.parse_webhook_event(&body) {
+        Ok(e) => e,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    // Process - always return 200 to Stripe (contract requirement), log errors
+    if let Err(e) = service.apply_checkout_completed(&event).await {
+        tracing::error!(error = %e, "Failed to process Stripe webhook event");
+    }
+
+    StatusCode::OK
 }
 
 fn parse_modules(module_names: &[String]) -> ApiResult<Vec<Module>> {
