@@ -58,8 +58,8 @@ pub mod xero;
 
 use crate::metrics;
 use crate::middleware::{
-    rate_limit_auth, require_auth, require_bill_com, require_edi,
-    require_quickbooks, require_sage_intacct, require_salesforce, require_tenant, require_workday,
+    rate_limit_auth, require_auth, require_bill_com, require_edi, require_quickbooks,
+    require_reporting, require_sage_intacct, require_salesforce, require_tenant, require_workday,
     require_xero, RateLimiterState,
 };
 use crate::routes::public_api::PublicApiRateLimiter;
@@ -251,8 +251,11 @@ fn api_routes(state: AppState) -> Router<AppState> {
     router
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
-        // Predictive Analytics (Forecasting & Anomaly Detection)
-        .nest("/analytics/predictive", predictive::routes())
+        // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module
+        .nest(
+            "/analytics/predictive",
+            predictive::routes().layer(middleware::from_fn(require_reporting)),
+        )
         // Analytics (Usage, Performance, Trends - tenant-scoped via AuthUser)
         .nest("/analytics", analytics::routes())
         // Mobile App Backend (Device management, dashboard, approvals)

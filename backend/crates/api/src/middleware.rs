@@ -345,3 +345,7 @@ pub async fn require_bill_com(req: Request<Body>, next: Next) -> Response<Body> 
 pub async fn require_edi(req: Request<Body>, next: Next) -> Response<Body> {
     gate_module(req, next, Module::Edi).await
 }
+
+pub async fn require_reporting(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::Reporting).await
+}
