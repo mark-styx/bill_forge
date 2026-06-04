@@ -1857,6 +1857,62 @@ export interface ExceptionTrendPoint {
 }
 
 // ---------------------------------------------------------------------------
+// AP Command Center — standup view
+// ---------------------------------------------------------------------------
+
+export interface ApCommandCenterBucket {
+  label: string;
+  range_start: string;
+  range_end: string;
+  total_payable_cents: number;
+  invoices: ApCommandCenterInvoice[];
+}
+
+export interface ApCommandCenterInvoice {
+  invoice_id: string;
+  invoice_number: string;
+  vendor_name: string;
+  amount_cents: number;
+  due_date: string;
+  blocking_approver_id: string | null;
+  blocking_approver_name: string | null;
+  days_stuck: number;
+  late_fee_risk_cents: number;
+  discount_expiring_cents: number;
+  discount_expires_at: string | null;
+}
+
+export interface ApCommandCenterResponse {
+  week_buckets: [ApCommandCenterBucket, ApCommandCenterBucket];
+  late_fee_risk_total_cents: number;
+  discount_expiring_total_cents: number;
+  generated_at: string;
+}
+
+export const apCommandCenterApi = {
+  /** Fetch this-week + next-week payables with blocker & discount metadata. */
+  thisWeek: () =>
+    api.get<ApCommandCenterResponse>('/api/v1/dashboard/ap-command-center/this-week'),
+};
+
+/** Inline approval actions — reassign and nudge via session-authenticated AP Command Center endpoints. */
+export const approvalsActions = {
+  /** Reassign the current pending approval on an invoice to another user. */
+  reassign: (invoiceId: string, newApproverId: string) =>
+    api.post<{ ok: boolean }>(
+      `/api/v1/dashboard/ap-command-center/${invoiceId}/reassign`,
+      { new_approver_id: newApproverId },
+    ),
+
+  /** Send a nudge / comment on a stuck approval. */
+  nudge: (invoiceId: string, commentBody: string) =>
+    api.post<{ ok: boolean }>(
+      `/api/v1/dashboard/ap-command-center/${invoiceId}/nudge`,
+      { comment_body: commentBody },
+    ),
+};
+
+// ---------------------------------------------------------------------------
 // Audit Log Types
 // ---------------------------------------------------------------------------
 

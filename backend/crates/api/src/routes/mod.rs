@@ -1,6 +1,7 @@
 //! API routes
 
 pub mod ai;
+pub mod ap_command_center;
 pub mod approval_links;
 pub(crate) mod audit;
 pub mod auth;
@@ -177,6 +178,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/reports", reports::routes())
         // Dashboard metrics
         .nest("/dashboard", dashboard::routes())
+        // AP Command Center (standup view)
+        .nest("/dashboard/ap-command-center", ap_command_center::routes())
         // Data export
         .nest("/export", export::routes())
         // Document storage
