@@ -74,7 +74,7 @@ pub struct BlockingInvoice {
     pub blocking_approver_name: Option<String>,
     /// Days since the current pending approval request was created.
     pub days_stuck: i32,
-    /// Estimated late-fee exposure (0 when vendor fields are absent).
+    /// Estimated late-fee exposure = invoice amount × vendor late-fee percent.
     pub late_fee_risk_cents: i64,
     /// Discount $ that will expire within this bucket window.
     pub discount_expiring_cents: i64,
@@ -120,7 +120,7 @@ async fn get_this_week_command_center(
         Option<Uuid>,   // blocking_approver_id
         Option<String>, // blocking_approver_name
         i32,           // days_stuck
-        i64,           // late_fee_risk_cents (always 0 — deferred)
+        i64,           // late_fee_risk_cents
         Option<f64>,   // discount_percent
         Option<NaiveDate>, // discount_deadline
         Option<i64>,   // discount_amount_cents
@@ -135,7 +135,11 @@ async fn get_this_week_command_center(
             blocker.approver_id     AS blocking_approver_id,
             blocker.approver_name   AS blocking_approver_name,
             COALESCE(blocker.days_stuck, 0) AS days_stuck,
-            0::bigint               AS late_fee_risk_cents,
+            CASE
+                WHEN v.late_fee_percent IS NULL OR v.late_fee_percent = 0
+                THEN 0::bigint
+                ELSE ROUND(i.total_amount_cents * v.late_fee_percent / 100.0)::bigint
+            END                     AS late_fee_risk_cents,
             i.discount_percent,
             i.discount_deadline,
             CASE
@@ -148,6 +152,7 @@ async fn get_this_week_command_center(
                 ELSE NULL
             END                     AS discount_amount_cents
         FROM invoices i
+        LEFT JOIN vendors v ON v.id = i.vendor_id AND v.tenant_id = i.tenant_id
         LEFT JOIN LATERAL (
             SELECT
                 u.id   AS approver_id,
