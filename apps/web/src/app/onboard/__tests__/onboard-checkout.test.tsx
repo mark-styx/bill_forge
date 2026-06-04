@@ -80,20 +80,23 @@ describe('OnboardPage checkout wiring', () => {
     await user.type(companyInput, 'TestCo');
     await user.click(screen.getByText('Next'));
 
-    // Fill admin fields (step 1)
+    // Industry step (step 1) - skip with default
+    await user.click(screen.getByText('Next'));
+
+    // Fill admin fields (step 2)
     await user.type(screen.getByPlaceholderText('Jane Smith'), 'Test User');
     await user.type(screen.getByPlaceholderText('jane@acme.com'), 'test@test.com');
     await user.type(screen.getByPlaceholderText('Min 8 characters'), 'password1');
     await user.type(screen.getByPlaceholderText('Confirm password'), 'password1');
     await user.click(screen.getByText('Next'));
 
-    // Skip OCR (step 2)
+    // Skip OCR (step 3)
     await user.click(screen.getByText('Next'));
 
-    // Skip ERP (step 3)
+    // Skip ERP (step 4)
     await user.click(screen.getByText('Next'));
 
-    // Step 4 - Launch
+    // Step 5 - Launch
     await user.click(screen.getByText('Launch BillForge'));
 
     await waitFor(() => {
@@ -128,6 +131,9 @@ describe('OnboardPage checkout wiring', () => {
     await user.type(screen.getByPlaceholderText('Acme Corporation'), 'TestCo');
     await user.click(screen.getByText('Next'));
 
+    // Industry step
+    await user.click(screen.getByText('Next'));
+
     await user.type(screen.getByPlaceholderText('Jane Smith'), 'Test User');
     await user.type(screen.getByPlaceholderText('jane@acme.com'), 'test@test.com');
     await user.type(screen.getByPlaceholderText('Min 8 characters'), 'password1');
@@ -150,6 +156,9 @@ describe('OnboardPage checkout wiring', () => {
     render(<OnboardPage />);
 
     await user.type(screen.getByPlaceholderText('Acme Corporation'), 'TestCo');
+    await user.click(screen.getByText('Next'));
+
+    // Industry step
     await user.click(screen.getByText('Next'));
 
     await user.type(screen.getByPlaceholderText('Jane Smith'), 'Test User');
@@ -184,22 +193,25 @@ describe('OnboardPage checkout wiring', () => {
     await user.type(screen.getByPlaceholderText('Acme Corporation'), 'TestCo');
     await user.click(screen.getByText('Next'));
 
-    // Fill admin fields (step 1)
+    // Industry step (step 1) - skip with default
+    await user.click(screen.getByText('Next'));
+
+    // Fill admin fields (step 2)
     await user.type(screen.getByPlaceholderText('Jane Smith'), 'Test User');
     await user.type(screen.getByPlaceholderText('jane@acme.com'), 'test@test.com');
     await user.type(screen.getByPlaceholderText('Min 8 characters'), 'password1');
     await user.type(screen.getByPlaceholderText('Confirm password'), 'password1');
     await user.click(screen.getByText('Next'));
 
-    // Select AWS Textract OCR (step 2)
+    // Select AWS Textract OCR (step 3)
     await user.click(screen.getByText('AWS Textract'));
     await user.click(screen.getByText('Next'));
 
-    // Select QuickBooks ERP (step 3)
+    // Select QuickBooks ERP (step 4)
     await user.click(screen.getByText('QuickBooks Online'));
     await user.click(screen.getByText('Next'));
 
-    // Step 4 - Launch
+    // Step 5 - Launch
     await user.click(screen.getByText('Launch BillForge'));
 
     await waitFor(() => {

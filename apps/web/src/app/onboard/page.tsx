@@ -2,7 +2,7 @@
 
 import { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { FileText, Building2, ScanLine, Link2, Rocket } from 'lucide-react';
+import { FileText, Building2, ScanLine, Link2, Rocket, Briefcase } from 'lucide-react';
 import { useAuthStore, setupApiCallbacks } from '@/stores/auth';
 import { authApi, billingApi, api, type BillingModule } from '@/lib/api';
 import { StepperWithContent, StepContent, Step } from '@/components/ui/stepper';
@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 
 const STEPS: Step[] = [
   { id: 'company', title: 'Company Info', icon: <Building2 className="w-4 h-4" /> },
+  { id: 'industry', title: 'Industry', icon: <Briefcase className="w-4 h-4" /> },
   { id: 'admin', title: 'Admin Account', icon: <FileText className="w-4 h-4" /> },
   { id: 'ocr', title: 'OCR Provider', icon: <ScanLine className="w-4 h-4" />, optional: true },
   { id: 'erp', title: 'ERP Connection', icon: <Link2 className="w-4 h-4" />, optional: true },
@@ -29,6 +30,13 @@ const ERP_OPTIONS = [
   { id: 'xero', name: 'Xero', description: 'Export approved invoices to Xero.' },
   { id: 'sage', name: 'Sage Intacct', description: 'Enterprise ERP integration with Sage.' },
   { id: 'none', name: 'Skip for now', description: 'You can connect an ERP later from Settings.' },
+];
+
+const INDUSTRY_OPTIONS = [
+  { id: 'construction', name: 'Construction', description: 'Subcontractors, materials, equipment rental, permits.' },
+  { id: 'professional_services', name: 'Professional Services', description: 'Consulting fees, travel, software, contractors.' },
+  { id: 'retail', name: 'Retail', description: 'Inventory, suppliers, freight, store operations.' },
+  { id: 'generic', name: 'Generic (None)', description: 'Start with a blank workspace. Configure later.' },
 ];
 
 const OCR_PROVIDER_BY_SELECTION: Record<string, string> = {
@@ -63,6 +71,7 @@ function OnboardInner() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [selectedOcr, setSelectedOcr] = useState('builtin');
   const [selectedErp, setSelectedErp] = useState('none');
+  const [selectedIndustry, setSelectedIndustry] = useState('generic');
 
   const handleStepComplete = async (stepIndex: number): Promise<boolean> => {
     setError(null);
@@ -75,7 +84,12 @@ function OnboardInner() {
       return true;
     }
 
+    // Industry step (1) always passes - has default selection
     if (stepIndex === 1) {
+      return true;
+    }
+
+    if (stepIndex === 2) {
       if (!adminName.trim() || !adminEmail.trim() || !adminPassword) {
         setError('All admin fields are required');
         return false;
@@ -92,7 +106,7 @@ function OnboardInner() {
     }
 
     // OCR and ERP steps always pass
-    if (stepIndex === 2 || stepIndex === 3) {
+    if (stepIndex === 3 || stepIndex === 4) {
       return true;
     }
 
@@ -106,6 +120,7 @@ function OnboardInner() {
     try {
       const response = await authApi.provision({
         company_name: companyName,
+        industry: selectedIndustry,
         admin_email: adminEmail,
         admin_password: adminPassword,
         admin_name: adminName,
@@ -248,7 +263,30 @@ function OnboardInner() {
             </div>
           </StepContent>
 
-          {/* Step 2: Admin Account */}
+          {/* Step 2: Industry */}
+          <StepContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Choose your industry to pre-configure approval workflows, GL accounts, and vendor categories.
+            </p>
+            <div className="space-y-3">
+              {INDUSTRY_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setSelectedIndustry(opt.id)}
+                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
+                    selectedIndustry === opt.id
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/30'
+                  }`}
+                >
+                  <div className="font-medium text-foreground">{opt.name}</div>
+                  <div className="text-sm text-muted-foreground mt-1">{opt.description}</div>
+                </button>
+              ))}
+            </div>
+          </StepContent>
+
+          {/* Step 3: Admin Account */}
           <StepContent>
             <div className="space-y-4">
               <div>
@@ -299,7 +337,7 @@ function OnboardInner() {
             </div>
           </StepContent>
 
-          {/* Step 3: OCR Provider */}
+          {/* Step 4: OCR Provider */}
           <StepContent>
             <p className="text-sm text-muted-foreground mb-4">
               Choose how BillForge extracts data from your invoices. You can change this later.
@@ -322,7 +360,7 @@ function OnboardInner() {
             </div>
           </StepContent>
 
-          {/* Step 4: ERP Connection */}
+          {/* Step 5: ERP Connection */}
           <StepContent>
             <p className="text-sm text-muted-foreground mb-4">
               Connect your accounting system to sync approved invoices automatically.
@@ -345,7 +383,7 @@ function OnboardInner() {
             </div>
           </StepContent>
 
-          {/* Step 5: Launch */}
+          {/* Step 6: Launch */}
           <StepContent>
             <div className="text-center py-6">
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-green-500/20 mb-4">
@@ -359,6 +397,10 @@ function OnboardInner() {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Company</span>
                   <span className="font-medium">{companyName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Industry</span>
+                  <span className="font-medium">{INDUSTRY_OPTIONS.find(i => i.id === selectedIndustry)?.name}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Admin</span>

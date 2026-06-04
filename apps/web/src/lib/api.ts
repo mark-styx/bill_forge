@@ -253,6 +253,7 @@ export const authApi = {
     default_currency?: string;
     ocr_provider?: string;
     local_ocr_required?: boolean;
+    industry?: string;
   }) =>
     api.post<AuthResponseData>('/api/v1/auth/provision', data),
 

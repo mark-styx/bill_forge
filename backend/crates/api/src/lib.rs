@@ -14,6 +14,7 @@ pub mod middleware;
 pub mod openapi;
 pub mod routes;
 pub mod services;
+pub mod starter_packs;
 pub mod state;
 pub mod state_machine;
 pub mod validation;

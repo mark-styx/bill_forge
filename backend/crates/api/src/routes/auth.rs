@@ -7,6 +7,7 @@ use axum::{extract::State, routing::post, Json, Router};
 use billforge_auth::{AuthResponse, LoginInput, ProvisionInput, RegisterInput};
 use billforge_core::TenantId;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use utoipa::ToSchema;
 
 pub fn routes() -> Router<AppState> {
@@ -82,6 +83,8 @@ pub struct ProvisionRequest {
     pub default_currency: Option<String>,
     pub ocr_provider: Option<String>,
     pub local_ocr_required: Option<bool>,
+    /// Industry vertical for starter pack seeding. Defaults to "generic".
+    pub industry: Option<String>,
 }
 
 #[utoipa::path(
@@ -98,6 +101,12 @@ async fn provision(
     State(state): State<AppState>,
     Json(req): Json<ProvisionRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
+    // Parse industry before provisioning so we can reject unknown values early
+    let industry_str = req.industry.as_deref().unwrap_or("generic");
+    let industry = crate::starter_packs::Industry::from_str(industry_str).map_err(|e| {
+        ApiError(billforge_core::Error::Validation(e))
+    })?;
+
     let response = state
         .auth
         .provision(ProvisionInput {
@@ -140,6 +149,15 @@ async fn provision(
                     e
                 );
             }
+
+            // Apply industry starter pack
+            if let Err(e) = crate::starter_packs::apply_pack(&pool, &tenant_id, industry).await {
+                tracing::warn!(
+                    "Failed to apply starter pack for {}: {}",
+                    tenant_id.as_str(),
+                    e
+                );
+            }
         }
         Err(e) => {
             tracing::warn!(
@@ -149,6 +167,13 @@ async fn provision(
             );
         }
     }
+
+    // Audit log the starter pack application
+    tracing::info!(
+        tenant_id = %tenant_id.as_str(),
+        industry = %industry_str,
+        "STARTER_PACK_APPLIED"
+    );
 
     Ok(Json(response))
 }
