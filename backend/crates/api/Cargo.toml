@@ -104,6 +104,7 @@ bill-com = ["dep:billforge-bill-com"]
 edi = ["dep:billforge-edi"]
 
 [dev-dependencies]
+hmac = "0.12"
 tokio-test = "0.4"
 tokio = { version = "1.35", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }

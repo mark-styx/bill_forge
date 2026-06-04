@@ -104,6 +104,44 @@ pub struct ListDocumentsQuery {
     pub status: Option<String>,
 }
 
+// ──────────────────────────── Webhook Auth Helper ────────────────────────────
+
+/// Authenticate an inbound EDI webhook by verifying HMAC-SHA256 signature.
+///
+/// Returns `Ok(())` only when both pre-conditions hold:
+/// 1. The tenant has a non-empty `webhook_secret` configured.
+/// 2. The request carries a non-empty `x-webhook-signature` header.
+///
+/// On success the HMAC is verified; on failure (or missing pre-conditions) a
+/// 401 is returned. Error bodies are generic to avoid leaking whether a partner
+/// or secret exists.
+fn authenticate_edi_webhook(
+    body: &[u8],
+    signature_header: &str,
+    webhook_secret: &Option<String>,
+) -> Result<(), axum::http::StatusCode> {
+    use axum::http::StatusCode;
+
+    match webhook_secret.as_deref() {
+        None | Some("") => {
+            tracing::warn!("EDI webhook rejected: no webhook secret configured for tenant");
+            Err(StatusCode::UNAUTHORIZED)
+        }
+        Some(secret) => {
+            if signature_header.is_empty() {
+                tracing::warn!("EDI webhook rejected: missing or empty signature header");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            if !verify_webhook_signature(body, signature_header, secret) {
+                tracing::warn!("EDI webhook rejected: signature verification failed");
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            tracing::debug!("EDI webhook signature verified");
+            Ok(())
+        }
+    }
+}
+
 // ──────────────────────────── Webhook ────────────────────────────
 
 /// Receive inbound EDI documents from middleware webhook
@@ -196,15 +234,7 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            if let Some(secret) = &webhook_secret {
-                if !secret.is_empty() && !signature.is_empty() {
-                    if !verify_webhook_signature(&body, signature, secret) {
-                        tracing::warn!("EDI webhook signature verification failed");
-                        return Err(axum::http::StatusCode::UNAUTHORIZED);
-                    }
-                    tracing::debug!("EDI webhook signature verified");
-                }
-            }
+            authenticate_edi_webhook(&body, signature, &webhook_secret)?;
 
             // --- Replay protection ---
             // 1. Timestamp freshness
@@ -506,14 +536,7 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            if let Some(secret) = &webhook_secret {
-                if !secret.is_empty() && !signature.is_empty() {
-                    if !verify_webhook_signature(&body, signature, secret) {
-                        tracing::warn!("EDI webhook signature verification failed");
-                        return Err(axum::http::StatusCode::UNAUTHORIZED);
-                    }
-                }
-            }
+            authenticate_edi_webhook(&body, signature, &webhook_secret)?;
 
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
@@ -683,14 +706,7 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            if let Some(secret) = &webhook_secret {
-                if !secret.is_empty() && !signature.is_empty() {
-                    if !verify_webhook_signature(&body, signature, secret) {
-                        tracing::warn!("EDI webhook signature verification failed");
-                        return Err(axum::http::StatusCode::UNAUTHORIZED);
-                    }
-                }
-            }
+            authenticate_edi_webhook(&body, signature, &webhook_secret)?;
 
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
@@ -921,14 +937,7 @@ async fn webhook_inbound(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            if let Some(secret) = &webhook_secret {
-                if !secret.is_empty() && !signature.is_empty() {
-                    if !verify_webhook_signature(&body, signature, secret) {
-                        tracing::warn!("EDI 997 webhook signature verification failed");
-                        return Err(axum::http::StatusCode::UNAUTHORIZED);
-                    }
-                }
-            }
+            authenticate_edi_webhook(&body, signature, &webhook_secret)?;
 
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
@@ -1683,4 +1692,77 @@ async fn delete_partner(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
+}
+
+#[cfg(test)]
+mod webhook_auth_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    fn compute_signature(body: &[u8], secret: &str) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    #[test]
+    fn test_reject_when_webhook_secret_is_none() {
+        let body = b"some payload";
+        let signature = "anything";
+        let webhook_secret: Option<String> = None;
+        let result = authenticate_edi_webhook(body, signature, &webhook_secret);
+        assert_eq!(result, Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn test_reject_when_webhook_secret_is_empty_string() {
+        let body = b"some payload";
+        let signature = "anything";
+        let webhook_secret = Some(String::new());
+        let result = authenticate_edi_webhook(body, signature, &webhook_secret);
+        assert_eq!(result, Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn test_reject_when_signature_header_is_empty() {
+        let body = b"some payload";
+        let signature = "";
+        let webhook_secret = Some("valid-secret".to_string());
+        let result = authenticate_edi_webhook(body, signature, &webhook_secret);
+        assert_eq!(result, Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn test_reject_when_signature_is_wrong() {
+        let body = b"some payload";
+        let signature = "deadbeef";
+        let webhook_secret = Some("valid-secret".to_string());
+        let result = authenticate_edi_webhook(body, signature, &webhook_secret);
+        assert_eq!(result, Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn test_accept_valid_signature() {
+        let body = b"some payload";
+        let secret = "valid-secret";
+        let signature = compute_signature(body, secret);
+        let webhook_secret = Some(secret.to_string());
+        let result = authenticate_edi_webhook(body, &signature, &webhook_secret);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_accept_valid_signature_with_sha256_prefix() {
+        let body = b"another payload";
+        let secret = "my-webhook-key";
+        let sig_hex = compute_signature(body, secret);
+        let signature = format!("sha256={}", sig_hex);
+        let webhook_secret = Some(secret.to_string());
+        let result = authenticate_edi_webhook(body, &signature, &webhook_secret);
+        assert_eq!(result, Ok(()));
+    }
 }

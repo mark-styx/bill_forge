@@ -971,6 +971,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "hmac 0.12.1",
  "http-body-util",
  "jsonwebtoken",
  "lazy_static",
