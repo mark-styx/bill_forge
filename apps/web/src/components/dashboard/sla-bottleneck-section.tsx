@@ -71,13 +71,50 @@ function dwellColor(minutes: number): string {
 // Sub-widgets
 // ---------------------------------------------------------------------------
 
-function AtRiskInvoices({ data }: { data: ApprovalSlaSummary | undefined }) {
+function AtRiskInvoices({ data, isLoading, isError }: { data: ApprovalSlaSummary | undefined; isLoading?: boolean; isError?: boolean }) {
   const items = (data?.items ?? [])
     .slice()
     .sort((a, b) => b.percent_elapsed - a.percent_elapsed)
     .slice(0, 10);
 
   if (!items.length) {
+    if (isLoading) {
+      return (
+        <div className="card p-5" data-testid="at-risk-loading" role="status" aria-busy="true">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-processing/10">
+              <Clock className="w-5 h-5 text-processing" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">At-Risk Invoices</h3>
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="animate-pulse h-14 rounded-xl bg-secondary" />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="card p-5" data-testid="at-risk-error" role="alert">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-error/10">
+              <AlertTriangle className="w-5 h-5 text-error" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">At-Risk Invoices</h3>
+              <p className="text-sm text-error">Unable to load at-risk invoices</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">
@@ -156,8 +193,45 @@ function AtRiskInvoices({ data }: { data: ApprovalSlaSummary | undefined }) {
   );
 }
 
-function StageDwellHeatMap({ data }: { data: StageDwellRow[] | undefined }) {
+function StageDwellHeatMap({ data, isLoading, isError }: { data: StageDwellRow[] | undefined; isLoading?: boolean; isError?: boolean }) {
   if (!data || data.length === 0) {
+    if (isLoading) {
+      return (
+        <div className="card p-5" data-testid="stage-dwell-loading" role="status" aria-busy="true">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-warning/10">
+              <Flame className="w-5 h-5 text-warning" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Stage Dwell Time</h3>
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="animate-pulse h-8 rounded-full bg-secondary" />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="card p-5" data-testid="stage-dwell-error" role="alert">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-error/10">
+              <AlertTriangle className="w-5 h-5 text-error" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Stage Dwell Time</h3>
+              <p className="text-sm text-error">Unable to load stage dwell data</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">
@@ -208,8 +282,45 @@ function StageDwellHeatMap({ data }: { data: StageDwellRow[] | undefined }) {
   );
 }
 
-function ApproverWorkloadChart({ data }: { data: ApproverWorkloadRow[] | undefined }) {
+function ApproverWorkloadChart({ data, isLoading, isError }: { data: ApproverWorkloadRow[] | undefined; isLoading?: boolean; isError?: boolean }) {
   if (!data || data.length === 0) {
+    if (isLoading) {
+      return (
+        <div className="card p-5" data-testid="approver-workload-loading" role="status" aria-busy="true">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-accent/10">
+              <Users className="w-5 h-5 text-accent" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Approver Workload</h3>
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="animate-pulse h-8 rounded-full bg-secondary" />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="card p-5" data-testid="approver-workload-error" role="alert">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-error/10">
+              <AlertTriangle className="w-5 h-5 text-error" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Approver Workload</h3>
+              <p className="text-sm text-error">Unable to load approver workload</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">
@@ -266,8 +377,41 @@ function ApproverWorkloadChart({ data }: { data: ApproverWorkloadRow[] | undefin
   );
 }
 
-function ExceptionTrendChart({ data }: { data: ExceptionTrendPoint[] | undefined }) {
+function ExceptionTrendChart({ data, isLoading, isError }: { data: ExceptionTrendPoint[] | undefined; isLoading?: boolean; isError?: boolean }) {
   if (!data || data.length === 0) {
+    if (isLoading) {
+      return (
+        <div className="card p-5" data-testid="exception-trend-loading" role="status" aria-busy="true">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-error/10">
+              <TrendingUp className="w-5 h-5 text-error" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Exception Rate Trend</h3>
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            </div>
+          </div>
+          <div className="animate-pulse h-32 rounded-xl bg-secondary" />
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="card p-5" data-testid="exception-trend-error" role="alert">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-error/10">
+              <AlertTriangle className="w-5 h-5 text-error" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Exception Rate Trend</h3>
+              <p className="text-sm text-error">Unable to load exception trend data</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">
@@ -322,22 +466,22 @@ function ExceptionTrendChart({ data }: { data: ExceptionTrendPoint[] | undefined
 // ---------------------------------------------------------------------------
 
 export function SlaBottleneckSection() {
-  const { data: approvalSla } = useQuery({
+  const { data: approvalSla, isLoading: approvalSlaLoading, isError: approvalSlaError } = useQuery({
     queryKey: ['dashboard-approval-sla'],
     queryFn: () => reportsApi.approvalSla(),
   });
 
-  const { data: stageDwell } = useQuery({
+  const { data: stageDwell, isLoading: stageDwellLoading, isError: stageDwellError } = useQuery({
     queryKey: ['dashboard-stage-dwell'],
     queryFn: () => dashboardApi.getStageDwell(),
   });
 
-  const { data: approverWorkload } = useQuery({
+  const { data: approverWorkload, isLoading: approverWorkloadLoading, isError: approverWorkloadError } = useQuery({
     queryKey: ['dashboard-approver-workload'],
     queryFn: () => dashboardApi.getApproverWorkload(),
   });
 
-  const { data: exceptionTrend } = useQuery({
+  const { data: exceptionTrend, isLoading: exceptionTrendLoading, isError: exceptionTrendError } = useQuery({
     queryKey: ['dashboard-exception-trend'],
     queryFn: () => dashboardApi.getExceptionTrend(),
   });
@@ -350,16 +494,16 @@ export function SlaBottleneckSection() {
       </h2>
 
       {/* Top row: At-Risk Invoices */}
-      <AtRiskInvoices data={approvalSla} />
+      <AtRiskInvoices data={approvalSla} isLoading={approvalSlaLoading} isError={approvalSlaError} />
 
       {/* Middle row: Stage Dwell + Approver Workload */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <StageDwellHeatMap data={stageDwell} />
-        <ApproverWorkloadChart data={approverWorkload} />
+        <StageDwellHeatMap data={stageDwell} isLoading={stageDwellLoading} isError={stageDwellError} />
+        <ApproverWorkloadChart data={approverWorkload} isLoading={approverWorkloadLoading} isError={approverWorkloadError} />
       </div>
 
       {/* Bottom row: Exception Rate Trend */}
-      <ExceptionTrendChart data={exceptionTrend} />
+      <ExceptionTrendChart data={exceptionTrend} isLoading={exceptionTrendLoading} isError={exceptionTrendError} />
     </div>
   );
 }

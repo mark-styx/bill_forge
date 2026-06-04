@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SlaBottleneckSection } from '../sla-bottleneck-section';
+import { reportsApi, dashboardApi } from '@/lib/api';
 
-// Mock the API module
+// Mock the API module with happy-path defaults
 vi.mock('@/lib/api', () => ({
   reportsApi: {
     approvalSla: vi.fn().mockResolvedValue({
@@ -145,5 +146,67 @@ describe('SlaBottleneckSection', () => {
     renderWithProviders(<SlaBottleneckSection />);
     expect(await screen.findByTestId('trend-bar-2026-05-29')).toBeInTheDocument();
     expect(screen.getByTestId('trend-bar-2026-05-30')).toBeInTheDocument();
+  });
+});
+
+describe('loading and error states', () => {
+  const loadingTestIds = [
+    'at-risk-loading',
+    'stage-dwell-loading',
+    'approver-workload-loading',
+    'exception-trend-loading',
+  ];
+
+  const errorTestIds = [
+    'at-risk-error',
+    'stage-dwell-error',
+    'approver-workload-error',
+    'exception-trend-error',
+  ];
+
+  const emptyStateTexts = [
+    'No invoices at risk',
+    'No stage data yet',
+    'No pending approvals',
+    'No data yet',
+  ];
+
+  it('shows loading placeholders while queries are pending', async () => {
+    // Override all mocks to never resolve so queries stay in loading state
+    vi.mocked(reportsApi.approvalSla).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(dashboardApi.getStageDwell).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(dashboardApi.getApproverWorkload).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(dashboardApi.getExceptionTrend).mockImplementation(() => new Promise(() => {}));
+
+    renderWithProviders(<SlaBottleneckSection />);
+
+    // All loading test IDs should be present immediately
+    for (const tid of loadingTestIds) {
+      expect(screen.getByTestId(tid)).toBeInTheDocument();
+    }
+
+    // Empty-state text must NOT appear while loading
+    for (const text of emptyStateTexts) {
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+    }
+  });
+
+  it('shows error messages when queries reject', async () => {
+    vi.mocked(reportsApi.approvalSla).mockRejectedValue(new Error('fail'));
+    vi.mocked(dashboardApi.getStageDwell).mockRejectedValue(new Error('fail'));
+    vi.mocked(dashboardApi.getApproverWorkload).mockRejectedValue(new Error('fail'));
+    vi.mocked(dashboardApi.getExceptionTrend).mockRejectedValue(new Error('fail'));
+
+    renderWithProviders(<SlaBottleneckSection />);
+
+    // All error test IDs should appear after rejection
+    for (const tid of errorTestIds) {
+      expect(await screen.findByTestId(tid)).toBeInTheDocument();
+    }
+
+    // Empty-state text must NOT appear on error
+    for (const text of emptyStateTexts) {
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+    }
   });
 });
