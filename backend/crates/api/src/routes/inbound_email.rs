@@ -38,20 +38,27 @@ async fn handle_inbound_email(
     headers: HeaderMap,
     Json(payload): Json<billforge_email::InboundEmailPayload>,
 ) -> Result<(StatusCode, Json<InboundEmailResponse>), StatusCode> {
-    // 1. Validate shared secret
-    let expected_secret = std::env::var("INBOUND_EMAIL_WEBHOOK_SECRET").unwrap_or_default();
-    if !expected_secret.is_empty() {
-        let provided = headers
-            .get(SECRET_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if provided != expected_secret {
+    // 1. Validate shared secret (fail-closed: reject if env var is missing or empty)
+    let expected_secret = match std::env::var("INBOUND_EMAIL_WEBHOOK_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
             tracing::warn!(
-                provided_secret = provided.len(),
-                "Inbound email webhook rejected: invalid secret"
+                "Inbound email webhook rejected: INBOUND_EMAIL_WEBHOOK_SECRET not configured"
             );
-            return Err(StatusCode::UNAUTHORIZED);
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
+    };
+
+    let provided = headers
+        .get(SECRET_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided != expected_secret {
+        tracing::warn!(
+            provided_secret = provided.len(),
+            "Inbound email webhook rejected: invalid secret"
+        );
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
     // 2. Resolve recipient → tenant via metadata DB

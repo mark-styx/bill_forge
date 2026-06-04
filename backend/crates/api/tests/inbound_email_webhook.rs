@@ -3,6 +3,7 @@
 //! Tests:
 //! - Valid secret + valid payload → 200 + DB rows created
 //! - Missing/invalid secret → 401
+//! - Unset or empty INBOUND_EMAIL_WEBHOOK_SECRET → 503 (fail-closed)
 
 use axum::{
     body::Body,
@@ -17,7 +18,9 @@ use tower::util::ServiceExt;
 // Helpers
 // ---------------------------------------------------------------------------
 
-async fn create_test_state() -> AppState {
+/// Set up the common env vars required by Config::from_env, EXCEPT
+/// INBOUND_EMAIL_WEBHOOK_SECRET (caller sets that to test different states).
+fn set_common_env_vars() {
     std::env::set_var("JWT_SECRET", "test-secret-key-for-testing-32-bytes");
     std::env::set_var("ENVIRONMENT", "development");
     if std::env::var("DATABASE_URL").is_err() {
@@ -29,8 +32,12 @@ async fn create_test_state() -> AppState {
     std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants_ie");
     std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files_ie");
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
-    std::env::set_var("INBOUND_EMAIL_WEBHOOK_SECRET", "test-inbound-secret");
     std::env::set_var("INBOUND_EMAIL_DOMAIN", "billforge.com");
+}
+
+async fn create_test_state() -> AppState {
+    set_common_env_vars();
+    std::env::set_var("INBOUND_EMAIL_WEBHOOK_SECRET", "test-inbound-secret");
 
     let config = Config::from_env().expect("Failed to load test config");
     AppState::new(&config)
@@ -76,6 +83,7 @@ fn sample_payload_with_pdf() -> serde_json::Value {
 
 #[tokio::test]
 async fn test_inbound_email_valid_secret_returns_200() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
 
     let response = app
@@ -105,6 +113,7 @@ async fn test_inbound_email_valid_secret_returns_200() {
 
 #[tokio::test]
 async fn test_inbound_email_invalid_secret_returns_401() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
 
     let response = app
@@ -133,6 +142,7 @@ async fn test_inbound_email_invalid_secret_returns_401() {
 
 #[tokio::test]
 async fn test_inbound_email_missing_secret_returns_401() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
 
     let response = app
@@ -161,6 +171,7 @@ async fn test_inbound_email_missing_secret_returns_401() {
 
 #[tokio::test]
 async fn test_inbound_email_with_pdf_attachment_returns_200() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
     let app = create_test_router().await;
 
     let response = app
@@ -184,6 +195,95 @@ async fn test_inbound_email_with_pdf_attachment_returns_200() {
         response.status() == StatusCode::OK
             || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
         "Expected 200 or 500 (no tenant DB), got {}",
+        response.status()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed tests: webhook must reject when secret env var is unset/empty
+// ---------------------------------------------------------------------------
+
+/// Mutex to serialize env-var mutation across tests. The handler reads
+/// INBOUND_EMAIL_WEBHOOK_SECRET at request time (not startup), so the guard
+/// must be held through the oneshot call.
+static SECRET_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tokio::test]
+async fn test_rejects_when_secret_env_unset() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
+    set_common_env_vars();
+    std::env::remove_var("INBOUND_EMAIL_WEBHOOK_SECRET");
+
+    let config = Config::from_env().expect("Failed to load test config");
+    let state = AppState::new(&config)
+        .await
+        .expect("Failed to create test state");
+    let app = routes::create_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/webhooks/inbound-email")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-inbound-email-secret", "anything")
+                .body(Body::from(
+                    serde_json::to_string(&sample_payload()).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("Request failed");
+
+    // Restore before releasing guard
+    std::env::set_var("INBOUND_EMAIL_WEBHOOK_SECRET", "test-inbound-secret");
+    drop(_guard);
+
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Expected 503 when INBOUND_EMAIL_WEBHOOK_SECRET is unset, got {}",
+        response.status()
+    );
+}
+
+#[tokio::test]
+async fn test_rejects_when_secret_env_empty() {
+    let _guard = SECRET_MUTEX.lock().unwrap();
+    set_common_env_vars();
+    std::env::set_var("INBOUND_EMAIL_WEBHOOK_SECRET", "");
+
+    let config = Config::from_env().expect("Failed to load test config");
+    let state = AppState::new(&config)
+        .await
+        .expect("Failed to create test state");
+    let app = routes::create_router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/webhooks/inbound-email")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-inbound-email-secret", "anything")
+                .body(Body::from(
+                    serde_json::to_string(&sample_payload()).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("Request failed");
+
+    // Restore before releasing guard
+    std::env::set_var("INBOUND_EMAIL_WEBHOOK_SECRET", "test-inbound-secret");
+    drop(_guard);
+
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Expected 503 when INBOUND_EMAIL_WEBHOOK_SECRET is empty, got {}",
         response.status()
     );
 }
