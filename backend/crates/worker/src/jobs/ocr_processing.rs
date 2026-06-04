@@ -25,9 +25,10 @@ use billforge_invoice_capture::{
     PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
+use billforge_invoice_processing::{ContractMatchInput, ContractMatchOutcome, match_invoice_to_contract};
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::config::WorkerConfig;
@@ -565,7 +566,7 @@ async fn load_tenant_settings(
         .ok_or_else(|| anyhow::anyhow!("Tenant settings not found"))
 }
 
-async fn run_straight_through_processing(
+pub async fn run_straight_through_processing(
     repo: &InvoiceRepositoryImpl,
     pool: &Arc<sqlx::PgPool>,
     tenant_id: &billforge_core::TenantId,
@@ -672,6 +673,59 @@ async fn run_straight_through_processing(
     repo.update_processing_status(tenant_id, invoice_id, ProcessingStatus::Submitted)
         .await?;
 
+    // --- Contract matching for non-PO invoices (#331) ---
+    // Only attempt for non-PO invoices that have a vendor assigned.
+    if invoice.po_number.is_none() && invoice.vendor_id.is_some() {
+        let invoice_date = invoice
+            .invoice_date
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        let amount_dollars = invoice.total_amount.amount as f64 / 100.0;
+
+        let contract_input = ContractMatchInput {
+            tenant_id: *tenant_id.as_uuid(),
+            vendor_id: invoice.vendor_id.unwrap(),
+            invoice_date,
+            amount: amount_dollars,
+            currency: invoice.currency.clone(),
+        };
+
+        match match_invoice_to_contract(pool, &contract_input, *invoice_id.as_uuid()).await {
+            Ok(outcome) => {
+                if let Some(status) = apply_contract_match_outcome(
+                    pool,
+                    tenant_id,
+                    invoice_id,
+                    &outcome,
+                )
+                .await
+                {
+                    // InBand -> Approved (Payment), OutOfBand/Expired -> OnHold (Review).
+                    repo.update_processing_status(tenant_id, invoice_id, status)
+                        .await?;
+                    route_to_processing_queue(pool, tenant_id, invoice_id, status).await;
+                    info!(
+                        invoice_id = %invoice_id,
+                        processing_status = ?status,
+                        "Straight-through contract match completed"
+                    );
+                    return Ok(());
+                }
+                // NoActiveContract -> fall through to WorkflowEngine below.
+                debug!(
+                    invoice_id = %invoice_id,
+                    "No active contract, falling through to workflow engine"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Contract matching failed, falling through to workflow engine"
+                );
+            }
+        }
+    }
+
     let workflow_repo = WorkflowRepositoryImpl::new(pool.clone());
     let engine = billforge_invoice_processing::WorkflowEngine::new(
         Arc::new(InvoiceRepositoryImpl::new(pool.clone())) as Arc<dyn InvoiceRepository>,
@@ -728,6 +782,96 @@ fn line_items_from_ocr(
             amount: item.amount.amount as f64 / 100.0,
         })
         .collect()
+}
+
+/// Apply contract match outcome side-effects: update processing status and notes.
+///
+/// Returns `Some(Approved)` for InBand, `Some(OnHold)` for OutOfBand/Expired,
+/// and `None` for NoActiveContract (caller should fall through to WorkflowEngine).
+pub async fn apply_contract_match_outcome(
+    pool: &Arc<sqlx::PgPool>,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &billforge_core::domain::InvoiceId,
+    outcome: &ContractMatchOutcome,
+) -> Option<ProcessingStatus> {
+    match outcome {
+        ContractMatchOutcome::InBand { .. } => {
+            if let Err(e) = sqlx::query(
+                r#"UPDATE invoices
+                   SET processing_status = 'approved', updated_at = NOW()
+                   WHERE id = $1 AND tenant_id = $2"#,
+            )
+            .bind(invoice_id.as_uuid())
+            .bind(*tenant_id.as_uuid())
+            .execute(&**pool)
+            .await
+            {
+                warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Failed to auto-approve contract-matched invoice"
+                );
+            }
+            Some(ProcessingStatus::Approved)
+        }
+        ContractMatchOutcome::OutOfBand {
+            contract_id,
+            expected,
+            variance_pct,
+        } => {
+            let msg = format!(
+                "Contract mismatch: expected {:.2}, variance {:.2}% (contract {})\n",
+                expected, variance_pct, contract_id
+            );
+            if let Err(e) = sqlx::query(
+                r#"UPDATE invoices
+                   SET processing_status = 'on_hold',
+                       notes = CONCAT(COALESCE(notes, ''), $3, E'\n'),
+                       updated_at = NOW()
+                   WHERE id = $1 AND tenant_id = $2"#,
+            )
+            .bind(invoice_id.as_uuid())
+            .bind(*tenant_id.as_uuid())
+            .bind(&msg)
+            .execute(&**pool)
+            .await
+            {
+                warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Failed to flag contract-mismatched invoice"
+                );
+            }
+            Some(ProcessingStatus::OnHold)
+        }
+        ContractMatchOutcome::Expired { contract_id } => {
+            let msg = format!(
+                "Contract expired: invoice date is past contract {} end date\n",
+                contract_id
+            );
+            if let Err(e) = sqlx::query(
+                r#"UPDATE invoices
+                   SET processing_status = 'on_hold',
+                       notes = CONCAT(COALESCE(notes, ''), $3, E'\n'),
+                       updated_at = NOW()
+                   WHERE id = $1 AND tenant_id = $2"#,
+            )
+            .bind(invoice_id.as_uuid())
+            .bind(*tenant_id.as_uuid())
+            .bind(&msg)
+            .execute(&**pool)
+            .await
+            {
+                warn!(
+                    invoice_id = %invoice_id,
+                    error = %e,
+                    "Failed to flag contract-expired invoice"
+                );
+            }
+            Some(ProcessingStatus::OnHold)
+        }
+        ContractMatchOutcome::NoActiveContract => None,
+    }
 }
 
 async fn route_to_processing_queue(
