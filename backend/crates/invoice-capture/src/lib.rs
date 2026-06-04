@@ -7,7 +7,11 @@ pub mod ocr;
 pub mod service;
 
 pub use calibration::{calibrated_confidence, OcrCalibrationStore, PgOcrCalibrationStore};
-pub use ocr::{OcrComparison, OcrComparisonResult, OcrProvider, ProviderResult};
+pub use ocr::{
+    HealthStatus, OcrComparison, OcrComparisonResult, OcrProvider, PrivateInferenceConfig,
+    PrivateInferenceError, ProviderResult, check_health, load_for_tenant, mark_unhealthy,
+    run_private_ocr, try_private_inference_ocr,
+};
 pub use service::{
     ocr_routing_decision, resolve_ocr_provider_name, InvoiceCaptureService, OcrRoutingDecision,
     LOCAL_OCR_PROVIDER, OCR_CALIBRATED_FIELDS, OCR_EXCEPTION_REVIEW_CONFIDENCE_THRESHOLD,

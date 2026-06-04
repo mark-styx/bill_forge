@@ -37,6 +37,9 @@ regex = "1.10"
 # Temporary files for OCR processing
 tempfile = "3.9"
 
+# HTTP client (private inference endpoint calls)
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+
 # PDF processing (optional, for extracting images from PDFs)
 # pdf = "0.8"
 

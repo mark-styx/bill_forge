@@ -112,8 +112,13 @@ pub async fn process_ocr(
         }
     };
 
-    // Run OCR (with optional fallback provider)
-    let ocr_result = if tenant_settings.features.local_ocr_required {
+    // Run OCR — try private inference first when enabled and healthy (#334),
+    // then fall back to the standard privacy_mode-driven provider selection.
+    let ocr_result = if let Some(pi_result) =
+        ocr::try_private_inference_ocr(&pool, &tenant_id, &doc_bytes).await
+    {
+        Ok(pi_result)
+    } else if tenant_settings.features.local_ocr_required {
         let ocr_provider = ocr::create_provider(&effective_ocr_provider);
         ocr_provider
             .extract(&doc_bytes, &payload.content_type)
