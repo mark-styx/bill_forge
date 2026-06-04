@@ -402,6 +402,10 @@ export interface ImplementationStatus {
       status: ImplementationPhaseStatus;
       count: number;
       sample_invoice_ids: string[];
+      measured_accuracy?: number | null;
+      accuracy_threshold: number;
+      total_extractions: number;
+      sufficient_sample: boolean;
     };
     configuration: ImplementationConfigurationPhase;
     go_live: {

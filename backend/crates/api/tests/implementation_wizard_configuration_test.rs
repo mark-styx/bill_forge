@@ -89,6 +89,8 @@ fn percent_complete_reflects_derived_signals_not_booleans() {
 
     // Complete OCR phase (but sample_invoice_routed stays false - no routed invoice)
     state.phases.ocr.sample_invoice_ids = (0..10).map(|_| Uuid::new_v4()).collect();
+    state.phases.ocr.sufficient_sample = true;
+    state.phases.ocr.measured_accuracy = Some(0.95);
     recompute_statuses(&mut state, false);
     assert_eq!(percent_complete(&state), 60); // 3/5 = 60%
     assert!(!state.phases.go_live.checks.sample_invoice_routed);

@@ -107,6 +107,18 @@ pub struct OcrPhase {
     pub status: PhaseStatus,
     pub count: u8,
     pub sample_invoice_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub measured_accuracy: Option<f64>,
+    #[serde(default = "default_accuracy_threshold")]
+    pub accuracy_threshold: f64,
+    #[serde(default)]
+    pub total_extractions: i64,
+    #[serde(default)]
+    pub sufficient_sample: bool,
+}
+
+fn default_accuracy_threshold() -> f64 {
+    billforge_invoice_capture::OCR_FIRST_PASS_ACCURACY_THRESHOLD
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -281,7 +293,7 @@ pub async fn get_status(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -315,7 +327,7 @@ pub async fn sync_erp(
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -337,7 +349,7 @@ pub async fn update_erp_sub_items(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -374,7 +386,7 @@ pub async fn select_approval_template(
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -395,7 +407,7 @@ pub async fn upload_sample_invoices(
         let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
         return Ok(Json(SampleInvoiceUploadResponse {
             uploaded: Vec::new(),
-            status: status_response_with_routed(wizard, routed),
+            status: status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
         }));
     }
 
@@ -451,7 +463,7 @@ pub async fn upload_sample_invoices(
 
     Ok(Json(SampleInvoiceUploadResponse {
         uploaded,
-        status: status_response_with_routed(wizard, routed),
+        status: status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
     }))
 }
 
@@ -475,7 +487,7 @@ pub async fn update_checklist(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -522,7 +534,7 @@ pub async fn update_privacy_mode(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -559,7 +571,7 @@ pub async fn update_capture_channels(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -594,7 +606,7 @@ pub async fn verify_email_forwarding(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -624,7 +636,7 @@ pub async fn acknowledge_module_entitlements(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 #[utoipa::path(
@@ -657,7 +669,7 @@ pub async fn update_notification_approvals(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_routed(wizard, routed)))
+    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
 }
 
 async fn load_or_create_state(
@@ -1819,6 +1831,10 @@ pub fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
                 status: PhaseStatus::NotStarted,
                 count: 0,
                 sample_invoice_ids: Vec::new(),
+                measured_accuracy: None,
+                accuracy_threshold: billforge_invoice_capture::OCR_FIRST_PASS_ACCURACY_THRESHOLD,
+                total_extractions: 0,
+                sufficient_sample: false,
             },
             configuration: ConfigurationPhase {
                 status: PhaseStatus::NotStarted,
@@ -1902,7 +1918,11 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
     };
 
     state.phases.ocr.count = state.phases.ocr.sample_invoice_ids.len().min(10) as u8;
-    state.phases.ocr.status = if state.phases.ocr.count >= 10 {
+    state.phases.ocr.status = if state.phases.ocr.count >= 10
+        && state.phases.ocr.sufficient_sample
+        && state.phases.ocr.measured_accuracy.unwrap_or(0.0)
+            >= state.phases.ocr.accuracy_threshold
+    {
         PhaseStatus::Complete
     } else if state.phases.ocr.count > 0 {
         PhaseStatus::InProgress
@@ -1947,6 +1967,29 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
 }
 
 fn status_response_with_routed(mut state: ImplementationWizardState, sample_invoice_routed: bool) -> ImplementationStatusResponse {
+    recompute_statuses(&mut state, sample_invoice_routed);
+    ImplementationStatusResponse {
+        day_number: day_number(state.started_at),
+        percent_complete: percent_complete(&state),
+        started_at: state.started_at,
+        phases: state.phases,
+    }
+}
+
+async fn status_response_with_accuracy(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+    mut state: ImplementationWizardState,
+    sample_invoice_routed: bool,
+) -> ImplementationStatusResponse {
+    // Fetch measured first-pass accuracy from calibration data
+    let fpa = billforge_invoice_capture::tenant_first_pass_accuracy(pool, tenant_id, None)
+        .await
+        .unwrap_or_default();
+    state.phases.ocr.measured_accuracy = fpa.accuracy;
+    state.phases.ocr.total_extractions = fpa.total_extractions;
+    state.phases.ocr.sufficient_sample = fpa.sufficient_sample;
+
     recompute_statuses(&mut state, sample_invoice_routed);
     ImplementationStatusResponse {
         day_number: day_number(state.started_at),
@@ -2011,13 +2054,44 @@ mod tests {
     }
 
     #[test]
-    fn ocr_phase_completes_at_ten_samples() {
+    fn ocr_phase_remains_in_progress_without_accuracy_gate() {
         let mut state = default_state(Utc::now());
         state.phases.ocr.sample_invoice_ids = (0..10).map(|_| Uuid::new_v4()).collect();
+        // No calibration data => sufficient_sample == false, measured_accuracy == None
         recompute_statuses(&mut state, false);
 
         assert_eq!(state.phases.ocr.count, 10);
+        assert_eq!(state.phases.ocr.status, PhaseStatus::InProgress);
+        assert!(!state.phases.ocr.sufficient_sample);
+        assert!(state.phases.ocr.measured_accuracy.is_none());
+    }
+
+    #[test]
+    fn ocr_phase_completes_when_accuracy_gate_met() {
+        let mut state = default_state(Utc::now());
+        state.phases.ocr.sample_invoice_ids = (0..10).map(|_| Uuid::new_v4()).collect();
+        // Simulate sufficient extractions with high accuracy (>= 90%)
+        state.phases.ocr.sufficient_sample = true;
+        state.phases.ocr.measured_accuracy = Some(0.95);
+        state.phases.ocr.total_extractions = 50;
+        recompute_statuses(&mut state, false);
+
         assert_eq!(state.phases.ocr.status, PhaseStatus::Complete);
+    }
+
+    #[test]
+    fn ocr_phase_blocked_by_low_accuracy() {
+        let mut state = default_state(Utc::now());
+        state.phases.ocr.sample_invoice_ids = (0..10).map(|_| Uuid::new_v4()).collect();
+        // Sufficient extractions but accuracy below 90%
+        state.phases.ocr.sufficient_sample = true;
+        state.phases.ocr.measured_accuracy = Some(0.85);
+        state.phases.ocr.total_extractions = 40;
+        recompute_statuses(&mut state, false);
+
+        assert_eq!(state.phases.ocr.status, PhaseStatus::InProgress);
+        assert_eq!(state.phases.ocr.measured_accuracy, Some(0.85));
+        assert!(state.phases.ocr.measured_accuracy.unwrap() < state.phases.ocr.accuracy_threshold);
     }
 
     #[test]

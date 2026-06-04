@@ -9,6 +9,98 @@ use billforge_core::types::TenantId;
 /// Minimum number of extractions before calibration weights kick in.
 const MIN_EXTRACTIONS_FOR_CALIBRATION: i64 = 10;
 
+/// Minimum total extractions required before first-pass accuracy is considered
+/// reliable enough for the OCR completion gate.
+pub const MIN_EXTRACTIONS_FOR_ACCURACY: i64 = 30;
+
+/// First-pass accuracy threshold (90%) that OCR phase completion requires.
+pub const OCR_FIRST_PASS_ACCURACY_THRESHOLD: f64 = 0.90;
+
+/// Per-field accuracy breakdown used in [`FirstPassAccuracy`].
+#[derive(Debug, Clone, Default)]
+pub struct FieldAccuracy {
+    pub field_name: String,
+    pub extractions: i64,
+    pub corrections: i64,
+    pub accuracy: Option<f64>,
+}
+
+/// Aggregated first-pass accuracy for a tenant (optionally filtered by provider).
+///
+/// Accuracy is `1 - (total_corrections / total_extractions)` once enough
+/// extractions have accumulated. Below the minimum sample floor the accuracy
+/// is `None` and `sufficient_sample` is `false`.
+#[derive(Debug, Clone, Default)]
+pub struct FirstPassAccuracy {
+    pub accuracy: Option<f64>,
+    pub total_extractions: i64,
+    pub total_corrections: i64,
+    pub per_field: Vec<FieldAccuracy>,
+    pub sufficient_sample: bool,
+}
+
+/// Pure computation: aggregate per-field extraction/correction rows into a
+/// [`FirstPassAccuracy`].
+///
+/// This is separated from the async DB function so it can be unit-tested
+/// without a database.
+pub fn compute_first_pass_accuracy(field_rows: &[(String, i64, i64)]) -> FirstPassAccuracy {
+    let total_extractions: i64 = field_rows.iter().map(|(_, e, _)| *e).sum();
+    let total_corrections: i64 = field_rows.iter().map(|(_, _, c)| *c).sum();
+    let sufficient_sample = total_extractions >= MIN_EXTRACTIONS_FOR_ACCURACY;
+    let accuracy = if sufficient_sample && total_extractions > 0 {
+        Some(1.0 - (total_corrections as f64 / total_extractions as f64))
+    } else {
+        None
+    };
+    let per_field: Vec<FieldAccuracy> = field_rows
+        .iter()
+        .map(|(name, ext, cor)| FieldAccuracy {
+            field_name: name.clone(),
+            extractions: *ext,
+            corrections: *cor,
+            accuracy: if *ext > 0 {
+                Some(1.0 - (*cor as f64 / *ext as f64))
+            } else {
+                None
+            },
+        })
+        .collect();
+    FirstPassAccuracy {
+        accuracy,
+        total_extractions,
+        total_corrections,
+        per_field,
+        sufficient_sample,
+    }
+}
+
+/// Fetch aggregated first-pass accuracy for a tenant from the
+/// `ocr_field_calibration` table.
+///
+/// When `provider` is `None`, aggregates across all providers.
+pub async fn tenant_first_pass_accuracy(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+    provider: Option<&str>,
+) -> billforge_core::Result<FirstPassAccuracy> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        r#"SELECT field_name, SUM(extractions) AS extractions, SUM(corrections) AS corrections
+           FROM ocr_field_calibration
+           WHERE tenant_id = $1 AND ($2::text IS NULL OR provider = $2)
+           GROUP BY field_name"#,
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(provider)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to fetch first-pass accuracy: {}", e))
+    })?;
+
+    Ok(compute_first_pass_accuracy(&rows))
+}
+
 /// Minimum number of bucket samples before bucket-based calibration overrides
 /// the field-weight path.
 const MIN_BUCKET_SAMPLES: u64 = 20;
@@ -616,5 +708,61 @@ mod tests {
             expected,
             result
         );
+    }
+
+    #[test]
+    fn first_pass_accuracy_insufficient_sample_below_floor() {
+        // 20 extractions total (< 30 floor) => no accuracy, insufficient sample
+        let rows: Vec<(String, i64, i64)> = vec![
+            ("invoice_number".to_string(), 10, 1),
+            ("total_amount".to_string(), 10, 0),
+        ];
+        let result = compute_first_pass_accuracy(&rows);
+        assert!(!result.sufficient_sample);
+        assert!(result.accuracy.is_none());
+        assert_eq!(result.total_extractions, 20);
+        assert_eq!(result.total_corrections, 1);
+        // Per-field accuracy is still computed individually
+        assert_eq!(result.per_field.len(), 2);
+        assert_eq!(result.per_field[0].field_name, "invoice_number");
+        assert!(result.per_field[0].accuracy.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn first_pass_accuracy_meets_threshold() {
+        // 30 extractions, 2 corrections => accuracy = 1 - 2/30 ≈ 0.933 >= 0.90
+        let rows: Vec<(String, i64, i64)> = vec![
+            ("invoice_number".to_string(), 15, 1),
+            ("total_amount".to_string(), 15, 1),
+        ];
+        let result = compute_first_pass_accuracy(&rows);
+        assert!(result.sufficient_sample);
+        let acc = result.accuracy.expect("accuracy should be computed");
+        assert!(acc >= OCR_FIRST_PASS_ACCURACY_THRESHOLD);
+        assert!((acc - (1.0 - 2.0 / 30.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn first_pass_accuracy_below_threshold() {
+        // 30 extractions, 4 corrections => accuracy = 1 - 4/30 ≈ 0.867 < 0.90
+        let rows: Vec<(String, i64, i64)> = vec![
+            ("invoice_number".to_string(), 10, 2),
+            ("vendor_name".to_string(), 10, 1),
+            ("total_amount".to_string(), 10, 1),
+        ];
+        let result = compute_first_pass_accuracy(&rows);
+        assert!(result.sufficient_sample);
+        let acc = result.accuracy.expect("accuracy should be computed");
+        assert!(acc < OCR_FIRST_PASS_ACCURACY_THRESHOLD);
+    }
+
+    #[test]
+    fn first_pass_accuracy_empty_rows() {
+        let rows: Vec<(String, i64, i64)> = vec![];
+        let result = compute_first_pass_accuracy(&rows);
+        assert!(!result.sufficient_sample);
+        assert!(result.accuracy.is_none());
+        assert_eq!(result.total_extractions, 0);
+        assert!(result.per_field.is_empty());
     }
 }

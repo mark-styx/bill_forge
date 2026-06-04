@@ -4036,6 +4036,10 @@ export interface components {
             count: number;
             sample_invoice_ids: string[];
             status: components["schemas"]["PhaseStatus"];
+            measured_accuracy?: number | null;
+            accuracy_threshold: number;
+            total_extractions: number;
+            sufficient_sample: boolean;
         };
         /** @description Pagination information */
         PaginationInfo: {
