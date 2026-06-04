@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use sqlx::migrate::Migrator;
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(name = "migrate")]
@@ -46,17 +47,32 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Prefer the superuser/migration URL when available so role-creation
+    // migrations (e.g. 120_force_rls_and_app_role) succeed even when the
+    // default DATABASE_URL points at a restricted app role.
     let database_url = cli
         .database_url
+        .or_else(|| std::env::var("DATABASE_URL_MIGRATIONS").ok())
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .ok_or_else(|| {
             anyhow::anyhow!("DATABASE_URL must be provided via --database-url or env var")
         })?;
 
+    // Inject the app-role password as a session GUC so migration 120 can
+    // read it via current_setting('billforge.app_password', true).
+    let app_pw = std::env::var("BILLFORGE_APP_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty());
+
     match cli.command {
         Commands::Up => {
             println!("Running migrations...");
-            let pool = PgPool::connect(&database_url).await?;
+            let mut connect_opts = sqlx::postgres::PgConnectOptions::from_str(&database_url)?;
+            if let Some(ref pw) = app_pw {
+                connect_opts =
+                    connect_opts.options([("billforge.app_password", pw.as_str())]);
+            }
+            let pool = PgPool::connect_with(connect_opts).await?;
             sqlx::migrate!("../../migrations").run(&pool).await?;
             pool.close().await;
             println!("Migrations completed successfully!");

@@ -706,6 +706,72 @@ async fn rls_after_connect_hook_isolates_tenants() {
     manager.delete_tenant(&tenant_b).await.ok();
 }
 
+// ===========================================================================
+// Test 10: FORCE RLS blocks table owner without tenant setting
+// ===========================================================================
+
+#[tokio::test]
+#[cfg_attr(not(feature = "integration"), ignore)]
+async fn force_rls_blocks_owner_without_tenant_setting() {
+    let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("force-rls").await;
+    let tenant_uuid = *tenant_id.as_uuid();
+
+    // Seed data as superuser (admin_pool bypasses RLS for INSERT)
+    let vendor_id = seed_vendor(&admin_pool, tenant_uuid).await;
+    let user_id = seed_user(&admin_pool, tenant_uuid).await;
+    seed_invoice(&admin_pool, tenant_uuid, vendor_id, user_id).await;
+
+    // Without setting app.current_tenant_id, SELECT should return 0 rows.
+    // Under FORCE RLS + the NULLIF policy from migration 092, the predicate
+    // fails closed: NULLIF('', '') yields NULL which never equals a UUID.
+    set_rls_tenant(&pool, None).await;
+
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM invoices")
+        .fetch_one(&pool)
+        .await
+        .expect("count invoices");
+    assert_eq!(
+        count.0, 0,
+        "FORCE RLS should block reads when tenant setting is absent"
+    );
+
+    // Setting the tenant should restore access
+    set_rls_tenant(&pool, Some(tenant_uuid)).await;
+
+    let vendor_count: (i64,) = sqlx::query_as("SELECT count(*) FROM vendors")
+        .fetch_one(&pool)
+        .await
+        .expect("count vendors");
+    assert!(
+        vendor_count.0 >= 1,
+        "Should see vendors with correct tenant setting"
+    );
+
+    // Verify pg_class.relforcerowsecurity = true for all RLS-protected tables
+    let force_rls_tables = vec![
+        "invoices",
+        "users",
+        "vendors",
+        "ai_conversations",
+    ];
+    for table in &force_rls_tables {
+        let forced: (bool,) = sqlx::query_as(
+            "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&admin_pool)
+        .await
+        .unwrap_or_else(|_| panic!("table {} not found in pg_class", table));
+        assert!(
+            forced.0,
+            "FORCE ROW LEVEL SECURITY should be enabled on {}",
+            table
+        );
+    }
+
+    teardown(&manager, &tenant_id).await;
+}
+
 #[tokio::test]
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn rls_policies_exist_on_core_tables() {

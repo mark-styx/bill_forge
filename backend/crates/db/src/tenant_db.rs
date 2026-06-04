@@ -560,6 +560,16 @@ pub async fn run_ai_rls_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // Force RLS on all tenant-scoped tables (core + AI) and create the
+    // dedicated app role.  Must run after 089 so AI tables have ENABLE ROW
+    // LEVEL SECURITY before FORCE is applied.
+    apply_migration(
+        pool,
+        "120_force_rls_and_app_role.sql",
+        include_str!("../../../migrations/120_force_rls_and_app_role.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

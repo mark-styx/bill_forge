@@ -139,7 +139,9 @@ services:
     container_name: billforge-api-prod
     restart: always
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/billforge_control
+      DATABASE_URL: postgres://billforge_app:${BILLFORGE_APP_PASSWORD}@postgres:5432/billforge_control
+      DATABASE_URL_MIGRATIONS: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/billforge_control
+      BILLFORGE_APP_PASSWORD: ${BILLFORGE_APP_PASSWORD}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
@@ -188,7 +190,9 @@ services:
     container_name: billforge-worker-prod
     restart: always
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/billforge_control
+      DATABASE_URL: postgres://billforge_app:${BILLFORGE_APP_PASSWORD}@postgres:5432/billforge_control
+      DATABASE_URL_MIGRATIONS: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/billforge_control
+      BILLFORGE_APP_PASSWORD: ${BILLFORGE_APP_PASSWORD}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}

@@ -18,14 +18,26 @@ pub struct DatabaseManager {
 impl DatabaseManager {
     /// Create a new database manager (SQLite compatibility mode)
     pub async fn new(_metadata_db_url: &str, _tenant_db_path: &str) -> Result<Self> {
-        // For now, use environment variables for PostgreSQL connection
-        let database_url = std::env::var("DATABASE_URL")
+        // Use the migration/superuser URL for the metadata pool so DDL operations
+        // (CREATE DATABASE, CREATE ROLE) succeed.  Falls back to DATABASE_URL
+        // when the migrations URL is not set (local dev without docker-compose).
+        let migrations_url = std::env::var("DATABASE_URL_MIGRATIONS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                std::env::var("DATABASE_URL")
+                    .expect("DATABASE_URL not set")
+            });
+
+        // Tenant pool template uses DATABASE_URL (the restricted app role) so
+        // normal query traffic is subject to RLS.
+        let app_url = std::env::var("DATABASE_URL")
             .map_err(|e| Error::Database(format!("DATABASE_URL not set: {}", e)))?;
 
         let tenant_template =
-            std::env::var("TENANT_DB_TEMPLATE").unwrap_or_else(|_| database_url.clone());
+            std::env::var("TENANT_DB_TEMPLATE").unwrap_or_else(|_| app_url.clone());
 
-        let pg_manager = PgManager::new(&database_url, tenant_template).await?;
+        let pg_manager = PgManager::new(&migrations_url, tenant_template).await?;
 
         Ok(Self { pg_manager })
     }

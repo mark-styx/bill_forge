@@ -37,6 +37,26 @@ impl PgManager {
                 Error::Database(format!("Failed to connect to metadata database: {}", e))
             })?;
 
+        // Warn if the application is running as a superuser or bypass-RLS role,
+        // which would undermine RLS guarantees.
+        if let Ok(row) = sqlx::query_as::<_, (String, bool, bool)>(
+            "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+        )
+        .fetch_one(&metadata_pool)
+        .await
+        {
+            let (user, is_super, bypass_rls) = row;
+            if is_super || bypass_rls {
+                tracing::warn!(
+                    current_user = %user,
+                    is_super,
+                    bypass_rls,
+                    "Database role has superuser or BYPASSRLS privilege; RLS is NOT enforced. \
+                     Use a dedicated NOSUPERUSER NOBYPASSRLS role (e.g. billforge_app)."
+                );
+            }
+        }
+
         Ok(Self {
             metadata_pool,
             tenant_pools: RwLock::new(HashMap::new()),
@@ -377,6 +397,9 @@ impl PgManager {
 
         // AI conversations and messages (scoped by tenant + user)
         crate::tenant_db::run_ai_conversation_migrations(pool).await?;
+
+        // FORCE RLS on AI tables + create billforge_app role
+        crate::tenant_db::run_ai_rls_migrations(pool).await?;
 
         tracing::info!("Tenant migrations completed successfully");
         Ok(())

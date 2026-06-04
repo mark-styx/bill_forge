@@ -3,6 +3,7 @@
 use billforge_core::{Error, Module, Result, Role, TenantId, TenantSettings, UserId};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Metadata database for system-wide data
@@ -17,7 +18,21 @@ impl MetadataDatabase {
     }
 
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url).await.map_err(|e| {
+        let mut connect_opts =
+            sqlx::postgres::PgConnectOptions::from_str(database_url).map_err(|e| {
+                Error::Database(format!("Invalid database URL: {}", e))
+            })?;
+
+        // Pass BILLFORGE_APP_PASSWORD to migration 120 via a session GUC so
+        // the role's password stays in sync with compose env vars.
+        if let Ok(pw) = std::env::var("BILLFORGE_APP_PASSWORD") {
+            if !pw.is_empty() {
+                connect_opts =
+                    connect_opts.options([("billforge.app_password", pw.as_str())]);
+            }
+        }
+
+        let pool = PgPool::connect_with(connect_opts).await.map_err(|e| {
             Error::Database(format!("Failed to connect to metadata database: {}", e))
         })?;
 
@@ -75,6 +90,21 @@ impl MetadataDatabase {
         .map_err(|e| {
             Error::Migration(format!(
                 "Failed to run inbound email metadata migration: {}",
+                e
+            ))
+        })?;
+
+        // Create dedicated app role + FORCE RLS on tenant-scoped tables.
+        // The FORCE statements are wrapped in existence checks so this is safe
+        // to run on the control-plane database (which lacks tenant tables).
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/120_force_rls_and_app_role.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run FORCE RLS / app-role migration: {}",
                 e
             ))
         })?;

@@ -57,8 +57,10 @@ impl AppState {
         let db = Arc::new(db);
 
         // Initialize auth service
-        let database_url = std::env::var("DATABASE_URL")
-            .map_err(|e| anyhow::anyhow!("DATABASE_URL not set: {}", e))?;
+        let database_url = std::env::var("DATABASE_URL_MIGRATIONS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::env::var("DATABASE_URL").unwrap_or_default());
         let metadata_db = Arc::new(
             billforge_db::MetadataDatabase::new(&database_url)
                 .await
@@ -160,8 +162,10 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Invalid sandbox tenant ID: {}", e))?;
 
         // Get metadata database URL from environment
-        let database_url = std::env::var("DATABASE_URL")
-            .map_err(|e| anyhow::anyhow!("DATABASE_URL not set: {}", e))?;
+        let database_url = std::env::var("DATABASE_URL_MIGRATIONS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::env::var("DATABASE_URL").unwrap_or_default());
 
         // Create metadata database wrapper
         let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
