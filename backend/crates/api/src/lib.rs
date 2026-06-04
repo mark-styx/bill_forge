@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;
+pub mod services;
 pub mod state;
 pub mod state_machine;
 pub mod validation;

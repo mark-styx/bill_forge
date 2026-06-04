@@ -3160,3 +3160,51 @@ export const budgetsApi = {
     // Exposed for the pre-approval summary UI.
     api.get<InvoiceBudgetCheckResult>(`/api/v1/budgets/check-invoice/${invoiceId}`),
 };
+
+// ---------------------------------------------------------------------------
+// Policy Composer (NL -> workflow rules)
+// ---------------------------------------------------------------------------
+
+export interface ProposedRule {
+  name: string;
+  description: string;
+  priority: number;
+  guardrail_kind: 'approval_limit' | 'budget_cap' | 'routing_rule' | 'block';
+  condition_json: Record<string, unknown>;
+  action_json: Record<string, unknown>;
+  summary: string;
+}
+
+export interface InvoiceSummary {
+  id: string;
+  invoice_number?: string;
+  vendor_name?: string;
+  total_amount_cents?: number;
+  processing_status?: string;
+  invoice_date?: string;
+}
+
+export interface PolicyPreviewResponse {
+  matched_count: number;
+  total_invoices: number;
+  sample_invoices: InvoiceSummary[];
+  projected_action_breakdown: Record<string, unknown>;
+}
+
+export interface ComposeResponse {
+  proposed_rule: ProposedRule;
+  preview: PolicyPreviewResponse;
+  warnings: string[];
+  unparseable_segments: string[];
+}
+
+export const policiesApi = {
+  compose: (text: string) =>
+    api.post<ComposeResponse>('/api/v1/policies/compose', { text }),
+
+  commit: (proposed_rule: ProposedRule, original_text: string) =>
+    api.post<{ success: boolean; rule_id: string }>('/api/v1/policies/commit', {
+      proposed_rule,
+      original_text,
+    }),
+};

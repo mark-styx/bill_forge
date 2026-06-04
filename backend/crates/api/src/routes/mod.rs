@@ -27,6 +27,7 @@ pub mod inbound_email;
 pub mod invoices;
 pub mod mobile;
 pub mod notifications;
+pub mod policies;
 pub mod predictive;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
@@ -298,6 +299,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/budgets", budgets::routes())
         // Recurring-pattern detection & auto-approval policies
         .nest("/recurring-patterns", recurring_patterns::routes())
+        // Natural-language policy composer (gated on InvoiceProcessing module via extractors)
+        .nest("/policies", policies::routes())
         // Invoice Capture (standalone OCR upload)
         .nest("/invoice-captures", crate::invoice_capture::routes())
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
