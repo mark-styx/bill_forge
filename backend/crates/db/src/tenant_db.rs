@@ -570,6 +570,16 @@ pub async fn run_ai_rls_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // RLS on tenant_db-created tables (documents, audit_log, edi_*, etc.).
+    // Must run after 120 so billforge_app role exists for the GRANT at the
+    // end of the migration.
+    apply_migration(
+        pool,
+        "121_enable_rls_tenant_db_tables.sql",
+        include_str!("../../../migrations/121_enable_rls_tenant_db_tables.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 
