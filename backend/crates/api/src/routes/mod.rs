@@ -4,6 +4,7 @@ pub mod ai;
 pub mod ap_command_center;
 pub mod approval_links;
 pub(crate) mod audit;
+pub mod audit_bundle;
 pub mod auth;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
@@ -184,8 +185,11 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/export", export::routes())
         // Document storage
         .nest("/documents", documents::routes())
-        // Audit logs
-        .nest("/audit", audit::routes())
+        // Audit logs + evidence bundle export
+        .nest(
+            "/audit",
+            audit::routes().merge(audit_bundle::routes()),
+        )
         // Sandbox/Development persona management
         .nest("/sandbox", sandbox::routes())
         // Server-backed implementation wizard

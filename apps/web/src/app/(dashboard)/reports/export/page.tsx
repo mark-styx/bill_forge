@@ -18,6 +18,7 @@ import {
   Loader2,
   Clock,
   BarChart3,
+  Shield,
 } from 'lucide-react';
 
 const exportTypes = [
@@ -76,6 +77,12 @@ export default function ExportPage() {
   const [dateRange, setDateRange] = useState('last_30_days');
   const [format, setFormat] = useState('csv');
   const [isExporting, setIsExporting] = useState(false);
+  const [auditFrom, setAuditFrom] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [auditTo, setAuditTo] = useState(() => new Date().toISOString().slice(0, 10));
 
   const exportMutation = useMutation({
     mutationFn: async () => {
@@ -245,6 +252,52 @@ export default function ExportPage() {
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Audit Evidence Bundle */}
+          <div className="card overflow-hidden">
+            <div className="h-1 bg-gradient-to-r from-blue-600 to-blue-400" />
+            <div className="p-6">
+              <h2 className="text-lg font-semibold text-foreground mb-4">
+                <Shield className="w-5 h-5 inline mr-2 text-blue-600" />
+                Audit Evidence Bundle
+              </h2>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-1">From</label>
+                  <input
+                    type="date"
+                    value={auditFrom}
+                    onChange={(e) => setAuditFrom(e.target.value)}
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-1">To</label>
+                  <input
+                    type="date"
+                    value={auditTo}
+                    onChange={(e) => setAuditTo(e.target.value)}
+                    className="input w-full"
+                  />
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground mb-4">
+                Includes invoice PDFs, OCR diffs, approval chain with IPs, GL coding history,
+                policy version, and a tamper-evident signed manifest. SOC/SOX-ready.
+              </p>
+              <button
+                onClick={() => {
+                  const from = `${auditFrom}T00:00:00Z`;
+                  const to = `${auditTo}T23:59:59Z`;
+                  window.location.assign(`/api/v1/audit/evidence_bundle?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+                }}
+                className="btn bg-blue-600 text-white hover:bg-blue-700 w-full py-3"
+              >
+                <Shield className="w-5 h-5 mr-2" />
+                Generate Signed Evidence Bundle
+              </button>
             </div>
           </div>
 
