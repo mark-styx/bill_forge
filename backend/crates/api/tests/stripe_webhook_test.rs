@@ -83,7 +83,7 @@ fn checkout_event_payload(tenant_id: &TenantId) -> Vec<u8> {
 
 #[tokio::test]
 async fn stripe_webhook_rejects_invalid_signature() {
-    let secret = "whsec_test_secret_for_invalid_sig_test";
+    let secret = "whsec_test_shared_secret";
     let app = create_test_router_with_secret(secret).await;
     let tenant_id = TenantId::new();
     let body = checkout_event_payload(&tenant_id);
@@ -109,7 +109,7 @@ async fn stripe_webhook_rejects_invalid_signature() {
 
 #[tokio::test]
 async fn stripe_webhook_accepts_valid_signature_and_invokes_service() {
-    let secret = "whsec_test_secret_for_valid_sig_test";
+    let secret = "whsec_test_shared_secret";
     let app = create_test_router_with_secret(secret).await;
     let tenant_id = TenantId::new();
     let body = checkout_event_payload(&tenant_id);
@@ -134,7 +134,7 @@ async fn stripe_webhook_accepts_valid_signature_and_invokes_service() {
 
 #[tokio::test]
 async fn stripe_webhook_rejects_missing_signature_header() {
-    let secret = "whsec_test_secret_for_missing_header";
+    let secret = "whsec_test_shared_secret";
     let app = create_test_router_with_secret(secret).await;
     let tenant_id = TenantId::new();
     let body = checkout_event_payload(&tenant_id);
