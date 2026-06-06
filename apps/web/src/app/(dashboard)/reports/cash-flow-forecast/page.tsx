@@ -5,7 +5,6 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
   reportsApi,
-  type ApCashFlowForecast,
   type ApCashFlowSimulation,
 } from '@/lib/api';
 import {
@@ -14,7 +13,6 @@ import {
 } from '@/components/ui/charts';
 import {
   DollarSign,
-  ArrowRight,
   AlertTriangle,
   Calendar,
   TrendingUp,
@@ -528,6 +526,24 @@ export default function CashFlowForecastPage() {
           </div>
         </div>
       )}
+
+      {/* Link to Cash Calendar */}
+      <div className="card p-4">
+        <Link
+          href="/reports/cash-calendar"
+          className="flex items-center gap-3 hover:bg-secondary/40 rounded-lg p-2 -m-2 transition-colors"
+        >
+          <div className="p-2.5 rounded-xl bg-accent/10">
+            <Calendar className="w-5 h-5 text-accent" />
+          </div>
+          <div>
+            <p className="font-semibold text-foreground">Cash Calendar</p>
+            <p className="text-sm text-muted-foreground">
+              Day-by-day calendar with projected bank balance and drag-to-reschedule
+            </p>
+          </div>
+        </Link>
+      </div>
     </div>
   );
 }
