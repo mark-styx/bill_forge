@@ -11,6 +11,7 @@ pub mod fraud_guard;
 pub mod invoice_capture;
 pub mod metrics;
 pub mod middleware;
+pub mod ofac_screening;
 pub mod openapi;
 pub mod routes;
 pub mod services;

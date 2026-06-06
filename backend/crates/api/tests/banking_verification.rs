@@ -391,9 +391,9 @@ async fn first_approval_does_not_clear_payment_hold(pool: sqlx::PgPool) {
 
     // Simulate first approval with screening results (including fraud-guard keys)
     let screening = serde_json::json!({
-        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z", "details": { "matches": [], "list_version": "seed-v1" } },
+        "avs": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "no AVS provider wired" } },
+        "plaid": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "micro-deposit/Plaid pending" } },
         "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
         "lookalike": { "risk": "low", "top_match": null },
         "bank_change": { "risk": "low", "recent_changes": 0 },
@@ -518,9 +518,9 @@ async fn same_user_cannot_dual_approve(pool: sqlx::PgPool) {
 
     // First approval as user_id
     let screening = serde_json::json!({
-        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z", "details": { "matches": [], "list_version": "seed-v1" } },
+        "avs": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "no AVS provider wired" } },
+        "plaid": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "micro-deposit/Plaid pending" } },
         "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
         "lookalike": { "risk": "low", "top_match": null },
         "bank_change": { "risk": "low", "recent_changes": 0 },
@@ -601,9 +601,9 @@ async fn second_distinct_approver_clears_hold(pool: sqlx::PgPool) {
 
     // First approval as user A
     let screening = serde_json::json!({
-        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "avs": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
-        "plaid": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z" },
+        "ofac": { "status": "pass", "checked_at": "2026-01-01T00:00:00Z", "details": { "matches": [], "list_version": "seed-v1" } },
+        "avs": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "no AVS provider wired" } },
+        "plaid": { "status": "not_configured", "checked_at": "2026-01-01T00:00:00Z", "details": { "reason": "micro-deposit/Plaid pending" } },
         "domain_age": { "risk": "low", "domain": "", "first_seen_at": null, "days_since_first_seen": null },
         "lookalike": { "risk": "low", "top_match": null },
         "bank_change": { "risk": "low", "recent_changes": 0 },

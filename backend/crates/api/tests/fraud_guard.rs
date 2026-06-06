@@ -437,9 +437,10 @@ fn build_screening_results_includes_all_keys() {
         overall_risk: billforge_api::fraud_guard::RiskLevel::Low,
     };
 
-    let json = billforge_api::fraud_guard::build_screening_results(&signals);
+    let screener = billforge_api::ofac_screening::OfacScreener::load_from_embedded();
+    let json = billforge_api::fraud_guard::build_screening_results(&signals, &screener, "Clean Test Vendor", None);
 
-    // Legacy keys
+    // OFAC/AVS/Plaid keys
     assert!(json.get("ofac").is_some(), "should have ofac key");
     assert!(json.get("avs").is_some(), "should have avs key");
     assert!(json.get("plaid").is_some(), "should have plaid key");

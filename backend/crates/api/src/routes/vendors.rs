@@ -175,15 +175,33 @@ async fn create_vendor(
     // Upsert domain so future checks can compare age
     fraud_guard::upsert_domain_first_seen(&tenant.tenant_id, &domain, &pool).await;
 
-    // If overall risk is high, the vendor should start on payment_hold
-    let vendor = if signals.overall_risk == fraud_guard::RiskLevel::High {
+    // Run OFAC/sanctions screening against bundled SDN seed list
+    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    let ofac_outcome = screener.screen(&input.name, None);
+
+    let needs_hold = signals.overall_risk == fraud_guard::RiskLevel::High
+        || ofac_outcome.status != "pass";
+
+    // If overall risk is high or OFAC flagged, the vendor should start on payment_hold
+    let vendor = if needs_hold {
         // Create vendor, then set payment_hold via direct query
         let v = repo.create(&tenant.tenant_id, input).await?;
+        let reason = if ofac_outcome.status != "pass" {
+            format!(
+                "OFAC screening: {} ({} match{})",
+                ofac_outcome.status,
+                ofac_outcome.matches.len(),
+                if ofac_outcome.matches.len() != 1 { "es" } else { "" }
+            )
+        } else {
+            "Fraud guard: high-risk signals detected".to_string()
+        };
         sqlx::query(
-            "UPDATE vendors SET payment_hold = true, payment_hold_reason = 'Fraud guard: high-risk signals detected', updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+            "UPDATE vendors SET payment_hold = true, payment_hold_reason = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
         )
         .bind(v.id.0)
         .bind(*tenant.tenant_id.as_uuid())
+        .bind(&reason)
         .execute(&*pool)
         .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to set payment_hold: {}", e)))?;
@@ -199,12 +217,21 @@ async fn create_vendor(
         AuditAction::Create,
         ResourceType::Vendor,
         vendor.id.to_string(),
-        format!("Created vendor {} (fraud guard: {})", vendor.name, serde_json::to_string(&signals.overall_risk).unwrap_or_default()),
+        format!(
+            "Created vendor {} (fraud guard: {}, OFAC: {})",
+            vendor.name,
+            serde_json::to_string(&signals.overall_risk).unwrap_or_default(),
+            ofac_outcome.status,
+        ),
     )
     .with_user_email(&user.email)
     .with_new_value(serde_json::to_value(&vendor).unwrap_or_default())
     .with_metadata(serde_json::json!({
         "fraud_signals": fraud_guard::fraud_signals_to_json(&signals),
+        "ofac_screening": {
+            "status": ofac_outcome.status,
+            "matches": ofac_outcome.matches,
+        },
     }));
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
@@ -233,16 +260,50 @@ async fn update_vendor(
     let old_vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?;
     let vendor = repo.update(&tenant.tenant_id, &vendor_id, input).await?;
 
+    // Run OFAC/sanctions screening on the updated vendor name
+    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    let ofac_outcome = screener.screen(&vendor.name, None);
+    let mut vendor = vendor;
+
+    if ofac_outcome.status != "pass" {
+        let reason = format!(
+            "OFAC screening: {} ({} match{})",
+            ofac_outcome.status,
+            ofac_outcome.matches.len(),
+            if ofac_outcome.matches.len() != 1 { "es" } else { "" }
+        );
+        sqlx::query(
+            "UPDATE vendors SET payment_hold = true, payment_hold_reason = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(vendor.id.0)
+        .bind(*tenant.tenant_id.as_uuid())
+        .bind(&reason)
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to set payment_hold: {}", e)))?;
+        vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?.unwrap_or(vendor);
+    }
+
     let mut audit_entry = AuditEntry::new(
         tenant.tenant_id.clone(),
         Some(user.user_id.clone()),
         AuditAction::Update,
         ResourceType::Vendor,
         vendor.id.to_string(),
-        format!("Updated vendor {}", vendor.name),
+        format!(
+            "Updated vendor {} (OFAC: {})",
+            vendor.name,
+            ofac_outcome.status,
+        ),
     )
     .with_user_email(&user.email)
-    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default());
+    .with_new_value(serde_json::to_value(&vendor).unwrap_or_default())
+    .with_metadata(serde_json::json!({
+        "ofac_screening": {
+            "status": ofac_outcome.status,
+            "matches": ofac_outcome.matches,
+        },
+    }));
     if let Some(old) = old_vendor {
         audit_entry = audit_entry.with_old_value(serde_json::to_value(&old).unwrap_or_default());
     }
@@ -1405,8 +1466,8 @@ async fn verify_banking(
     }
 }
 
-/// Run screening checks: legacy OFAC/AVS/Plaid stubs plus fraud-guard signals.
-/// Returns a merged JSON value with both legacy keys and new fraud-guard keys.
+/// Run screening checks: OFAC screening against bundled SDN list, honest AVS/Plaid
+/// stubs, plus fraud-guard signals. Returns a merged JSON value with all keys.
 /// The `pool` argument is used for the async fraud-guard checks.
 async fn run_screening_with_fraud_guard(
     tenant_id: &TenantId,
@@ -1429,7 +1490,8 @@ async fn run_screening_with_fraud_guard(
         pool,
     )
     .await;
-    fraud_guard::build_screening_results(&signals)
+    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    fraud_guard::build_screening_results(&signals, &screener, vendor_name, None)
 }
 
 /// GET /api/v1/vendors/:id/banking-verifications

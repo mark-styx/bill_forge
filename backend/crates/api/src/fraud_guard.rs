@@ -364,24 +364,49 @@ pub fn fraud_signals_to_json(signals: &FraudSignals) -> serde_json::Value {
     serde_json::to_value(signals).unwrap_or_default()
 }
 
-/// Merge fraud-guard signals with the legacy screening stubs into a single
-/// JSON value suitable for `screening_results`.
-pub fn build_screening_results(signals: &FraudSignals) -> serde_json::Value {
+/// Merge fraud-guard signals with OFAC screening and honest AVS/Plaid stubs
+/// into a single JSON value suitable for `screening_results`.
+pub fn build_screening_results(
+    signals: &FraudSignals,
+    screener: &crate::ofac_screening::OfacScreener,
+    vendor_name: &str,
+    dba: Option<&str>,
+) -> serde_json::Value {
     let now = Utc::now().to_rfc3339();
     let mut map = serde_json::Map::new();
 
-    // Legacy stubs (kept for API contract compatibility)
+    // Real OFAC screening against bundled SDN seed list
+    let ofac_outcome = screener.screen(vendor_name, dba);
     map.insert(
         "ofac".to_string(),
-        serde_json::json!({ "status": "pass", "checked_at": now }),
+        serde_json::json!({
+            "status": ofac_outcome.status,
+            "checked_at": now,
+            "details": {
+                "matches": ofac_outcome.matches,
+                "list_version": "seed-v1",
+            }
+        }),
     );
+
+    // AVS not yet wired - honest status instead of fake pass
     map.insert(
         "avs".to_string(),
-        serde_json::json!({ "status": "pass", "checked_at": now }),
+        serde_json::json!({
+            "status": "not_configured",
+            "checked_at": now,
+            "details": { "reason": "no AVS provider wired" }
+        }),
     );
+
+    // Plaid/micro-deposit not yet wired - honest status instead of fake pass
     map.insert(
         "plaid".to_string(),
-        serde_json::json!({ "status": "pass", "checked_at": now }),
+        serde_json::json!({
+            "status": "not_configured",
+            "checked_at": now,
+            "details": { "reason": "micro-deposit/Plaid pending" }
+        }),
     );
 
     // Fraud-guard signals
