@@ -342,7 +342,93 @@ async fn nudge_approver(
     .await
     .map_err(|e| Error::Internal(format!("Failed to write nudge audit: {}", e)))?;
 
+    // --- Email notification (best-effort) ---
+    // Look up the active pending approver for this invoice.
+    let approver_user_id: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT COALESCE(ar.requested_from->>'User', '')::uuid
+           FROM approval_requests ar
+           WHERE ar.invoice_id = $1
+             AND ar.tenant_id  = $2
+             AND ar.status     = 'pending'
+           ORDER BY ar.created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(invoice_id)
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| Error::Internal(format!("Failed to query pending approver: {}", e)))?;
+
+    if let Some(approver_id) = approver_user_id {
+        let approver_email: Option<String> = sqlx::query_scalar(
+            "SELECT email FROM users WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(approver_id)
+        .bind(tenant.tenant_id.as_uuid())
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to query approver email: {}", e)))?;
+
+        if let Some(recipient_email) = approver_email {
+            let short_id = &invoice_id.to_string()[..8];
+            let subject = format!("Reminder: invoice {short_id} is waiting for your approval");
+            let text_body = format!(
+                "{name} nudged you about invoice {short_id}.\n\n{comment}",
+                name = user.name,
+                comment = comment,
+            );
+            let html_body = format!(
+                "<p><strong>{name}</strong> nudged you about invoice <strong>{short_id}</strong>.</p>\
+                 <p>{comment}</p>",
+                name = html_escape(&user.name),
+                comment = html_escape(&comment),
+            );
+
+            sqlx::query(
+                r#"INSERT INTO email_notifications (
+                       id, tenant_id, recipient_email, subject, html_body, text_body,
+                       status, priority, metadata, created_at
+                   ) VALUES (
+                       gen_random_uuid(), $1, $2, $3, $4, $5,
+                       'pending', 5, $6, NOW()
+                   )"#,
+            )
+            .bind(tenant.tenant_id.as_uuid())
+            .bind(&recipient_email)
+            .bind(&subject)
+            .bind(&html_body)
+            .bind(&text_body)
+            .bind(serde_json::json!({
+                "source": "ap_command_center_nudge",
+                "invoice_id": invoice_id.to_string(),
+                "actor_id": user.user_id.as_uuid().to_string(),
+            }))
+            .execute(&*pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to queue nudge email: {}", e)))?;
+        } else {
+            tracing::warn!(
+                approver_id = %approver_id,
+                invoice_id = %invoice_id,
+                "Nudge: pending approver has no email, skipping notification"
+            );
+        }
+    } else {
+        tracing::warn!(
+            invoice_id = %invoice_id,
+            "Nudge: no active pending approval_request found, skipping notification"
+        );
+    }
+
     Ok(Json(ActionOk { ok: true }))
+}
+
+/// Minimal HTML-escape for user-supplied strings in email bodies.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// POST `/api/v1/dashboard/ap-command-center/{invoice_id}/reassign`

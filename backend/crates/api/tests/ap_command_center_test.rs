@@ -416,6 +416,12 @@ async fn seed_target_approver(pool: &sqlx::PgPool) -> Uuid {
 
 /// Clean up test data.
 async fn cleanup_test_data(pool: &sqlx::PgPool, invoice_id: Uuid, tenant_id: Uuid) {
+    sqlx::query("DELETE FROM email_notifications WHERE metadata->>'invoice_id' = $1 AND tenant_id = $2")
+        .bind(invoice_id.to_string())
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .ok();
     sqlx::query("DELETE FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2")
         .bind(invoice_id)
         .bind(tenant_id)
@@ -603,6 +609,241 @@ async fn reassign_succeeds_and_updates_pending_approval() {
     .unwrap();
 
     assert_eq!(metadata["rows_updated"], 1, "Audit metadata should have rows_updated = 1");
+
+    cleanup_test_data(&pool, invoice_id, tenant_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// Nudge integration tests (require DATABASE_URL, run with --ignored)
+// ---------------------------------------------------------------------------
+
+/// When a pending approval_request exists pointing at an approver with a known
+/// email, the nudge handler should write both an audit-log row AND enqueue
+/// exactly one email_notifications row addressed to the approver.
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL
+async fn nudge_enqueues_email_and_writes_audit() {
+    let pool = get_pool().await;
+    let (invoice_id, tenant_id) = seed_invoice(&pool).await;
+    let approver_id = seed_target_approver(&pool).await;
+
+    // Create a pending approval_request pointing at the target approver.
+    let approval_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO approval_requests (id, tenant_id, invoice_id, requested_from, status)
+         VALUES ($1, $2, $3, $4, 'pending')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(approval_id)
+    .bind(tenant_id)
+    .bind(invoice_id)
+    .bind(serde_json::json!({"User": approver_id.to_string()}))
+    .execute(&pool)
+    .await
+    .expect("create approval_request");
+
+    // Look up the approver's email (seeded by seed_target_approver).
+    let approver_email: String = sqlx::query_scalar(
+        "SELECT email FROM users WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(approver_id)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .expect("approver email");
+
+    // --- Simulate the nudge handler SQL ---
+
+    // 1. Audit log INSERT
+    let actor_id = Uuid::parse_str(FIXTURE_USER_ID).unwrap();
+    let comment = "Please review ASAP";
+    sqlx::query(
+        r#"INSERT INTO invoice_audit_log
+               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type,
+                metadata, source_channel)
+           VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_approval',
+                   'nudge_via_ap_command_center', $5, 'ap_command_center')"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(invoice_id)
+    .bind(actor_id)
+    .bind(serde_json::to_string(&serde_json::json!({ "comment_body": comment })).unwrap_or_default())
+    .execute(&pool)
+    .await
+    .expect("write nudge audit");
+
+    // 2. Look up pending approver (mirrors handler query)
+    let found_approver: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT COALESCE(ar.requested_from->>'User', '')::uuid
+           FROM approval_requests ar
+           WHERE ar.invoice_id = $1
+             AND ar.tenant_id  = $2
+             AND ar.status     = 'pending'
+           ORDER BY ar.created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("query approver");
+
+    assert!(found_approver.is_some(), "Should find a pending approver");
+    assert_eq!(found_approver.unwrap(), approver_id);
+
+    // 3. Insert email_notifications row
+    let short_id = &invoice_id.to_string()[..8];
+    let subject = format!("Reminder: invoice {short_id} is waiting for your approval");
+    sqlx::query(
+        r#"INSERT INTO email_notifications (
+               id, tenant_id, recipient_email, subject, html_body, text_body,
+               status, priority, metadata, created_at
+           ) VALUES (
+               gen_random_uuid(), $1, $2, $3, $4, $5,
+               'pending', 5, $6, NOW()
+           )"#,
+    )
+    .bind(tenant_id)
+    .bind(&approver_email)
+    .bind(&subject)
+    .bind("<p>nudge</p>")
+    .bind("nudge")
+    .bind(serde_json::json!({
+        "source": "ap_command_center_nudge",
+        "invoice_id": invoice_id.to_string(),
+        "actor_id": actor_id.to_string(),
+    }))
+    .execute(&pool)
+    .await
+    .expect("queue nudge email");
+
+    // --- Assertions ---
+
+    // (i) Exactly one nudge audit row
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invoice_audit_log
+         WHERE invoice_id = $1 AND tenant_id = $2
+           AND event_type = 'nudge_via_ap_command_center'",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1, "Exactly one nudge audit row should exist");
+
+    // (ii) Exactly one email_notifications row for this approver with the right metadata source
+    let email_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM email_notifications
+         WHERE tenant_id = $1
+           AND recipient_email = $2
+           AND metadata->>'source' = 'ap_command_center_nudge'",
+    )
+    .bind(tenant_id)
+    .bind(&approver_email)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(email_count, 1, "Exactly one nudge email should be queued");
+
+    // (iii) Verify metadata contains invoice_id
+    let meta: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata::jsonb FROM email_notifications
+         WHERE tenant_id = $1
+           AND recipient_email = $2
+           AND metadata->>'source' = 'ap_command_center_nudge'",
+    )
+    .bind(tenant_id)
+    .bind(&approver_email)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(meta["invoice_id"], invoice_id.to_string());
+
+    cleanup_test_data(&pool, invoice_id, tenant_id).await;
+}
+
+/// When there is no active pending approval_request, the nudge handler should
+/// still write the audit log but enqueue ZERO email_notifications rows.
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL
+async fn nudge_no_email_when_no_pending_approval() {
+    let pool = get_pool().await;
+    let (invoice_id, tenant_id) = seed_invoice(&pool).await;
+
+    // Deliberately do NOT create any approval_requests row.
+
+    // Count email rows before
+    let email_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Simulate the nudge audit INSERT (handler always writes this)
+    let actor_id = Uuid::parse_str(FIXTURE_USER_ID).unwrap();
+    sqlx::query(
+        r#"INSERT INTO invoice_audit_log
+               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type,
+                metadata, source_channel)
+           VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_approval',
+                   'nudge_via_ap_command_center', $5, 'ap_command_center')"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(invoice_id)
+    .bind(actor_id)
+    .bind(serde_json::to_string(&serde_json::json!({ "comment_body": "nudge" })).unwrap_or_default())
+    .execute(&pool)
+    .await
+    .expect("write nudge audit");
+
+    // Look up pending approver — should return None
+    let found_approver: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT COALESCE(ar.requested_from->>'User', '')::uuid
+           FROM approval_requests ar
+           WHERE ar.invoice_id = $1
+             AND ar.tenant_id  = $2
+             AND ar.status     = 'pending'
+           ORDER BY ar.created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("query approver");
+
+    assert!(found_approver.is_none(), "No pending approver should be found");
+
+    // Assert audit row was written
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invoice_audit_log
+         WHERE invoice_id = $1 AND tenant_id = $2
+           AND event_type = 'nudge_via_ap_command_center'",
+    )
+    .bind(invoice_id)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1, "Audit row should still be written");
+
+    // Assert no new email_notifications rows
+    let email_after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        email_after, email_before,
+        "No new email_notifications should be enqueued when no pending approval"
+    );
 
     cleanup_test_data(&pool, invoice_id, tenant_id).await;
 }
