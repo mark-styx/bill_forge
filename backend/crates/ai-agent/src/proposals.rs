@@ -209,7 +209,7 @@ fn risk_level_to_proposal_risk(risk_level: AiToolRiskLevel) -> AiActionProposalR
     }
 }
 
-fn user_roles_grant_tool_permission(user: &UserContext, permission: AiToolPermission) -> bool {
+pub(crate) fn user_roles_grant_tool_permission(user: &UserContext, permission: AiToolPermission) -> bool {
     user.roles
         .iter()
         .any(|role| role_grants_tool_permission(*role, permission))

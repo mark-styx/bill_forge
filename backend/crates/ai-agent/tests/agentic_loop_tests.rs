@@ -2,9 +2,20 @@
 //!
 //! These run without a database or OpenAI key (SQLX_OFFLINE=true).
 
+use billforge_ai_agent::models::AgentContext;
 use billforge_ai_agent::tools::{AiToolClass, AiToolDefinition, AiToolPermission, AiToolRiskLevel};
 use billforge_ai_agent::tools::{ToolProposalContext, ToolRegistry};
 use sqlx::postgres::PgPoolOptions;
+
+fn admin_agent_context() -> AgentContext {
+    AgentContext {
+        tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: uuid::Uuid::new_v4(),
+        user_role: "tenant_admin".to_string(),
+        permissions: vec!["read".to_string()],
+        enabled_modules: vec![],
+    }
+}
 
 fn fake_pool() -> sqlx::PgPool {
     PgPoolOptions::new()
@@ -218,7 +229,7 @@ async fn test_admin_analysis_tools_reject_non_admin_before_db() {
         let err = result.expect_err("non-admin context should be rejected before DB access");
         let msg = err.to_string();
         assert!(
-            msg.contains("admin-only") || msg.contains("Forbidden"),
+            msg.contains("admin-only") || msg.contains("Forbidden") || msg.contains("Permission denied"),
             "unexpected error for {tool}: {msg}"
         );
     }
@@ -708,7 +719,7 @@ async fn test_request_issue_creation_unsupported_target_fails() {
 fn test_tool_execution_guard_allows_low_risk_non_mutating_without_proposal_context() {
     let def = synthetic_tool_definition("synthetic_read_tool", false, AiToolRiskLevel::Low);
 
-    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), None);
 
     assert!(result.is_ok(), "low-risk read-only tool should pass");
 }
@@ -717,7 +728,7 @@ fn test_tool_execution_guard_allows_low_risk_non_mutating_without_proposal_conte
 fn test_tool_execution_guard_rejects_mutating_without_proposal_context() {
     let def = synthetic_tool_definition("synthetic_mutating_tool", true, AiToolRiskLevel::Low);
 
-    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), None);
 
     let err = result.expect_err("mutating tool should require approval context");
     assert_eq!(
@@ -730,7 +741,7 @@ fn test_tool_execution_guard_rejects_mutating_without_proposal_context() {
 fn test_tool_execution_guard_rejects_high_risk_without_proposal_context() {
     let def = synthetic_tool_definition("synthetic_high_risk_tool", false, AiToolRiskLevel::High);
 
-    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), None);
 
     let err = result.expect_err("high-risk tool should require approval context");
     assert_eq!(
@@ -759,7 +770,7 @@ fn test_tool_execution_guard_allows_risky_tool_with_approved_matching_proposal_c
             approved: true,
         };
 
-        let result = ToolRegistry::validate_tool_execution_guard(&def, Some(&proposal_context));
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&proposal_context));
 
         assert!(
             result.is_ok(),
@@ -785,7 +796,7 @@ fn test_tool_execution_guard_rejects_unapproved_or_mismatched_proposal_context()
             approved: true,
         },
     ] {
-        let result = ToolRegistry::validate_tool_execution_guard(&def, Some(&proposal_context));
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&proposal_context));
 
         let err = result.expect_err("invalid proposal context should be rejected");
         assert_eq!(

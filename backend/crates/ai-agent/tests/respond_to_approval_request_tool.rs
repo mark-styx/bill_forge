@@ -1,8 +1,19 @@
 //! Tests for the respond_to_approval_request mutating AP-action tool.
 
+use billforge_ai_agent::models::AgentContext;
 use billforge_ai_agent::tools::{
     AiToolPermission, AiToolRiskLevel, ToolProposalContext, ToolRegistry,
 };
+
+fn admin_agent_context() -> AgentContext {
+    AgentContext {
+        tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: uuid::Uuid::new_v4(),
+        user_role: "tenant_admin".to_string(),
+        permissions: vec!["read".to_string()],
+        enabled_modules: vec![],
+    }
+}
 
 // ── (a) Tool definition metadata ─────────────────────────────────────────────
 
@@ -25,7 +36,7 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
         .expect("respond_to_approval_request should be registered");
 
     // Without any proposal context, the guard must reject.
-    let result = ToolRegistry::validate_tool_execution_guard(&def, None);
+    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), None);
     let err = result.expect_err("mutating tool should require approved proposal context");
     assert!(
         err.to_string()
@@ -48,7 +59,7 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
         },
     ];
     for ctx in &bad_contexts {
-        let result = ToolRegistry::validate_tool_execution_guard(&def, Some(ctx));
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(ctx));
         assert!(
             result.is_err(),
             "invalid proposal context should be rejected"
@@ -61,7 +72,7 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
         tool_name: "respond_to_approval_request".to_string(),
         approved: true,
     };
-    let result = ToolRegistry::validate_tool_execution_guard(&def, Some(&good_ctx));
+    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&good_ctx));
     assert!(
         result.is_ok(),
         "approved matching proposal context should pass"

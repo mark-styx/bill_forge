@@ -10,7 +10,7 @@ use uuid::Uuid;
 use billforge_core::{
     domain::{ApprovalStatus, ApprovalTarget, InvoiceId, ProcessingStatus},
     traits::{ApprovalRepository, InvoiceRepository, WorkQueueRepository, WorkflowRuleRepository},
-    TenantId,
+    Role, TenantId, UserContext, UserId,
 };
 use billforge_db::repositories::{InvoiceRepositoryImpl, WorkflowRepositoryImpl};
 
@@ -3696,10 +3696,75 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Parse effective `Role` values from the `user_role` and `permissions`
+    /// fields of an [`AgentContext`]. Strings that do not map to a known role
+    /// variant are silently skipped so that non-role permission strings (e.g.
+    /// `"read"`) do not cause errors.
+    fn parse_effective_roles(context: &AgentContext) -> Vec<Role> {
+        fn parse_role_name(name: &str) -> Option<Role> {
+            match name.to_ascii_lowercase().as_str() {
+                "tenant_admin" | "admin" | "owner" | "super_admin" => Some(Role::TenantAdmin),
+                "ap_user" => Some(Role::ApUser),
+                "approver" => Some(Role::Approver),
+                "vendor_manager" => Some(Role::VendorManager),
+                "report_viewer" => Some(Role::ReportViewer),
+                _ => None,
+            }
+        }
+
+        let mut roles = Vec::new();
+        if let Some(role) = parse_role_name(&context.user_role) {
+            roles.push(role);
+        }
+        for perm in &context.permissions {
+            if let Some(role) = parse_role_name(perm) {
+                if !roles.contains(&role) {
+                    roles.push(role);
+                }
+            }
+        }
+        roles
+    }
+
+    /// Build a lightweight [`UserContext`] from an [`AgentContext`] so the
+    /// shared permission helper in `proposals.rs` can evaluate roles.
+    fn build_user_context_from_agent(context: &AgentContext) -> UserContext {
+        let roles = Self::parse_effective_roles(context);
+        let tenant_id = TenantId(
+            Uuid::parse_str(&context.tenant_id).unwrap_or(Uuid::nil()),
+        );
+        UserContext {
+            user_id: UserId(context.user_id),
+            tenant_id,
+            email: String::new(),
+            name: String::new(),
+            roles,
+        }
+    }
+
+    /// Central execution guard for every tool dispatch path.
+    ///
+    /// 1. Resolves the caller's roles from `context` and checks them against
+    ///    `def.required_permission` using the same helper the proposal path
+    ///    uses (`user_roles_grant_tool_permission`).
+    /// 2. For mutating / high-risk tools, additionally requires an approved
+    ///    [`ToolProposalContext`].
     pub fn validate_tool_execution_guard(
         def: &AiToolDefinition,
+        context: &AgentContext,
         proposal_context: Option<&ToolProposalContext>,
     ) -> Result<()> {
+        // Every tool requires its declared permission — even read-only / low-risk ones.
+        let user = Self::build_user_context_from_agent(context);
+        if !super::proposals::user_roles_grant_tool_permission(&user, def.required_permission) {
+            anyhow::bail!(
+                "Permission denied: caller does not have the '{}' permission required for tool '{}'",
+                format!("{:?}", def.required_permission),
+                def.name
+            );
+        }
+
+        // Mutating or high-risk tools additionally require an approved proposal.
         if !def.mutates && def.risk_level != AiToolRiskLevel::High {
             return Ok(());
         }
@@ -3733,7 +3798,7 @@ impl ToolRegistry {
         // Reject unknown tools early via the typed registry.
         let def = Self::get_tool_definition(tool_name)
             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tool_name))?;
-        Self::validate_tool_execution_guard(&def, proposal_context)?;
+        Self::validate_tool_execution_guard(&def, context, proposal_context)?;
 
         match tool_name {
             "get_invoice_status" => {
@@ -3827,5 +3892,116 @@ impl ToolRegistry {
             }
             _ => anyhow::bail!("Tool '{}' not found", tool_name),
         }
+    }
+}
+
+#[cfg(test)]
+mod permission_guard_tests {
+    use super::*;
+    use crate::models::AgentContext;
+
+    /// Helper: build a minimal `AgentContext` with the given role string and
+    /// permission strings.
+    fn agent_context(user_role: &str, permissions: Vec<&str>) -> AgentContext {
+        AgentContext {
+            tenant_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            user_id: Uuid::new_v4(),
+            user_role: user_role.to_string(),
+            permissions: permissions.into_iter().map(|s| s.to_string()).collect(),
+            enabled_modules: vec![],
+        }
+    }
+
+    /// Helper: build a read-only tool definition that requires admin-level
+    /// analytics permission.
+    fn admin_analytics_read_tool() -> AiToolDefinition {
+        AiToolDefinition {
+            name: "test_admin_analytics_read",
+            description: "Test-only admin analytics read tool.",
+            class: AiToolClass::AdminAnalysis,
+            required_permission: AiToolPermission::AdminAnalyticsRead,
+            risk_level: AiToolRiskLevel::Low,
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            output_schema: serde_json::json!({"type": "object", "properties": {}}),
+            mutates: false,
+        }
+    }
+
+    /// Helper: build a mutating tool definition (matches the existing
+    /// synthetic test tool pattern).
+    fn mutating_test_tool() -> AiToolDefinition {
+        AiToolDefinition {
+            name: "test_mutating_tool",
+            description: "Test-only mutating tool.",
+            class: AiToolClass::IssueIntake,
+            required_permission: AiToolPermission::IssueRequest,
+            risk_level: AiToolRiskLevel::Low,
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            output_schema: serde_json::json!({"type": "object", "properties": {}}),
+            mutates: true,
+        }
+    }
+
+    #[test]
+    fn read_tool_with_insufficient_role_is_rejected() {
+        let def = admin_analytics_read_tool();
+        // report_viewer does NOT grant AdminAnalyticsRead
+        let context = agent_context("report_viewer", vec!["read"]);
+
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &context, None);
+        assert!(
+            result.is_err(),
+            "Expected permission-denied error for non-admin caller, got Ok"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Permission denied"),
+            "Error should mention 'Permission denied', got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn read_tool_with_sufficient_role_passes() {
+        let def = admin_analytics_read_tool();
+        // TenantAdmin grants every permission including AdminAnalyticsRead
+        let context = agent_context("tenant_admin", vec!["read", "write"]);
+
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &context, None);
+        assert!(
+            result.is_ok(),
+            "TenantAdmin caller should pass the permission guard for a read tool"
+        );
+    }
+
+    #[test]
+    fn mutating_tool_still_requires_approved_proposal() {
+        let def = mutating_test_tool();
+        // ApUser grants IssueRequest permission
+        let context = agent_context("ap_user", vec!["read"]);
+
+        // Without a proposal context → should fail (proposal requirement, not permission)
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &context, None);
+        assert!(
+            result.is_err(),
+            "Mutating tool without proposal context should be rejected"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("approved proposal context"),
+            "Error should mention 'approved proposal context', got: {err_msg}"
+        );
+
+        // With an approved proposal context → should succeed
+        let proposal = ToolProposalContext {
+            proposal_id: Uuid::new_v4(),
+            tool_name: "test_mutating_tool".to_string(),
+            approved: true,
+        };
+        let result =
+            ToolRegistry::validate_tool_execution_guard(&def, &context, Some(&proposal));
+        assert!(
+            result.is_ok(),
+            "Mutating tool with approved proposal context should pass"
+        );
     }
 }
