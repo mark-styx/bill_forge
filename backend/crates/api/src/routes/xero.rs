@@ -76,6 +76,9 @@ pub struct SyncContactsResponse {
     pub updated: u64,
     /// Number of contacts skipped
     pub skipped: u64,
+    /// Number of contacts that failed to sync due to database errors
+    #[schema(example = 0)]
+    pub failed: u64,
 }
 
 /// Account mapping
@@ -470,7 +473,7 @@ async fn sync_contacts(
     .bind(tenant.tenant_id.as_uuid())
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to create sync log: {}", e)))?;
 
     // Fetch contacts from Xero (paginate through all results)
     let mut all_contacts = Vec::new();
@@ -500,9 +503,11 @@ async fn sync_contacts(
     let mut imported = 0u64;
     let mut updated = 0u64;
     let skipped = 0u64;
+    let mut failed = 0u64;
+    let mut last_error: Option<String> = None;
 
     // Sync each contact
-    for xero_contact in suppliers {
+    for xero_contact in &suppliers {
         // Check if contact already exists
         let existing: Option<(Uuid,)> = sqlx::query_as(
             "SELECT v.id FROM vendors v
@@ -513,11 +518,13 @@ async fn sync_contacts(
         .bind(&xero_contact.ContactID)
         .fetch_optional(&*pool)
         .await
-        .ok()
-        .flatten();
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to look up existing vendor: {}", e)))?;
 
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
+        let db_err = |e: sqlx::Error| billforge_core::Error::Database(e.to_string());
+        let result: Result<(), billforge_core::Error> = if let Some((vendor_id,)) = existing {
+            // Update existing vendor + mapping in a transaction
+            let mut tx = pool.begin().await.map_err(&db_err)?;
+
             sqlx::query(
                 "UPDATE vendors SET name = $2, email = $3, updated_at = NOW()
                  WHERE id = $1",
@@ -525,11 +532,10 @@ async fn sync_contacts(
             .bind(vendor_id)
             .bind(&xero_contact.Name)
             .bind(&xero_contact.EmailAddress)
-            .execute(&*pool)
+            .execute(&mut *tx)
             .await
-            .ok();
+            .map_err(&db_err)?;
 
-            // Update mapping
             sqlx::query(
                 "UPDATE xero_contact_mappings
                  SET xero_contact_name = $3, last_synced_at = NOW(), updated_at = NOW()
@@ -538,14 +544,16 @@ async fn sync_contacts(
             .bind(tenant.tenant_id.as_uuid())
             .bind(&xero_contact.ContactID)
             .bind(&xero_contact.Name)
-            .execute(&*pool)
+            .execute(&mut *tx)
             .await
-            .ok();
+            .map_err(&db_err)?;
 
-            updated += 1;
+            tx.commit().await.map_err(&db_err)?;
+            Ok(())
         } else {
-            // Create new vendor
+            // Create new vendor + mapping in a transaction
             let vendor_id = Uuid::new_v4();
+            let mut tx = pool.begin().await.map_err(&db_err)?;
 
             sqlx::query(
                 "INSERT INTO vendors (id, name, vendor_type, email, status, created_at, updated_at)
@@ -559,11 +567,10 @@ async fn sync_contacts(
             } else {
                 "inactive"
             })
-            .execute(&*pool)
+            .execute(&mut *tx)
             .await
-            .ok();
+            .map_err(&db_err)?;
 
-            // Create mapping
             sqlx::query(
                 "INSERT INTO xero_contact_mappings
                  (tenant_id, xero_contact_id, billforge_vendor_id, xero_contact_name, last_synced_at, created_at, updated_at)
@@ -573,39 +580,72 @@ async fn sync_contacts(
             .bind(&xero_contact.ContactID)
             .bind(vendor_id)
             .bind(&xero_contact.Name)
-            .execute(&*pool)
+            .execute(&mut *tx)
             .await
-            .ok();
+            .map_err(&db_err)?;
 
-            imported += 1;
+            tx.commit().await.map_err(&db_err)?;
+            Ok(())
+        };
+
+        match result {
+            Ok(()) => {
+                if existing.is_some() {
+                    updated += 1;
+                } else {
+                    imported += 1;
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    contact_id = %xero_contact.ContactID,
+                    error = %e,
+                    "Failed to sync Xero contact"
+                );
+                last_error = Some(e.to_string());
+                failed += 1;
+            }
         }
     }
+
+    // Compute final sync status from failure count
+    let status = if failed == 0 { "completed" } else { "failed" };
 
     // Update sync log
     sqlx::query(
         "UPDATE xero_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4
+         SET status = $5, completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4, error_message = $6
          WHERE id = $1"
     )
     .bind(sync_id)
-    .bind((imported + updated + skipped) as i32)
+    .bind((imported + updated + skipped + failed) as i32)
     .bind(imported as i32)
     .bind(updated as i32)
+    .bind(status)
+    .bind(last_error.as_deref().unwrap_or(""))
     .execute(&*pool)
     .await
-    .ok();
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to update sync log: {}", e)))?;
 
-    // Update last sync time on connection
-    sqlx::query("UPDATE xero_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
+    // Only advance last_sync_at watermark when all contacts succeeded
+    if failed == 0 {
+        sqlx::query("UPDATE xero_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
+            .bind(tenant.tenant_id.as_uuid())
+            .execute(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!(
+                    "Failed to update connection last_sync_at: {}",
+                    e
+                ))
+            })?;
+    }
 
     let response = SyncContactsResponse {
         imported,
         updated,
         skipped,
+        failed,
     };
 
     Ok(Json(response))
