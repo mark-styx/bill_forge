@@ -45,3 +45,6 @@ beforeAll(() => {
   }
   window.ResizeObserver = mockResizeObserver as unknown as typeof ResizeObserver
 })
+
+// Mock Element.scrollIntoView (not available in jsdom)
+Element.prototype.scrollIntoView = function () {}

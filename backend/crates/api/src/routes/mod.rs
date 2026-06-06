@@ -16,6 +16,7 @@ pub mod close_periods;
 pub mod contracts;
 pub mod dashboard;
 pub mod discounts;
+pub(crate) mod document_qa;
 pub(crate) mod documents;
 #[cfg(feature = "edi")]
 pub mod edi;
@@ -191,7 +192,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Data export
         .nest("/export", export::routes())
         // Document storage
-        .nest("/documents", documents::routes())
+        .nest("/documents", documents::routes().merge(document_qa::routes()))
         // Audit logs + evidence bundle export
         .nest(
             "/audit",

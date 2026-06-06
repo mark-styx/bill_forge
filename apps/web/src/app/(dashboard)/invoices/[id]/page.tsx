@@ -5,6 +5,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { invoicesApi, workflowsApi, vendorsApi, documentsApi, DocumentMetadata, InvoiceLineItem } from '@/lib/api';
+import { DocumentQAPanel } from './components/DocumentQAPanel';
+import { PdfViewer } from '@/components/PdfViewer';
+import type { Citation } from '@/types/documentQa';
 import { toast } from 'sonner';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { LineItemsGrid } from '@/components/ui/line-items-grid';
@@ -49,6 +52,7 @@ export default function InvoiceDetailPage() {
   const [quickAddVendorName, setQuickAddVendorName] = useState('');
   const [quickAddVendorType, setQuickAddVendorType] = useState('business');
   const [editedLineItems, setEditedLineItems] = useState<InvoiceLineItem[] | null>(null);
+  const [highlightCitation, setHighlightCitation] = useState<Citation | null>(null);
 
   const { data: invoice, isLoading } = useQuery({
     queryKey: ['invoice', id],
@@ -390,10 +394,10 @@ export default function InvoiceDetailPage() {
       </div>
 
       {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - PDF Viewer and Documents */}
-        <div className="lg:col-span-1 space-y-4">
-          {/* Document Preview */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Left Column - PDF Viewer + Q&A side by side */}
+        <div className="lg:col-span-2 space-y-4">
+          {/* Document Preview with Q&A */}
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <h2 className="font-semibold text-slate-900 dark:text-white flex items-center space-x-2">
@@ -417,33 +421,46 @@ export default function InvoiceDetailPage() {
               />
             </div>
             {documents && documents.length > 0 ? (
-              <div className="aspect-[8.5/11] bg-slate-100 dark:bg-slate-900 relative">
-                {previewError ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center p-6">
-                      <XCircle className="w-12 h-12 text-red-400 mx-auto mb-2" />
-                      <p className="text-red-500 text-sm">{previewError}</p>
+              <div className="flex flex-col lg:flex-row" style={{ minHeight: '500px' }}>
+                {/* PDF Viewer */}
+                <div className="flex-1 min-w-0">
+                  {previewError ? (
+                    <div className="flex items-center justify-center h-full p-8">
+                      <div className="text-center">
+                        <XCircle className="w-12 h-12 text-red-400 mx-auto mb-2" />
+                        <p className="text-red-500 text-sm">{previewError}</p>
+                      </div>
                     </div>
-                  </div>
-                ) : previewLoading || !previewBlobUrl ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                  </div>
-                ) : documents[0].mime_type === 'application/pdf' ? (
-                  <iframe
-                    src={previewBlobUrl}
-                    className="w-full h-full border-0"
-                    title="Invoice Document"
-                  />
-                ) : documents[0].mime_type.startsWith('image/') ? (
-                  <img
-                    src={previewBlobUrl}
-                    alt="Invoice Document"
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <File className="w-16 h-16 text-slate-300 dark:text-slate-600" />
+                  ) : previewLoading || !previewBlobUrl ? (
+                    <div className="flex items-center justify-center h-96">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                    </div>
+                  ) : documents[0].mime_type === 'application/pdf' ? (
+                    <PdfViewer
+                      file={previewBlobUrl}
+                      targetPage={highlightCitation?.page}
+                      highlight={highlightCitation}
+                      onHighlightConsumed={() => setHighlightCitation(null)}
+                    />
+                  ) : documents[0].mime_type.startsWith('image/') ? (
+                    <img
+                      src={previewBlobUrl}
+                      alt="Invoice Document"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-96">
+                      <File className="w-16 h-16 text-slate-300 dark:text-slate-600" />
+                    </div>
+                  )}
+                </div>
+                {/* Q&A Panel - right rail beside PDF */}
+                {documents[0].mime_type === 'application/pdf' && (
+                  <div className="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-slate-200 dark:border-slate-700 shrink-0">
+                    <DocumentQAPanel
+                      documentId={previewDocument?.id}
+                      onCitationClick={(citation) => setHighlightCitation(citation)}
+                    />
                   </div>
                 )}
               </div>
@@ -509,7 +526,7 @@ export default function InvoiceDetailPage() {
           )}
         </div>
 
-        {/* Right Column - Editable Fields */}
+        {/* Right Column - Editable Fields + Document Q&A */}
         <div className="lg:col-span-2 space-y-6">
           {/* Invoice Details Card */}
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
@@ -901,6 +918,8 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
       )}
+
+
     </div>
   );
 }

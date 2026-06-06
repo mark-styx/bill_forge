@@ -89,6 +89,9 @@ serde_urlencoded = "0.7"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 
+# PDF text extraction for document Q&A
+lopdf = "0.34"
+
 # Metrics
 prometheus = { version = "0.13", default-features = false }
 lazy_static = "1.4"
