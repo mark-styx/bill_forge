@@ -349,8 +349,9 @@ async fn nudge_approver(
 ///
 /// Reassigns the current pending approval request on an invoice to a different
 /// user. Updates `requested_from` on the active `approval_requests` row and
-/// writes an audit log entry. Session-authenticated — the actor is the
-/// logged-in AP manager, not a Teams/Slack bot mapping.
+/// writes an audit log entry. Returns 404 if there is no active pending approval
+/// to reassign. Session-authenticated — the actor is the logged-in AP manager,
+/// not a Teams/Slack bot mapping.
 #[utoipa::path(
     post,
     path = "/api/v1/dashboard/ap-command-center/{invoice_id}/reassign",
@@ -358,6 +359,7 @@ async fn nudge_approver(
     responses(
         (status = 200, description = "Approval reassigned"),
         (status = 401, description = "Unauthorized"),
+        (status = 404, description = "No active pending approval request to reassign"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -418,6 +420,13 @@ async fn reassign_approver(
     .execute(&*pool)
     .await
     .map_err(|e| Error::Internal(format!("Failed to reassign approval: {}", e)))?;
+
+    if updated.rows_affected() == 0 {
+        return Err(Error::NotFound {
+            resource_type: "PendingApprovalRequest".to_string(),
+            id: invoice_id.to_string(),
+        }.into());
+    }
 
     // Write audit log
     sqlx::query(
