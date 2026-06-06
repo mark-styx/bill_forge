@@ -1,6 +1,6 @@
 //! Two-week implementation wizard orchestration.
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::extractors::{AuthUser, InvoiceCaptureAccess, InvoiceProcessingAccess, TenantCtx};
 use crate::state::AppState;
 use axum::{
@@ -15,6 +15,7 @@ use billforge_core::{
     },
     traits::{PurchaseOrderRepository, WorkflowTemplateRepository},
     types::{Money, TenantId, UserId},
+    Error, Role,
 };
 use billforge_quickbooks::{
     QBAccount, QBPurchaseOrder, QBPurchaseOrderLine, QBVendor, QuickBooksClient,
@@ -499,10 +500,17 @@ pub async fn update_checklist(
 )]
 pub async fn update_privacy_mode(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<UpdatePrivacyModeRequest>,
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
+    // Only tenant admins may change the privacy toggle
+    if !user.has_role(Role::TenantAdmin) {
+        return Err(ApiError(Error::Forbidden(
+            "Only administrators can change privacy settings".to_string(),
+        )));
+    }
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 

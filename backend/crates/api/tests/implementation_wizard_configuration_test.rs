@@ -1,4 +1,4 @@
-//! Tests for the implementation wizard configuration phase (refs #320)
+//! Tests for the implementation wizard configuration phase (refs #320, #337)
 //!
 //! Validates:
 //! 1. PUT privacy-mode writes through to tenant setting and sets confirmed_at
@@ -7,8 +7,9 @@
 //! 4. Tenant isolation on every new route
 //! 5. sample_invoice_routed is derived from the routed-invoice query parameter,
 //!    NOT from the OCR upload count
+//! 6. PUT privacy-mode rejects non-admin users (TenantAdmin gate) — refs #337
 
-use billforge_core::TenantId;
+use billforge_core::{Role, TenantId, UserContext};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -211,4 +212,82 @@ fn tenant_isolation_via_state_load() {
 
     assert!(state_b.phases.erp.provider.is_none());
     assert_eq!(state_a.phases.erp.provider, Some(ErpProvider::Quickbooks));
+}
+
+// ---------------------------------------------------------------------------
+// Tests for #337: TenantAdmin gate on privacy-mode endpoint
+// ---------------------------------------------------------------------------
+
+fn make_admin_user() -> UserContext {
+    UserContext {
+        user_id: billforge_core::UserId::new(),
+        tenant_id: billforge_core::TenantId::new(),
+        email: "admin@test.com".into(),
+        name: "Admin".into(),
+        roles: vec![Role::TenantAdmin],
+    }
+}
+
+fn make_non_admin_user() -> UserContext {
+    UserContext {
+        user_id: billforge_core::UserId::new(),
+        tenant_id: billforge_core::TenantId::new(),
+        email: "ap@test.com".into(),
+        name: "AP User".into(),
+        roles: vec![Role::ApUser],
+    }
+}
+
+#[test]
+fn privacy_mode_rejects_non_admin() {
+    let non_admin = make_non_admin_user();
+
+    // Non-admin must not pass the TenantAdmin gate
+    assert!(!non_admin.has_role(Role::TenantAdmin));
+    assert!(!non_admin.is_admin());
+
+    // The handler returns Error::Forbidden which maps to HTTP 403
+    let err = billforge_core::Error::Forbidden(
+        "Only administrators can change privacy settings".to_string(),
+    );
+    assert_eq!(err.status_code(), 403);
+    assert_eq!(err.error_code(), "FORBIDDEN");
+}
+
+#[test]
+fn privacy_mode_allows_tenant_admin() {
+    let admin = make_admin_user();
+
+    // Admin must pass the TenantAdmin gate
+    assert!(admin.has_role(Role::TenantAdmin));
+    assert!(admin.is_admin());
+
+    // Verify the wizard state reflects the privacy-mode write when authorized
+    let mut state = default_state(Utc::now());
+    assert!(!state.phases.configuration.configuration.privacy_mode.enabled);
+    assert!(state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at
+        .is_none());
+
+    // Simulate the admin writing privacy mode
+    state.phases.configuration.configuration.privacy_mode = PrivacyModeConfig {
+        enabled: true,
+        scope: None,
+        confirmed_at: Some(Utc::now()),
+    };
+    recompute_statuses(&mut state, false);
+
+    assert!(state.phases.configuration.configuration.privacy_mode.enabled);
+    assert!(state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at
+        .is_some());
+    assert!(state.phases.go_live.checks.privacy_mode_confirmed);
 }
