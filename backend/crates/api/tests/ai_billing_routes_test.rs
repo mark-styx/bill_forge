@@ -343,7 +343,7 @@ fn test_ai_action_proposal_routes_use_ai_assistant_access_and_shared_models() {
     assert!(source.contains(r#""/action-proposals/{proposal_id}/approve""#));
     assert!(source.contains(r#""/action-proposals/{proposal_id}/reject""#));
     assert!(source.contains("Json(_request): Json<AiActionProposalDecisionRequest>"));
-    assert!(source.contains("Result<Json<AiActionProposalResponse>"));
+    assert!(source.contains("ApiResult<Json<AiActionProposalResponse>"));
 
     let approve_handler_start = source
         .find("async fn approve_action_proposal_handler(")
