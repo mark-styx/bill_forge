@@ -31,6 +31,68 @@ import type { LucideIcon } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 import { SlaBottleneckSection } from '@/components/dashboard/sla-bottleneck-section';
+import { useSearchParams } from 'next/navigation';
+import { useState } from 'react';
+
+function SandboxBanner() {
+  const searchParams = useSearchParams();
+  const isWelcome = searchParams.get('welcome') === 'sandbox';
+  const [promoting, setPromoting] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const { tenant } = useAuthStore();
+
+  if (dismissed || !isWelcome || !tenant) return null;
+
+  const handlePromote = async () => {
+    setPromoting(true);
+    try {
+      const apiBase = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
+      const res = await fetch(`${apiBase}/api/v1/public/promote`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${useAuthStore.getState().accessToken}`,
+        },
+        body: JSON.stringify({ plan_id: 'starter' }),
+      });
+      if (res.ok) {
+        setDismissed(true);
+      }
+    } catch {
+      // Ignore - banner stays
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex flex-col sm:flex-row items-center gap-4">
+      <div className="flex-1 text-center sm:text-left">
+        <p className="text-sm font-semibold text-foreground">
+          Welcome to your sandbox!
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Your workspace includes sample vendors, invoices, and workflows. Explore freely, then upgrade when ready.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handlePromote}
+          disabled={promoting}
+          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+        >
+          {promoting ? 'Upgrading...' : 'Promote to Paid'}
+        </button>
+        <button
+          onClick={() => setDismissed(true)}
+          className="px-3 py-2 rounded-lg border border-input text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const { hasModule, user } = useAuthStore();
@@ -210,6 +272,9 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Sandbox Banner */}
+      <SandboxBanner />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

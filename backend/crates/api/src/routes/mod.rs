@@ -34,6 +34,7 @@ pub mod predictive;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
 pub mod public_api;
+pub mod public_signup;
 pub mod qbo;
 pub mod recurring_patterns;
 #[cfg(feature = "quickbooks")]
@@ -105,7 +106,14 @@ pub fn create_router(state: AppState) -> Router {
                 )))
                 .layer(Extension(state.clone())),
         )
-        .with_state(state)
+        // Self-serve signup + pricing plans (no auth)
+        .nest(
+            "/api/public",
+            public_signup::public_routes(),
+        )
+        // Sandbox promote endpoint (authenticated, inside the auth-gated tree below)
+        // Mounted before the api_routes() call so it can be merged in later if needed.
+        .with_state(state.clone())
 }
 
 /// Prometheus metrics endpoint
@@ -280,6 +288,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/ai", ai::routes())
         // Billing & Subscription
         .nest("/billing", billing::routes())
+        // Self-serve sandbox promotion (authenticated)
+        .nest("/public", public_signup::promote_route())
         // Vendor Statement Reconciliation
         .merge(vendor_statements::routes())
         // Intelligent Routing & Workload Balancing

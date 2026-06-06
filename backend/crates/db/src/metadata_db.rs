@@ -109,6 +109,19 @@ impl MetadataDatabase {
             ))
         })?;
 
+        // Add is_sandbox flag to tenants table (self-serve sandbox provisioning).
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/128_add_tenant_is_sandbox.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run is_sandbox migration: {}",
+                e
+            ))
+        })?;
+
         Ok(())
     }
 
@@ -212,6 +225,62 @@ impl MetadataDatabase {
             .map_err(|e| Error::Database(format!("Failed to update tenant modules: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Set the is_sandbox flag on a tenant.
+    pub async fn set_tenant_sandbox(&self, tenant_id: &TenantId, is_sandbox: bool) -> Result<()> {
+        sqlx::query("UPDATE tenants SET is_sandbox = $1, updated_at = NOW() WHERE id = $2")
+            .bind(is_sandbox)
+            .bind(tenant_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to set sandbox flag: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Check whether a tenant is marked as sandbox.
+    pub async fn is_tenant_sandbox(&self, tenant_id: &TenantId) -> Result<bool> {
+        let is_sandbox: bool =
+            sqlx::query_scalar("SELECT is_sandbox FROM tenants WHERE id = $1")
+                .bind(tenant_id.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to check sandbox flag: {}", e)))?;
+
+        Ok(is_sandbox)
+    }
+
+    /// Update the tenant's subscription plan.
+    pub async fn update_tenant_plan(&self, tenant_id: &TenantId, plan_id: &str) -> Result<()> {
+        // Use the tenant_subscriptions table if it exists, otherwise update
+        // a plan_id column on tenants (or settings). Best-effort: try
+        // tenant_subscriptions first, fall back to settings jsonb.
+        let result = sqlx::query(
+            "INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, created_at, updated_at)
+             VALUES ($1, $2, 'active', NOW(), NOW())
+             ON CONFLICT (tenant_id) DO UPDATE SET plan_id = EXCLUDED.plan_id, updated_at = NOW()",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(plan_id)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Fallback: store plan_id in settings jsonb
+                sqlx::query(
+                    "UPDATE tenants SET settings = jsonb_set(COALESCE(settings, '{}'), '{plan_id}', $1::jsonb), updated_at = NOW() WHERE id = $2",
+                )
+                .bind(serde_json::Value::String(plan_id.to_string()))
+                .bind(tenant_id.as_uuid())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to update tenant plan: {}", e)))?;
+                Ok(())
+            }
+        }
     }
 
     /// Create a new user
