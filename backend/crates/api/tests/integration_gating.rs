@@ -116,6 +116,10 @@ fn test_middleware_defines_integration_gates() {
         "middleware.rs must define require_edi"
     );
     assert!(
+        source.contains("pub async fn require_netsuite"),
+        "middleware.rs must define require_netsuite"
+    );
+    assert!(
         source.contains("module_not_entitled"),
         "middleware.rs must reference module_not_entitled error code"
     );
@@ -144,4 +148,25 @@ fn test_integration_module_from_str_round_trips() {
         assert_eq!(parsed, *expected);
         assert_eq!(expected.as_str(), *slug);
     }
+}
+
+// ---------------------------------------------------------------------------
+// NetSuite route mount guard
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_routes_mod_mounts_netsuite() {
+    let source = include_str!("../src/routes/mod.rs");
+    assert!(
+        source.contains("pub mod netsuite"),
+        "routes/mod.rs must declare the netsuite module"
+    );
+    assert!(
+        source.contains("\"/netsuite\""),
+        "routes/mod.rs must mount the /netsuite path"
+    );
+    assert!(
+        source.contains("require_netsuite"),
+        "routes/mod.rs must apply require_netsuite middleware to the netsuite route"
+    );
 }

@@ -958,6 +958,7 @@ dependencies = [
  "billforge-invoice-capture",
  "billforge-invoice-processing",
  "billforge-mobile-push",
+ "billforge-netsuite",
  "billforge-notifications",
  "billforge-quickbooks",
  "billforge-reporting",

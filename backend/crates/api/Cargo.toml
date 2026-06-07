@@ -30,6 +30,7 @@ billforge-salesforce = { path = "../salesforce", optional = true }
 billforge-workday = { path = "../workday", optional = true }
 billforge-bill-com = { path = "../bill-com", optional = true }
 billforge-edi = { path = "../edi", optional = true }
+billforge-netsuite = { path = "../netsuite", optional = true }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
 billforge-analytics = { path = "../analytics" }
@@ -97,7 +98,7 @@ prometheus = { version = "0.13", default-features = false }
 lazy_static = "1.4"
 
 [features]
-default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi"]
+default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi", "netsuite"]
 quickbooks = ["dep:billforge-quickbooks"]
 xero = ["dep:billforge-xero"]
 sage-intacct = ["dep:billforge-sage-intacct"]
@@ -105,6 +106,7 @@ salesforce = ["dep:billforge-salesforce"]
 workday = ["dep:billforge-workday"]
 bill-com = ["dep:billforge-bill-com"]
 edi = ["dep:billforge-edi"]
+netsuite = ["dep:billforge-netsuite"]
 
 [dev-dependencies]
 hmac = "0.12"

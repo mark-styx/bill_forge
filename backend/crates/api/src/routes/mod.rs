@@ -21,6 +21,8 @@ pub(crate) mod documents;
 #[cfg(feature = "edi")]
 pub mod edi;
 pub mod email_actions;
+#[cfg(feature = "netsuite")]
+pub mod netsuite;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub mod health;
@@ -60,9 +62,9 @@ pub mod xero;
 
 use crate::metrics;
 use crate::middleware::{
-    rate_limit_auth, require_auth, require_bill_com, require_edi, require_quickbooks,
-    require_reporting, require_sage_intacct, require_salesforce, require_tenant, require_workday,
-    require_xero, RateLimiterState,
+    rate_limit_auth, require_auth, require_bill_com, require_edi, require_netsuite,
+    require_quickbooks, require_reporting, require_sage_intacct, require_salesforce,
+    require_tenant, require_workday, require_xero, RateLimiterState,
 };
 use crate::routes::public_api::PublicApiRateLimiter;
 use crate::state::AppState;
@@ -254,6 +256,11 @@ fn api_routes(state: AppState) -> Router<AppState> {
         let router = router.nest(
             "/edi/purchase-orders",
             purchase_orders::routes().layer(middleware::from_fn(require_edi)),
+        );
+        #[cfg(feature = "netsuite")]
+        let router = router.nest(
+            "/netsuite",
+            netsuite::routes().layer(middleware::from_fn(require_netsuite)),
         );
         router
     };
