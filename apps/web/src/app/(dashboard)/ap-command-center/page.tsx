@@ -22,6 +22,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import PeerBenchmarkPanel from '@/components/ap-command-center/PeerBenchmarkPanel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -456,6 +457,9 @@ export default function ApCommandCenterPage() {
           color="bg-amber-50 text-amber-600"
         />
       </div>
+
+      {/* Peer Benchmark Panel */}
+      <PeerBenchmarkPanel />
 
       {/* Bucket tables */}
       {thisWeek && <BucketTable bucket={thisWeek} />}

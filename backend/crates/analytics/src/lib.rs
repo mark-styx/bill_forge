@@ -6,6 +6,7 @@
 #![allow(warnings)]
 
 pub mod anomaly_detection;
+pub mod benchmark;
 pub mod forecasting;
 pub mod handlers;
 pub mod jobs;
@@ -17,6 +18,10 @@ pub mod repository;
 pub mod service;
 
 pub use anomaly_detection::*;
+pub use benchmark::{
+    BenchmarkKpis, BenchmarkOptInRequest, BenchmarkResponse, CohortDescriptor, CohortPercentiles,
+    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis,
+};
 pub use forecasting::*;
 pub use handlers::*;
 pub use models::*;

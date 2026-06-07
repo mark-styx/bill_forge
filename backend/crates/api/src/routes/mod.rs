@@ -274,6 +274,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         )
         // Analytics (Usage, Performance, Trends - tenant-scoped via AuthUser)
         .nest("/analytics", analytics::routes())
+        // Analytics - Benchmark (opt-in peer insights)
+        .nest("/analytics/benchmark", analytics::benchmark_routes())
         // Mobile App Backend (Device management, dashboard, approvals)
         .nest("/mobile", mobile::routes())
         // Tenant settings

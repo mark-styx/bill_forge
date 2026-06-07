@@ -171,3 +171,175 @@ async fn get_trends(
 
     Ok(Json(trends))
 }
+
+// ---------------------------------------------------------------------------
+// Benchmark routes (opt-in peer insights)
+// ---------------------------------------------------------------------------
+
+use billforge_analytics::benchmark::{
+    BenchmarkOptInRequest, BenchmarkResponse, CohortDescriptor,
+    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis,
+};
+
+/// Benchmark sub-router mounted at `/analytics/benchmark`
+pub fn benchmark_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(get_benchmark))
+        .route("/opt-in", post(benchmark_opt_in))
+}
+
+/// `GET /api/v1/analytics/benchmark`
+///
+/// Returns the tenant's six AP KPIs alongside anonymized cohort percentiles.
+/// If `benchmark_opt_in = false`, returns `{ opted_in: false }` so the UI
+/// can render the opt-in CTA.
+async fn get_benchmark(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<BenchmarkResponse>> {
+    let tenant_id = &user.0.tenant_id;
+    let metadata_pool = state.db.metadata();
+
+    let row: Option<(bool, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT benchmark_opt_in, benchmark_industry, benchmark_headcount_band, benchmark_volume_band
+        FROM tenants
+        WHERE id = $1
+        "#,
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(&*metadata_pool)
+    .await
+    .map_err(|e| billforge_core::Error::Internal(format!("Failed to read tenant benchmark settings: {}", e)))?;
+
+    let (opted_in, industry, headcount_band, volume_band) = match row {
+        Some(r) => r,
+        None => {
+            return Ok(Json(BenchmarkResponse {
+                opted_in: false,
+                cohort: None,
+                tenant_kpis: None,
+                cohort_kpis: None,
+                cohort_size: None,
+            }));
+        }
+    };
+
+    if !opted_in {
+        return Ok(Json(BenchmarkResponse {
+            opted_in: false,
+            cohort: None,
+            tenant_kpis: None,
+            cohort_kpis: None,
+            cohort_size: None,
+        }));
+    }
+
+    let ind = match industry {
+        Some(v) => v,
+        None => {
+            return Ok(Json(BenchmarkResponse {
+                opted_in: true,
+                cohort: None,
+                tenant_kpis: None,
+                cohort_kpis: None,
+                cohort_size: None,
+            }));
+        }
+    };
+    let hc = headcount_band.unwrap_or_default();
+    let vb = volume_band.unwrap_or_default();
+
+    let cohort = CohortDescriptor {
+        industry: ind.clone(),
+        headcount_band: hc.clone(),
+        volume_band: vb.clone(),
+    };
+
+    // Compute tenant KPIs (tenant-scoped pool under RLS)
+    let tenant_pool = state.db.tenant(tenant_id).await?;
+    let tenant_kpis = match compute_tenant_kpis(&tenant_pool).await {
+        Ok(kpis) => {
+            // Publish into metadata DB so cohort aggregation includes this tenant
+            if let Err(e) = publish_tenant_kpis(
+                &metadata_pool,
+                tenant_id.as_uuid(),
+                &cohort.industry,
+                &cohort.headcount_band,
+                &cohort.volume_band,
+                &kpis,
+            )
+            .await
+            {
+                tracing::warn!("Failed to publish tenant benchmark KPIs: {}", e);
+            }
+            Some(kpis)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to compute tenant benchmark KPIs: {}", e);
+            None
+        }
+    };
+
+    // Fetch cohort percentiles from the SECURITY DEFINER function
+    let (cohort_kpis, cohort_size) =
+        match fetch_cohort_percentiles(&metadata_pool, &cohort.industry, &cohort.headcount_band, &cohort.volume_band).await {
+            Ok(Some((pct, sz))) => (Some(pct), Some(sz)),
+            Ok(None) => (None, None),
+            Err(e) => {
+                tracing::warn!("Failed to fetch cohort percentiles: {}", e);
+                (None, None)
+            }
+        };
+
+    Ok(Json(BenchmarkResponse {
+        opted_in: true,
+        cohort: Some(cohort),
+        tenant_kpis,
+        cohort_kpis,
+        cohort_size,
+    }))
+}
+
+/// `POST /api/v1/analytics/benchmark/opt-in`
+///
+/// Toggles the benchmark_opt_in flag and stores the cohort descriptor.
+async fn benchmark_opt_in(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<BenchmarkOptInRequest>,
+) -> ApiResult<Json<BenchmarkResponse>> {
+    let tenant_id = &user.0.tenant_id;
+    let metadata_pool = state.db.metadata();
+
+    sqlx::query(
+        r#"
+        UPDATE tenants
+        SET benchmark_opt_in = TRUE,
+            benchmark_industry = $2,
+            benchmark_headcount_band = $3,
+            benchmark_volume_band = $4,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(&body.industry)
+    .bind(&body.headcount_band)
+    .bind(&body.volume_band)
+    .execute(&*metadata_pool)
+    .await
+    .map_err(|e| billforge_core::Error::Internal(format!("Failed to update benchmark opt-in: {}", e)))?;
+
+    Ok(Json(BenchmarkResponse {
+        opted_in: true,
+        cohort: Some(CohortDescriptor {
+            industry: body.industry,
+            headcount_band: body.headcount_band,
+            volume_band: body.volume_band,
+        }),
+        tenant_kpis: None,
+        cohort_kpis: None,
+        cohort_size: None,
+    }))
+}

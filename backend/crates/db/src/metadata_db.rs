@@ -122,6 +122,19 @@ impl MetadataDatabase {
             ))
         })?;
 
+        // Benchmark peer insights: opt-in columns, KPI rollup table, cohort percentile function.
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/130_benchmark_peer_insights.up.sql"
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            Error::Migration(format!(
+                "Failed to run benchmark peer insights migration: {}",
+                e
+            ))
+        })?;
+
         Ok(())
     }
 

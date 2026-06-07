@@ -1956,6 +1956,55 @@ export const apCommandCenterApi = {
     api.get<ApCommandCenterResponse>('/api/v1/dashboard/ap-command-center/this-week'),
 };
 
+// ---------------------------------------------------------------------------
+// Benchmark Peer Insights
+// ---------------------------------------------------------------------------
+
+export interface BenchmarkKpis {
+  dpo_days: number;
+  avg_approval_cycle_hours: number;
+  ocr_straight_through_rate: number;
+  exception_rate: number;
+  discount_capture_rate: number;
+  cost_per_invoice: number;
+}
+
+export interface CohortPercentiles {
+  p25: BenchmarkKpis;
+  p50: BenchmarkKpis;
+  p75: BenchmarkKpis;
+}
+
+export interface CohortDescriptor {
+  industry: string;
+  headcount_band: string;
+  volume_band: string;
+}
+
+export interface BenchmarkResponse {
+  opted_in: boolean;
+  cohort?: CohortDescriptor;
+  tenant_kpis?: BenchmarkKpis;
+  cohort_kpis?: CohortPercentiles;
+  cohort_size?: number;
+}
+
+export interface BenchmarkOptInRequest {
+  industry: string;
+  headcount_band: string;
+  volume_band: string;
+}
+
+export const benchmarkApi = {
+  /** Fetch benchmark data (KPIs + cohort percentiles) for the current tenant. */
+  get: () =>
+    api.get<BenchmarkResponse>('/api/v1/analytics/benchmark'),
+
+  /** Opt in to peer benchmarking with cohort descriptor. */
+  optIn: (body: BenchmarkOptInRequest) =>
+    api.post<BenchmarkResponse>('/api/v1/analytics/benchmark/opt-in', body),
+};
+
 /** Inline approval actions — reassign and nudge via session-authenticated AP Command Center endpoints. */
 export const approvalsActions = {
   /** Reassign the current pending approval on an invoice to another user. */
