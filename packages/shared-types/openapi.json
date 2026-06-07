@@ -24,7 +24,7 @@
         "tags": [
           "Email Actions"
         ],
-        "summary": "Handle approve action from email",
+        "summary": "Handle approve action from email - renders confirmation interstitial (GET)",
         "operationId": "handle_approve",
         "parameters": [
           {
@@ -39,7 +39,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Invoice approved"
+            "description": "Renders confirmation page"
           },
           "400": {
             "description": "Invalid token"
@@ -52,7 +52,7 @@
         "tags": [
           "Email Actions"
         ],
-        "summary": "Handle hold action from email",
+        "summary": "Handle hold action from email - renders confirmation interstitial (GET)",
         "operationId": "handle_hold",
         "parameters": [
           {
@@ -67,7 +67,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Invoice placed on hold"
+            "description": "Renders confirmation page"
           },
           "400": {
             "description": "Invalid token"
@@ -80,7 +80,7 @@
         "tags": [
           "Email Actions"
         ],
-        "summary": "Handle reject action from email",
+        "summary": "Handle reject action from email - renders confirmation interstitial (GET)",
         "operationId": "handle_reject",
         "parameters": [
           {
@@ -95,7 +95,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Invoice rejected"
+            "description": "Renders confirmation page"
           },
           "400": {
             "description": "Invalid token"
@@ -327,6 +327,52 @@
         }
       }
     },
+    "/api/v1/analytics/predictive/alerts": {
+      "get": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Get budget alerts",
+        "operationId": "get_budget_alerts",
+        "responses": {
+          "200": {
+            "description": "Budget alerts"
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/predictive/alerts/{alert_id}/dismiss": {
+      "post": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Dismiss a budget alert",
+        "operationId": "dismiss_alert",
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Alert dismissed"
+          }
+        }
+      }
+    },
     "/api/v1/analytics/predictive/anomalies": {
       "get": {
         "tags": [
@@ -395,140 +441,6 @@
         }
       }
     },
-    "/api/v1/analytics/predictive/anomaly-rules": {
-      "get": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Get anomaly rules",
-        "operationId": "get_anomaly_rules",
-        "responses": {
-          "200": {
-            "description": "Anomaly rules"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Configure anomaly rule",
-        "operationId": "configure_anomaly_rule",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {}
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Rule configured"
-          }
-        }
-      }
-    },
-    "/api/v1/analytics/predictive/anomaly-rules/{id}": {
-      "get": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Get anomaly rule by ID",
-        "operationId": "get_anomaly_rule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Anomaly rule"
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Update anomaly rule",
-        "operationId": "update_anomaly_rule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {}
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Rule updated"
-          }
-        }
-      }
-    },
-    "/api/v1/analytics/predictive/budget-alerts": {
-      "get": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Get budget alerts",
-        "operationId": "get_budget_alerts",
-        "responses": {
-          "200": {
-            "description": "Budget alerts"
-          }
-        }
-      }
-    },
-    "/api/v1/analytics/predictive/budget-alerts/{id}/dismiss": {
-      "post": {
-        "tags": [
-          "Predictive Analytics"
-        ],
-        "summary": "Dismiss a budget alert",
-        "operationId": "dismiss_alert",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {}
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Alert dismissed"
-          }
-        }
-      }
-    },
     "/api/v1/analytics/predictive/forecasts": {
       "get": {
         "tags": [
@@ -541,7 +453,9 @@
             "description": "Forecasts"
           }
         }
-      },
+      }
+    },
+    "/api/v1/analytics/predictive/forecasts/generate": {
       "post": {
         "tags": [
           "Predictive Analytics"
@@ -583,6 +497,94 @@
         "responses": {
           "200": {
             "description": "Forecast detail"
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/predictive/rules": {
+      "get": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Get anomaly rules",
+        "operationId": "get_anomaly_rules",
+        "responses": {
+          "200": {
+            "description": "Anomaly rules"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Configure anomaly rule",
+        "operationId": "configure_anomaly_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rule configured"
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/predictive/rules/{rule_id}": {
+      "get": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Get anomaly rule by ID",
+        "operationId": "get_anomaly_rule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Anomaly rule"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Predictive Analytics"
+        ],
+        "summary": "Update anomaly rule",
+        "operationId": "update_anomaly_rule",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rule updated"
           }
         }
       }
@@ -3698,6 +3700,60 @@
         }
       }
     },
+    "/api/v1/salesforce/push/invoices/{invoice_id}/payment-status": {
+      "post": {
+        "tags": [
+          "Salesforce"
+        ],
+        "summary": "Push invoice payment status back to the linked Salesforce Account.",
+        "operationId": "push_invoice_payment_status",
+        "parameters": [
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "BillForge invoice ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushPaymentStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Payment status pushed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushPaymentStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request (vendor not mapped, invalid status)"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Invoice not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/api/v1/salesforce/status": {
       "get": {
         "tags": [
@@ -6539,6 +6595,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "min_ocr_confidence",
+            "in": "query",
+            "description": "Minimum OCR confidence (0.0-1.0)",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          {
+            "name": "max_ocr_confidence",
+            "in": "query",
+            "description": "Maximum OCR confidence (0.0-1.0)",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            }
           }
         ],
         "responses": {
@@ -7092,6 +7168,23 @@
           }
         }
       },
+      "CaptureChannelsConfig": {
+        "type": "object",
+        "required": [
+          "email_forwarding"
+        ],
+        "properties": {
+          "email_forwarding": {
+            "$ref": "#/components/schemas/EmailForwardingConfig"
+          },
+          "erp_sync_enabled": {
+            "type": "boolean"
+          },
+          "manual_upload_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "CheckoutRequest": {
         "type": "object",
         "required": [
@@ -7112,6 +7205,47 @@
           },
           "plan_id": {
             "type": "string"
+          }
+        }
+      },
+      "ConfigurationPhase": {
+        "type": "object",
+        "required": [
+          "status",
+          "configuration"
+        ],
+        "properties": {
+          "configuration": {
+            "$ref": "#/components/schemas/ConfigurationSection"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PhaseStatus"
+          }
+        }
+      },
+      "ConfigurationSection": {
+        "type": "object",
+        "required": [
+          "privacy_mode",
+          "capture_channels",
+          "module_entitlements",
+          "notification_approvals"
+        ],
+        "properties": {
+          "capture_channels": {
+            "$ref": "#/components/schemas/CaptureChannelsConfig"
+          },
+          "module_entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModuleEntitlement"
+            }
+          },
+          "notification_approvals": {
+            "$ref": "#/components/schemas/NotificationApprovalsConfig"
+          },
+          "privacy_mode": {
+            "$ref": "#/components/schemas/PrivacyModeConfig"
           }
         }
       },
@@ -7198,6 +7332,21 @@
           "vendor": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "EmailForwardingConfig": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -7378,22 +7527,22 @@
       "GoLiveChecks": {
         "type": "object",
         "required": [
-          "notify_ap_team",
-          "set_email_forwarding",
-          "enable_approval_routing",
           "confirm_cutover_date"
         ],
         "properties": {
           "confirm_cutover_date": {
             "type": "boolean"
           },
-          "enable_approval_routing": {
+          "forwarding_email_verified": {
             "type": "boolean"
           },
-          "notify_ap_team": {
+          "notifications_acknowledged": {
             "type": "boolean"
           },
-          "set_email_forwarding": {
+          "privacy_mode_confirmed": {
+            "type": "boolean"
+          },
+          "sample_invoice_routed": {
             "type": "boolean"
           }
         }
@@ -7439,11 +7588,15 @@
           "erp",
           "approvals",
           "ocr",
+          "configuration",
           "go_live"
         ],
         "properties": {
           "approvals": {
             "$ref": "#/components/schemas/ApprovalsPhase"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/ConfigurationPhase"
           },
           "erp": {
             "$ref": "#/components/schemas/ErpPhase"
@@ -7980,6 +8133,21 @@
           }
         }
       },
+      "ModuleEntitlement": {
+        "type": "object",
+        "required": [
+          "module_key",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "module_key": {
+            "type": "string"
+          }
+        }
+      },
       "MoneyInfo": {
         "type": "object",
         "description": "Money amount with currency",
@@ -8001,6 +8169,30 @@
           }
         }
       },
+      "NotificationApprovalsConfig": {
+        "type": "object",
+        "properties": {
+          "ap_team_distribution": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "escalation_distribution": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "OcrPhase": {
         "type": "object",
         "required": [
@@ -8009,10 +8201,21 @@
           "sample_invoice_ids"
         ],
         "properties": {
+          "accuracy_threshold": {
+            "type": "number",
+            "format": "double"
+          },
           "count": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "measured_accuracy": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           },
           "sample_invoice_ids": {
             "type": "array",
@@ -8023,6 +8226,13 @@
           },
           "status": {
             "$ref": "#/components/schemas/PhaseStatus"
+          },
+          "sufficient_sample": {
+            "type": "boolean"
+          },
+          "total_extractions": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -8177,6 +8387,30 @@
           "complete"
         ]
       },
+      "PrivacyModeConfig": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ProvisionRequest": {
         "type": "object",
         "required": [
@@ -8203,6 +8437,13 @@
               "string",
               "null"
             ]
+          },
+          "industry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Industry vertical for starter pack seeding. Defaults to \"generic\"."
           },
           "local_ocr_required": {
             "type": [
@@ -8273,6 +8514,80 @@
           "status": {
             "type": "string",
             "description": "Export status"
+          }
+        }
+      },
+      "PushPaymentStatusRequest": {
+        "type": "object",
+        "description": "Push payment status request",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "amount_paid": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Amount paid (for partial payments)"
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp when payment was made"
+          },
+          "payment_reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "External payment reference / confirmation number"
+          },
+          "salesforce_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Salesforce custom field name to update (defaults to `BillForge_Payment_Status__c`)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Payment status: must be one of `paid`, `partial`, or `void`"
+          }
+        }
+      },
+      "PushPaymentStatusResponse": {
+        "type": "object",
+        "description": "Push payment status response",
+        "required": [
+          "invoice_id",
+          "salesforce_account_id",
+          "salesforce_field",
+          "value",
+          "pushed_at"
+        ],
+        "properties": {
+          "invoice_id": {
+            "type": "string",
+            "description": "The BillForge invoice ID that was pushed"
+          },
+          "pushed_at": {
+            "type": "string",
+            "description": "ISO-8601 timestamp of the push"
+          },
+          "salesforce_account_id": {
+            "type": "string",
+            "description": "The Salesforce Account ID that was updated"
+          },
+          "salesforce_field": {
+            "type": "string",
+            "description": "The Salesforce field that was set"
+          },
+          "value": {
+            "description": "The value written to the field"
           }
         }
       },
@@ -8639,9 +8954,17 @@
         "required": [
           "imported",
           "updated",
-          "skipped"
+          "skipped",
+          "failed"
         ],
         "properties": {
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of contacts that failed to sync due to database errors",
+            "example": 0,
+            "minimum": 0
+          },
           "imported": {
             "type": "integer",
             "format": "int64",

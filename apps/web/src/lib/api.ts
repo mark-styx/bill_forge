@@ -2349,7 +2349,7 @@ export const predictiveApi = {
     api.get<AnomalyRule>(`/api/v1/analytics/predictive/rules/${id}`),
 
   updateAnomalyRule: (id: string, data: ConfigureAnomalyRuleInput) =>
-    api.post<null>(`/api/v1/analytics/predictive/rules/${id}/update`, data),
+    api.post<null>(`/api/v1/analytics/predictive/rules/${id}`, data),
 };
 
 // ---------------------------------------------------------------------------
