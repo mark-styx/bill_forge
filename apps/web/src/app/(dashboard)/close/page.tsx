@@ -1,8 +1,8 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { closePeriodsApi, type ClosePeriod, type RunCloseResponse } from '@/lib/api';
+import { useState, useEffect, useCallback } from 'react';
+import { closePeriodsApi, type ClosePeriod, type RunCloseResponse, type ReadinessResponse } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import {
   Calendar,
@@ -177,6 +177,122 @@ function ConfirmCloseDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Readiness Panel
+// ---------------------------------------------------------------------------
+
+function ReadinessPanel() {
+  const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchReadiness = useCallback(async () => {
+    try {
+      const data = await closePeriodsApi.readiness();
+      setReadiness(data);
+    } catch {
+      // Silently ignore - the panel is supplementary
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchReadiness();
+    const interval = setInterval(fetchReadiness, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchReadiness]);
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-border p-6">
+        <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />
+      </div>
+    );
+  }
+
+  if (!readiness || !readiness.period) {
+    return null;
+  }
+
+  const score = readiness.score ?? 0;
+  const scoreColor =
+    score >= 90
+      ? 'text-green-600 dark:text-green-400'
+      : score >= 70
+        ? 'text-amber-600 dark:text-amber-400'
+        : 'text-red-600 dark:text-red-400';
+  const scoreBg =
+    score >= 90
+      ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800'
+      : score >= 70
+        ? 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800'
+        : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800';
+
+  return (
+    <div className={`rounded-xl border p-6 ${scoreBg}`}>
+      <div className="flex items-start gap-6">
+        {/* Score */}
+        <div className="flex flex-col items-center">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+            Readiness
+          </span>
+          <span className={`text-5xl font-bold ${scoreColor}`} data-testid="readiness-score">
+            {score}
+          </span>
+        </div>
+
+        {/* Details */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-3">
+            <h3 className="text-sm font-semibold text-foreground">
+              {readiness.period.period_label} Period
+            </h3>
+            {readiness.totals.days_until_cutoff != null && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-background/60 text-muted-foreground">
+                <Calendar className="w-3 h-3" />
+                {readiness.totals.days_until_cutoff} days until cutoff
+              </span>
+            )}
+          </div>
+
+          {/* Exception checklist */}
+          {readiness.exceptions.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400" data-testid="all-clear">
+              <CheckCircle2 className="w-4 h-4" />
+              All clear - period is close-ready.
+            </div>
+          ) : (
+            <ul className="space-y-1.5" data-testid="exception-list">
+              {readiness.exceptions.map((exc) => (
+                <li key={exc.id} className="flex items-center gap-2 text-sm">
+                  <span
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      exc.severity === 'high'
+                        ? 'bg-red-500'
+                        : exc.severity === 'medium'
+                          ? 'bg-amber-500'
+                          : 'bg-blue-500'
+                    }`}
+                  />
+                  <span className="text-foreground">{exc.label}</span>
+                  <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-background/60 text-muted-foreground">
+                    {exc.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Last updated */}
+          <p className="text-xs text-muted-foreground mt-3">
+            Updated {new Date(readiness.computed_at).toLocaleTimeString()}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -253,6 +369,9 @@ export default function CloseCalendarPage() {
           New Period
         </button>
       </div>
+
+      {/* Readiness Panel */}
+      <ReadinessPanel />
 
       {/* Close result banner */}
       {closeResult && (

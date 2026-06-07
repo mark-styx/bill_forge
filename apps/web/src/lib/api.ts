@@ -3035,6 +3035,30 @@ export interface RunCloseResponse {
   erp_post_error: string | null;
 }
 
+export interface ReadinessException {
+  id: string;
+  label: string;
+  count: number;
+  severity: string;
+}
+
+export interface ReadinessTotals {
+  total_invoices: number;
+  unapproved_invoices: number;
+  accruals_drafted: number;
+  invoices_needing_accrual: number;
+  invoices_missing_gl_coding: number;
+  days_until_cutoff: number | null;
+}
+
+export interface ReadinessResponse {
+  period: ClosePeriod | null;
+  score: number | null;
+  computed_at: string;
+  totals: ReadinessTotals;
+  exceptions: ReadinessException[];
+}
+
 export const closePeriodsApi = {
   list: () =>
     api.get<ClosePeriod[]>('/api/v1/close-periods'),
@@ -3052,6 +3076,9 @@ export const closePeriodsApi = {
 
   runClose: (id: string) =>
     api.post<RunCloseResponse>(`/api/v1/close-periods/${id}/close`, {}),
+
+  readiness: () =>
+    api.get<ReadinessResponse>('/api/v1/close-periods/current/readiness'),
 };
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ const mockList = vi.fn();
 const mockCreate = vi.fn();
 const mockUpdate = vi.fn();
 const mockRunClose = vi.fn();
+const mockReadiness = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   closePeriodsApi: {
@@ -16,6 +17,7 @@ vi.mock('@/lib/api', () => ({
     create: (body: unknown) => mockCreate(body),
     update: (id: string, body: unknown) => mockUpdate(id, body),
     runClose: (id: string) => mockRunClose(id),
+    readiness: () => mockReadiness(),
   },
 }));
 
@@ -87,6 +89,32 @@ describe('CloseCalendarPage', () => {
       accrual_entries_created: 3,
       erp_post_status: 'posted',
       erp_post_error: null,
+    });
+    mockReadiness.mockResolvedValue({
+      period: {
+        id: 'period-2',
+        tenant_id: 'tenant-1',
+        period_label: '2026-05',
+        period_start: '2026-05-01',
+        period_end: '2026-05-31',
+        cutoff_date: '2026-05-25',
+        status: 'open',
+        locked_at: null,
+        locked_by_user_id: null,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+      score: 100,
+      computed_at: '2026-06-01T00:00:00Z',
+      totals: {
+        total_invoices: 5,
+        unapproved_invoices: 0,
+        accruals_drafted: 0,
+        invoices_needing_accrual: 0,
+        invoices_missing_gl_coding: 0,
+        days_until_cutoff: 19,
+      },
+      exceptions: [],
     });
   });
 
@@ -212,5 +240,66 @@ describe('CloseCalendarPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed to load close periods.')).toBeInTheDocument();
     });
+  });
+
+  it('shows readiness panel with score 100 and all-clear message', async () => {
+    renderWithProviders(<CloseCalendarPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('readiness-score')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('readiness-score')).toHaveTextContent('100');
+    expect(screen.getByTestId('all-clear')).toHaveTextContent('All clear - period is close-ready.');
+  });
+
+  it('shows readiness panel with exceptions when score is below 100', async () => {
+    mockReadiness.mockResolvedValue({
+      period: {
+        id: 'period-2',
+        tenant_id: 'tenant-1',
+        period_label: '2026-05',
+        period_start: '2026-05-01',
+        period_end: '2026-05-31',
+        cutoff_date: '2026-05-25',
+        status: 'open',
+        locked_at: null,
+        locked_by_user_id: null,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+      score: 62,
+      computed_at: '2026-06-01T00:00:00Z',
+      totals: {
+        total_invoices: 10,
+        unapproved_invoices: 3,
+        accruals_drafted: 1,
+        invoices_needing_accrual: 3,
+        invoices_missing_gl_coding: 1,
+        days_until_cutoff: 5,
+      },
+      exceptions: [
+        { id: 'unaccrued_invoices', label: 'Invoices missing accrual', count: 3, severity: 'high' },
+        { id: 'missing_gl_coding', label: 'Invoices missing GL coding', count: 1, severity: 'medium' },
+        { id: 'unapproved_invoices', label: 'Unapproved invoices', count: 3, severity: 'low' },
+      ],
+    });
+
+    renderWithProviders(<CloseCalendarPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('readiness-score')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('readiness-score')).toHaveTextContent('62');
+
+    const list = screen.getByTestId('exception-list');
+    expect(list).toBeInTheDocument();
+    expect(screen.getByText('Invoices missing accrual')).toBeInTheDocument();
+
+    // Count badge for unaccrued_invoices exception
+    const badges = list.querySelectorAll('span.inline-flex');
+    const count3 = Array.from(badges).find((el) => el.textContent === '3');
+    expect(count3).toBeTruthy();
   });
 });

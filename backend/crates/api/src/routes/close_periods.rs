@@ -30,6 +30,7 @@ use uuid::Uuid;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_periods).post(create_period))
+        .route("/current/readiness", get(get_current_period_readiness))
         .route("/:id", patch(update_period))
         .route("/:id/close", post(run_close))
 }
@@ -72,6 +73,37 @@ pub struct RunCloseResponse {
     pub accrual_entries_created: usize,
     pub erp_post_status: String,
     pub erp_post_error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Readiness types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ReadinessResponse {
+    pub period: Option<ClosePeriodResponse>,
+    pub score: Option<i32>,
+    pub computed_at: String,
+    pub totals: ReadinessTotals,
+    pub exceptions: Vec<ExceptionItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadinessTotals {
+    pub total_invoices: i64,
+    pub unapproved_invoices: i64,
+    pub accruals_drafted: i64,
+    pub invoices_needing_accrual: i64,
+    pub invoices_missing_gl_coding: i64,
+    pub days_until_cutoff: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExceptionItem {
+    pub id: String,
+    pub label: String,
+    pub count: i64,
+    pub severity: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +211,194 @@ struct AccrualEntryStub {
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+async fn get_current_period_readiness(
+    State(state): State<AppState>,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<ReadinessResponse>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // 1. Resolve current open period (latest row where status = 'open')
+    let period_row: Option<(
+        Uuid, Uuid, String, String, String, String, String,
+        Option<String>, Option<Uuid>, String, String,
+    )> = sqlx::query_as(
+        "SELECT id, tenant_id, period_label, period_start::text, period_end::text, \
+                cutoff_date::text, status, locked_at::text, locked_by_user_id, \
+                created_at::text, updated_at::text \
+         FROM close_periods \
+         WHERE tenant_id = $1 AND status = 'open' \
+         ORDER BY period_start DESC \
+         LIMIT 1",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to fetch open period: {}", e)))?;
+
+    let computed_at = Utc::now().to_rfc3339();
+
+    let Some(period_row) = period_row else {
+        return Ok(Json(ReadinessResponse {
+            period: None,
+            score: None,
+            computed_at,
+            totals: ReadinessTotals {
+                total_invoices: 0,
+                unapproved_invoices: 0,
+                accruals_drafted: 0,
+                invoices_needing_accrual: 0,
+                invoices_missing_gl_coding: 0,
+                days_until_cutoff: None,
+            },
+            exceptions: vec![ExceptionItem {
+                id: "no_open_period".to_string(),
+                label: "No open close period configured".to_string(),
+                count: 1,
+                severity: "high".to_string(),
+            }],
+        }));
+    };
+
+    let period = ClosePeriodResponse {
+        id: period_row.0,
+        tenant_id: period_row.1,
+        period_label: period_row.2.clone(),
+        period_start: period_row.3.clone(),
+        period_end: period_row.4.clone(),
+        cutoff_date: period_row.5.clone(),
+        status: period_row.6,
+        locked_at: period_row.7,
+        locked_by_user_id: period_row.8,
+        created_at: period_row.9,
+        updated_at: period_row.10,
+    };
+
+    // 2. Compute counts within period window
+    // total_invoices in window
+    let (total_invoices,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM invoices \
+         WHERE tenant_id = $1 AND invoice_date >= $2::date AND invoice_date <= $3::date",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&period.period_start)
+    .bind(&period.period_end)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count invoices: {}", e)))?;
+
+    // unapproved_invoices: status NOT IN ('approved', 'paid', 'void', 'rejected')
+    let (unapproved_invoices,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM invoices \
+         WHERE tenant_id = $1 AND invoice_date >= $2::date AND invoice_date <= $3::date \
+           AND status NOT IN ('approved', 'paid', 'void', 'rejected')",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&period.period_start)
+    .bind(&period.period_end)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count unapproved invoices: {}", e)))?;
+
+    // accruals_drafted for this period
+    let (accruals_drafted,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM close_accrual_entries WHERE close_period_id = $1",
+    )
+    .bind(period.id)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count accruals: {}", e)))?;
+
+    // invoices_needing_accrual: unapproved invoices in window with NO matching accrual row
+    let (invoices_needing_accrual,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM invoices i \
+         WHERE i.tenant_id = $1 AND i.invoice_date >= $2::date AND i.invoice_date <= $3::date \
+           AND i.status NOT IN ('approved', 'paid', 'void', 'rejected') \
+           AND NOT EXISTS ( \
+               SELECT 1 FROM close_accrual_entries cae \
+               WHERE cae.invoice_id = i.id AND cae.close_period_id = $4 \
+           )",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&period.period_start)
+    .bind(&period.period_end)
+    .bind(period.id)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count invoices needing accrual: {}", e)))?;
+
+    // invoices_missing_gl_coding: window invoices with null/empty gl_code
+    let (invoices_missing_gl_coding,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM invoices \
+         WHERE tenant_id = $1 AND invoice_date >= $2::date AND invoice_date <= $3::date \
+           AND (gl_code IS NULL OR gl_code = '')",
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(&period.period_start)
+    .bind(&period.period_end)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to count invoices missing GL coding: {}", e)))?;
+
+    // days_until_cutoff
+    let days_until_cutoff: Option<i64> = sqlx::query_scalar(
+        "SELECT ($1::date - CURRENT_DATE)::bigint",
+    )
+    .bind(&period.cutoff_date)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to compute days until cutoff: {}", e)))?;
+
+    // 3. Compute score
+    let denominator = std::cmp::max(total_invoices, 1);
+    let raw_score = 100.0 * (1.0 - ((invoices_needing_accrual + invoices_missing_gl_coding) as f64 / denominator as f64));
+    let score = raw_score.round().clamp(0.0, 100.0) as i32;
+
+    // 4. Build exceptions checklist
+    let mut exceptions = Vec::new();
+
+    if invoices_needing_accrual > 0 {
+        exceptions.push(ExceptionItem {
+            id: "unaccrued_invoices".to_string(),
+            label: "Invoices missing accrual".to_string(),
+            count: invoices_needing_accrual,
+            severity: "high".to_string(),
+        });
+    }
+
+    if invoices_missing_gl_coding > 0 {
+        exceptions.push(ExceptionItem {
+            id: "missing_gl_coding".to_string(),
+            label: "Invoices missing GL coding".to_string(),
+            count: invoices_missing_gl_coding,
+            severity: "medium".to_string(),
+        });
+    }
+
+    if unapproved_invoices > 0 {
+        exceptions.push(ExceptionItem {
+            id: "unapproved_invoices".to_string(),
+            label: "Unapproved invoices".to_string(),
+            count: unapproved_invoices,
+            severity: "low".to_string(),
+        });
+    }
+
+    Ok(Json(ReadinessResponse {
+        period: Some(period),
+        score: Some(score),
+        computed_at,
+        totals: ReadinessTotals {
+            total_invoices,
+            unapproved_invoices,
+            accruals_drafted,
+            invoices_needing_accrual,
+            invoices_missing_gl_coding,
+            days_until_cutoff,
+        },
+        exceptions,
+    }))
+}
 
 async fn list_periods(
     State(state): State<AppState>,
@@ -485,6 +705,17 @@ async fn run_close(
         });
     }
 
+    // Touch updated_at when draft accruals are generated (serves as last_auto_drafted_at)
+    if entry_count > 0 {
+        sqlx::query("UPDATE close_periods SET updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to touch period updated_at: {}", e))
+            })?;
+    }
+
     // 4. Attempt ERP posting
     let erp_result =
         post_accrual_entries_to_erp(&state, &tenant.tenant_id, &entry_stubs).await;
@@ -697,5 +928,122 @@ mod tests {
             erp_post_error,
             Some("QBO journal entry posting not implemented".to_string())
         );
+    }
+
+    #[test]
+    fn test_readiness_response_no_period() {
+        let resp = ReadinessResponse {
+            period: None,
+            score: None,
+            computed_at: "2026-06-01T00:00:00Z".to_string(),
+            totals: ReadinessTotals {
+                total_invoices: 0,
+                unapproved_invoices: 0,
+                accruals_drafted: 0,
+                invoices_needing_accrual: 0,
+                invoices_missing_gl_coding: 0,
+                days_until_cutoff: None,
+            },
+            exceptions: vec![ExceptionItem {
+                id: "no_open_period".to_string(),
+                label: "No open close period configured".to_string(),
+                count: 1,
+                severity: "high".to_string(),
+            }],
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert!(val["period"].is_null());
+        assert!(val["score"].is_null());
+        assert_eq!(val["exceptions"][0]["id"], "no_open_period");
+    }
+
+    #[test]
+    fn test_readiness_response_score_100_clean() {
+        let resp = ReadinessResponse {
+            period: Some(ClosePeriodResponse {
+                id: Uuid::new_v4(),
+                tenant_id: Uuid::new_v4(),
+                period_label: "2026-05".to_string(),
+                period_start: "2026-05-01".to_string(),
+                period_end: "2026-05-31".to_string(),
+                cutoff_date: "2026-05-25".to_string(),
+                status: "open".to_string(),
+                locked_at: None,
+                locked_by_user_id: None,
+                created_at: "2026-05-01T00:00:00Z".to_string(),
+                updated_at: "2026-05-01T00:00:00Z".to_string(),
+            }),
+            score: Some(100),
+            computed_at: "2026-06-01T00:00:00Z".to_string(),
+            totals: ReadinessTotals {
+                total_invoices: 10,
+                unapproved_invoices: 0,
+                accruals_drafted: 0,
+                invoices_needing_accrual: 0,
+                invoices_missing_gl_coding: 0,
+                days_until_cutoff: Some(24),
+            },
+            exceptions: vec![],
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["score"], 100);
+        assert!(val["exceptions"].as_array().unwrap().is_empty());
+        assert_eq!(val["totals"]["total_invoices"], 10);
+    }
+
+    #[test]
+    fn test_readiness_response_with_exceptions() {
+        let resp = ReadinessResponse {
+            period: Some(ClosePeriodResponse {
+                id: Uuid::new_v4(),
+                tenant_id: Uuid::new_v4(),
+                period_label: "2026-05".to_string(),
+                period_start: "2026-05-01".to_string(),
+                period_end: "2026-05-31".to_string(),
+                cutoff_date: "2026-05-25".to_string(),
+                status: "open".to_string(),
+                locked_at: None,
+                locked_by_user_id: None,
+                created_at: "2026-05-01T00:00:00Z".to_string(),
+                updated_at: "2026-05-01T00:00:00Z".to_string(),
+            }),
+            score: Some(62),
+            computed_at: "2026-06-01T00:00:00Z".to_string(),
+            totals: ReadinessTotals {
+                total_invoices: 10,
+                unapproved_invoices: 3,
+                accruals_drafted: 1,
+                invoices_needing_accrual: 2,
+                invoices_missing_gl_coding: 1,
+                days_until_cutoff: Some(5),
+            },
+            exceptions: vec![
+                ExceptionItem {
+                    id: "unaccrued_invoices".to_string(),
+                    label: "Invoices missing accrual".to_string(),
+                    count: 2,
+                    severity: "high".to_string(),
+                },
+                ExceptionItem {
+                    id: "missing_gl_coding".to_string(),
+                    label: "Invoices missing GL coding".to_string(),
+                    count: 1,
+                    severity: "medium".to_string(),
+                },
+                ExceptionItem {
+                    id: "unapproved_invoices".to_string(),
+                    label: "Unapproved invoices".to_string(),
+                    count: 3,
+                    severity: "low".to_string(),
+                },
+            ],
+        };
+        let val = serde_json::to_value(&resp).unwrap();
+        assert_eq!(val["score"], 62);
+        let exc = val["exceptions"].as_array().unwrap();
+        assert_eq!(exc.len(), 3);
+        assert_eq!(exc[0]["id"], "unaccrued_invoices");
+        assert_eq!(exc[0]["count"], 2);
+        assert_eq!(exc[0]["severity"], "high");
     }
 }
