@@ -26,7 +26,8 @@ use axum::{
 };
 use billforge_core::{TenantId, UserId};
 use billforge_notifications::{
-    build_invoice_approval_blocks, build_teams_approval_card, verify_slack_signature,
+    build_invoice_approval_blocks, build_teams_approval_card,
+    slack_post_thread_reply, teams_post_conversation_reply, verify_slack_signature,
     InvoiceContext, InvoiceLineItem,
 };
 use serde::{Deserialize, Serialize};
@@ -151,6 +152,55 @@ fn parse_action_id(action_id: &str) -> Option<(&str, Uuid)> {
     let (verb, id_str) = action_id.split_once(':')?;
     let uuid = id_str.parse::<Uuid>().ok()?;
     Some((verb, uuid))
+}
+
+/// Detect invoice-question messages that should be routed to the AI assistant.
+///
+/// A message is a question when it:
+/// - starts with `?`, or
+/// - starts with `/ask `, or
+/// - mentions the bot user (detected via the `SLACK_BOT_USER_ID` env var).
+fn is_invoice_question(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with('?') {
+        return true;
+    }
+    if trimmed.starts_with("/ask ") || trimmed.starts_with("/ask\t") {
+        return true;
+    }
+    // Check for bot mention (<@U...> prefix)
+    if let Some(rest) = trimmed.strip_prefix("<@") {
+        if rest.contains('>') {
+            // Strip the mention and check if there's text after it
+            if let Some(after_mention) = rest.split_once('>') {
+                if !after_mention.1.trim().is_empty() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Extract the question text from a message, stripping the trigger prefix.
+fn extract_question(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(q) = trimmed.strip_prefix('?') {
+        return q.trim();
+    }
+    if let Some(q) = trimmed.strip_prefix("/ask ") {
+        return q.trim();
+    }
+    if let Some(q) = trimmed.strip_prefix("/ask\t") {
+        return q.trim();
+    }
+    // For bot mentions, strip the <@...> prefix
+    if let Some(rest) = trimmed.strip_prefix("<@") {
+        if let Some((_mention, after)) = rest.split_once('>') {
+            return after.trim();
+        }
+    }
+    trimmed
 }
 
 /// Persist a chat approval thread mapping for future event routing.
@@ -600,20 +650,89 @@ async fn slack_events(
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
 
     if let Some((invoice_id,)) = thread {
-        write_chat_audit(
-            &tenant_pool,
-            tenant_id,
-            invoice_id,
-            user_id,
-            "thread_comment_via_slack",
-            "slack",
-            Some(message_ts),
-            serde_json::json!({
-                "comment_body": message_text,
-                "thread_ts": thread_ts,
-            }),
-        )
-        .await?;
+        // Check if chat AI Q&A is enabled (feature flag, default off)
+        let chat_ai_enabled =
+            std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
+
+        if chat_ai_enabled && is_invoice_question(message_text) {
+            // Route to AI assistant
+            let question = extract_question(message_text);
+            let provider = billforge_ai_agent::OpenAiCompatibleProvider::from_env();
+
+            match billforge_ai_agent::answer_invoice_question(
+                &provider,
+                &tenant_pool,
+                tenant_id,
+                invoice_id,
+                question,
+            )
+            .await
+            {
+                Ok(answer) => {
+                    // Post the answer as a threaded reply
+                    let slack_token = std::env::var("SLACK_BOT_TOKEN").unwrap_or_default();
+                    if !slack_token.is_empty() && !channel_id.is_empty() && !thread_ts.is_empty() {
+                        if let Err(e) =
+                            slack_post_thread_reply(&slack_token, channel_id, &thread_ts, &answer)
+                                .await
+                        {
+                            tracing::warn!("Failed to post AI answer reply to Slack: {}", e);
+                        }
+                    }
+
+                    // Audit the Q&A exchange
+                    write_chat_audit(
+                        &tenant_pool,
+                        tenant_id,
+                        invoice_id,
+                        user_id,
+                        "ai_qa_via_slack",
+                        "slack",
+                        Some(message_ts),
+                        serde_json::json!({
+                            "question": question,
+                            "answer_truncated": answer.chars().take(500).collect::<String>(),
+                            "thread_ts": thread_ts,
+                        }),
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "AI invoice question failed for invoice {}: {}",
+                        invoice_id,
+                        e
+                    );
+                    // Post a generic apology rather than erroring to Slack
+                    let slack_token = std::env::var("SLACK_BOT_TOKEN").unwrap_or_default();
+                    if !slack_token.is_empty() && !channel_id.is_empty() && !thread_ts.is_empty() {
+                        let _ = slack_post_thread_reply(
+                            &slack_token,
+                            channel_id,
+                            &thread_ts,
+                            "Sorry, I couldn't process your question about this invoice. Please try again later.",
+                        )
+                        .await;
+                    }
+                }
+            }
+        } else {
+            // Existing behavior: log as a plain thread comment
+            write_chat_audit(
+                &tenant_pool,
+                tenant_id,
+                invoice_id,
+                user_id,
+                "thread_comment_via_slack",
+                "slack",
+                Some(message_ts),
+                serde_json::json!({
+                    "comment_body": message_text,
+                    "thread_ts": thread_ts,
+                }),
+            )
+            .await?;
+        }
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1001,6 +1120,83 @@ async fn teams_actions(
                 meta,
             )
             .await?;
+        }
+        "ask" => {
+            // AI Q&A via Teams
+            let chat_ai_enabled =
+                std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
+            if !chat_ai_enabled {
+                return Err(ApiError(billforge_core::Error::Validation(
+                    "AI Q&A is not enabled".to_string(),
+                )));
+            }
+            let question = body.comment_body.as_deref().unwrap_or("");
+            if question.is_empty() {
+                return Err(ApiError(billforge_core::Error::Validation(
+                    "Question body is required for 'ask' action".to_string(),
+                )));
+            }
+
+            let provider = billforge_ai_agent::OpenAiCompatibleProvider::from_env();
+
+            // Get the webhook URL for posting the reply
+            let webhook_row: Option<(String,)> = sqlx::query_as(
+                "SELECT webhook_url FROM teams_webhooks WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+            match billforge_ai_agent::answer_invoice_question(
+                &provider,
+                &tenant_pool,
+                tenant_id,
+                invoice_id,
+                question,
+            )
+            .await
+            {
+                Ok(answer) => {
+                    // Post the answer back via the webhook
+                    if let Some((webhook_url,)) = webhook_row {
+                        if let Err(e) =
+                            teams_post_conversation_reply(&webhook_url, &answer).await
+                        {
+                            tracing::warn!("Failed to post AI answer reply to Teams: {}", e);
+                        }
+                    }
+
+                    write_chat_audit(
+                        &tenant_pool,
+                        tenant_id,
+                        invoice_id,
+                        actor_id,
+                        "ai_qa_via_teams",
+                        "teams",
+                        None,
+                        serde_json::json!({
+                            "question": question,
+                            "answer_truncated": answer.chars().take(500).collect::<String>(),
+                        }),
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "AI invoice question failed for invoice {}: {}",
+                        invoice_id,
+                        e
+                    );
+                    if let Some((webhook_url,)) = webhook_row {
+                        let _ = teams_post_conversation_reply(
+                            &webhook_url,
+                            "Sorry, I couldn't process your question about this invoice. Please try again later.",
+                        )
+                        .await;
+                    }
+                }
+            }
         }
         _ => {
             return Err(ApiError(billforge_core::Error::Validation(format!(

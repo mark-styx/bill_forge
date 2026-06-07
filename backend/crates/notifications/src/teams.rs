@@ -499,6 +499,60 @@ impl TeamsClient {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone Teams conversation-reply helper (no TeamsClient required)
+// ---------------------------------------------------------------------------
+
+/// Post a simple text reply to a Teams channel via webhook.
+///
+/// Sends a plain Adaptive Card with a single TextBlock containing the
+/// reply text. Useful for posting AI answers back into the conversation
+/// where an approval card was sent.
+pub async fn post_conversation_reply(
+    webhook_url: &str,
+    text: &str,
+) -> Result<String, TeamsError> {
+    let http_client = Client::new();
+    let payload = serde_json::json!({
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": null,
+            "content": {
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [{
+                    "type": "TextBlock",
+                    "text": text,
+                    "wrap": true
+                }]
+            }
+        }]
+    });
+
+    let response = http_client
+        .post(webhook_url)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        warn!(
+            "Teams conversation reply failed with status {}: {}",
+            status, body
+        );
+        return Err(TeamsError::Webhook(format!("Status {}: {}", status, body)));
+    }
+
+    Ok("ok".to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Rich approval Adaptive Card builder for Teams
 // ---------------------------------------------------------------------------
 

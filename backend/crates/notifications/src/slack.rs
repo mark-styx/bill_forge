@@ -522,6 +522,47 @@ impl SlackClient {
     pub fn slack_signing_secret(&self) -> &str {
         &self.config.signing_secret
     }
+
+    /// Post a threaded reply to an existing Slack message.
+    ///
+    /// Uses `chat.postMessage` with `thread_ts` set to the parent message so
+    /// the reply appears inline under the approval card.
+    pub async fn post_thread_reply(
+        &self,
+        access_token: &str,
+        channel: &str,
+        thread_ts: &str,
+        text: &str,
+    ) -> Result<String, SlackError> {
+        let body = serde_json::json!({
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "text": text,
+        });
+
+        let response = self
+            .http_client
+            .post("https://slack.com/api/chat.postMessage")
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let msg_response: SlackMessageResponse = response.json().await?;
+
+        if !msg_response.ok {
+            let error = msg_response
+                .error
+                .unwrap_or_else(|| "Unknown error".to_string());
+            warn!("Slack thread reply API error: {}", error);
+            return Err(SlackError::Api(error));
+        }
+
+        msg_response
+            .ts
+            .ok_or_else(|| SlackError::Api("No timestamp in response".to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,6 +622,51 @@ fn crypto_common_eq(a: &[u8], b: &[u8]) -> bool {
         eq |= x ^ y;
     }
     eq == 0
+}
+
+// ---------------------------------------------------------------------------
+// Standalone Slack thread-reply helper (no SlackClient required)
+// ---------------------------------------------------------------------------
+
+/// Post a threaded reply to a Slack message using a bot token.
+///
+/// This is a standalone function so callers (e.g. the API route handler) do
+/// not need to construct a full [`SlackClient`]. It reuses the same
+/// `chat.postMessage` endpoint with `thread_ts` set.
+pub async fn post_thread_reply(
+    access_token: &str,
+    channel: &str,
+    thread_ts: &str,
+    text: &str,
+) -> Result<String, SlackError> {
+    let http_client = Client::new();
+    let body = serde_json::json!({
+        "channel": channel,
+        "thread_ts": thread_ts,
+        "text": text,
+    });
+
+    let response = http_client
+        .post("https://slack.com/api/chat.postMessage")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    let msg_response: SlackMessageResponse = response.json().await?;
+
+    if !msg_response.ok {
+        let error = msg_response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string());
+        warn!("Slack thread reply API error: {}", error);
+        return Err(SlackError::Api(error));
+    }
+
+    msg_response
+        .ts
+        .ok_or_else(|| SlackError::Api("No timestamp in response".to_string()))
 }
 
 // ---------------------------------------------------------------------------

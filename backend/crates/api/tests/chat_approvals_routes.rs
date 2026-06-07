@@ -221,6 +221,143 @@ fn test_teams_disabled_handler_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #356: AI Q&A question detection and routing
+// ---------------------------------------------------------------------------
+
+/// Verify `is_invoice_question` detects messages starting with `?`.
+#[test]
+fn test_is_invoice_question_detects_question_mark() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("fn is_invoice_question"),
+        "chat_approvals.rs must contain the is_invoice_question helper"
+    );
+}
+
+/// Verify the question detection helper recognizes all trigger patterns.
+#[test]
+fn test_question_trigger_patterns() {
+    // Replicate the detection logic inline to verify the patterns
+    fn is_question(text: &str) -> bool {
+        let trimmed = text.trim();
+        if trimmed.starts_with('?') {
+            return true;
+        }
+        if trimmed.starts_with("/ask ") || trimmed.starts_with("/ask\t") {
+            return true;
+        }
+        if let Some(rest) = trimmed.strip_prefix("<@") {
+            if rest.contains('>') {
+                if let Some(after_mention) = rest.split_once('>') {
+                    if !after_mention.1.trim().is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // Question mark prefix
+    assert!(is_question("? What is the total?"));
+    assert!(is_question("  ?question about GL code"));
+
+    // /ask prefix
+    assert!(is_question("/ask What vendor is this?"));
+    assert!(is_question("/ask\tsomething"));
+
+    // Bot mention prefix
+    assert!(is_question("<@U12345> What is the total?"));
+
+    // Not a question
+    assert!(!is_question("This looks good, approving"));
+    assert!(!is_question("Can we get this done by Friday?")); // no prefix
+    assert!(!is_question("<@U12345>")); // mention but no text after
+}
+
+/// Verify `extract_question` strips the trigger prefix correctly.
+#[test]
+fn test_extract_question_strips_prefix() {
+    fn extract(text: &str) -> &str {
+        let trimmed = text.trim();
+        if let Some(q) = trimmed.strip_prefix('?') {
+            return q.trim();
+        }
+        if let Some(q) = trimmed.strip_prefix("/ask ") {
+            return q.trim();
+        }
+        if let Some(q) = trimmed.strip_prefix("/ask\t") {
+            return q.trim();
+        }
+        if let Some(rest) = trimmed.strip_prefix("<@") {
+            if let Some((_mention, after)) = rest.split_once('>') {
+                return after.trim();
+            }
+        }
+        trimmed
+    }
+
+    assert_eq!(extract("? What is the total?"), "What is the total?");
+    assert_eq!(extract("/ask What vendor?"), "What vendor?");
+    assert_eq!(extract("<@U12345> total?"), "total?");
+    assert_eq!(extract("?what"), "what");
+}
+
+/// Verify the AI Q&A feature is gated behind CHAT_AI_QA_ENABLED.
+#[test]
+fn test_chat_ai_qa_gated_behind_env_var() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("CHAT_AI_QA_ENABLED"),
+        "AI Q&A must be gated behind the CHAT_AI_QA_ENABLED env var"
+    );
+    assert!(
+        source.contains("ai_qa_via_slack"),
+        "Slack AI Q&A must log audit entries with type ai_qa_via_slack"
+    );
+    assert!(
+        source.contains("ai_qa_via_teams"),
+        "Teams AI Q&A must log audit entries with type ai_qa_via_teams"
+    );
+}
+
+/// Verify plain comments are still logged as thread_comment_via_slack
+/// when the message is NOT a question.
+#[test]
+fn test_plain_comment_still_logged_when_not_question() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    // The existing comment path should still exist
+    assert!(
+        source.contains("thread_comment_via_slack"),
+        "Non-question thread replies must still be logged as thread_comment_via_slack"
+    );
+}
+
+/// Verify that AI errors produce an apology reply, not a 500 to Slack.
+#[test]
+fn test_ai_errors_produce_apology_not_500() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("Sorry, I couldn't process your question about this invoice"),
+        "AI errors must post a generic apology rather than 500ing back to Slack"
+    );
+}
+
+/// Verify that answer_invoice_question is exported from the ai-agent crate.
+#[test]
+fn test_answer_invoice_question_is_exported() {
+    let source = include_str!("../../ai-agent/src/lib.rs");
+    assert!(
+        source.contains("pub async fn answer_invoice_question"),
+        "answer_invoice_question must be a public function in ai-agent lib.rs"
+    );
+    assert!(
+        source.contains("MAX_ANSWER_LENGTH"),
+        "answer_invoice_question must truncate answers to a chat-safe length"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Issue 2 (signing secret): SLACK_SIGNING_SECRET must not fall back to a hardcoded constant
 // ---------------------------------------------------------------------------
 

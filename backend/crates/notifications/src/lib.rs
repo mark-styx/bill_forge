@@ -14,12 +14,13 @@ pub use notification_router::{
     NotificationRouter, PushDeviceToken, PushDeviceTokenStore,
 };
 pub use slack::{
-    build_invoice_approval_blocks, verify_slack_signature, InMemorySlackUserStore, SlackClient,
-    SlackConfig, SlackError, SlackInteractionPayload, SlackUserConfig, SlackUserStore,
+    build_invoice_approval_blocks, post_thread_reply as slack_post_thread_reply,
+    verify_slack_signature, InMemorySlackUserStore, SlackClient, SlackConfig, SlackError,
+    SlackInteractionPayload, SlackUserConfig, SlackUserStore,
 };
 pub use teams::{
-    build_teams_approval_card, InMemoryTeamsWebhookStore, TeamsClient, TeamsConfig, TeamsError,
-    TeamsWebhookStore,
+    build_teams_approval_card, post_conversation_reply as teams_post_conversation_reply,
+    InMemoryTeamsWebhookStore, TeamsClient, TeamsConfig, TeamsError, TeamsWebhookStore,
 };
 
 use async_trait::async_trait;
