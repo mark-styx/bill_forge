@@ -9,7 +9,7 @@
 
 #![allow(warnings)]
 
-use billforge_edi::{check_replay_nonce, validate_timestamp_freshness};
+use billforge_edi::{check_replay_nonce, delete_replay_nonce, validate_timestamp_freshness};
 use chrono::{TimeDelta, Utc};
 
 #[test]
@@ -174,6 +174,40 @@ mod integration {
 
         // Replay should be detected
         let result = check_replay_nonce(&pool, tenant_id, &nonce).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+
+        // Cleanup
+        sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[sqlx::test]
+    #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
+    async fn replay_nonce_released_on_processing_failure() {
+        let pool = setup_test_pool().await;
+        let tenant_id = Uuid::new_v4();
+        let nonce = "test-nonce-rollback-001";
+
+        // 1. First check inserts the nonce - should succeed
+        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        // 2. Simulate compensating rollback (handler failed, deletes nonce)
+        let del = delete_replay_nonce(&pool, tenant_id, nonce).await;
+        assert!(del.is_ok());
+
+        // 3. Retry with same nonce succeeds because nonce was released
+        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        // 4. Without rollback, a second check is flagged as replay
+        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
 

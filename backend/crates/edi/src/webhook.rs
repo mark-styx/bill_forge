@@ -81,6 +81,25 @@ pub async fn check_replay_nonce(
     }
 }
 
+/// Delete a previously recorded replay nonce.
+///
+/// This is the compensating rollback action used when EDI webhook processing
+/// fails after `check_replay_nonce` has already committed the nonce. Removing
+/// the nonce allows the provider to retry the same payload without being
+/// rejected as a replay.
+pub async fn delete_replay_nonce(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    nonce: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1 AND nonce = $2")
+        .bind(tenant_id)
+        .bind(nonce)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

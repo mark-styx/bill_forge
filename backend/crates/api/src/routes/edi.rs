@@ -29,9 +29,10 @@ use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_core::types::{TenantId, UserId};
 use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
 use billforge_edi::{
-    check_ack_timeouts, check_replay_nonce, process_inbound_ack, validate_timestamp_freshness,
-    verify_webhook_signature, EdiClient, EdiConfig, EdiDocumentType, EdiFunctionalAck, EdiInvoice,
-    EdiMapper, EdiPurchaseOrder, EdiShipNotice, EdiWebhookPayload, OutboundEdiService,
+    check_ack_timeouts, check_replay_nonce, delete_replay_nonce, process_inbound_ack,
+    validate_timestamp_freshness, verify_webhook_signature, EdiClient, EdiConfig,
+    EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper, EdiPurchaseOrder, EdiShipNotice,
+    EdiWebhookPayload, OutboundEdiService,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -259,6 +260,11 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
+            // Wrap post-nonce processing so we can roll back the nonce on failure.
+            let nonce_pool = Arc::clone(&tenant_pool);
+            let nonce_tenant = tenant_uuid;
+            let nonce_value = nonce.clone();
+            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // 3. Store EDI document record (status: processing)
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -488,6 +494,16 @@ async fn webhook_inbound(
                 "edi_document_id": doc_id,
                 "match_result": match_result_json,
             })))
+            }.await;
+            match result {
+                Ok(resp) => Ok(resp),
+                Err(status) => {
+                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
+                        tracing::warn!("Failed to roll back replay nonce after 810 processing failure: {}", e);
+                    }
+                    Err(status)
+                }
+            }
         }
         EdiDocumentType::PurchaseOrder850 => {
             let edi_po: EdiPurchaseOrder = serde_json::from_value(payload.payload.clone())
@@ -559,6 +575,11 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
+            // Wrap post-nonce processing so we can roll back the nonce on failure.
+            let nonce_pool = Arc::clone(&tenant_pool);
+            let nonce_tenant = tenant_uuid;
+            let nonce_value = nonce.clone();
+            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store EDI document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -657,6 +678,16 @@ async fn webhook_inbound(
                 "po_id": po.id.0,
                 "edi_document_id": doc_id,
             })))
+            }.await;
+            match result {
+                Ok(resp) => Ok(resp),
+                Err(status) => {
+                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
+                        tracing::warn!("Failed to roll back replay nonce after 850 processing failure: {}", e);
+                    }
+                    Err(status)
+                }
+            }
         }
         EdiDocumentType::ShipNotice856 => {
             let edi_asn: EdiShipNotice =
@@ -729,6 +760,11 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
+            // Wrap post-nonce processing so we can roll back the nonce on failure.
+            let nonce_pool = Arc::clone(&tenant_pool);
+            let nonce_tenant = tenant_uuid;
+            let nonce_value = nonce.clone();
+            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store EDI document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -875,6 +911,16 @@ async fn webhook_inbound(
                 "po_status": new_status,
                 "edi_document_id": doc_id,
             })))
+            }.await;
+            match result {
+                Ok(resp) => Ok(resp),
+                Err(status) => {
+                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
+                        tracing::warn!("Failed to roll back replay nonce after 856 processing failure: {}", e);
+                    }
+                    Err(status)
+                }
+            }
         }
         EdiDocumentType::Remittance820 => {
             // 820 is outbound-only, receiving one inbound is unexpected
@@ -960,6 +1006,11 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
+            // Wrap post-nonce processing so we can roll back the nonce on failure.
+            let nonce_pool = Arc::clone(&tenant_pool);
+            let nonce_tenant = tenant_uuid;
+            let nonce_value = nonce.clone();
+            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store the inbound 997 document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -1005,6 +1056,16 @@ async fn webhook_inbound(
                 "matched_document_id": matched_doc_id,
                 "edi_document_id": doc_id,
             })))
+            }.await;
+            match result {
+                Ok(resp) => Ok(resp),
+                Err(status) => {
+                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
+                        tracing::warn!("Failed to roll back replay nonce after 997 processing failure: {}", e);
+                    }
+                    Err(status)
+                }
+            }
         }
     }
 }
