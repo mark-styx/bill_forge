@@ -428,40 +428,8 @@ async fn sync_contacts(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Get Xero connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT xero_tenant_id, access_token, access_token_expires_at FROM xero_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (xero_tenant_id, access_token, token_expires_at) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
-    })?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation(
-            "Xero token expired. Please reconnect.".to_string(),
-        )
-        .into());
-    }
-
-    let xero_config = state.config.xero.as_ref().ok_or_else(|| {
-        billforge_core::Error::Validation("Xero integration not configured".to_string())
-    })?;
-
-    let client = XeroClient::new(
-        access_token,
-        xero_tenant_id,
-        match xero_config.environment {
-            crate::config::XeroEnvironment::Sandbox => XeroEnvironment::Sandbox,
-            crate::config::XeroEnvironment::Production => XeroEnvironment::Production,
-        },
-    );
+    let (client, _xero_tenant_id) =
+        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
 
     // Create sync log entry
     let sync_id = Uuid::new_v4();
@@ -668,40 +636,8 @@ async fn sync_accounts(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Get Xero connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT xero_tenant_id, access_token, access_token_expires_at FROM xero_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (xero_tenant_id, access_token, token_expires_at) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
-    })?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation(
-            "Xero token expired. Please reconnect.".to_string(),
-        )
-        .into());
-    }
-
-    let xero_config = state.config.xero.as_ref().ok_or_else(|| {
-        billforge_core::Error::Validation("Xero integration not configured".to_string())
-    })?;
-
-    let client = XeroClient::new(
-        access_token,
-        xero_tenant_id,
-        match xero_config.environment {
-            crate::config::XeroEnvironment::Sandbox => XeroEnvironment::Sandbox,
-            crate::config::XeroEnvironment::Production => XeroEnvironment::Production,
-        },
-    );
+    let (client, _xero_tenant_id) =
+        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
 
     // Create sync log entry
     let sync_id = Uuid::new_v4();
@@ -803,27 +739,8 @@ async fn export_invoice_to_xero(
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
-    // Get Xero connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT xero_tenant_id, access_token, access_token_expires_at FROM xero_connections WHERE tenant_id = $1 AND sync_enabled = true"
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (xero_tenant_id, access_token, token_expires_at) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
-    })?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        return Err(billforge_core::Error::Validation(
-            "Xero token expired. Please reconnect.".to_string(),
-        )
-        .into());
-    }
+    let (client, _xero_tenant_id) =
+        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
 
     // Get invoice from database
     let invoice_id: billforge_core::domain::InvoiceId = request
@@ -866,19 +783,6 @@ async fn export_invoice_to_xero(
             "Vendor not found in Xero. Please sync contacts first.".to_string(),
         )
     })?;
-
-    let xero_config = state.config.xero.as_ref().ok_or_else(|| {
-        billforge_core::Error::Validation("Xero integration not configured".to_string())
-    })?;
-
-    let client = XeroClient::new(
-        access_token,
-        xero_tenant_id,
-        match xero_config.environment {
-            crate::config::XeroEnvironment::Sandbox => XeroEnvironment::Sandbox,
-            crate::config::XeroEnvironment::Production => XeroEnvironment::Production,
-        },
-    );
 
     // Build Xero invoice (bill)
     use billforge_xero::{XeroContact, XeroInvoice, XeroLineItem};
@@ -1158,4 +1062,91 @@ async fn xero_webhook(
     );
 
     Ok(StatusCode::OK)
+}
+
+/// Fetch the Xero connection for a tenant, automatically refreshing the access token
+/// if it is expired or near-expiry (within 5 minutes). Returns a ready-to-use `XeroClient`
+/// and the Xero tenant ID.
+async fn get_authenticated_xero_client(
+    state: &AppState,
+    tenant_id: &billforge_core::TenantId,
+) -> ApiResult<(XeroClient, String)> {
+    let pool = state.db.tenant(tenant_id).await?;
+
+    // Fetch connection including refresh_token
+    let connection: Option<(String, String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT xero_tenant_id, access_token, refresh_token, access_token_expires_at \
+         FROM xero_connections WHERE tenant_id = $1 AND sync_enabled = true",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to fetch Xero connection for token refresh");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
+
+    let (xero_tenant_id, mut access_token, refresh_token_val, token_expires_at) = connection
+        .ok_or_else(|| {
+            billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
+        })?;
+
+    // Refresh if token is expired or will expire within 5 minutes
+    if token_expires_at <= Utc::now() + Duration::minutes(5) {
+        let xero_config = state.config.xero.as_ref().ok_or_else(|| {
+            billforge_core::Error::Validation("Xero integration not configured".to_string())
+        })?;
+
+        let oauth = XeroOAuth::new(XeroOAuthConfig {
+            client_id: xero_config.client_id.clone(),
+            client_secret: xero_config.client_secret.clone(),
+            redirect_uri: xero_config.redirect_uri.clone(),
+            environment: match xero_config.environment {
+                crate::config::XeroEnvironment::Sandbox => XeroEnvironment::Sandbox,
+                crate::config::XeroEnvironment::Production => XeroEnvironment::Production,
+            },
+        });
+
+        let new_tokens = oauth.refresh_token(&refresh_token_val).await.map_err(|e| {
+            tracing::warn!(error = %e, "Xero token refresh failed");
+            billforge_core::Error::Validation("Xero token expired. Please reconnect.".to_string())
+        })?;
+
+        // Persist refreshed tokens
+        let now = Utc::now();
+        let new_access_expires = now + Duration::seconds(new_tokens.expires_in);
+        sqlx::query(
+            "UPDATE xero_connections \
+             SET access_token = $2, refresh_token = $3, \
+                 access_token_expires_at = $4, updated_at = NOW() \
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(&new_tokens.access_token)
+        .bind(&new_tokens.refresh_token)
+        .bind(new_access_expires)
+        .execute(&*pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to persist refreshed Xero tokens");
+            billforge_core::Error::Database(format!("Failed to update tokens: {}", e))
+        })?;
+
+        access_token = new_tokens.access_token;
+    }
+
+    let xero_config = state.config.xero.as_ref().ok_or_else(|| {
+        billforge_core::Error::Validation("Xero integration not configured".to_string())
+    })?;
+
+    let client = XeroClient::new(
+        access_token,
+        xero_tenant_id.clone(),
+        match xero_config.environment {
+            crate::config::XeroEnvironment::Sandbox => XeroEnvironment::Sandbox,
+            crate::config::XeroEnvironment::Production => XeroEnvironment::Production,
+        },
+    );
+
+    Ok((client, xero_tenant_id))
 }
