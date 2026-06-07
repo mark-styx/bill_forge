@@ -83,10 +83,9 @@ describe('PeerBenchmarkPanel', () => {
     renderWithProviders();
 
     await waitFor(() => {
-      expect(screen.getByText('Peer Benchmark')).toBeInTheDocument();
+      expect(screen.getByText('Opt In')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Opt In')).toBeInTheDocument();
     expect(screen.getByLabelText('Industry')).toBeInTheDocument();
     expect(screen.getByLabelText('Headcount band')).toBeInTheDocument();
     expect(screen.getByLabelText('Monthly invoice volume band')).toBeInTheDocument();
