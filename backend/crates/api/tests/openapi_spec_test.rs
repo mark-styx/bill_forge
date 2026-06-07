@@ -201,10 +201,27 @@ fn test_openapi_covers_all_mounted_route_groups() {
             "public_api",
             &["/api/external/v1/invoices", "/api/external/v1/webhook-subscriptions"],
         ),
+        #[cfg(feature = "netsuite")]
+        ("netsuite", &["/api/v1/netsuite/connect", "/api/v1/netsuite/status"]),
+        (
+            "benchmark",
+            &[
+                "/api/v1/analytics/benchmark",
+                "/api/v1/analytics/benchmark/opt-in",
+            ],
+        ),
+        (
+            "close-periods",
+            &[
+                "/api/v1/close-periods",
+                "/api/v1/close-periods/current/readiness",
+            ],
+        ),
     ];
 
-    // Route groups that are NOT yet documented. All groups are now documented.
-    let known_gaps: &[&str] = &[];
+    // Route groups that are NOT yet documented. Add new gaps here when a route
+    // group is mounted but its utoipa coverage is deferred.
+    let known_gaps: &[&str] = &["analytics"];
 
     // Verify documented groups are actually present in the spec
     for (group, sample_paths) in documented_groups {
@@ -251,6 +268,11 @@ fn test_openapi_covers_all_mounted_route_groups() {
         "vendor-statements",
         "routing",
         "public_api",
+        #[cfg(feature = "netsuite")]
+        "netsuite",
+        "analytics",
+        "benchmark",
+        "close-periods",
     ];
 
     let documented_names: Vec<&str> = documented_groups.iter().map(|(n, _)| *n).collect();

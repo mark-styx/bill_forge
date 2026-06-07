@@ -769,6 +769,71 @@ pub struct PaginationInfo {
 )]
 struct PublicApiDoc;
 
+/// OpenAPI documentation for the NetSuite ERP integration routes.
+#[cfg(feature = "netsuite")]
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::netsuite::netsuite_connect,
+        crate::routes::netsuite::netsuite_disconnect,
+        crate::routes::netsuite::netsuite_status,
+        crate::routes::netsuite::sync_vendors,
+    ),
+    components(
+        schemas(
+            crate::routes::netsuite::NetSuiteConnectRequest,
+            crate::routes::netsuite::NetSuiteConnectResponse,
+            crate::routes::netsuite::NetSuiteDisconnectResponse,
+            crate::routes::netsuite::NetSuiteStatus,
+            crate::routes::netsuite::SyncResponse,
+        )
+    )
+)]
+struct NetSuiteApiDoc;
+
+/// OpenAPI documentation for the peer benchmarking routes.
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::analytics::get_benchmark,
+        crate::routes::analytics::benchmark_opt_in,
+    ),
+    components(
+        schemas(
+            billforge_analytics::benchmark::BenchmarkKpis,
+            billforge_analytics::benchmark::CohortPercentiles,
+            billforge_analytics::benchmark::CohortDescriptor,
+            billforge_analytics::benchmark::BenchmarkResponse,
+            billforge_analytics::benchmark::BenchmarkOptInRequest,
+        )
+    )
+)]
+struct BenchmarkApiDoc;
+
+/// OpenAPI documentation for the month-end close-period routes.
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::close_periods::get_current_period_readiness,
+        crate::routes::close_periods::list_periods,
+        crate::routes::close_periods::create_period,
+        crate::routes::close_periods::update_period,
+        crate::routes::close_periods::run_close,
+    ),
+    components(
+        schemas(
+            crate::routes::close_periods::CreatePeriodRequest,
+            crate::routes::close_periods::UpdatePeriodRequest,
+            crate::routes::close_periods::ClosePeriodResponse,
+            crate::routes::close_periods::RunCloseResponse,
+            crate::routes::close_periods::ReadinessResponse,
+            crate::routes::close_periods::ReadinessTotals,
+            crate::routes::close_periods::ExceptionItem,
+        )
+    )
+)]
+struct CloseApiDoc;
+
 /// Generate the full OpenAPI document, including feature-gated route groups.
 pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     #[allow(unused_mut)]
@@ -788,6 +853,12 @@ pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     openapi.merge(BillComApiDoc::openapi());
     #[cfg(feature = "edi")]
     openapi.merge(EdiApiDoc::openapi());
+    #[cfg(feature = "netsuite")]
+    openapi.merge(NetSuiteApiDoc::openapi());
+
+    // v1 surfaces that are always present
+    openapi.merge(BenchmarkApiDoc::openapi());
+    openapi.merge(CloseApiDoc::openapi());
 
     // External PAT-authenticated public API (always present)
     openapi.merge(PublicApiDoc::openapi());

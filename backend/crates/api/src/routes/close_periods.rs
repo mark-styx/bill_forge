@@ -21,6 +21,7 @@ use axum::{
 use billforge_core::TenantId;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ pub fn routes() -> Router<AppState> {
 // Request / Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreatePeriodRequest {
     pub period_label: String, // e.g. "2026-05"
     pub period_start: String, // ISO date
@@ -47,12 +48,12 @@ pub struct CreatePeriodRequest {
     pub cutoff_date: String,  // ISO date
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UpdatePeriodRequest {
     pub cutoff_date: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ClosePeriodResponse {
     pub id: Uuid,
     pub tenant_id: Uuid,
@@ -67,7 +68,7 @@ pub struct ClosePeriodResponse {
     pub updated_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RunCloseResponse {
     pub period_id: Uuid,
     pub accrual_entries_created: usize,
@@ -79,7 +80,7 @@ pub struct RunCloseResponse {
 // Readiness types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadinessResponse {
     pub period: Option<ClosePeriodResponse>,
     pub score: Option<i32>,
@@ -88,7 +89,7 @@ pub struct ReadinessResponse {
     pub exceptions: Vec<ExceptionItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadinessTotals {
     pub total_invoices: i64,
     pub unapproved_invoices: i64,
@@ -98,7 +99,7 @@ pub struct ReadinessTotals {
     pub days_until_cutoff: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ExceptionItem {
     pub id: String,
     pub label: String,
@@ -212,6 +213,16 @@ struct AccrualEntryStub {
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/close-periods/current/readiness",
+    tag = "Close",
+    responses(
+        (status = 200, description = "Current period readiness", body = ReadinessResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn get_current_period_readiness(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -400,6 +411,16 @@ async fn get_current_period_readiness(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/close-periods",
+    tag = "Close",
+    responses(
+        (status = 200, description = "All close periods for tenant", body = [ClosePeriodResponse]),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn list_periods(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -467,6 +488,18 @@ async fn list_periods(
     Ok(Json(periods))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/close-periods",
+    tag = "Close",
+    request_body = CreatePeriodRequest,
+    responses(
+        (status = 201, description = "Period created", body = ClosePeriodResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn create_period(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -515,6 +548,20 @@ async fn create_period(
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/close-periods/{id}",
+    tag = "Close",
+    params(("id" = Uuid, Path, description = "Close period id")),
+    request_body = UpdatePeriodRequest,
+    responses(
+        (status = 200, description = "Period updated", body = ClosePeriodResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Period not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn update_period(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
@@ -591,6 +638,18 @@ async fn update_period(
     Ok(Json(resp))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/close-periods/{id}/close",
+    tag = "Close",
+    params(("id" = Uuid, Path, description = "Close period id")),
+    responses(
+        (status = 200, description = "Close run completed (accruals + ERP post attempt)", body = RunCloseResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Period not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn run_close(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,

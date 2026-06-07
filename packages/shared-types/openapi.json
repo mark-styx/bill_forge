@@ -551,6 +551,75 @@
         }
       }
     },
+    "/api/v1/analytics/benchmark": {
+      "get": {
+        "tags": [
+          "Benchmarking"
+        ],
+        "summary": "`GET /api/v1/analytics/benchmark`",
+        "description": "Returns the tenant's six AP KPIs alongside anonymized cohort percentiles.\nIf `benchmark_opt_in = false`, returns `{ opted_in: false }` so the UI\ncan render the opt-in CTA.",
+        "operationId": "get_benchmark",
+        "responses": {
+          "200": {
+            "description": "Benchmark KPIs and cohort percentiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/benchmark/opt-in": {
+      "post": {
+        "tags": [
+          "Benchmarking"
+        ],
+        "summary": "`POST /api/v1/analytics/benchmark/opt-in`",
+        "description": "Toggles the benchmark_opt_in flag and stores the cohort descriptor.",
+        "operationId": "benchmark_opt_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchmarkOptInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Opt-in accepted; returns updated benchmark snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/api/v1/analytics/predictive/alerts": {
       "get": {
         "tags": [
@@ -1272,6 +1341,193 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/close-periods": {
+      "get": {
+        "tags": [
+          "Close"
+        ],
+        "operationId": "list_periods",
+        "responses": {
+          "200": {
+            "description": "All close periods for tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClosePeriodResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Close"
+        ],
+        "operationId": "create_period",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePeriodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Period created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClosePeriodResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/close-periods/current/readiness": {
+      "get": {
+        "tags": [
+          "Close"
+        ],
+        "operationId": "get_current_period_readiness",
+        "responses": {
+          "200": {
+            "description": "Current period readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/close-periods/{id}": {
+      "patch": {
+        "tags": [
+          "Close"
+        ],
+        "operationId": "update_period",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Close period id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePeriodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Period updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClosePeriodResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Period not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/close-periods/{id}/close": {
+      "post": {
+        "tags": [
+          "Close"
+        ],
+        "operationId": "run_close",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Close period id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Close run completed (accruals + ERP post attempt)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCloseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Period not found"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -2581,6 +2837,127 @@
         "responses": {
           "200": {
             "description": "Invoice sync data"
+          }
+        }
+      }
+    },
+    "/api/v1/netsuite/connect": {
+      "post": {
+        "tags": [
+          "NetSuite"
+        ],
+        "summary": "Connect to NetSuite (save credentials & test connection)",
+        "operationId": "netsuite_connect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetSuiteConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "NetSuite connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetSuiteConnectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid credentials or auth not yet implemented"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/netsuite/disconnect": {
+      "post": {
+        "tags": [
+          "NetSuite"
+        ],
+        "summary": "Disconnect NetSuite",
+        "operationId": "netsuite_disconnect",
+        "responses": {
+          "200": {
+            "description": "NetSuite disconnected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetSuiteDisconnectResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/netsuite/status": {
+      "get": {
+        "tags": [
+          "NetSuite"
+        ],
+        "summary": "Get NetSuite connection status",
+        "operationId": "netsuite_status",
+        "responses": {
+          "200": {
+            "description": "NetSuite status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetSuiteStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/api/v1/netsuite/sync/vendors": {
+      "post": {
+        "tags": [
+          "NetSuite"
+        ],
+        "summary": "Sync vendors from NetSuite",
+        "operationId": "netsuite_sync_vendors",
+        "responses": {
+          "200": {
+            "description": "Vendors synced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -7275,6 +7652,113 @@
           }
         }
       },
+      "BenchmarkKpis": {
+        "type": "object",
+        "description": "Six AP KPIs for a single tenant or a cohort percentile bucket.",
+        "required": [
+          "dpo_days",
+          "avg_approval_cycle_hours",
+          "ocr_straight_through_rate",
+          "exception_rate",
+          "discount_capture_rate",
+          "cost_per_invoice"
+        ],
+        "properties": {
+          "avg_approval_cycle_hours": {
+            "type": "number",
+            "format": "double"
+          },
+          "cost_per_invoice": {
+            "type": "number",
+            "format": "double"
+          },
+          "discount_capture_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "dpo_days": {
+            "type": "number",
+            "format": "double"
+          },
+          "exception_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "ocr_straight_through_rate": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "BenchmarkOptInRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/analytics/benchmark/opt-in`.",
+        "required": [
+          "industry",
+          "headcount_band",
+          "volume_band"
+        ],
+        "properties": {
+          "headcount_band": {
+            "type": "string"
+          },
+          "industry": {
+            "type": "string"
+          },
+          "volume_band": {
+            "type": "string"
+          }
+        }
+      },
+      "BenchmarkResponse": {
+        "type": "object",
+        "description": "Full benchmark response returned by `GET /api/analytics/benchmark`.",
+        "required": [
+          "opted_in"
+        ],
+        "properties": {
+          "cohort": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CohortDescriptor"
+              }
+            ]
+          },
+          "cohort_kpis": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CohortPercentiles"
+              }
+            ]
+          },
+          "cohort_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "opted_in": {
+            "type": "boolean"
+          },
+          "tenant_kpis": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BenchmarkKpis"
+              }
+            ]
+          }
+        }
+      },
       "BillComConnectRequest": {
         "type": "object",
         "description": "Bill.com connection request (credential-based)",
@@ -7432,6 +7916,104 @@
           }
         }
       },
+      "ClosePeriodResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "period_label",
+          "period_start",
+          "period_end",
+          "cutoff_date",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "cutoff_date": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locked_by_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "period_label": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "CohortDescriptor": {
+        "type": "object",
+        "description": "Cohort descriptor (the three dimensions that define a peer group).",
+        "required": [
+          "industry",
+          "headcount_band",
+          "volume_band"
+        ],
+        "properties": {
+          "headcount_band": {
+            "type": "string"
+          },
+          "industry": {
+            "type": "string"
+          },
+          "volume_band": {
+            "type": "string"
+          }
+        }
+      },
+      "CohortPercentiles": {
+        "type": "object",
+        "description": "Percentile bands for cohort KPIs.",
+        "required": [
+          "p25",
+          "p50",
+          "p75"
+        ],
+        "properties": {
+          "p25": {
+            "$ref": "#/components/schemas/BenchmarkKpis"
+          },
+          "p50": {
+            "$ref": "#/components/schemas/BenchmarkKpis"
+          },
+          "p75": {
+            "$ref": "#/components/schemas/BenchmarkKpis"
+          }
+        }
+      },
       "ConfigurationPhase": {
         "type": "object",
         "required": [
@@ -7470,6 +8052,29 @@
           },
           "privacy_mode": {
             "$ref": "#/components/schemas/PrivacyModeConfig"
+          }
+        }
+      },
+      "CreatePeriodRequest": {
+        "type": "object",
+        "required": [
+          "period_label",
+          "period_start",
+          "period_end",
+          "cutoff_date"
+        ],
+        "properties": {
+          "cutoff_date": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "period_label": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
           }
         }
       },
@@ -7727,6 +8332,30 @@
           "message": {
             "type": "string",
             "description": "Human-readable error message"
+          }
+        }
+      },
+      "ExceptionItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "count",
+          "severity"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
           }
         }
       },
@@ -8432,6 +9061,92 @@
           }
         }
       },
+      "NetSuiteConnectRequest": {
+        "type": "object",
+        "description": "NetSuite connection request",
+        "required": [
+          "account_id",
+          "client_id",
+          "client_secret"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "NetSuite account ID (e.g. \"TSTDRV1234567\")"
+          },
+          "client_id": {
+            "type": "string",
+            "description": "OAuth 2.0 client ID"
+          },
+          "client_secret": {
+            "type": "string",
+            "description": "OAuth 2.0 client secret"
+          }
+        }
+      },
+      "NetSuiteConnectResponse": {
+        "type": "object",
+        "description": "Response body for a successful NetSuite connect.",
+        "required": [
+          "status",
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "NetSuite account id that was registered."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always \"connected\"."
+          }
+        }
+      },
+      "NetSuiteDisconnectResponse": {
+        "type": "object",
+        "description": "Response body for NetSuite disconnect.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always \"disconnected\"."
+          }
+        }
+      },
+      "NetSuiteStatus": {
+        "type": "object",
+        "description": "NetSuite connection status",
+        "required": [
+          "connected",
+          "sync_enabled"
+        ],
+        "properties": {
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "NetSuite account ID"
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "Whether NetSuite is connected"
+          },
+          "last_sync_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last sync timestamp"
+          },
+          "sync_enabled": {
+            "type": "boolean",
+            "description": "Sync enabled"
+          }
+        }
+      },
       "NotificationApprovalsConfig": {
         "type": "object",
         "properties": {
@@ -8948,6 +9663,84 @@
           }
         }
       },
+      "ReadinessResponse": {
+        "type": "object",
+        "required": [
+          "computed_at",
+          "totals",
+          "exceptions"
+        ],
+        "properties": {
+          "computed_at": {
+            "type": "string"
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExceptionItem"
+            }
+          },
+          "period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClosePeriodResponse"
+              }
+            ]
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ReadinessTotals"
+          }
+        }
+      },
+      "ReadinessTotals": {
+        "type": "object",
+        "required": [
+          "total_invoices",
+          "unapproved_invoices",
+          "accruals_drafted",
+          "invoices_needing_accrual",
+          "invoices_missing_gl_coding"
+        ],
+        "properties": {
+          "accruals_drafted": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "days_until_cutoff": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "invoices_missing_gl_coding": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "invoices_needing_accrual": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_invoices": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unapproved_invoices": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "RefreshRequest": {
         "type": "object",
         "required": [
@@ -8979,6 +9772,33 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "RunCloseResponse": {
+        "type": "object",
+        "required": [
+          "period_id",
+          "accrual_entries_created",
+          "erp_post_status"
+        ],
+        "properties": {
+          "accrual_entries_created": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "erp_post_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "erp_post_status": {
+            "type": "string"
+          },
+          "period_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -9569,6 +10389,17 @@
         "properties": {
           "sub_items": {
             "$ref": "#/components/schemas/ErpSubItems"
+          }
+        }
+      },
+      "UpdatePeriodRequest": {
+        "type": "object",
+        "properties": {
+          "cutoff_date": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

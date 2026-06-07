@@ -5,6 +5,75 @@
  */
 
 export interface paths {
+    "/api/external/v1/invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/external/v1/invoices` — list invoices for the token's tenant. */
+        get: operations["list_invoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/external/v1/invoices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/external/v1/invoices/:id` — get a single invoice (tenant-scoped). */
+        get: operations["get_invoice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/external/v1/webhook-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/external/v1/webhook-subscriptions` */
+        get: operations["list_webhook_subscriptions"];
+        put?: never;
+        /** `POST /api/external/v1/webhook-subscriptions` */
+        post: operations["create_webhook_subscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/external/v1/webhook-subscriptions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** `DELETE /api/external/v1/webhook-subscriptions/:id` */
+        delete: operations["delete_webhook_subscription"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/actions/approve": {
         parameters: {
             query?: never;
@@ -12,7 +81,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Handle approve action from email */
+        /** Handle approve action from email - renders confirmation interstitial (GET) */
         get: operations["handle_approve"];
         put?: never;
         post?: never;
@@ -29,7 +98,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Handle hold action from email */
+        /** Handle hold action from email - renders confirmation interstitial (GET) */
         get: operations["handle_hold"];
         put?: never;
         post?: never;
@@ -46,7 +115,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Handle reject action from email */
+        /** Handle reject action from email - renders confirmation interstitial (GET) */
         get: operations["handle_reject"];
         put?: never;
         post?: never;
@@ -175,6 +244,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/benchmark": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/analytics/benchmark`
+         * @description Returns the tenant's six AP KPIs alongside anonymized cohort percentiles.
+         *     If `benchmark_opt_in = false`, returns `{ opted_in: false }` so the UI
+         *     can render the opt-in CTA.
+         */
+        get: operations["get_benchmark"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/benchmark/opt-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/analytics/benchmark/opt-in`
+         * @description Toggles the benchmark_opt_in flag and stores the cohort descriptor.
+         */
+        post: operations["benchmark_opt_in"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/predictive/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get budget alerts */
+        get: operations["get_budget_alerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/predictive/alerts/{alert_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a budget alert */
+        post: operations["dismiss_alert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/predictive/anomalies": {
         parameters: {
             query?: never;
@@ -226,76 +371,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/analytics/predictive/anomaly-rules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get anomaly rules */
-        get: operations["get_anomaly_rules"];
-        put?: never;
-        /** Configure anomaly rule */
-        post: operations["configure_anomaly_rule"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/predictive/anomaly-rules/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get anomaly rule by ID */
-        get: operations["get_anomaly_rule"];
-        /** Update anomaly rule */
-        put: operations["update_anomaly_rule"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/predictive/budget-alerts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get budget alerts */
-        get: operations["get_budget_alerts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/predictive/budget-alerts/{id}/dismiss": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Dismiss a budget alert */
-        post: operations["dismiss_alert"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/analytics/predictive/forecasts": {
         parameters: {
             query?: never;
@@ -305,6 +380,22 @@ export interface paths {
         };
         /** Get forecasts for tenant */
         get: operations["get_forecasts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/predictive/forecasts/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         /** Generate a new forecast */
         post: operations["generate_forecast"];
@@ -325,6 +416,42 @@ export interface paths {
         get: operations["get_forecast_by_id"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/predictive/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get anomaly rules */
+        get: operations["get_anomaly_rules"];
+        put?: never;
+        /** Configure anomaly rule */
+        post: operations["configure_anomaly_rule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/predictive/rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get anomaly rule by ID */
+        get: operations["get_anomaly_rule"];
+        put?: never;
+        /** Update anomaly rule */
+        post: operations["update_anomaly_rule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -596,6 +723,70 @@ export interface paths {
         get: operations["get_usage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/close-periods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_periods"];
+        put?: never;
+        post: operations["create_period"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/close-periods/current/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_current_period_readiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/close-periods/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["update_period"];
+        trace?: never;
+    };
+    "/api/v1/close-periods/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["run_close"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1393,6 +1584,74 @@ export interface paths {
         get: operations["sync_invoices"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netsuite/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect to NetSuite (save credentials & test connection) */
+        post: operations["netsuite_connect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netsuite/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect NetSuite */
+        post: operations["netsuite_disconnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netsuite/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get NetSuite connection status */
+        get: operations["netsuite_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/netsuite/sync/vendors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync vendors from NetSuite */
+        post: operations["netsuite_sync_vendors"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2273,6 +2532,23 @@ export interface paths {
         put?: never;
         /** Update account-to-vendor mappings */
         post: operations["update_account_mappings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/salesforce/push/invoices/{invoice_id}/payment-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Push invoice payment status back to the linked Salesforce Account. */
+        post: operations["push_invoice_payment_status"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3686,6 +3962,36 @@ export interface components {
             /** Format: double */
             workload_score: number;
         };
+        /** @description Six AP KPIs for a single tenant or a cohort percentile bucket. */
+        BenchmarkKpis: {
+            /** Format: double */
+            avg_approval_cycle_hours: number;
+            /** Format: double */
+            cost_per_invoice: number;
+            /** Format: double */
+            discount_capture_rate: number;
+            /** Format: double */
+            dpo_days: number;
+            /** Format: double */
+            exception_rate: number;
+            /** Format: double */
+            ocr_straight_through_rate: number;
+        };
+        /** @description Request body for `POST /api/analytics/benchmark/opt-in`. */
+        BenchmarkOptInRequest: {
+            headcount_band: string;
+            industry: string;
+            volume_band: string;
+        };
+        /** @description Full benchmark response returned by `GET /api/analytics/benchmark`. */
+        BenchmarkResponse: {
+            cohort?: null | components["schemas"]["CohortDescriptor"];
+            cohort_kpis?: null | components["schemas"]["CohortPercentiles"];
+            /** Format: int64 */
+            cohort_size?: number | null;
+            opted_in: boolean;
+            tenant_kpis?: null | components["schemas"]["BenchmarkKpis"];
+        };
         /** @description Bill.com connection request (credential-based) */
         BillComConnectRequest: {
             /** @description Developer key (issued by Bill.com) */
@@ -3731,10 +4037,63 @@ export interface components {
             /** @description Scheduled process date (YYYY-MM-DD) */
             process_date: string;
         };
+        CaptureChannelsConfig: {
+            email_forwarding: components["schemas"]["EmailForwardingConfig"];
+            erp_sync_enabled?: boolean;
+            manual_upload_enabled?: boolean;
+        };
         CheckoutRequest: {
             add_on_modules?: string[];
             billing_cycle?: string | null;
             plan_id: string;
+        };
+        ClosePeriodResponse: {
+            created_at: string;
+            cutoff_date: string;
+            /** Format: uuid */
+            id: string;
+            locked_at?: string | null;
+            /** Format: uuid */
+            locked_by_user_id?: string | null;
+            period_end: string;
+            period_label: string;
+            period_start: string;
+            status: string;
+            /** Format: uuid */
+            tenant_id: string;
+            updated_at: string;
+        };
+        /** @description Cohort descriptor (the three dimensions that define a peer group). */
+        CohortDescriptor: {
+            headcount_band: string;
+            industry: string;
+            volume_band: string;
+        };
+        /** @description Percentile bands for cohort KPIs. */
+        CohortPercentiles: {
+            p25: components["schemas"]["BenchmarkKpis"];
+            p50: components["schemas"]["BenchmarkKpis"];
+            p75: components["schemas"]["BenchmarkKpis"];
+        };
+        ConfigurationPhase: {
+            configuration: components["schemas"]["ConfigurationSection"];
+            status: components["schemas"]["PhaseStatus"];
+        };
+        ConfigurationSection: {
+            capture_channels: components["schemas"]["CaptureChannelsConfig"];
+            module_entitlements: components["schemas"]["ModuleEntitlement"][];
+            notification_approvals: components["schemas"]["NotificationApprovalsConfig"];
+            privacy_mode: components["schemas"]["PrivacyModeConfig"];
+        };
+        CreatePeriodRequest: {
+            cutoff_date: string;
+            period_end: string;
+            period_label: string;
+            period_start: string;
+        };
+        CreateWebhookSubscriptionRequest: {
+            event_types: string[];
+            target_url: string;
         };
         /** @description Dashboard metrics response */
         DashboardMetrics: {
@@ -3767,6 +4126,11 @@ export interface components {
             line_item_fingerprint: number;
             /** Format: double */
             vendor: number;
+        };
+        EmailForwardingConfig: {
+            address?: string;
+            /** Format: date-time */
+            verified_at?: string | null;
         };
         ErpPhase: {
             last_error?: string | null;
@@ -3807,6 +4171,13 @@ export interface components {
             /** @description Human-readable error message */
             message: string;
         };
+        ExceptionItem: {
+            /** Format: int64 */
+            count: number;
+            id: string;
+            label: string;
+            severity: string;
+        };
         /** @description Export invoice to QuickBooks */
         ExportInvoiceRequest: {
             /** @description Invoice ID to export */
@@ -3823,9 +4194,10 @@ export interface components {
         };
         GoLiveChecks: {
             confirm_cutover_date: boolean;
-            enable_approval_routing: boolean;
-            notify_ap_team: boolean;
-            set_email_forwarding: boolean;
+            forwarding_email_verified?: boolean;
+            notifications_acknowledged?: boolean;
+            privacy_mode_confirmed?: boolean;
+            sample_invoice_routed?: boolean;
         };
         GoLivePhase: {
             checks: components["schemas"]["GoLiveChecks"];
@@ -3846,6 +4218,7 @@ export interface components {
         };
         ImplementationPhases: {
             approvals: components["schemas"]["ApprovalsPhase"];
+            configuration: components["schemas"]["ConfigurationPhase"];
             erp: components["schemas"]["ErpPhase"];
             go_live: components["schemas"]["GoLivePhase"];
             ocr: components["schemas"]["OcrPhase"];
@@ -3976,6 +4349,12 @@ export interface components {
              */
             trend_vs_last_month: number;
         };
+        ListInvoicesQuery: {
+            /** Format: int32 */
+            page?: number | null;
+            /** Format: int32 */
+            per_page?: number | null;
+        };
         LoginRequest: {
             email: string;
             password: string;
@@ -4017,6 +4396,10 @@ export interface components {
             tenantId: string;
             tenantName: string;
         };
+        ModuleEntitlement: {
+            enabled: boolean;
+            module_key: string;
+        };
         /** @description Money amount with currency */
         MoneyInfo: {
             /**
@@ -4031,15 +4414,56 @@ export interface components {
              */
             currency: string;
         };
+        /** @description NetSuite connection request */
+        NetSuiteConnectRequest: {
+            /** @description NetSuite account ID (e.g. "TSTDRV1234567") */
+            account_id: string;
+            /** @description OAuth 2.0 client ID */
+            client_id: string;
+            /** @description OAuth 2.0 client secret */
+            client_secret: string;
+        };
+        /** @description Response body for a successful NetSuite connect. */
+        NetSuiteConnectResponse: {
+            /** @description NetSuite account id that was registered. */
+            account_id: string;
+            /** @description Always "connected". */
+            status: string;
+        };
+        /** @description Response body for NetSuite disconnect. */
+        NetSuiteDisconnectResponse: {
+            /** @description Always "disconnected". */
+            status: string;
+        };
+        /** @description NetSuite connection status */
+        NetSuiteStatus: {
+            /** @description NetSuite account ID */
+            account_id?: string | null;
+            /** @description Whether NetSuite is connected */
+            connected: boolean;
+            /** @description Last sync timestamp */
+            last_sync_at?: string | null;
+            /** @description Sync enabled */
+            sync_enabled: boolean;
+        };
+        NotificationApprovalsConfig: {
+            ap_team_distribution?: string[];
+            /** Format: date-time */
+            approved_at?: string | null;
+            escalation_distribution?: string[];
+        };
         OcrPhase: {
+            /** Format: double */
+            accuracy_threshold?: number;
             /** Format: int32 */
             count: number;
+            /** Format: double */
+            measured_accuracy?: number | null;
             sample_invoice_ids: string[];
             status: components["schemas"]["PhaseStatus"];
-            measured_accuracy?: number | null;
-            accuracy_threshold: number;
-            total_extractions: number;
-            sufficient_sample: boolean;
+            sufficient_sample?: boolean;
+            /** Format: int64 */
+            total_extractions?: number;
         };
         /** @description Pagination information */
         PaginationInfo: {
@@ -4115,15 +4539,34 @@ export interface components {
         };
         /** @enum {string} */
         PhaseStatus: "not_started" | "in_progress" | "complete";
+        PrivacyModeConfig: {
+            /** Format: date-time */
+            confirmed_at?: string | null;
+            enabled: boolean;
+            scope?: string | null;
+        };
         ProvisionRequest: {
             admin_email: string;
             admin_name: string;
             admin_password: string;
             company_name: string;
             default_currency?: string | null;
+            /** @description Industry vertical for starter pack seeding. Defaults to "generic". */
+            industry?: string | null;
             local_ocr_required?: boolean | null;
             ocr_provider?: string | null;
             timezone?: string | null;
+        };
+        PublicApiErrorBody: {
+            error: components["schemas"]["PublicApiErrorDetail"];
+        };
+        PublicApiErrorDetail: {
+            code: string;
+            message: string;
+        };
+        /** @description Typed success response for public API delete operations. */
+        PublicSuccessResponse: {
+            success: boolean;
         };
         /** @description Push bill request (additional fields for Bill.com bill creation) */
         PushBillRequest: {
@@ -4143,6 +4586,35 @@ export interface components {
             /** @description Export status */
             status: string;
         };
+        /** @description Push payment status request */
+        PushPaymentStatusRequest: {
+            /**
+             * Format: double
+             * @description Amount paid (for partial payments)
+             */
+            amount_paid?: number | null;
+            /** @description ISO-8601 timestamp when payment was made */
+            paid_at?: string | null;
+            /** @description External payment reference / confirmation number */
+            payment_reference?: string | null;
+            /** @description Salesforce custom field name to update (defaults to `BillForge_Payment_Status__c`) */
+            salesforce_field?: string | null;
+            /** @description Payment status: must be one of `paid`, `partial`, or `void` */
+            status: string;
+        };
+        /** @description Push payment status response */
+        PushPaymentStatusResponse: {
+            /** @description The BillForge invoice ID that was pushed */
+            invoice_id: string;
+            /** @description ISO-8601 timestamp of the push */
+            pushed_at: string;
+            /** @description The Salesforce Account ID that was updated */
+            salesforce_account_id: string;
+            /** @description The Salesforce field that was set */
+            salesforce_field: string;
+            /** @description The value written to the field */
+            value: unknown;
+        };
         /** @description QuickBooks connection status */
         QuickBooksStatus: {
             /** @description Company ID */
@@ -4160,6 +4632,28 @@ export interface components {
             add_on_modules?: string[];
             plan_id: string;
         };
+        ReadinessResponse: {
+            computed_at: string;
+            exceptions: components["schemas"]["ExceptionItem"][];
+            period?: null | components["schemas"]["ClosePeriodResponse"];
+            /** Format: int32 */
+            score?: number | null;
+            totals: components["schemas"]["ReadinessTotals"];
+        };
+        ReadinessTotals: {
+            /** Format: int64 */
+            accruals_drafted: number;
+            /** Format: int64 */
+            days_until_cutoff?: number | null;
+            /** Format: int64 */
+            invoices_missing_gl_coding: number;
+            /** Format: int64 */
+            invoices_needing_accrual: number;
+            /** Format: int64 */
+            total_invoices: number;
+            /** Format: int64 */
+            unapproved_invoices: number;
+        };
         RefreshRequest: {
             refresh_token: string;
         };
@@ -4168,6 +4662,13 @@ export interface components {
             name: string;
             password: string;
             tenant_id: string;
+        };
+        RunCloseResponse: {
+            accrual_entries_created: number;
+            erp_post_error?: string | null;
+            erp_post_status: string;
+            /** Format: uuid */
+            period_id: string;
         };
         /** @description Account mapping */
         SageAccountMapping: {
@@ -4271,6 +4772,12 @@ export interface components {
         };
         /** @description Sync contacts response */
         SyncContactsResponse: {
+            /**
+             * Format: int64
+             * @description Number of contacts that failed to sync due to database errors
+             * @example 0
+             */
+            failed: number;
             /**
              * Format: int64
              * @description Number of contacts imported
@@ -4424,6 +4931,9 @@ export interface components {
         UpdateErpSubItemsRequest: {
             sub_items: components["schemas"]["ErpSubItems"];
         };
+        UpdatePeriodRequest: {
+            cutoff_date?: string | null;
+        };
         UploadResponse: {
             document_id: string;
             invoice_id: string;
@@ -4521,6 +5031,17 @@ export interface components {
              */
             total_vendors: number;
         };
+        WebhookSubscriptionListResponse: {
+            subscriptions: components["schemas"]["WebhookSubscriptionResponse"][];
+        };
+        WebhookSubscriptionResponse: {
+            created_at: string;
+            event_types: string[];
+            id: string;
+            is_active: boolean;
+            signing_secret?: string | null;
+            target_url: string;
+        };
         /** @description Workday ledger account mapping */
         WorkdayAccountMapping: {
             /** @description BillForge GL code */
@@ -4588,6 +5109,219 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_invoices: {
+        parameters: {
+            query?: {
+                /** @description Page number (1-indexed) */
+                page?: number;
+                /** @description Items per page */
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of invoices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid Bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_invoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Invoice UUID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invoice details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid Bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invoice not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_webhook_subscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of webhook subscriptions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSubscriptionListResponse"];
+                };
+            };
+            /** @description Missing or invalid Bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_webhook_subscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhookSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Webhook subscription created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSubscriptionResponse"];
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid Bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_webhook_subscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Webhook subscription UUID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscription deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicSuccessResponse"];
+                };
+            };
+            /** @description Missing or invalid Bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Subscription not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     handle_approve: {
         parameters: {
             query: {
@@ -4600,7 +5334,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Invoice approved */
+            /** @description Renders confirmation page */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4628,7 +5362,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Invoice placed on hold */
+            /** @description Renders confirmation page */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4656,7 +5390,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Invoice rejected */
+            /** @description Renders confirmation page */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4913,6 +5647,127 @@ export interface operations {
             };
         };
     };
+    get_benchmark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Benchmark KPIs and cohort percentiles */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    benchmark_opt_in: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkOptInRequest"];
+            };
+        };
+        responses: {
+            /** @description Opt-in accepted; returns updated benchmark snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_budget_alerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Budget alerts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    dismiss_alert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Alert dismissed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_anomalies: {
         parameters: {
             query?: never;
@@ -4977,132 +5832,6 @@ export interface operations {
             };
         };
     };
-    get_anomaly_rules: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Anomaly rules */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    configure_anomaly_rule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": unknown;
-            };
-        };
-        responses: {
-            /** @description Rule configured */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_anomaly_rule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Anomaly rule */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    update_anomaly_rule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": unknown;
-            };
-        };
-        responses: {
-            /** @description Rule updated */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_budget_alerts: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Budget alerts */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    dismiss_alert: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": unknown;
-            };
-        };
-        responses: {
-            /** @description Alert dismissed */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     get_forecasts: {
         parameters: {
             query?: never;
@@ -5155,6 +5884,90 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Forecast detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_anomaly_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Anomaly rules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    configure_anomaly_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Rule configured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_anomaly_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Anomaly rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_anomaly_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Rule updated */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5682,6 +6495,218 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_periods: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All close periods for tenant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClosePeriodResponse"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_period: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePeriodRequest"];
+            };
+        };
+        responses: {
+            /** @description Period created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClosePeriodResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_current_period_readiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current period readiness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_period: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Close period id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePeriodRequest"];
+            };
+        };
+        responses: {
+            /** @description Period updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClosePeriodResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Period not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    run_close: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Close period id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Close run completed (accruals + ERP post attempt) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCloseResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Period not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7018,6 +8043,153 @@ export interface operations {
         responses: {
             /** @description Invoice sync data */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    netsuite_connect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetSuiteConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description NetSuite connected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetSuiteConnectResponse"];
+                };
+            };
+            /** @description Invalid credentials or auth not yet implemented */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    netsuite_disconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description NetSuite disconnected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetSuiteDisconnectResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    netsuite_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description NetSuite status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetSuiteStatus"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    netsuite_sync_vendors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Vendors synced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8617,6 +9789,61 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    push_invoice_payment_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description BillForge invoice ID */
+                invoice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushPaymentStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Payment status pushed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushPaymentStatusResponse"];
+                };
+            };
+            /** @description Bad request (vendor not mapped, invalid status) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invoice not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11406,6 +12633,10 @@ export interface operations {
                 processing_status?: string;
                 /** @description Search term */
                 search?: string;
+                /** @description Minimum OCR confidence (0.0-1.0) */
+                min_ocr_confidence?: number;
+                /** @description Maximum OCR confidence (0.0-1.0) */
+                max_ocr_confidence?: number;
             };
             header?: never;
             path?: never;

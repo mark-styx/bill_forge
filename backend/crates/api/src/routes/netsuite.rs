@@ -75,6 +75,22 @@ pub struct SyncResponse {
     pub skipped: u64,
 }
 
+/// Response body for a successful NetSuite connect.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct NetSuiteConnectResponse {
+    /// Always "connected".
+    pub status: String,
+    /// NetSuite account id that was registered.
+    pub account_id: String,
+}
+
+/// Response body for NetSuite disconnect.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct NetSuiteDisconnectResponse {
+    /// Always "disconnected".
+    pub status: String,
+}
+
 // ──────────────────────────── Handlers ────────────────────────────
 
 /// Connect to NetSuite (save credentials & test connection)
@@ -84,7 +100,7 @@ pub struct SyncResponse {
     tag = "NetSuite",
     request_body = NetSuiteConnectRequest,
     responses(
-        (status = 200, description = "NetSuite connected"),
+        (status = 200, description = "NetSuite connected", body = NetSuiteConnectResponse),
         (status = 400, description = "Invalid credentials or auth not yet implemented"),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error")
@@ -137,10 +153,10 @@ async fn netsuite_connect(
     .await
     .ok();
 
-    Ok(Json(serde_json::json!({
-        "status": "connected",
-        "account_id": request.account_id,
-    })))
+    Ok(Json(NetSuiteConnectResponse {
+        status: "connected".to_string(),
+        account_id: request.account_id,
+    }))
 }
 
 /// Disconnect NetSuite
@@ -149,7 +165,7 @@ async fn netsuite_connect(
     path = "/api/v1/netsuite/disconnect",
     tag = "NetSuite",
     responses(
-        (status = 200, description = "NetSuite disconnected"),
+        (status = 200, description = "NetSuite disconnected", body = NetSuiteDisconnectResponse),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error")
     )
@@ -166,7 +182,9 @@ async fn netsuite_disconnect(
         .await
         .ok();
 
-    Ok(Json(serde_json::json!({ "status": "disconnected" })))
+    Ok(Json(NetSuiteDisconnectResponse {
+        status: "disconnected".to_string(),
+    }))
 }
 
 /// Get NetSuite connection status
@@ -221,6 +239,7 @@ async fn netsuite_status(
     post,
     path = "/api/v1/netsuite/sync/vendors",
     tag = "NetSuite",
+    operation_id = "netsuite_sync_vendors",
     responses(
         (status = 200, description = "Vendors synced", body = SyncResponse),
         (status = 401, description = "Unauthorized"),

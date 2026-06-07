@@ -14,7 +14,7 @@ use sqlx::PgPool;
 // ---------------------------------------------------------------------------
 
 /// Six AP KPIs for a single tenant or a cohort percentile bucket.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct BenchmarkKpis {
     pub dpo_days: f64,
     pub avg_approval_cycle_hours: f64,
@@ -25,7 +25,7 @@ pub struct BenchmarkKpis {
 }
 
 /// Percentile bands for cohort KPIs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct CohortPercentiles {
     pub p25: BenchmarkKpis,
     pub p50: BenchmarkKpis,
@@ -33,7 +33,7 @@ pub struct CohortPercentiles {
 }
 
 /// Cohort descriptor (the three dimensions that define a peer group).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct CohortDescriptor {
     pub industry: String,
     pub headcount_band: String,
@@ -41,7 +41,7 @@ pub struct CohortDescriptor {
 }
 
 /// Full benchmark response returned by `GET /api/analytics/benchmark`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct BenchmarkResponse {
     pub opted_in: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +55,7 @@ pub struct BenchmarkResponse {
 }
 
 /// Request body for `POST /api/analytics/benchmark/opt-in`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct BenchmarkOptInRequest {
     pub industry: String,
     pub headcount_band: String,

@@ -29,5 +29,8 @@ tracing = { workspace = true }
 # Web framework (for API endpoints)
 axum = { workspace = true }
 
+# OpenAPI schemas
+utoipa = { version = "5", features = ["uuid", "chrono"] }
+
 [dev-dependencies]
 tokio-test = "0.4"

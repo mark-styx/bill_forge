@@ -193,6 +193,16 @@ pub fn benchmark_routes() -> Router<AppState> {
 /// Returns the tenant's six AP KPIs alongside anonymized cohort percentiles.
 /// If `benchmark_opt_in = false`, returns `{ opted_in: false }` so the UI
 /// can render the opt-in CTA.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/benchmark",
+    tag = "Benchmarking",
+    responses(
+        (status = 200, description = "Benchmark KPIs and cohort percentiles", body = BenchmarkResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn get_benchmark(
     State(state): State<AppState>,
     user: AuthUser,
@@ -304,6 +314,18 @@ async fn get_benchmark(
 /// `POST /api/v1/analytics/benchmark/opt-in`
 ///
 /// Toggles the benchmark_opt_in flag and stores the cohort descriptor.
+#[utoipa::path(
+    post,
+    path = "/api/v1/analytics/benchmark/opt-in",
+    tag = "Benchmarking",
+    request_body = BenchmarkOptInRequest,
+    responses(
+        (status = 200, description = "Opt-in accepted; returns updated benchmark snapshot", body = BenchmarkResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn benchmark_opt_in(
     State(state): State<AppState>,
     user: AuthUser,
