@@ -22,6 +22,7 @@ use billforge_core::{
     Error,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -40,21 +41,21 @@ pub struct PublicApiRateLimiter(pub RateLimiter);
 /// and attaches the verified token to request extensions.
 pub struct PublicApiAuth(pub billforge_core::public_api::PublicApiToken);
 
-#[derive(Debug, Serialize)]
-struct PublicApiErrorBody {
-    error: PublicApiErrorDetail,
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PublicApiErrorBody {
+    pub error: PublicApiErrorDetail,
 }
 
-#[derive(Debug, Serialize)]
-struct PublicApiErrorDetail {
-    code: &'static str,
-    message: String,
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PublicApiErrorDetail {
+    pub code: String,
+    pub message: String,
 }
 
-fn public_error(status: StatusCode, code: &'static str, message: &str) -> Response {
+fn public_error(status: StatusCode, code: &str, message: &str) -> Response {
     let body = PublicApiErrorBody {
         error: PublicApiErrorDetail {
-            code,
+            code: code.to_string(),
             message: message.to_string(),
         },
     };
@@ -137,7 +138,7 @@ where
                     ],
                     Json(PublicApiErrorBody {
                         error: PublicApiErrorDetail {
-                            code: "rate_limited",
+                            code: "rate_limited".to_string(),
                             message: format!(
                                 "Rate limit exceeded. Retry after {} seconds.",
                                 retry_after
@@ -157,13 +158,31 @@ where
 // Route handlers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ListInvoicesQuery {
     pub page: Option<u32>,
     pub per_page: Option<u32>,
 }
 
 /// `GET /api/external/v1/invoices` — list invoices for the token's tenant.
+#[utoipa::path(
+    get,
+    path = "/api/external/v1/invoices",
+    tag = "External API",
+    params(
+        ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "List of invoices", body = serde_json::Value),
+        (status = 401, description = "Missing or invalid Bearer token"),
+        (status = 403, description = "Insufficient scope"),
+        (status = 429, description = "Rate limit exceeded"),
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 async fn list_invoices(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
@@ -189,6 +208,23 @@ async fn list_invoices(
 }
 
 /// `GET /api/external/v1/invoices/:id` — get a single invoice (tenant-scoped).
+#[utoipa::path(
+    get,
+    path = "/api/external/v1/invoices/{id}",
+    tag = "External API",
+    params(
+        ("id" = Uuid, Path, description = "Invoice UUID"),
+    ),
+    responses(
+        (status = 200, description = "Invoice details", body = serde_json::Value),
+        (status = 401, description = "Missing or invalid Bearer token"),
+        (status = 403, description = "Insufficient scope"),
+        (status = 404, description = "Invoice not found"),
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 async fn get_invoice(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
@@ -217,13 +253,13 @@ async fn get_invoice(
 // Webhook Subscription CRUD
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateWebhookSubscriptionRequest {
     pub target_url: String,
     pub event_types: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct WebhookSubscriptionResponse {
     pub id: String,
     pub target_url: String,
@@ -234,12 +270,27 @@ pub struct WebhookSubscriptionResponse {
     pub signing_secret: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct WebhookSubscriptionListResponse {
     pub subscriptions: Vec<WebhookSubscriptionResponse>,
 }
 
 /// `POST /api/external/v1/webhook-subscriptions`
+#[utoipa::path(
+    post,
+    path = "/api/external/v1/webhook-subscriptions",
+    tag = "External API",
+    request_body = CreateWebhookSubscriptionRequest,
+    responses(
+        (status = 201, description = "Webhook subscription created", body = WebhookSubscriptionResponse),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Missing or invalid Bearer token"),
+        (status = 403, description = "Insufficient scope"),
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 async fn create_webhook_subscription(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
@@ -312,6 +363,19 @@ async fn create_webhook_subscription(
 }
 
 /// `GET /api/external/v1/webhook-subscriptions`
+#[utoipa::path(
+    get,
+    path = "/api/external/v1/webhook-subscriptions",
+    tag = "External API",
+    responses(
+        (status = 200, description = "List of webhook subscriptions", body = WebhookSubscriptionListResponse),
+        (status = 401, description = "Missing or invalid Bearer token"),
+        (status = 403, description = "Insufficient scope"),
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 async fn list_webhook_subscriptions(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
@@ -354,11 +418,28 @@ async fn list_webhook_subscriptions(
 }
 
 /// `DELETE /api/external/v1/webhook-subscriptions/:id`
+#[utoipa::path(
+    delete,
+    path = "/api/external/v1/webhook-subscriptions/{id}",
+    tag = "External API",
+    params(
+        ("id" = Uuid, Path, description = "Webhook subscription UUID"),
+    ),
+    responses(
+        (status = 200, description = "Subscription deleted", body = PublicSuccessResponse),
+        (status = 401, description = "Missing or invalid Bearer token"),
+        (status = 403, description = "Insufficient scope"),
+        (status = 404, description = "Subscription not found"),
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
 async fn delete_webhook_subscription(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, Response> {
+) -> Result<Json<PublicSuccessResponse>, Response> {
     public_api::require_scope(&token, "webhooks:write").map_err(|msg| {
         public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg)
     })?;
@@ -387,7 +468,13 @@ async fn delete_webhook_subscription(
         ));
     }
 
-    Ok(Json(serde_json::json!({ "success": true })))
+    Ok(Json(PublicSuccessResponse { success: true }))
+}
+
+/// Typed success response for public API delete operations.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PublicSuccessResponse {
+    pub success: bool,
 }
 
 // ---------------------------------------------------------------------------

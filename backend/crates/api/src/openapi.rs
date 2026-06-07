@@ -75,6 +75,7 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         (name = "AI Assistant", description = "Winston AI assistant"),
         (name = "Billing", description = "Billing plans and subscriptions"),
         (name = "Routing", description = "Intelligent routing and workload balancing"),
+        (name = "External API", description = "PAT-authenticated public API for external consumers (invoices, webhook subscriptions)"),
     ),
     paths(
         // Authentication endpoints
@@ -744,6 +745,30 @@ pub struct PaginationInfo {
     pub total_pages: u32,
 }
 
+/// OpenAPI documentation for the External PAT-authenticated public API.
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::public_api::list_invoices,
+        crate::routes::public_api::get_invoice,
+        crate::routes::public_api::create_webhook_subscription,
+        crate::routes::public_api::list_webhook_subscriptions,
+        crate::routes::public_api::delete_webhook_subscription,
+    ),
+    components(
+        schemas(
+            crate::routes::public_api::ListInvoicesQuery,
+            crate::routes::public_api::CreateWebhookSubscriptionRequest,
+            crate::routes::public_api::WebhookSubscriptionResponse,
+            crate::routes::public_api::WebhookSubscriptionListResponse,
+            crate::routes::public_api::PublicSuccessResponse,
+            crate::routes::public_api::PublicApiErrorBody,
+            crate::routes::public_api::PublicApiErrorDetail,
+        )
+    )
+)]
+struct PublicApiDoc;
+
 /// Generate the full OpenAPI document, including feature-gated route groups.
 pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     #[allow(unused_mut)]
@@ -763,6 +788,9 @@ pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     openapi.merge(BillComApiDoc::openapi());
     #[cfg(feature = "edi")]
     openapi.merge(EdiApiDoc::openapi());
+
+    // External PAT-authenticated public API (always present)
+    openapi.merge(PublicApiDoc::openapi());
 
     openapi
 }

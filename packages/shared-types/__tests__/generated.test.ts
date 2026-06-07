@@ -40,6 +40,25 @@ describe('generated.ts schemas', () => {
     }
   });
 
+  it('includes external API paths for invoices and webhook-subscriptions', () => {
+    const raw = fs.readFileSync(path.join(pkgRoot, 'openapi.json'), 'utf-8');
+    const doc = JSON.parse(raw);
+
+    const externalPaths = [
+      '/api/external/v1/invoices',
+      '/api/external/v1/webhook-subscriptions',
+    ] as const;
+
+    for (const p of externalPaths) {
+      expect(doc.paths[p], `missing external path: ${p}`).toBeDefined();
+    }
+
+    // Verify expected operations exist
+    expect(doc.paths['/api/external/v1/invoices'].get).toBeDefined();
+    expect(doc.paths['/api/external/v1/webhook-subscriptions'].post).toBeDefined();
+    expect(doc.paths['/api/external/v1/webhook-subscriptions'].get).toBeDefined();
+  });
+
   it('generated.ts file exists and references all required schemas', () => {
     const genPath = path.join(pkgRoot, 'src', 'generated.ts');
     expect(fs.existsSync(genPath)).toBe(true);

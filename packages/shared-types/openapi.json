@@ -19,6 +19,230 @@
     }
   ],
   "paths": {
+    "/api/external/v1/invoices": {
+      "get": {
+        "tags": [
+          "External API"
+        ],
+        "summary": "`GET /api/external/v1/invoices` — list invoices for the token's tenant.",
+        "operationId": "list_invoices",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-indexed)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of invoices",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/external/v1/invoices/{id}": {
+      "get": {
+        "tags": [
+          "External API"
+        ],
+        "summary": "`GET /api/external/v1/invoices/:id` — get a single invoice (tenant-scoped).",
+        "operationId": "get_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Invoice UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice details",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          },
+          "404": {
+            "description": "Invoice not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/external/v1/webhook-subscriptions": {
+      "get": {
+        "tags": [
+          "External API"
+        ],
+        "summary": "`GET /api/external/v1/webhook-subscriptions`",
+        "operationId": "list_webhook_subscriptions",
+        "responses": {
+          "200": {
+            "description": "List of webhook subscriptions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "External API"
+        ],
+        "summary": "`POST /api/external/v1/webhook-subscriptions`",
+        "operationId": "create_webhook_subscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Webhook subscription created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/external/v1/webhook-subscriptions/{id}": {
+      "delete": {
+        "tags": [
+          "External API"
+        ],
+        "summary": "`DELETE /api/external/v1/webhook-subscriptions/:id`",
+        "operationId": "delete_webhook_subscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Webhook subscription UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscription deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSuccessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token"
+          },
+          "403": {
+            "description": "Insufficient scope"
+          },
+          "404": {
+            "description": "Subscription not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/actions/approve": {
       "get": {
         "tags": [
@@ -7249,6 +7473,24 @@
           }
         }
       },
+      "CreateWebhookSubscriptionRequest": {
+        "type": "object",
+        "required": [
+          "target_url",
+          "event_types"
+        ],
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_url": {
+            "type": "string"
+          }
+        }
+      },
       "DashboardMetrics": {
         "type": "object",
         "description": "Dashboard metrics response",
@@ -7977,6 +8219,27 @@
           }
         }
       },
+      "ListInvoicesQuery": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -8462,6 +8725,44 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "PublicApiErrorBody": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/PublicApiErrorDetail"
+          }
+        }
+      },
+      "PublicApiErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicSuccessResponse": {
+        "type": "object",
+        "description": "Typed success response for public API delete operations.",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
           }
         }
       },
@@ -9630,6 +9931,56 @@
           }
         }
       },
+      "WebhookSubscriptionListResponse": {
+        "type": "object",
+        "required": [
+          "subscriptions"
+        ],
+        "properties": {
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookSubscriptionResponse"
+            }
+          }
+        }
+      },
+      "WebhookSubscriptionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "target_url",
+          "event_types",
+          "is_active",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "signing_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_url": {
+            "type": "string"
+          }
+        }
+      },
       "WorkdayAccountMapping": {
         "type": "object",
         "description": "Workday ledger account mapping",
@@ -9923,6 +10274,10 @@
     {
       "name": "Routing",
       "description": "Intelligent routing and workload balancing"
+    },
+    {
+      "name": "External API",
+      "description": "PAT-authenticated public API for external consumers (invoices, webhook subscriptions)"
     }
   ]
 }

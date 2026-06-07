@@ -197,6 +197,10 @@ fn test_openapi_covers_all_mounted_route_groups() {
             &["/api/v1/vendors/{vendor_id}/statements"],
         ),
         ("routing", &["/api/v1/routing/workload"]),
+        (
+            "public_api",
+            &["/api/external/v1/invoices", "/api/external/v1/webhook-subscriptions"],
+        ),
     ];
 
     // Route groups that are NOT yet documented. All groups are now documented.
@@ -246,6 +250,7 @@ fn test_openapi_covers_all_mounted_route_groups() {
         "billing",
         "vendor-statements",
         "routing",
+        "public_api",
     ];
 
     let documented_names: Vec<&str> = documented_groups.iter().map(|(n, _)| *n).collect();
