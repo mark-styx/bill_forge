@@ -16,6 +16,10 @@ path = "src/bin/seed.rs"
 name = "rollback"
 path = "src/bin/rollback.rs"
 
+[[bin]]
+name = "teams_oid_backfill"
+path = "src/bin/teams_oid_backfill.rs"
+
 [features]
 default = []
 integration = []

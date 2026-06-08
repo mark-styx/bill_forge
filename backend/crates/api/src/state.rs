@@ -177,21 +177,21 @@ impl AppState {
             return Ok(TeamsJwtValidator::disabled());
         }
 
-        let jwks_url = std::env::var("TEAMS_OIDC_JWKS_URL").map_err(|_| {
-            anyhow::anyhow!(
-                "TEAMS_OIDC_JWKS_URL is required when TEAMS_ACTIONS_ENABLED=true"
-            )
-        })?;
-        let issuer = std::env::var("TEAMS_OIDC_EXPECTED_ISSUER").map_err(|_| {
-            anyhow::anyhow!(
-                "TEAMS_OIDC_EXPECTED_ISSUER is required when TEAMS_ACTIONS_ENABLED=true"
-            )
-        })?;
-        let audience = std::env::var("TEAMS_OIDC_EXPECTED_AUDIENCE").map_err(|_| {
-            anyhow::anyhow!(
-                "TEAMS_OIDC_EXPECTED_AUDIENCE is required when TEAMS_ACTIONS_ENABLED=true"
-            )
-        })?;
+        // dotenv-loaded `KEY=` lines produce Ok("") from env::var, so a sample
+        // .env copied verbatim would otherwise build a validator with empty
+        // strings and only fail at the first inbound callback. Treat blank
+        // and whitespace-only values as unset so the failure surfaces at boot.
+        fn required(name: &str) -> anyhow::Result<String> {
+            match std::env::var(name) {
+                Ok(v) if !v.trim().is_empty() => Ok(v),
+                _ => Err(anyhow::anyhow!(
+                    "{name} is required when TEAMS_ACTIONS_ENABLED=true"
+                )),
+            }
+        }
+        let jwks_url = required("TEAMS_OIDC_JWKS_URL")?;
+        let issuer = required("TEAMS_OIDC_EXPECTED_ISSUER")?;
+        let audience = required("TEAMS_OIDC_EXPECTED_AUDIENCE")?;
         let ttl_secs = std::env::var("TEAMS_JWKS_CACHE_TTL_SECS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())

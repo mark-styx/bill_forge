@@ -557,10 +557,15 @@ pub async fn post_conversation_reply(
 // ---------------------------------------------------------------------------
 
 /// Base URL for the Teams action callback endpoint. Override via
-/// `TEAMS_ACTIONS_URL` env var in production.
+/// `TEAMS_ACTIONS_URL` env var in production. A blank value (e.g. a
+/// `TEAMS_ACTIONS_URL=` line copied verbatim from .env.example) is treated as
+/// unset and falls back to the prod default; otherwise dotenv-loaded blanks
+/// would produce cards with `url: ""` that silently 404.
 fn teams_actions_base_url() -> String {
     std::env::var("TEAMS_ACTIONS_URL")
-        .unwrap_or_else(|_| "https://api.billforge.io/integrations/teams/actions".to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://api.billforge.io/integrations/teams/actions".to_string())
 }
 
 /// Build a rich Teams Adaptive Card for invoice approval with five action verbs.
