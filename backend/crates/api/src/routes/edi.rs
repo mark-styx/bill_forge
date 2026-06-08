@@ -29,7 +29,7 @@ use billforge_core::traits::{InvoiceRepository, PurchaseOrderRepository};
 use billforge_core::types::{TenantId, UserId};
 use billforge_db::repositories::{InvoiceRepositoryImpl, PurchaseOrderRepositoryImpl};
 use billforge_edi::{
-    check_ack_timeouts, check_replay_nonce, delete_replay_nonce, process_inbound_ack,
+    check_ack_timeouts, check_replay_nonce_tx, process_inbound_ack_tx,
     validate_timestamp_freshness, verify_webhook_signature, EdiClient, EdiConfig,
     EdiDocumentType, EdiFunctionalAck, EdiInvoice, EdiMapper, EdiPurchaseOrder, EdiShipNotice,
     EdiWebhookPayload, OutboundEdiService,
@@ -244,12 +244,21 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::UNAUTHORIZED);
             }
 
-            // 2. Nonce deduplication
+            // 2. Begin tx: nonce + edi_documents + invoice + match must commit
+            //    or roll back atomically. On any `?` short-circuit below the tx
+            //    is dropped and Postgres rolls back every write, so a provider
+            //    retry of the same payload is accepted on the next attempt.
+            let mut tx = tenant_pool.begin().await.map_err(|e| {
+                tracing::error!("Failed to begin EDI 810 tx: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            // 3. Nonce deduplication (on tx)
             let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+            if !check_replay_nonce_tx(&mut tx, tenant_uuid, &nonce)
                 .await
                 .map_err(|e| {
                     tracing::error!("Replay nonce check failed: {}", e);
@@ -260,12 +269,7 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
-            // Wrap post-nonce processing so we can roll back the nonce on failure.
-            let nonce_pool = Arc::clone(&tenant_pool);
-            let nonce_tenant = tenant_uuid;
-            let nonce_value = nonce.clone();
-            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
-            // 3. Store EDI document record (status: processing)
+            // 4. Store EDI document record (status: processing)
             let doc_id = Uuid::new_v4();
             sqlx::query(
                 r#"INSERT INTO edi_documents (id, tenant_id, document_type, direction, interchange_control, sender_id, receiver_id, status, raw_payload, created_at)
@@ -279,27 +283,27 @@ async fn webhook_inbound(
             .bind(&edi_invoice.sender_id)
             .bind(&edi_invoice.receiver_id)
             .bind(&payload.payload)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store EDI document: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            // 4. Look up trading partner by sender_id to find vendor_id
+            // 5. Look up trading partner by sender_id to find vendor_id
             let vendor_id: Option<Uuid> = sqlx::query_scalar(
                 "SELECT vendor_id FROM edi_trading_partners WHERE tenant_id = $1 AND edi_id = $2 AND is_active = true",
             )
             .bind(tenant_uuid)
             .bind(&edi_invoice.sender_id)
-            .fetch_optional(&*tenant_pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to look up trading partner: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            // 5. Map EDI invoice to BillForge invoice and create it
+            // 6. Map EDI invoice to BillForge invoice and create it
             // Use a separate document_id (not the edi_documents row ID) since
             // document_id is used for blob storage references elsewhere.
             let invoice_doc_id = Uuid::new_v4();
@@ -318,7 +322,7 @@ async fn webhook_inbound(
                 "SELECT id FROM users WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1",
             )
             .bind(tenant_uuid)
-            .fetch_optional(&*tenant_pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to look up tenant admin user: {}", e);
@@ -333,69 +337,71 @@ async fn webhook_inbound(
             let invoice_repo = InvoiceRepositoryImpl::new(Arc::clone(&tenant_pool));
 
             let invoice = invoice_repo
-                .create(&tenant_id, invoice_input, Some(&created_by))
+                .create_tx(&mut tx, &tenant_id, invoice_input, Some(&created_by))
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create invoice from EDI: {}", e);
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR
                 })?;
 
-            // 6. Update EDI document: status -> mapped, link invoice_id
+            // 7. Update EDI document: status -> mapped, link invoice_id
             sqlx::query(
                 r#"UPDATE edi_documents SET status = 'mapped', invoice_id = $1, mapped_data = $2, processed_at = NOW() WHERE id = $3"#,
             )
             .bind(invoice.id.0)
             .bind(&mapped_data)
             .bind(doc_id)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to update EDI document status: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            // 7. Submit invoice into workflow: EDI data is fully structured,
+            // 8. Submit invoice into workflow: EDI data is fully structured,
             // so skip capture (OCR) and go straight to processing/submitted
             sqlx::query(
                 "UPDATE invoices SET capture_status = 'reviewed', processing_status = 'submitted', updated_at = NOW() WHERE id = $1",
             )
             .bind(invoice.id.0)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to submit EDI invoice to workflow: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            // 8. If invoice references a PO, attempt automatic 3-way matching
+            // 9. If invoice references a PO, attempt automatic 3-way matching.
+            //    Match-related writes are part of the same tx as the invoice;
+            //    a failure here rolls back the whole webhook and the provider
+            //    will retry.
             let mut match_result_json = serde_json::Value::Null;
             if let Some(ref po_number) = edi_invoice.po_number {
                 let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
-                if let Ok(Some(po)) = po_repo.find_by_po_number(&tenant_id, po_number).await {
+                let po_opt = po_repo
+                    .find_by_po_number_tx(&mut tx, &tenant_id, po_number)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to look up PO for auto-match: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
+                if let Some(po) = po_opt {
                     use billforge_core::domain::MatchTolerances;
                     use billforge_edi::matching::{InvoiceLineForMatch, MatchEngine};
 
-                    // Load receiving records for this PO
-                    let recv_rows = sqlx::query_as::<_, (Uuid, i32, f32, f32, Option<String>)>(
+                    let recv_rows: Vec<(Uuid, i32, f32, f32, Option<String>)> = sqlx::query_as(
                         r#"SELECT rl.id, rl.po_line_number, rl.quantity_received, rl.quantity_damaged, rl.product_id
                            FROM receiving_line_items rl
                            JOIN receiving_records rr ON rl.receiving_id = rr.id
                            WHERE rr.po_id = $1"#,
                     )
                     .bind(po.id.0)
-                    .fetch_all(&*tenant_pool)
-                    .await;
-
-                    let recv_rows = match recv_rows {
-                        Ok(rows) => rows,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to load receiving records for auto-match: {}",
-                                e
-                            );
-                            vec![]
-                        }
-                    };
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to load receiving records for auto-match: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
                     let receiving_lines: Vec<billforge_core::domain::ReceivingLineItem> = recv_rows
                         .iter()
@@ -430,7 +436,7 @@ async fn webhook_inbound(
                     let details = serde_json::to_value(&match_output).unwrap_or_default();
                     let match_id = Uuid::new_v4();
 
-                    let match_stored = sqlx::query(
+                    sqlx::query(
                         r#"INSERT INTO match_results (id, tenant_id, invoice_id, po_id, match_type, price_variance_pct, quantity_variance_pct, details)
                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
                     )
@@ -442,42 +448,44 @@ async fn webhook_inbound(
                     .bind(match_output.overall_price_variance_pct as f32)
                     .bind(match_output.overall_quantity_variance_pct as f32)
                     .bind(&details)
-                    .execute(&*tenant_pool)
-                    .await;
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to store match result: {}", e);
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
 
-                    if let Err(e) = &match_stored {
-                        tracing::warn!("Failed to store match result: {}", e);
+                    if match_output.match_type == billforge_core::domain::MatchType::Full
+                        && invoice.total_amount.amount <= tolerances.auto_approve_below_cents
+                    {
+                        sqlx::query(
+                            "UPDATE invoices SET processing_status = 'approved', updated_at = NOW() WHERE id = $1",
+                        )
+                        .bind(invoice.id.0)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Failed to auto-approve matched invoice: {}", e);
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                        })?;
+                        tracing::info!(
+                            invoice_id = %invoice.id,
+                            po_id = %po.id,
+                            "EDI invoice auto-approved via 3-way match"
+                        );
                     }
 
-                    // Only report match and auto-approve if the result was persisted
-                    if match_stored.is_ok() {
-                        if match_output.match_type == billforge_core::domain::MatchType::Full
-                            && invoice.total_amount.amount <= tolerances.auto_approve_below_cents
-                        {
-                            if let Err(e) = sqlx::query(
-                                "UPDATE invoices SET processing_status = 'approved', updated_at = NOW() WHERE id = $1",
-                            )
-                            .bind(invoice.id.0)
-                            .execute(&*tenant_pool)
-                            .await
-                            {
-                                tracing::warn!("Failed to auto-approve matched invoice: {}", e);
-                            } else {
-                                tracing::info!(
-                                    invoice_id = %invoice.id,
-                                    po_id = %po.id,
-                                    "EDI invoice auto-approved via 3-way match"
-                                );
-                            }
-                        }
-
-                        match_result_json = serde_json::json!({
-                            "match_type": match_output.match_type.as_str(),
-                            "match_id": match_id,
-                        });
-                    }
+                    match_result_json = serde_json::json!({
+                        "match_type": match_output.match_type.as_str(),
+                        "match_id": match_id,
+                    });
                 }
             }
+
+            tx.commit().await.map_err(|e| {
+                tracing::error!("Failed to commit EDI 810 tx: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
             tracing::info!(
                 invoice_id = %invoice.id,
@@ -494,16 +502,6 @@ async fn webhook_inbound(
                 "edi_document_id": doc_id,
                 "match_result": match_result_json,
             })))
-            }.await;
-            match result {
-                Ok(resp) => Ok(resp),
-                Err(status) => {
-                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
-                        tracing::warn!("Failed to roll back replay nonce after 810 processing failure: {}", e);
-                    }
-                    Err(status)
-                }
-            }
         }
         EdiDocumentType::PurchaseOrder850 => {
             let edi_po: EdiPurchaseOrder = serde_json::from_value(payload.payload.clone())
@@ -560,11 +558,16 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::UNAUTHORIZED);
             }
 
+            let mut tx = tenant_pool.begin().await.map_err(|e| {
+                tracing::error!("Failed to begin EDI 850 tx: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
             let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+            if !check_replay_nonce_tx(&mut tx, tenant_uuid, &nonce)
                 .await
                 .map_err(|e| {
                     tracing::error!("Replay nonce check failed: {}", e);
@@ -575,11 +578,6 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
-            // Wrap post-nonce processing so we can roll back the nonce on failure.
-            let nonce_pool = Arc::clone(&tenant_pool);
-            let nonce_tenant = tenant_uuid;
-            let nonce_value = nonce.clone();
-            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store EDI document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -594,7 +592,7 @@ async fn webhook_inbound(
             .bind(&edi_po.sender_id)
             .bind(&edi_po.receiver_id)
             .bind(&payload.payload)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store EDI document: {}", e);
@@ -607,7 +605,7 @@ async fn webhook_inbound(
             )
             .bind(tenant_uuid)
             .bind(&edi_po.sender_id)
-            .fetch_optional(&*tenant_pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to look up trading partner: {}", e);
@@ -630,7 +628,7 @@ async fn webhook_inbound(
                 "SELECT id FROM users WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1",
             )
             .bind(tenant_uuid)
-            .fetch_optional(&*tenant_pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to look up tenant admin: {}", e);
@@ -644,7 +642,7 @@ async fn webhook_inbound(
             let created_by = UserId::from_uuid(admin_user_id);
             let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
             let po = po_repo
-                .create(&tenant_id, po_input, &created_by)
+                .create_tx(&mut tx, &tenant_id, po_input, &created_by)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to create purchase order from EDI: {}", e);
@@ -657,10 +655,15 @@ async fn webhook_inbound(
             )
             .bind(po.id.0)
             .bind(doc_id)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to update EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tx.commit().await.map_err(|e| {
+                tracing::error!("Failed to commit EDI 850 tx: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
@@ -678,16 +681,6 @@ async fn webhook_inbound(
                 "po_id": po.id.0,
                 "edi_document_id": doc_id,
             })))
-            }.await;
-            match result {
-                Ok(resp) => Ok(resp),
-                Err(status) => {
-                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
-                        tracing::warn!("Failed to roll back replay nonce after 850 processing failure: {}", e);
-                    }
-                    Err(status)
-                }
-            }
         }
         EdiDocumentType::ShipNotice856 => {
             let edi_asn: EdiShipNotice =
@@ -745,11 +738,16 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::UNAUTHORIZED);
             }
 
+            let mut tx = tenant_pool.begin().await.map_err(|e| {
+                tracing::error!("Failed to begin EDI 856 tx: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
             let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+            if !check_replay_nonce_tx(&mut tx, tenant_uuid, &nonce)
                 .await
                 .map_err(|e| {
                     tracing::error!("Replay nonce check failed: {}", e);
@@ -760,11 +758,6 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
-            // Wrap post-nonce processing so we can roll back the nonce on failure.
-            let nonce_pool = Arc::clone(&tenant_pool);
-            let nonce_tenant = tenant_uuid;
-            let nonce_value = nonce.clone();
-            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store EDI document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -779,17 +772,19 @@ async fn webhook_inbound(
             .bind(&edi_asn.sender_id)
             .bind(&edi_asn.receiver_id)
             .bind(&payload.payload)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store EDI document: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
-            // Find matching PO by po_number
+            // Find matching PO by po_number on the same tx, so we don't grab a
+            // second pool connection while a tx connection is already held
+            // (small pools could deadlock).
             let po_repo = PurchaseOrderRepositoryImpl::new(Arc::clone(&tenant_pool));
             let po = po_repo
-                .find_by_po_number(&tenant_id, &edi_asn.po_number)
+                .find_by_po_number_tx(&mut tx, &tenant_id, &edi_asn.po_number)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to look up PO: {}", e);
@@ -812,7 +807,7 @@ async fn webhook_inbound(
             .bind(po.id.0)
             .bind(edi_asn.ship_date)
             .bind(doc_id)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to create receiving record: {}", e);
@@ -832,7 +827,7 @@ async fn webhook_inbound(
                 .bind(line.quantity_received as f32)
                 .bind(line.quantity_damaged as f32)
                 .bind(&line.product_id)
-                .execute(&*tenant_pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to insert receiving line item: {}", e);
@@ -841,7 +836,8 @@ async fn webhook_inbound(
 
                 // Update PO line received quantity
                 po_repo
-                    .update_received_quantities(
+                    .update_received_quantities_tx(
+                        &mut tx,
                         &tenant_id,
                         &po.id,
                         line.po_line_number,
@@ -859,7 +855,7 @@ async fn webhook_inbound(
                 "SELECT COUNT(*) FROM po_line_items WHERE po_id = $1 AND received_quantity < quantity",
             )
             .bind(po.id.0)
-            .fetch_one(&*tenant_pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to check PO fulfillment: {}", e);
@@ -875,7 +871,7 @@ async fn webhook_inbound(
             sqlx::query("UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE id = $2")
                 .bind(new_status)
                 .bind(po.id.0)
-                .execute(&*tenant_pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to update PO status: {}", e);
@@ -888,10 +884,15 @@ async fn webhook_inbound(
             )
             .bind(po.id.0)
             .bind(doc_id)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to update EDI document: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tx.commit().await.map_err(|e| {
+                tracing::error!("Failed to commit EDI 856 tx: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
@@ -911,16 +912,6 @@ async fn webhook_inbound(
                 "po_status": new_status,
                 "edi_document_id": doc_id,
             })))
-            }.await;
-            match result {
-                Ok(resp) => Ok(resp),
-                Err(status) => {
-                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
-                        tracing::warn!("Failed to roll back replay nonce after 856 processing failure: {}", e);
-                    }
-                    Err(status)
-                }
-            }
         }
         EdiDocumentType::Remittance820 => {
             // 820 is outbound-only, receiving one inbound is unexpected
@@ -991,11 +982,16 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::UNAUTHORIZED);
             }
 
+            let mut tx = tenant_pool.begin().await.map_err(|e| {
+                tracing::error!("Failed to begin EDI 997 tx: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
             let nonce = payload.middleware_id.clone().unwrap_or_else(|| {
                 let hash = sha2::Sha256::digest(&body);
                 hex::encode(hash)
             });
-            if !check_replay_nonce(&*tenant_pool, tenant_uuid, &nonce)
+            if !check_replay_nonce_tx(&mut tx, tenant_uuid, &nonce)
                 .await
                 .map_err(|e| {
                     tracing::error!("Replay nonce check failed: {}", e);
@@ -1006,11 +1002,6 @@ async fn webhook_inbound(
                 return Err(axum::http::StatusCode::CONFLICT);
             }
 
-            // Wrap post-nonce processing so we can roll back the nonce on failure.
-            let nonce_pool = Arc::clone(&tenant_pool);
-            let nonce_tenant = tenant_uuid;
-            let nonce_value = nonce.clone();
-            let result: Result<Json<serde_json::Value>, axum::http::StatusCode> = async {
             // Store the inbound 997 document
             let doc_id = Uuid::new_v4();
             sqlx::query(
@@ -1022,7 +1013,7 @@ async fn webhook_inbound(
             .bind(tenant_uuid)
             .bind(&ack.group_control)
             .bind(&payload.payload)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to store inbound 997: {}", e);
@@ -1030,7 +1021,7 @@ async fn webhook_inbound(
             })?;
 
             // Process the ack - find and update the matching outbound document
-            let matched_doc_id = process_inbound_ack(&tenant_pool, tenant_uuid, &ack)
+            let matched_doc_id = process_inbound_ack_tx(&mut tx, tenant_uuid, &ack)
                 .await
                 .map_err(|e| {
                     tracing::error!("Failed to process inbound 997: {}", e);
@@ -1042,10 +1033,15 @@ async fn webhook_inbound(
                 "UPDATE edi_documents SET status = 'mapped', processed_at = NOW() WHERE id = $1",
             )
             .bind(doc_id)
-            .execute(&*tenant_pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to update 997 document status: {}", e);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+            tx.commit().await.map_err(|e| {
+                tracing::error!("Failed to commit EDI 997 tx: {}", e);
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             })?;
 
@@ -1056,16 +1052,6 @@ async fn webhook_inbound(
                 "matched_document_id": matched_doc_id,
                 "edi_document_id": doc_id,
             })))
-            }.await;
-            match result {
-                Ok(resp) => Ok(resp),
-                Err(status) => {
-                    if let Err(e) = delete_replay_nonce(&*nonce_pool, nonce_tenant, &nonce_value).await {
-                        tracing::warn!("Failed to roll back replay nonce after 997 processing failure: {}", e);
-                    }
-                    Err(status)
-                }
-            }
         }
     }
 }

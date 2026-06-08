@@ -13,7 +13,7 @@ use crate::types::{AckStatus, EdiDocumentType, EdiFunctionalAck};
 use anyhow::{Context, Result};
 use billforge_core::domain::Invoice;
 use chrono::{Duration, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 /// Sends outbound EDI documents and tracks their ack status.
@@ -322,6 +322,133 @@ pub async fn process_inbound_ack(
                 )
                 .bind(doc_id)
                 .execute(pool)
+                .await
+                .context("Failed to reset document for retry")?;
+
+                tracing::info!(
+                    doc_id = %doc_id,
+                    retry = retry_count + 1,
+                    max = max_retries,
+                    "Document queued for retry after 997 rejection"
+                );
+            }
+        } else {
+            tracing::warn!(
+                doc_id = %doc_id,
+                retries = retry_count,
+                "Document exceeded max retries after 997 rejection"
+            );
+        }
+    }
+
+    Ok(Some(doc_id))
+}
+
+/// Transaction-scoped variant of `process_inbound_ack`.
+///
+/// Mirrors `process_inbound_ack` but executes every update on the caller's
+/// `Transaction` so the ack-state mutation commits or rolls back atomically
+/// with the surrounding 997 webhook processing (storing the inbound
+/// `edi_documents` row, marking it `mapped`, etc.).
+pub async fn process_inbound_ack_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    ack: &EdiFunctionalAck,
+) -> Result<Option<Uuid>> {
+    let matched_doc: Option<(Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, document_type FROM edi_documents
+           WHERE tenant_id = $1
+             AND direction = 'outbound'
+             AND group_control = $2
+             AND ack_status = 'pending'
+           ORDER BY created_at DESC
+           LIMIT 1"#,
+    )
+    .bind(tenant_id)
+    .bind(&ack.group_control)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("Failed to look up outbound document for ack")?;
+
+    let (doc_id, doc_type) = match matched_doc {
+        Some(row) => row,
+        None => {
+            tracing::warn!(
+                group_control = %ack.group_control,
+                "No pending outbound document found for inbound 997"
+            );
+            return Ok(None);
+        }
+    };
+
+    let ack_status_str = match ack.status {
+        AckStatus::Accepted => "accepted",
+        AckStatus::AcceptedWithErrors => "accepted_with_errors",
+        AckStatus::Rejected => "rejected",
+        AckStatus::Pending => "pending",
+    };
+
+    let error_msg = if ack.errors.is_empty() {
+        None
+    } else {
+        Some(
+            ack.errors
+                .iter()
+                .map(|e| format!("{}: {}", e.code, e.description))
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    };
+
+    sqlx::query(
+        r#"UPDATE edi_documents
+           SET ack_status = $1, ack_received_at = NOW(), error_message = COALESCE($2, error_message)
+           WHERE id = $3"#,
+    )
+    .bind(ack_status_str)
+    .bind(&error_msg)
+    .bind(doc_id)
+    .execute(&mut **tx)
+    .await
+    .context("Failed to update outbound document ack status")?;
+
+    tracing::info!(
+        doc_id = %doc_id,
+        doc_type = %doc_type,
+        ack_status = %ack_status_str,
+        group_control = %ack.group_control,
+        "Processed inbound 997 acknowledgment"
+    );
+
+    if ack.status == AckStatus::Rejected {
+        let (retry_count, max_retries): (i32, i32) = sqlx::query_as(
+            "SELECT ack_retry_count, max_ack_retries FROM edi_documents WHERE id = $1",
+        )
+        .bind(doc_id)
+        .fetch_one(&mut **tx)
+        .await
+        .context("Failed to check retry count")?;
+
+        if retry_count < max_retries {
+            let auto_retry: bool = sqlx::query_scalar(
+                "SELECT COALESCE(auto_retry_on_reject, true) FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("Failed to check auto-retry setting")?
+            .unwrap_or(false);
+
+            if auto_retry {
+                sqlx::query(
+                    r#"UPDATE edi_documents
+                       SET ack_status = 'pending', ack_retry_count = ack_retry_count + 1,
+                           ack_received_at = NULL, error_message = NULL,
+                           ack_timeout_at = NOW() + INTERVAL '24 hours'
+                       WHERE id = $1"#,
+                )
+                .bind(doc_id)
+                .execute(&mut **tx)
                 .await
                 .context("Failed to reset document for retry")?;
 

@@ -8,7 +8,7 @@ use billforge_core::{
     Error, Result,
 };
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -19,6 +19,184 @@ pub struct PurchaseOrderRepositoryImpl {
 impl PurchaseOrderRepositoryImpl {
     pub fn new(pool: Arc<PgPool>) -> Self {
         Self { pool }
+    }
+
+    /// Transaction-scoped variant of `create`. Inserts the PO header and all
+    /// `po_line_items` on the caller's `Transaction` so they commit or roll
+    /// back atomically with the surrounding work (used by the inbound 850 EDI
+    /// webhook handler).
+    pub async fn create_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant_id: &TenantId,
+        input: CreatePurchaseOrderInput,
+        created_by: &UserId,
+    ) -> Result<PurchaseOrder> {
+        let id = PurchaseOrderId::new();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"INSERT INTO purchase_orders (
+                id, tenant_id, po_number, vendor_id, vendor_name, order_date,
+                expected_delivery, status, total_amount_cents, total_currency,
+                ship_to_address, notes, created_by, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)"#,
+        )
+        .bind(id.0)
+        .bind(*tenant_id.as_uuid())
+        .bind(&input.po_number)
+        .bind(input.vendor_id)
+        .bind(&input.vendor_name)
+        .bind(input.order_date)
+        .bind(input.expected_delivery)
+        .bind("open")
+        .bind(input.total_amount.amount)
+        .bind(&input.total_amount.currency)
+        .bind(&input.ship_to_address)
+        .bind(&input.notes)
+        .bind(created_by.0)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("duplicate key") {
+                Error::AlreadyExists {
+                    resource_type: "PurchaseOrder".to_string(),
+                }
+            } else {
+                Error::Database(format!("Failed to create purchase order: {}", e))
+            }
+        })?;
+
+        let mut line_items = Vec::new();
+        for (i, li) in input.line_items.iter().enumerate() {
+            let li_id = Uuid::new_v4();
+            let line_number = li.line_number.unwrap_or((i + 1) as u32);
+
+            sqlx::query(
+                r#"INSERT INTO po_line_items (
+                    id, po_id, line_number, description, quantity, unit_of_measure,
+                    unit_price_cents, unit_price_currency, total_cents, total_currency,
+                    product_id, received_quantity, invoiced_quantity
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0)"#,
+            )
+            .bind(li_id)
+            .bind(id.0)
+            .bind(line_number as i32)
+            .bind(&li.description)
+            .bind(li.quantity)
+            .bind(&li.unit_of_measure)
+            .bind(li.unit_price.amount)
+            .bind(&li.unit_price.currency)
+            .bind(li.total.amount)
+            .bind(&li.total.currency)
+            .bind(&li.product_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to create PO line item: {}", e)))?;
+
+            line_items.push(POLineItem {
+                id: li_id,
+                line_number,
+                description: li.description.clone(),
+                quantity: li.quantity,
+                unit_of_measure: li.unit_of_measure.clone(),
+                unit_price: li.unit_price.clone(),
+                total: li.total.clone(),
+                product_id: li.product_id.clone(),
+                received_quantity: 0.0,
+                invoiced_quantity: 0.0,
+            });
+        }
+
+        Ok(PurchaseOrder {
+            id,
+            tenant_id: tenant_id.clone(),
+            po_number: input.po_number,
+            vendor_id: input.vendor_id,
+            vendor_name: input.vendor_name,
+            order_date: input.order_date,
+            expected_delivery: input.expected_delivery,
+            status: POStatus::Open,
+            line_items,
+            total_amount: input.total_amount,
+            ship_to_address: input.ship_to_address,
+            notes: input.notes,
+            created_by: created_by.clone(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Transaction-scoped variant of `find_by_po_number`. Reads the PO header
+    /// and its line items on the caller's `Transaction` so we don't grab a
+    /// second pool connection while a tx connection is already held — that
+    /// pattern can deadlock under small pools.
+    pub async fn find_by_po_number_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant_id: &TenantId,
+        po_number: &str,
+    ) -> Result<Option<PurchaseOrder>> {
+        let row = sqlx::query_as::<_, PurchaseOrderRow>(
+            r#"SELECT id, tenant_id, po_number, vendor_id, vendor_name, order_date,
+                      expected_delivery, status, total_amount_cents, total_currency,
+                      ship_to_address, notes, created_by, created_at, updated_at
+               FROM purchase_orders WHERE tenant_id = $1 AND po_number = $2"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(po_number)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to find purchase order: {}", e)))?;
+
+        match row {
+            Some(r) => {
+                let line_items = sqlx::query_as::<_, POLineItemRow>(
+                    r#"SELECT id, line_number, description, quantity, unit_of_measure,
+                              unit_price_cents, unit_price_currency, total_cents, total_currency,
+                              product_id, received_quantity, invoiced_quantity
+                       FROM po_line_items WHERE po_id = $1 ORDER BY line_number"#,
+                )
+                .bind(r.id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to fetch PO line items: {}", e)))?
+                .into_iter()
+                .map(|r| r.into_line_item())
+                .collect();
+                Ok(Some(r.into_purchase_order(line_items)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Transaction-scoped variant of `update_received_quantities`. Bumps the
+    /// receiving quantity for a PO line on the caller's `Transaction` so the
+    /// update commits or rolls back atomically with the surrounding 856 EDI
+    /// webhook processing.
+    pub async fn update_received_quantities_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant_id: &TenantId,
+        po_id: &PurchaseOrderId,
+        line_number: u32,
+        received_qty: f64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE po_line_items SET received_quantity = received_quantity + $1 \
+             WHERE po_id = $2 AND line_number = $3 \
+             AND po_id IN (SELECT id FROM purchase_orders WHERE id = $2 AND tenant_id = $4)",
+        )
+        .bind(received_qty)
+        .bind(po_id.0)
+        .bind(line_number as i32)
+        .bind(*tenant_id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to update received quantities: {}", e)))?;
+
+        Ok(())
     }
 }
 

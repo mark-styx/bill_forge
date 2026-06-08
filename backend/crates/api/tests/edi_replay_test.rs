@@ -9,7 +9,7 @@
 
 #![allow(warnings)]
 
-use billforge_edi::{check_replay_nonce, delete_replay_nonce, validate_timestamp_freshness};
+use billforge_edi::{check_replay_nonce, check_replay_nonce_tx, validate_timestamp_freshness};
 use chrono::{TimeDelta, Utc};
 
 #[test]
@@ -69,15 +69,16 @@ fn test_nonce_body_hash_deterministic() {
 // ============================================================================
 // Database-dependent tests
 // ============================================================================
-// The following tests require a live PostgreSQL database with tenant schema.
-// They are enabled via the `integration` feature flag in CI.
+// The following tests require a live PostgreSQL database. Each is gated with
+// `#[ignore]` so they only run via `cargo test ... -- --ignored`.
 //
 // To run locally:
-//   SQLX_OFFLINE=false cargo test --features integration --test edi_replay_test
+//   TEST_DATABASE_URL=postgres://... \
+//     cargo test -p billforge-api --test edi_replay_test -- --ignored
 
-#[cfg(feature = "integration")]
 mod integration {
     use super::*;
+    use sha2::Digest;
     use sqlx::PgPool;
     use uuid::Uuid;
 
@@ -188,28 +189,80 @@ mod integration {
     #[sqlx::test]
     #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
     async fn replay_nonce_released_on_processing_failure() {
+        // Models the #363 fix: when an EDI webhook handler wraps the post-nonce
+        // body in a single Postgres tx, dropping that tx (handler failure) must
+        // roll back the nonce insert alongside the rest of the writes. The next
+        // provider retry of the same payload then succeeds.
         let pool = setup_test_pool().await;
         let tenant_id = Uuid::new_v4();
         let nonce = "test-nonce-rollback-001";
 
-        // 1. First check inserts the nonce - should succeed
-        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap());
+        // 1. Begin a tx, insert the nonce inside it, then ROLL BACK the tx.
+        //    `tx.rollback()` is equivalent to the tx being dropped from a
+        //    handler that returns Err -- both undo the nonce insert.
+        {
+            let mut tx = pool.begin().await.expect("begin tx");
+            let first = check_replay_nonce_tx(&mut tx, tenant_id, nonce)
+                .await
+                .expect("nonce check ok");
+            assert!(first, "first-seen nonce inside tx should return true");
+            tx.rollback().await.expect("rollback tx");
+        }
 
-        // 2. Simulate compensating rollback (handler failed, deletes nonce)
-        let del = delete_replay_nonce(&pool, tenant_id, nonce).await;
-        assert!(del.is_ok());
+        // 2. After rollback, the nonce row is gone. A retry with the same
+        //    nonce on a fresh tx succeeds (first-seen again).
+        {
+            let mut tx = pool.begin().await.expect("begin tx");
+            let retry = check_replay_nonce_tx(&mut tx, tenant_id, nonce)
+                .await
+                .expect("nonce check ok");
+            assert!(retry, "after rollback, retry should be first-seen");
+            tx.commit().await.expect("commit tx");
+        }
 
-        // 3. Retry with same nonce succeeds because nonce was released
-        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap());
+        // 3. Without rollback, a second check is flagged as replay (sanity
+        //    check that the previous commit actually landed the row).
+        let third = check_replay_nonce(&pool, tenant_id, nonce)
+            .await
+            .expect("pool check ok");
+        assert!(!third, "third check (after commit) should be flagged replay");
 
-        // 4. Without rollback, a second check is flagged as replay
-        let result = check_replay_nonce(&pool, tenant_id, nonce).await;
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
+        // Cleanup
+        sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[sqlx::test]
+    #[ignore] // Requires DATABASE_URL - run with: cargo test --test edi_replay_test -- --ignored
+    async fn replay_nonce_persists_when_tx_commits() {
+        // Models the happy path: a webhook handler commits its tx, so the
+        // nonce row sticks and a subsequent retry of the same payload is
+        // correctly rejected as a replay.
+        let pool = setup_test_pool().await;
+        let tenant_id = Uuid::new_v4();
+        let nonce = "test-nonce-commit-001";
+
+        {
+            let mut tx = pool.begin().await.expect("begin tx");
+            let first = check_replay_nonce_tx(&mut tx, tenant_id, nonce)
+                .await
+                .expect("nonce check ok");
+            assert!(first, "first-seen nonce inside tx should return true");
+            tx.commit().await.expect("commit tx");
+        }
+
+        // After commit, the same nonce on a fresh tx is detected as replay.
+        {
+            let mut tx = pool.begin().await.expect("begin tx");
+            let replay = check_replay_nonce_tx(&mut tx, tenant_id, nonce)
+                .await
+                .expect("nonce check ok");
+            assert!(!replay, "after commit, replay should be flagged");
+            tx.rollback().await.ok();
+        }
 
         // Cleanup
         sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1")

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use billforge_core::{domain::*, traits::InvoiceRepository, types::*, Error, Result};
 use chrono::{NaiveDate, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -14,6 +14,109 @@ pub struct InvoiceRepositoryImpl {
 impl InvoiceRepositoryImpl {
     pub fn new(pool: Arc<PgPool>) -> Self {
         Self { pool }
+    }
+
+    /// Transaction-scoped variant of `create`.
+    ///
+    /// Inserts the invoice on the caller's `Transaction` so the write commits
+    /// or rolls back atomically with whatever else the caller does on the same
+    /// tx (e.g. the EDI nonce row and the `edi_documents` row in the inbound
+    /// webhook handlers).
+    pub async fn create_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant_id: &TenantId,
+        input: CreateInvoiceInput,
+        created_by: Option<&UserId>,
+    ) -> Result<Invoice> {
+        let id = InvoiceId::new();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"INSERT INTO invoices (
+                id, tenant_id, vendor_id, vendor_name, invoice_number, invoice_date, due_date,
+                po_number, subtotal_cents, tax_amount_cents, total_amount_cents, currency,
+                line_items, document_id, ocr_confidence, notes, tags, custom_fields,
+                capture_status, processing_status, department, gl_code, cost_center, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)"#
+        )
+        .bind(id.0)
+        .bind(*tenant_id.as_uuid())
+        .bind(input.vendor_id)
+        .bind(&input.vendor_name)
+        .bind(&input.invoice_number)
+        .bind(input.invoice_date)
+        .bind(input.due_date)
+        .bind(&input.po_number)
+        .bind(input.subtotal.as_ref().map(|m| m.amount))
+        .bind(input.tax_amount.as_ref().map(|m| m.amount))
+        .bind(input.total_amount.amount)
+        .bind(&input.currency)
+        .bind(sqlx::types::Json(&input.line_items))
+        .bind(input.document_id)
+        .bind(input.ocr_confidence)
+        .bind(&input.notes)
+        .bind(sqlx::types::Json(&input.tags))
+        .bind(sqlx::types::Json(&serde_json::Value::Object(serde_json::Map::new())))
+        .bind(CaptureStatus::Pending.as_str())
+        .bind(ProcessingStatus::Draft.as_str())
+        .bind(&input.department)
+        .bind(&input.gl_code)
+        .bind(&input.cost_center)
+        .bind(created_by.map(|u| u.0))
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to create invoice: {}", e)))?;
+
+        let invoice = Invoice {
+            id,
+            tenant_id: tenant_id.clone(),
+            vendor_id: input.vendor_id,
+            vendor_name: input.vendor_name,
+            invoice_number: input.invoice_number,
+            invoice_date: input.invoice_date,
+            due_date: input.due_date,
+            po_number: input.po_number,
+            subtotal: input.subtotal,
+            tax_amount: input.tax_amount,
+            total_amount: input.total_amount,
+            currency: input.currency,
+            line_items: input
+                .line_items
+                .into_iter()
+                .enumerate()
+                .map(|(idx, item)| billforge_core::domain::InvoiceLineItem {
+                    id: Uuid::new_v4(),
+                    line_number: (idx + 1) as u32,
+                    description: item.description,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    amount: item.amount,
+                    gl_code: item.gl_code,
+                    department: item.department,
+                    project: item.project,
+                })
+                .collect(),
+            capture_status: CaptureStatus::Pending,
+            processing_status: ProcessingStatus::Draft,
+            current_queue_id: None,
+            assigned_to: None,
+            document_id: input.document_id,
+            supporting_documents: vec![],
+            ocr_confidence: input.ocr_confidence,
+            categorization_confidence: None,
+            department: input.department,
+            gl_code: input.gl_code,
+            cost_center: input.cost_center,
+            notes: input.notes,
+            tags: input.tags,
+            custom_fields: serde_json::Value::Object(serde_json::Map::new()),
+            created_by: created_by.cloned(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        Ok(invoice)
     }
 }
 

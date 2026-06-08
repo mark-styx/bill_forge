@@ -3,7 +3,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -81,23 +81,40 @@ pub async fn check_replay_nonce(
     }
 }
 
-/// Delete a previously recorded replay nonce.
+/// Transaction-scoped variant of `check_replay_nonce`.
 ///
-/// This is the compensating rollback action used when EDI webhook processing
-/// fails after `check_replay_nonce` has already committed the nonce. Removing
-/// the nonce allows the provider to retry the same payload without being
-/// rejected as a replay.
-pub async fn delete_replay_nonce(
-    pool: &PgPool,
+/// Inserts the nonce inside the caller's `Transaction` so the nonce row commits
+/// atomically with whatever the handler does after the check. If the handler
+/// fails and the tx is rolled back, the nonce insert is undone too — no
+/// compensating delete is required, and a provider retry of the same payload
+/// will be accepted on the next attempt.
+///
+/// Returns `Ok(true)` for first-seen nonces and `Ok(false)` on unique
+/// violation (replay).
+pub async fn check_replay_nonce_tx(
+    tx: &mut Transaction<'_, Postgres>,
     tenant_id: Uuid,
     nonce: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1 AND nonce = $2")
-        .bind(tenant_id)
-        .bind(nonce)
-        .execute(pool)
-        .await
-        .map(|_| ())
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO edi_webhook_nonces (tenant_id, nonce, received_at) VALUES ($1, $2, NOW())",
+    )
+    .bind(tenant_id)
+    .bind(nonce)
+    .execute(&mut **tx)
+    .await;
+
+    match result {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            if let Some(db_error) = e.as_database_error() {
+                if db_error.code().as_deref() == Some("23505") {
+                    return Ok(false);
+                }
+            }
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
