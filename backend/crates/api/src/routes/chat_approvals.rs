@@ -7,8 +7,11 @@
 //!
 //! **Security notes:**
 //! - The Teams `/teams/actions` endpoint is gated behind `TEAMS_ACTIONS_ENABLED=true`
-//!   and **disabled by default**. Full JWT validation against the Microsoft OpenID
-//!   cert endpoint must be implemented before enabling in production.
+//!   and **disabled by default**. When enabled, every request is validated by
+//!   `crate::teams_jwt::TeamsJwtValidator` (RS256 signature against the configured
+//!   JWKS, issuer, audience, expiry) and the actor is bound to the JWT `oid` claim
+//!   via `teams_webhooks.aad_object_id`. `TEAMS_SKIP_JWT_VALIDATION=true` is a
+//!   dev-only bypass that falls back to the legacy LIMIT 1 lookup.
 //! - The handler resolves the acting user from `teams_webhooks` rather than using a
 //!   sentinel nil UUID, preserving the audit-trail contract and FK integrity.
 //!
@@ -43,15 +46,16 @@ pub fn routes() -> Router<AppState> {
         .route("/slack/events", post(slack_events))
         .route("/slack/commands", post(slack_commands));
 
-    // Teams actions endpoint is gated behind TEAMS_ACTIONS_ENABLED=true.
-    // The route is disabled by default because JWT validation against the
-    // Microsoft OpenID cert endpoint (issuer, audience, signature, expiry)
-    // has not been implemented yet. Enable only after that lands.
+    // Teams actions endpoint is gated behind TEAMS_ACTIONS_ENABLED=true. The
+    // handler validates the inbound Bearer JWT against the configured
+    // Microsoft JWKS (TEAMS_OIDC_JWKS_URL / EXPECTED_ISSUER / EXPECTED_AUDIENCE,
+    // see crate::teams_jwt) and binds the actor to the JWT `oid` claim via
+    // teams_webhooks.aad_object_id. TEAMS_SKIP_JWT_VALIDATION=true falls back
+    // to a LIMIT 1 lookup for dev only.
     if std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true") {
         tracing::warn!(
             "Teams actions endpoint is ENABLED. Ensure TEAMS_SKIP_JWT_VALIDATION is NOT \
-             set to 'true' in production. Full Microsoft JWT validation must be \
-             implemented before this flag is used outside dev/test."
+             set to 'true' in production."
         );
         router = router.route("/teams/actions", post(teams_actions));
     } else {
@@ -951,36 +955,35 @@ async fn teams_actions(
     headers: HeaderMap,
     Json(body): Json<TeamsActionBody>,
 ) -> Result<StatusCode, ApiError> {
-    // Bearer JWT validation for Teams Actionable Message callbacks.
-    // In production, validate the JWT against the Microsoft cert endpoint.
-    // Set TEAMS_SKIP_JWT_VALIDATION=true only in development/test environments.
+    // TEAMS_SKIP_JWT_VALIDATION=true bypasses signature/issuer/audience checks
+    // AND falls back to the legacy LIMIT 1 actor lookup. It exists solely so
+    // local development without an AAD tenant can still exercise the handler.
+    // Production deployments MUST leave it unset.
     let skip_jwt = std::env::var("TEAMS_SKIP_JWT_VALIDATION").as_deref() == Ok("true");
-    if !skip_jwt {
-        let auth_header = headers.get("Authorization").ok_or_else(|| {
-            ApiError(billforge_core::Error::Validation(
-                "Missing Authorization header".to_string(),
-            ))
-        })?;
-        let auth_str = auth_header.to_str().map_err(|_| {
-            ApiError(billforge_core::Error::Validation(
-                "Invalid Authorization header".to_string(),
-            ))
-        })?;
-        if !auth_str.starts_with("Bearer ") {
-            return Err(ApiError(billforge_core::Error::Validation(
-                "Authorization header must be a Bearer token".to_string(),
-            )));
-        }
-        let token = &auth_str[7..];
-        // Production: decode and validate the JWT against the Microsoft
-        // OpenID discovery endpoint (issuer, audience, expiry).
-        // Reject expired or malformed tokens here.
-        if token.is_empty() {
-            return Err(ApiError(billforge_core::Error::Validation(
-                "Empty Bearer token".to_string(),
-            )));
-        }
-    }
+
+    let validated_oid: Option<Uuid> = if skip_jwt {
+        None
+    } else {
+        let bearer = headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .ok_or_else(|| {
+                ApiError(billforge_core::Error::InvalidToken(
+                    "Missing or malformed Authorization header".to_string(),
+                ))
+            })?;
+        let claims = state
+            .teams_jwt_validator
+            .validate(bearer)
+            .await
+            .map_err(|e| {
+                ApiError(billforge_core::Error::InvalidToken(format!(
+                    "Token rejected: {e}"
+                )))
+            })?;
+        Some(claims.oid)
+    };
 
     let action = body.action.as_deref().unwrap_or("");
     let invoice_id = body.invoice_id.ok_or_else(|| {
@@ -994,26 +997,46 @@ async fn teams_actions(
         ))
     })?;
 
-    // Resolve the actor from the teams_webhooks table for this tenant.
-    // In the future the Teams Adaptive Card payload should carry a signed
-    // `acting_user_id` so we can verify the exact caller. For now we pick
-    // the first active webhook user for the tenant as the approver.
+    // Resolve the actor. With a validated JWT we look up the (tenant_id, oid)
+    // tuple — this implicitly cross-checks that the AAD principal in the token
+    // is actually registered for the tenant in the request body, blocking
+    // cross-tenant attempts. The dev-only TEAMS_SKIP_JWT_VALIDATION path falls
+    // back to the legacy LIMIT 1 query so local testing without a real token
+    // still works.
     let pool = state.db.metadata();
-    let actor_row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT user_id FROM teams_webhooks WHERE tenant_id = $1 AND is_active = true LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&*pool)
-    .await
-    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+    let actor_row: Option<(Uuid,)> = match validated_oid {
+        Some(oid) => sqlx::query_as(
+            "SELECT user_id FROM teams_webhooks \
+             WHERE tenant_id = $1 AND aad_object_id = $2 AND is_active = true LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(oid.to_string())
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?,
+        None => sqlx::query_as(
+            "SELECT user_id FROM teams_webhooks \
+             WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?,
+    };
 
     let actor_id = actor_row
         .ok_or_else(|| {
-            ApiError(billforge_core::Error::Validation(
-                "No active Teams webhook configuration found for this tenant. \
-                 Cannot attribute action to a real user."
-                    .to_string(),
-            ))
+            if validated_oid.is_some() {
+                ApiError(billforge_core::Error::Forbidden(
+                    "AAD principal is not registered for this tenant".to_string(),
+                ))
+            } else {
+                ApiError(billforge_core::Error::Validation(
+                    "No active Teams webhook configuration found for this tenant. \
+                     Cannot attribute action to a real user."
+                        .to_string(),
+                ))
+            }
         })?
         .0;
 

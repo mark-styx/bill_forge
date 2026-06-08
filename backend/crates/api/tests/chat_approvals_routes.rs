@@ -221,6 +221,113 @@ fn test_teams_disabled_handler_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #362: Teams Bearer must be a real Microsoft JWT validated against JWKS
+// ---------------------------------------------------------------------------
+
+/// The handler must call the shared TeamsJwtValidator from AppState rather
+/// than only checking that the Bearer token is non-empty.
+#[test]
+fn test_teams_actions_uses_teams_jwt_validator() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("state\n            .teams_jwt_validator")
+            || source.contains("state.teams_jwt_validator"),
+        "teams_actions must validate the Bearer via state.teams_jwt_validator"
+    );
+    assert!(
+        source.contains(".validate(bearer)"),
+        "teams_actions must call validator.validate() on the Bearer token"
+    );
+}
+
+/// The handler must no longer accept any non-empty Bearer. The stub comment
+/// from before #362 ("Production: decode and validate the JWT...") and the
+/// `if token.is_empty()` guard must be gone.
+#[test]
+fn test_teams_actions_no_longer_accepts_any_nonempty_bearer() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    let teams_start = source.find("async fn teams_actions(").unwrap();
+    let teams_end = source[teams_start..]
+        .find("\n// -")
+        .unwrap_or(source.len() - teams_start);
+    let teams_section = &source[teams_start..teams_start + teams_end];
+    assert!(
+        !teams_section.contains("Empty Bearer token"),
+        "teams_actions must not gate solely on Bearer-non-empty; that was the #362 bug"
+    );
+    assert!(
+        !teams_section.contains("Production: decode and validate the JWT"),
+        "teams_actions must no longer defer JWT decode/validate to a comment"
+    );
+}
+
+/// When the validator accepts the token, the handler must resolve the actor
+/// by matching teams_webhooks.aad_object_id against the validated `oid` claim,
+/// not by LIMIT 1 over the table.
+#[test]
+fn test_teams_actor_lookup_uses_aad_object_id() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("aad_object_id = $2"),
+        "teams_actions must look up the actor by (tenant_id, aad_object_id) when a validated JWT \
+         is present"
+    );
+    assert!(
+        source.contains("AAD principal is not registered for this tenant"),
+        "teams_actions must return a Forbidden error (not Validation) when the validated oid is \
+         not registered for the supplied tenant"
+    );
+}
+
+/// The dev-only TEAMS_SKIP_JWT_VALIDATION path must still resolve an actor
+/// via the legacy LIMIT 1 lookup so local testing without a real token works.
+#[test]
+fn test_teams_skip_jwt_keeps_limit_1_fallback() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    assert!(
+        source.contains("TEAMS_SKIP_JWT_VALIDATION"),
+        "the dev-only TEAMS_SKIP_JWT_VALIDATION bypass must still exist"
+    );
+    assert!(
+        source.contains("WHERE tenant_id = $1 AND is_active = true LIMIT 1"),
+        "TEAMS_SKIP_JWT_VALIDATION must fall through to the original LIMIT 1 actor query"
+    );
+}
+
+/// The new TeamsJwtValidator must be wired into AppState so the handler can
+/// reach it via the shared state.
+#[test]
+fn test_state_carries_teams_jwt_validator() {
+    let source = include_str!("../src/state.rs");
+    assert!(
+        source.contains("pub teams_jwt_validator: Arc<TeamsJwtValidator>"),
+        "AppState must expose teams_jwt_validator so the handler can validate inbound tokens"
+    );
+    assert!(
+        source.contains("TEAMS_OIDC_JWKS_URL")
+            && source.contains("TEAMS_OIDC_EXPECTED_ISSUER")
+            && source.contains("TEAMS_OIDC_EXPECTED_AUDIENCE"),
+        "Validator construction must read the three required OIDC env vars when actions are \
+         enabled"
+    );
+}
+
+/// The migration adding teams_webhooks.aad_object_id must be present so the
+/// (tenant_id, aad_object_id) actor lookup has a column to query.
+#[test]
+fn test_migration_adds_aad_object_id_column() {
+    let source = include_str!("../../../migrations/131_teams_webhooks_aad_oid.sql");
+    assert!(
+        source.contains("ADD COLUMN IF NOT EXISTS aad_object_id TEXT"),
+        "migration must add the aad_object_id column to teams_webhooks"
+    );
+    assert!(
+        source.contains("teams_webhooks_tenant_aad_active_idx"),
+        "migration must add the partial unique index for (tenant_id, aad_object_id) where active"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Issue #356: AI Q&A question detection and routing
 // ---------------------------------------------------------------------------
 

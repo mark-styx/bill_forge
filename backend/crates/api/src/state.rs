@@ -1,5 +1,6 @@
 //! Application state shared across handlers
 
+use crate::teams_jwt::{MicrosoftJwksProvider, TeamsJwtValidator};
 use crate::Config;
 use anyhow::Result;
 use axum::extract::FromRef;
@@ -15,6 +16,7 @@ use billforge_email::{EmailService, EmailServiceImpl, MockEmailService};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -42,6 +44,10 @@ pub struct AppState {
     /// Broadcast channel for per-tenant invoice status events (SSE).
     /// Single-process only; for multi-process fan-out, add Redis pub/sub.
     pub invoice_events: broadcast::Sender<InvoiceEvent>,
+    /// Validator for Microsoft AAD JWTs on the Teams Actionable Messages
+    /// callback. When `TEAMS_ACTIONS_ENABLED!=true` this is a disabled stub
+    /// (the route is not registered in that case).
+    pub teams_jwt_validator: Arc<TeamsJwtValidator>,
 }
 
 impl FromRef<AppState> for Arc<AuthService> {
@@ -134,6 +140,12 @@ impl AppState {
         // Invoice event broadcast channel for SSE (capacity 256)
         let (invoice_events, _) = broadcast::channel(256);
 
+        // Build the Teams JWT validator if the Actionable Messages endpoint
+        // is enabled. Required env vars are checked here so startup fails
+        // fast rather than at the first webhook call.
+        let teams_jwt_validator =
+            Arc::new(Self::build_teams_jwt_validator()?);
+
         Ok(Self {
             db,
             auth,
@@ -143,7 +155,53 @@ impl AppState {
             config: Arc::new(config.clone()),
             redis,
             invoice_events,
+            teams_jwt_validator,
         })
+    }
+
+    fn build_teams_jwt_validator() -> Result<TeamsJwtValidator> {
+        let actions_enabled =
+            std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true");
+        if !actions_enabled {
+            return Ok(TeamsJwtValidator::disabled());
+        }
+
+        let skip_jwt =
+            std::env::var("TEAMS_SKIP_JWT_VALIDATION").as_deref() == Ok("true");
+        if skip_jwt {
+            tracing::warn!(
+                "TEAMS_SKIP_JWT_VALIDATION=true: building a disabled Teams JWT \
+                 validator. The handler must NOT call validate() in this mode. \
+                 Never use this configuration outside dev/test."
+            );
+            return Ok(TeamsJwtValidator::disabled());
+        }
+
+        let jwks_url = std::env::var("TEAMS_OIDC_JWKS_URL").map_err(|_| {
+            anyhow::anyhow!(
+                "TEAMS_OIDC_JWKS_URL is required when TEAMS_ACTIONS_ENABLED=true"
+            )
+        })?;
+        let issuer = std::env::var("TEAMS_OIDC_EXPECTED_ISSUER").map_err(|_| {
+            anyhow::anyhow!(
+                "TEAMS_OIDC_EXPECTED_ISSUER is required when TEAMS_ACTIONS_ENABLED=true"
+            )
+        })?;
+        let audience = std::env::var("TEAMS_OIDC_EXPECTED_AUDIENCE").map_err(|_| {
+            anyhow::anyhow!(
+                "TEAMS_OIDC_EXPECTED_AUDIENCE is required when TEAMS_ACTIONS_ENABLED=true"
+            )
+        })?;
+        let ttl_secs = std::env::var("TEAMS_JWKS_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(3600);
+
+        let provider = Arc::new(MicrosoftJwksProvider::new(
+            jwks_url,
+            Duration::from_secs(ttl_secs),
+        ));
+        Ok(TeamsJwtValidator::new(provider, issuer, audience))
     }
 
     /// Get the audit service
