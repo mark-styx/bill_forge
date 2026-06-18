@@ -25,6 +25,12 @@ export BILLFORGE_APP_PASSWORD="${BILLFORGE_APP_PASSWORD:-billforge_app_test_pw}"
 
 cargo run -p billforge-db --bin migrate -- --database-url "$DATABASE_URL" up
 
+# Some billing tests provision their own throwaway databases via CREATE DATABASE.
+# Migration 120 leaves billforge_app NOSUPERUSER NOBYPASSRLS (correct for prod)
+# but without CREATEDB it cannot provision those scratch DBs. Grant CREATEDB
+# here as a CI-only privilege; it does not affect RLS enforcement.
+psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE billforge_app CREATEDB"
+
 # After migrations, route tests through the restricted role so PgManager does
 # not refuse to start. Unconditionally overwrite TEST_DATABASE_URL: workflows
 # pre-set it to the superuser handle in their env block, which would otherwise
