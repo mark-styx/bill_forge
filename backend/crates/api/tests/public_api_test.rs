@@ -186,16 +186,20 @@ async fn get_pool() -> Option<sqlx::PgPool> {
 
 /// Seed a tenant in the metadata database (idempotent).
 async fn seed_tenant(pool: &sqlx::PgPool, tenant_id: Uuid, name: &str) {
+    // `slug` is NOT NULL, derive a unique value from the tenant id so concurrent
+    // test cases never collide on tenants_slug_key.
+    let slug = format!("test-{}", tenant_id.simple());
     sqlx::query(
-        r#"INSERT INTO tenants (id, name, is_active, created_at)
-           VALUES ($1, $2, true, NOW())
+        r#"INSERT INTO tenants (id, name, slug, is_active, created_at)
+           VALUES ($1, $2, $3, true, NOW())
            ON CONFLICT (id) DO NOTHING"#,
     )
     .bind(tenant_id)
     .bind(name)
+    .bind(&slug)
     .execute(pool)
     .await
-    .ok();
+    .expect("seed tenant");
 }
 
 #[tokio::test]
