@@ -36,7 +36,7 @@ import { useState } from 'react';
 
 function SandboxBanner() {
   const searchParams = useSearchParams();
-  const isWelcome = searchParams.get('welcome') === 'sandbox';
+  const isWelcome = searchParams?.get('welcome') === 'sandbox';
   const [promoting, setPromoting] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const { tenant } = useAuthStore();
