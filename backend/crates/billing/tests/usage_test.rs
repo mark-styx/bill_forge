@@ -66,7 +66,10 @@ async fn seed_vendor(pool: &PgPool, tenant_id: &TenantId, vendor_id: Uuid) {
 }
 
 /// Insert a minimal invoice row. `created_at` is explicitly set so tests can
-/// control the period window.
+/// control the period window. `processing_status` is forced to "approved" and
+/// `updated_at` is pinned to the same timestamp as `created_at` so the
+/// billable-status + updated_at-window filter in `get_tenant_usage` actually
+/// matches the seeded rows.
 async fn seed_invoice_at(
     pool: &PgPool,
     tenant_id: &TenantId,
@@ -77,8 +80,9 @@ async fn seed_invoice_at(
 ) {
     sqlx::query(
         "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number,
-                                total_amount_cents, document_id, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, 1000, $6, $7, $8)",
+                                total_amount_cents, document_id, created_by,
+                                processing_status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 1000, $6, $7, 'approved', $8, $8)",
     )
     .bind(invoice_id)
     .bind(*tenant_id.as_uuid())
