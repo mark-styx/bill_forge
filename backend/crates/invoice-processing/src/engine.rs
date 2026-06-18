@@ -117,8 +117,7 @@ impl WorkflowEngine {
         // Check recurring-pattern auto-approval before ML-confidence lane.
         if let (Some(ref pool), Some(vendor_id)) = (&self.pool, invoice.vendor_id) {
             if let Ok(Some(pattern)) =
-                crate::recurring_patterns::find_pattern(&**pool, *tenant_id.as_uuid(), vendor_id)
-                    .await
+                crate::recurring_patterns::find_pattern(pool, *tenant_id.as_uuid(), vendor_id).await
             {
                 let line_items_json =
                     serde_json::to_value(&invoice.line_items).unwrap_or(serde_json::json!([]));
@@ -585,7 +584,7 @@ impl WorkflowEngine {
             ) {
                 if let Some(vendor_id) = invoice.vendor_id {
                     let _ = crate::recurring_patterns::detect_or_update_pattern(
-                        &**pool,
+                        pool,
                         *tenant_id.as_uuid(),
                         vendor_id,
                     )

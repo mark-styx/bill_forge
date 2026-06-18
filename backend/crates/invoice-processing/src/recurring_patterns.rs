@@ -416,6 +416,7 @@ fn median_i64(sorted: &[i64]) -> i64 {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::inconsistent_digit_grouping, clippy::explicit_auto_deref)]
 mod tests {
     use super::*;
 

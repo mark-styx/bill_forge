@@ -1,3 +1,4 @@
+#![allow(clippy::inconsistent_digit_grouping)]
 //! Integration tests for the AP Command Center endpoint.
 //!
 //! Validates response shape, bucket assignment, blocking-approver metadata,

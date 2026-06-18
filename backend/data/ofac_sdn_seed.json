@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "primary_name": "AL-QAEDA",
+    "aliases": ["AL QA'IDA", "THE BASE", "AL-QAIDA"],
+    "sdn_id": "SDN-AQ-0001",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "GAZPROMBANK JOINT STOCK COMPANY",
+    "aliases": ["GAZPROMBANK", "GPB"],
+    "sdn_id": "SDN-RU-0040",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "APT29",
+    "aliases": ["COZY BEAR", "THE DUKES", "NOBELIUM"],
+    "sdn_id": "SDN-CY-0029",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "ISLAMIC STATE OF IRAQ AND THE LEVANT",
+    "aliases": ["ISIS", "ISIL", "DAESH", "IS"],
+    "sdn_id": "SDN-IS-0001",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "SBERBANK OF RUSSIA",
+    "aliases": ["SBERBANK"],
+    "sdn_id": "SDN-RU-0001",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "DARKSIDE",
+    "aliases": ["DarkSide", "DARK SIDE", "CARBON SPIDER"],
+    "sdn_id": "SDN-CY-0050",
+    "list": "SDN"
+  },
+  {
+    "primary_name": "LAZARUS GROUP",
+    "aliases": ["HIDDEN COBRA", "ZINC", "APT38"],
+    "sdn_id": "SDN-KP-0010",
+    "list": "SDN"
+  }
+]

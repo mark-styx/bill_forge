@@ -1,3 +1,4 @@
+#![allow(clippy::inconsistent_digit_grouping)]
 //! Integration tests for recurring-pattern detection and auto-approval policy endpoints.
 //!
 //! Tests:

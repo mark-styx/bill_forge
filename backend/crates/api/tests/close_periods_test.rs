@@ -239,7 +239,7 @@ mod tests {
         let val = serde_json::to_value(&resp).unwrap();
         assert_eq!(val["score"], 50);
         let exc = val["exceptions"].as_array().unwrap();
-        assert!(exc.len() >= 1);
+        assert!(!exc.is_empty());
         assert_eq!(exc[0]["id"], "unaccrued_invoices");
         assert_eq!(exc[0]["count"], 2);
     }

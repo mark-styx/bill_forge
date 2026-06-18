@@ -1,3 +1,4 @@
+#![allow(clippy::await_holding_lock)]
 //! Integration tests for the inbound email webhook endpoint.
 //!
 //! Tests:

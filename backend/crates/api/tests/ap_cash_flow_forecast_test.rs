@@ -1,3 +1,4 @@
+#![allow(clippy::inconsistent_digit_grouping)]
 //! Integration tests for the AP cash flow forecast endpoint.
 //!
 //! Seeds invoices with various approval statuses and EPD records, then validates
@@ -537,12 +538,12 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
     //   - scenario: same as baseline (approved is not delayed, EPD already triggers)
 
     // Verify the scenario logic by computing expected values
-    let expected_scenario_amount_a = (1_000_00 as f64) * (1.0 - 2.0 / 100.0); // 98000
+    let expected_scenario_amount_a = 1_000_00_f64 * (1.0 - 2.0 / 100.0); // 98000
     let expected_scenario_date_a = today + chrono::Duration::days(5);
     let expected_baseline_amount_a = 1_000_00_i64; // no EPD in baseline
     let expected_baseline_date_a = today + chrono::Duration::days(3);
 
-    let expected_epd_amount_b = (2_000_00 as f64) * (1.0 - 3.0 / 100.0); // 194000
+    let expected_epd_amount_b = 2_000_00_f64 * (1.0 - 3.0 / 100.0); // 194000
     let _expected_epd_date_b = today + chrono::Duration::days(2);
 
     assert_eq!(expected_scenario_amount_a as i64, 98_000);

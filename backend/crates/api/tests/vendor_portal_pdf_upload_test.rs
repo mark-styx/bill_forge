@@ -60,7 +60,8 @@ fn build_pdf_multipart_body(boundary: &str, file_mime: &str, invoice_number: &st
     // File field
     body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
     body.extend_from_slice(
-        format!("Content-Disposition: form-data; name=\"file\"; filename=\"invoice.pdf\"\r\n")
+        "Content-Disposition: form-data; name=\"file\"; filename=\"invoice.pdf\"\r\n"
+            .to_string()
             .as_bytes(),
     );
     body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file_mime).as_bytes());
