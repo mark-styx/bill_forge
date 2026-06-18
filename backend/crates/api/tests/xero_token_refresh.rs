@@ -167,7 +167,10 @@ mod integration {
         .unwrap();
 
         let needs_refresh = token_expires_at <= Utc::now() + Duration::minutes(5);
-        assert!(needs_refresh, "Expired token should trigger refresh attempt");
+        assert!(
+            needs_refresh,
+            "Expired token should trigger refresh attempt"
+        );
 
         // When the Xero OAuth refresh_token call fails (e.g. the refresh token
         // has been revoked), the helper maps the error to:
@@ -177,9 +180,8 @@ mod integration {
         // helper produces. In production the Xero API returns a 400 for an
         // invalid refresh token, and XeroOAuth::refresh_token bails with
         // "Xero token refresh failed: ...". The helper wraps this as:
-        let simulated_error = billforge_core::Error::Validation(
-            "Xero token expired. Please reconnect.".to_string(),
-        );
+        let simulated_error =
+            billforge_core::Error::Validation("Xero token expired. Please reconnect.".to_string());
 
         // Verify the error message matches what the frontend expects.
         match simulated_error {
@@ -190,13 +192,12 @@ mod integration {
         }
 
         // Verify the access token was NOT updated (refresh failed).
-        let access_token: String = sqlx::query_scalar(
-            "SELECT access_token FROM xero_connections WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let access_token: String =
+            sqlx::query_scalar("SELECT access_token FROM xero_connections WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(
             access_token, "old-access-token",
@@ -233,13 +234,12 @@ mod integration {
         );
 
         // Token should still be the original.
-        let access_token: String = sqlx::query_scalar(
-            "SELECT access_token FROM xero_connections WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let access_token: String =
+            sqlx::query_scalar("SELECT access_token FROM xero_connections WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(access_token, "old-access-token");
     }

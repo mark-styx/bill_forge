@@ -104,7 +104,8 @@ async fn get_this_week_command_center(
 
     // Determine week boundaries (Monday..Sunday).
     let today = Utc::now().date_naive();
-    let this_week_start = today - chrono::Duration::days((today.weekday().num_days_from_monday()) as i64);
+    let this_week_start =
+        today - chrono::Duration::days((today.weekday().num_days_from_monday()) as i64);
     let this_week_end = this_week_start + chrono::Duration::days(6);
     let next_week_start = this_week_start + chrono::Duration::days(7);
     let next_week_end = this_week_start + chrono::Duration::days(13);
@@ -319,7 +320,8 @@ async fn nudge_approver(
         return Err(Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: invoice_id.to_string(),
-        }.into());
+        }
+        .into());
     }
 
     let comment = body
@@ -360,14 +362,13 @@ async fn nudge_approver(
     .map_err(|e| Error::Internal(format!("Failed to query pending approver: {}", e)))?;
 
     if let Some(approver_id) = approver_user_id {
-        let approver_email: Option<String> = sqlx::query_scalar(
-            "SELECT email FROM users WHERE id = $1 AND tenant_id = $2",
-        )
-        .bind(approver_id)
-        .bind(tenant.tenant_id.as_uuid())
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to query approver email: {}", e)))?;
+        let approver_email: Option<String> =
+            sqlx::query_scalar("SELECT email FROM users WHERE id = $1 AND tenant_id = $2")
+                .bind(approver_id)
+                .bind(tenant.tenant_id.as_uuid())
+                .fetch_optional(&*pool)
+                .await
+                .map_err(|e| Error::Internal(format!("Failed to query approver email: {}", e)))?;
 
         if let Some(recipient_email) = approver_email {
             let short_id = &invoice_id.to_string()[..8];
@@ -471,24 +472,25 @@ async fn reassign_approver(
         return Err(Error::NotFound {
             resource_type: "Invoice".to_string(),
             id: invoice_id.to_string(),
-        }.into());
+        }
+        .into());
     }
 
     // Verify the target approver exists in this tenant
-    let approver_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)",
-    )
-    .bind(body.new_approver_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_one(&*pool)
-    .await
-    .map_err(|e| Error::Internal(format!("Failed to verify approver: {}", e)))?;
+    let approver_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)")
+            .bind(body.new_approver_id)
+            .bind(tenant.tenant_id.as_uuid())
+            .fetch_one(&*pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to verify approver: {}", e)))?;
 
     if !approver_exists {
         return Err(Error::NotFound {
             resource_type: "User".to_string(),
             id: body.new_approver_id.to_string(),
-        }.into());
+        }
+        .into());
     }
 
     // Update the pending approval request(s) for this invoice
@@ -511,7 +513,8 @@ async fn reassign_approver(
         return Err(Error::NotFound {
             resource_type: "PendingApprovalRequest".to_string(),
             id: invoice_id.to_string(),
-        }.into());
+        }
+        .into());
     }
 
     // Write audit log

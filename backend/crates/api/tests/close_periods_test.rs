@@ -228,7 +228,11 @@ mod tests {
             ],
         };
         assert!(resp.score.unwrap() < 100);
-        let unaccrued = resp.exceptions.iter().find(|e| e.id == "unaccrued_invoices").unwrap();
+        let unaccrued = resp
+            .exceptions
+            .iter()
+            .find(|e| e.id == "unaccrued_invoices")
+            .unwrap();
         assert_eq!(unaccrued.count, 2);
         assert_eq!(unaccrued.severity, "high");
 

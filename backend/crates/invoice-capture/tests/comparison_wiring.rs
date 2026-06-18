@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use billforge_core::domain::{
-    CaptureStatus, CreateInvoiceInput, ExtractedField, Invoice, InvoiceFilters,
-    InvoiceId, InvoiceLineItem, OcrExtractionResult, ProcessingStatus,
+    CaptureStatus, CreateInvoiceInput, ExtractedField, Invoice, InvoiceFilters, InvoiceId,
+    InvoiceLineItem, OcrExtractionResult, ProcessingStatus,
 };
 use billforge_core::traits::{InvoiceRepository, OcrService, StorageService};
 use billforge_core::types::{Money, PaginatedResponse, Pagination, TenantId, UserId};
@@ -305,20 +305,23 @@ async fn upload_invoice_uses_comparison_best_provider() {
 
     // Build comparison with both providers; the high-confidence one should win.
     let comparison = Arc::new(OcrComparison::new(vec![
-        (OcrProvider::Tesseract, Box::new(StubOcr::new("tesseract", low_confidence_result()))),
-        (OcrProvider::AwsTextract, Box::new(StubOcr::new("aws_textract", high_confidence_result()))),
+        (
+            OcrProvider::Tesseract,
+            Box::new(StubOcr::new("tesseract", low_confidence_result())),
+        ),
+        (
+            OcrProvider::AwsTextract,
+            Box::new(StubOcr::new("aws_textract", high_confidence_result())),
+        ),
     ]));
 
     let storage = Arc::new(FakeStorage::new());
     let repo = Arc::new(FakeInvoiceRepo::new());
 
     // Service default provider is the low stub, but comparison should override.
-    let service = InvoiceCaptureService::with_provider(
-        Box::new(low_stub),
-        repo.clone(),
-        storage.clone(),
-    )
-    .with_comparison(comparison);
+    let service =
+        InvoiceCaptureService::with_provider(Box::new(low_stub), repo.clone(), storage.clone())
+            .with_comparison(comparison);
 
     let tenant_id = TenantId::new();
     let user_id = UserId::new();
@@ -350,7 +353,10 @@ async fn reprocess_ocr_uses_comparison_best_provider() {
     let high_stub_for_comparison = StubOcr::new("aws_textract", high_confidence_result());
 
     let comparison = Arc::new(OcrComparison::new(vec![
-        (OcrProvider::Tesseract, Box::new(StubOcr::new("tesseract", low_confidence_result()))),
+        (
+            OcrProvider::Tesseract,
+            Box::new(StubOcr::new("tesseract", low_confidence_result())),
+        ),
         (OcrProvider::AwsTextract, Box::new(high_stub_for_comparison)),
     ]));
 
@@ -398,12 +404,9 @@ async fn reprocess_ocr_uses_comparison_best_provider() {
     };
     repo.seed(seed_invoice);
 
-    let service = InvoiceCaptureService::with_provider(
-        Box::new(low_stub),
-        repo.clone(),
-        storage.clone(),
-    )
-    .with_comparison(comparison);
+    let service =
+        InvoiceCaptureService::with_provider(Box::new(low_stub), repo.clone(), storage.clone())
+            .with_comparison(comparison);
 
     let result = service
         .reprocess_ocr(&tenant_id, &invoice_id)

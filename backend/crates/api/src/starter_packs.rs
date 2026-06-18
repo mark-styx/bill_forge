@@ -127,22 +127,78 @@ pub fn pack_for(industry: Industry) -> StarterPack {
 fn construction_pack() -> StarterPack {
     StarterPack {
         gl_accounts: vec![
-            GlAccountSeed { code: "5100", name: "Subcontractor Labor", account_type: "expense" },
-            GlAccountSeed { code: "5200", name: "Materials & Supplies", account_type: "expense" },
-            GlAccountSeed { code: "5300", name: "Equipment Rental", account_type: "expense" },
-            GlAccountSeed { code: "5400", name: "Permits & Fees", account_type: "expense" },
-            GlAccountSeed { code: "6000", name: "Job Site Overhead", account_type: "expense" },
-            GlAccountSeed { code: "6100", name: "Project Management", account_type: "expense" },
-            GlAccountSeed { code: "7000", name: "Insurance", account_type: "expense" },
-            GlAccountSeed { code: "7100", name: "Depreciation - Equipment", account_type: "expense" },
+            GlAccountSeed {
+                code: "5100",
+                name: "Subcontractor Labor",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5200",
+                name: "Materials & Supplies",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5300",
+                name: "Equipment Rental",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5400",
+                name: "Permits & Fees",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6000",
+                name: "Job Site Overhead",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6100",
+                name: "Project Management",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7000",
+                name: "Insurance",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7100",
+                name: "Depreciation - Equipment",
+                account_type: "expense",
+            },
         ],
         vendor_categories: vec![
-            VendorCategorySeed { name: "Subcontractors", default_gl_code: "5100", description: "Trade subcontractors and specialty labor" },
-            VendorCategorySeed { name: "Material Suppliers", default_gl_code: "5200", description: "Building materials and supplies" },
-            VendorCategorySeed { name: "Equipment Rental", default_gl_code: "5300", description: "Heavy equipment and tool rental" },
-            VendorCategorySeed { name: "Permit Services", default_gl_code: "5400", description: "Permit expediting and inspection services" },
-            VendorCategorySeed { name: "Insurance Providers", default_gl_code: "7000", description: "Builder's risk and liability insurance" },
-            VendorCategorySeed { name: "Professional Services", default_gl_code: "6100", description: "Architects, engineers, and consultants" },
+            VendorCategorySeed {
+                name: "Subcontractors",
+                default_gl_code: "5100",
+                description: "Trade subcontractors and specialty labor",
+            },
+            VendorCategorySeed {
+                name: "Material Suppliers",
+                default_gl_code: "5200",
+                description: "Building materials and supplies",
+            },
+            VendorCategorySeed {
+                name: "Equipment Rental",
+                default_gl_code: "5300",
+                description: "Heavy equipment and tool rental",
+            },
+            VendorCategorySeed {
+                name: "Permit Services",
+                default_gl_code: "5400",
+                description: "Permit expediting and inspection services",
+            },
+            VendorCategorySeed {
+                name: "Insurance Providers",
+                default_gl_code: "7000",
+                description: "Builder's risk and liability insurance",
+            },
+            VendorCategorySeed {
+                name: "Professional Services",
+                default_gl_code: "6100",
+                description: "Architects, engineers, and consultants",
+            },
         ],
         approval_rules: vec![
             ApprovalRuleSeed {
@@ -173,9 +229,24 @@ fn construction_pack() -> StarterPack {
             },
         ],
         policy_thresholds: vec![
-            PolicyThresholdSeed { name: "Max Subcontractor Payment", threshold_type: "max_amount", value: 50_000_00, applies_to: "Subcontractors" },
-            PolicyThresholdSeed { name: "Auto-Approve Materials", threshold_type: "auto_approve", value: 5_000_00, applies_to: "Material Suppliers" },
-            PolicyThresholdSeed { name: "Retention Percentage", threshold_type: "percentage", value: 10, applies_to: "Subcontractors" },
+            PolicyThresholdSeed {
+                name: "Max Subcontractor Payment",
+                threshold_type: "max_amount",
+                value: 50_000_00,
+                applies_to: "Subcontractors",
+            },
+            PolicyThresholdSeed {
+                name: "Auto-Approve Materials",
+                threshold_type: "auto_approve",
+                value: 5_000_00,
+                applies_to: "Material Suppliers",
+            },
+            PolicyThresholdSeed {
+                name: "Retention Percentage",
+                threshold_type: "percentage",
+                value: 10,
+                applies_to: "Subcontractors",
+            },
         ],
     }
 }
@@ -183,22 +254,78 @@ fn construction_pack() -> StarterPack {
 fn professional_services_pack() -> StarterPack {
     StarterPack {
         gl_accounts: vec![
-            GlAccountSeed { code: "4100", name: "Consulting Revenue", account_type: "revenue" },
-            GlAccountSeed { code: "5000", name: "Professional Fees", account_type: "expense" },
-            GlAccountSeed { code: "5100", name: "Subcontractor Services", account_type: "expense" },
-            GlAccountSeed { code: "5200", name: "Travel & Entertainment", account_type: "expense" },
-            GlAccountSeed { code: "6000", name: "Office Expenses", account_type: "expense" },
-            GlAccountSeed { code: "6100", name: "Software Subscriptions", account_type: "expense" },
-            GlAccountSeed { code: "7000", name: "Marketing", account_type: "expense" },
-            GlAccountSeed { code: "7100", name: "Insurance", account_type: "expense" },
+            GlAccountSeed {
+                code: "4100",
+                name: "Consulting Revenue",
+                account_type: "revenue",
+            },
+            GlAccountSeed {
+                code: "5000",
+                name: "Professional Fees",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5100",
+                name: "Subcontractor Services",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5200",
+                name: "Travel & Entertainment",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6000",
+                name: "Office Expenses",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6100",
+                name: "Software Subscriptions",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7000",
+                name: "Marketing",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7100",
+                name: "Insurance",
+                account_type: "expense",
+            },
         ],
         vendor_categories: vec![
-            VendorCategorySeed { name: "Contractors & Consultants", default_gl_code: "5100", description: "Independent contractors and freelance consultants" },
-            VendorCategorySeed { name: "Travel Providers", default_gl_code: "5200", description: "Airlines, hotels, and travel agencies" },
-            VendorCategorySeed { name: "Software Vendors", default_gl_code: "6100", description: "SaaS tools and software licenses" },
-            VendorCategorySeed { name: "Office Suppliers", default_gl_code: "6000", description: "Office supplies and equipment" },
-            VendorCategorySeed { name: "Marketing Agencies", default_gl_code: "7000", description: "Advertising, PR, and creative agencies" },
-            VendorCategorySeed { name: "Insurance Providers", default_gl_code: "7100", description: "Professional liability and E&O insurance" },
+            VendorCategorySeed {
+                name: "Contractors & Consultants",
+                default_gl_code: "5100",
+                description: "Independent contractors and freelance consultants",
+            },
+            VendorCategorySeed {
+                name: "Travel Providers",
+                default_gl_code: "5200",
+                description: "Airlines, hotels, and travel agencies",
+            },
+            VendorCategorySeed {
+                name: "Software Vendors",
+                default_gl_code: "6100",
+                description: "SaaS tools and software licenses",
+            },
+            VendorCategorySeed {
+                name: "Office Suppliers",
+                default_gl_code: "6000",
+                description: "Office supplies and equipment",
+            },
+            VendorCategorySeed {
+                name: "Marketing Agencies",
+                default_gl_code: "7000",
+                description: "Advertising, PR, and creative agencies",
+            },
+            VendorCategorySeed {
+                name: "Insurance Providers",
+                default_gl_code: "7100",
+                description: "Professional liability and E&O insurance",
+            },
         ],
         approval_rules: vec![
             ApprovalRuleSeed {
@@ -229,9 +356,24 @@ fn professional_services_pack() -> StarterPack {
             },
         ],
         policy_thresholds: vec![
-            PolicyThresholdSeed { name: "Max Consulting Fee", threshold_type: "max_amount", value: 25_000_00, applies_to: "Contractors & Consultants" },
-            PolicyThresholdSeed { name: "Auto-Approve Expenses", threshold_type: "auto_approve", value: 2_500_00, applies_to: "Office Suppliers" },
-            PolicyThresholdSeed { name: "Billable Threshold", threshold_type: "min_amount", value: 50_00, applies_to: "Travel Providers" },
+            PolicyThresholdSeed {
+                name: "Max Consulting Fee",
+                threshold_type: "max_amount",
+                value: 25_000_00,
+                applies_to: "Contractors & Consultants",
+            },
+            PolicyThresholdSeed {
+                name: "Auto-Approve Expenses",
+                threshold_type: "auto_approve",
+                value: 2_500_00,
+                applies_to: "Office Suppliers",
+            },
+            PolicyThresholdSeed {
+                name: "Billable Threshold",
+                threshold_type: "min_amount",
+                value: 50_00,
+                applies_to: "Travel Providers",
+            },
         ],
     }
 }
@@ -239,22 +381,78 @@ fn professional_services_pack() -> StarterPack {
 fn retail_pack() -> StarterPack {
     StarterPack {
         gl_accounts: vec![
-            GlAccountSeed { code: "4100", name: "Sales Revenue", account_type: "revenue" },
-            GlAccountSeed { code: "5000", name: "Cost of Goods Sold", account_type: "expense" },
-            GlAccountSeed { code: "5100", name: "Inventory Purchases", account_type: "expense" },
-            GlAccountSeed { code: "5200", name: "Freight & Shipping", account_type: "expense" },
-            GlAccountSeed { code: "6000", name: "Store Operations", account_type: "expense" },
-            GlAccountSeed { code: "6100", name: "Marketing & Advertising", account_type: "expense" },
-            GlAccountSeed { code: "7000", name: "Utilities", account_type: "expense" },
-            GlAccountSeed { code: "7100", name: "Maintenance & Repairs", account_type: "expense" },
+            GlAccountSeed {
+                code: "4100",
+                name: "Sales Revenue",
+                account_type: "revenue",
+            },
+            GlAccountSeed {
+                code: "5000",
+                name: "Cost of Goods Sold",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5100",
+                name: "Inventory Purchases",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "5200",
+                name: "Freight & Shipping",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6000",
+                name: "Store Operations",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "6100",
+                name: "Marketing & Advertising",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7000",
+                name: "Utilities",
+                account_type: "expense",
+            },
+            GlAccountSeed {
+                code: "7100",
+                name: "Maintenance & Repairs",
+                account_type: "expense",
+            },
         ],
         vendor_categories: vec![
-            VendorCategorySeed { name: "Suppliers & Distributors", default_gl_code: "5100", description: "Product suppliers and wholesale distributors" },
-            VendorCategorySeed { name: "Freight Carriers", default_gl_code: "5200", description: "Shipping and freight companies" },
-            VendorCategorySeed { name: "Marketing Vendors", default_gl_code: "6100", description: "Advertising, signage, and promotional vendors" },
-            VendorCategorySeed { name: "Maintenance Services", default_gl_code: "7100", description: "Facility maintenance and repair services" },
-            VendorCategorySeed { name: "Utility Providers", default_gl_code: "7000", description: "Electric, gas, water, and telecom" },
-            VendorCategorySeed { name: "Store Fixtures", default_gl_code: "6000", description: "Shelving, displays, and store equipment" },
+            VendorCategorySeed {
+                name: "Suppliers & Distributors",
+                default_gl_code: "5100",
+                description: "Product suppliers and wholesale distributors",
+            },
+            VendorCategorySeed {
+                name: "Freight Carriers",
+                default_gl_code: "5200",
+                description: "Shipping and freight companies",
+            },
+            VendorCategorySeed {
+                name: "Marketing Vendors",
+                default_gl_code: "6100",
+                description: "Advertising, signage, and promotional vendors",
+            },
+            VendorCategorySeed {
+                name: "Maintenance Services",
+                default_gl_code: "7100",
+                description: "Facility maintenance and repair services",
+            },
+            VendorCategorySeed {
+                name: "Utility Providers",
+                default_gl_code: "7000",
+                description: "Electric, gas, water, and telecom",
+            },
+            VendorCategorySeed {
+                name: "Store Fixtures",
+                default_gl_code: "6000",
+                description: "Shelving, displays, and store equipment",
+            },
         ],
         approval_rules: vec![
             ApprovalRuleSeed {
@@ -285,9 +483,24 @@ fn retail_pack() -> StarterPack {
             },
         ],
         policy_thresholds: vec![
-            PolicyThresholdSeed { name: "Max Purchase Order", threshold_type: "max_amount", value: 100_000_00, applies_to: "Suppliers & Distributors" },
-            PolicyThresholdSeed { name: "Auto-Approve Reorder", threshold_type: "auto_approve", value: 10_000_00, applies_to: "Suppliers & Distributors" },
-            PolicyThresholdSeed { name: "Freight Tolerance", threshold_type: "percentage", value: 15, applies_to: "Freight Carriers" },
+            PolicyThresholdSeed {
+                name: "Max Purchase Order",
+                threshold_type: "max_amount",
+                value: 100_000_00,
+                applies_to: "Suppliers & Distributors",
+            },
+            PolicyThresholdSeed {
+                name: "Auto-Approve Reorder",
+                threshold_type: "auto_approve",
+                value: 10_000_00,
+                applies_to: "Suppliers & Distributors",
+            },
+            PolicyThresholdSeed {
+                name: "Freight Tolerance",
+                threshold_type: "percentage",
+                value: 15,
+                applies_to: "Freight Carriers",
+            },
         ],
     }
 }
@@ -318,12 +531,10 @@ pub async fn apply_pack(
     ensure_starter_pack_tables(pool).await?;
 
     // Idempotency: skip if GL accounts already seeded for this tenant
-    let existing: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM gl_accounts WHERE tenant_id = $1",
-    )
-    .bind(&tid)
-    .fetch_one(pool)
-    .await?;
+    let existing: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM gl_accounts WHERE tenant_id = $1")
+        .bind(&tid)
+        .fetch_one(pool)
+        .await?;
 
     if existing.0 > 0 {
         tracing::info!(
@@ -490,8 +701,14 @@ mod tests {
 
     #[test]
     fn industry_from_str_valid() {
-        assert_eq!(Industry::from_str("construction").unwrap(), Industry::Construction);
-        assert_eq!(Industry::from_str("professional_services").unwrap(), Industry::ProfessionalServices);
+        assert_eq!(
+            Industry::from_str("construction").unwrap(),
+            Industry::Construction
+        );
+        assert_eq!(
+            Industry::from_str("professional_services").unwrap(),
+            Industry::ProfessionalServices
+        );
         assert_eq!(Industry::from_str("retail").unwrap(), Industry::Retail);
         assert_eq!(Industry::from_str("generic").unwrap(), Industry::Generic);
     }
@@ -513,14 +730,20 @@ mod tests {
 
     #[test]
     fn industry_display() {
-        assert_eq!(format!("{}", Industry::ProfessionalServices), "professional_services");
+        assert_eq!(
+            format!("{}", Industry::ProfessionalServices),
+            "professional_services"
+        );
         assert_eq!(format!("{}", Industry::Generic), "generic");
     }
 
     #[test]
     fn industry_label() {
         assert_eq!(Industry::Construction.label(), "Construction");
-        assert_eq!(Industry::ProfessionalServices.label(), "Professional Services");
+        assert_eq!(
+            Industry::ProfessionalServices.label(),
+            "Professional Services"
+        );
         assert_eq!(Industry::Retail.label(), "Retail");
         assert_eq!(Industry::Generic.label(), "Generic");
     }
@@ -568,7 +791,11 @@ mod tests {
     #[test]
     fn all_packs_have_consistent_gl_codes() {
         // Every vendor category references a GL code that exists in the pack
-        for industry in [Industry::Construction, Industry::ProfessionalServices, Industry::Retail] {
+        for industry in [
+            Industry::Construction,
+            Industry::ProfessionalServices,
+            Industry::Retail,
+        ] {
             let pack = pack_for(industry);
             let codes: std::collections::HashSet<&str> =
                 pack.gl_accounts.iter().map(|a| a.code).collect();

@@ -51,7 +51,10 @@ async fn handle_approve(
     State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    Ok(Html(render_confirmation_page(&query.t, EmailAction::ApproveInvoice)))
+    Ok(Html(render_confirmation_page(
+        &query.t,
+        EmailAction::ApproveInvoice,
+    )))
 }
 
 /// Handle reject action from email - renders confirmation interstitial (GET)
@@ -62,7 +65,10 @@ async fn handle_reject(
     State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    Ok(Html(render_confirmation_page(&query.t, EmailAction::RejectInvoice)))
+    Ok(Html(render_confirmation_page(
+        &query.t,
+        EmailAction::RejectInvoice,
+    )))
 }
 
 /// Handle hold action from email - renders confirmation interstitial (GET)
@@ -73,7 +79,10 @@ async fn handle_hold(
     State(_state): State<AppState>,
     Query(query): Query<ActionQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    Ok(Html(render_confirmation_page(&query.t, EmailAction::HoldInvoice)))
+    Ok(Html(render_confirmation_page(
+        &query.t,
+        EmailAction::HoldInvoice,
+    )))
 }
 
 /// POST confirm: approve invoice (performs the actual mutation)
@@ -345,12 +354,9 @@ async fn perform_approval(
     }
 
     // Budget guardrail check: block approval if budget is exceeded
-    let budget_check = super::budgets::check_invoice_against_budgets(
-        pool,
-        *tenant_id.as_uuid(),
-        invoice_id,
-    )
-    .await?;
+    let budget_check =
+        super::budgets::check_invoice_against_budgets(pool, *tenant_id.as_uuid(), invoice_id)
+            .await?;
 
     if budget_check.blocked {
         return Err(billforge_core::Error::Conflict(format!(
@@ -387,7 +393,13 @@ async fn perform_approval(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(
+        &mut conn,
+        metadata_pool,
+        tenant_id,
+        invoice_id,
+    )
+    .await?;
 
     Ok(())
 }
@@ -407,7 +419,13 @@ async fn perform_rejection(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(
+        &mut conn,
+        metadata_pool,
+        tenant_id,
+        invoice_id,
+    )
+    .await?;
 
     Ok(())
 }
@@ -672,7 +690,10 @@ mod tests {
 
         // Form must POST to the correct action path
         assert!(
-            html.contains(&format!("action=\"/api/v1/actions/{}\"", expected_action_path)),
+            html.contains(&format!(
+                "action=\"/api/v1/actions/{}\"",
+                expected_action_path
+            )),
             "confirmation page must contain action=\"/api/v1/actions/{}\"",
             expected_action_path
         );

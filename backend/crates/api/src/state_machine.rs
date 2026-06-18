@@ -349,20 +349,20 @@ async fn transition_handler(
         .map_err(|e| billforge_core::Error::Database(format!("Budget check failed: {}", e)))?;
 
         if budget_check.blocked {
-            return Err(
-                billforge_core::Error::Conflict(format!(
-                    "BUDGET_EXCEEDED: {}",
-                    serde_json::to_string(&budget_check.violations)
-                        .unwrap_or_else(|_| "budget exceeded".to_string())
-                ))
-                .into(),
-            );
+            return Err(billforge_core::Error::Conflict(format!(
+                "BUDGET_EXCEEDED: {}",
+                serde_json::to_string(&budget_check.violations)
+                    .unwrap_or_else(|_| "budget exceeded".to_string())
+            ))
+            .into());
         }
 
         // Attach budget warnings to metadata for audit trail
         if !budget_check.warnings.is_empty() || !budget_check.results.is_empty() {
             // Log budget check audit entry
-            if let Ok(mut meta) = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(metadata.clone()) {
+            if let Ok(mut meta) = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+                metadata.clone(),
+            ) {
                 meta.insert(
                     "budget_check".to_string(),
                     serde_json::json!({

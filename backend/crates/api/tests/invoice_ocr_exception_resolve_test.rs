@@ -259,11 +259,11 @@ async fn fetch_invoice(
 /// Create a minimal 1x1 PNG image.
 fn create_minimal_image() -> Vec<u8> {
     vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
-        0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, 0x00, 0x00, 0x00,
-        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
     ]
 }
 
@@ -341,7 +341,9 @@ async fn test_resolve_ocr_exception_advances_capture_status() {
     // state (capture_status = ready_for_review, current_queue_id set).
     let (_, invoice_before) = fetch_invoice(&app, &token, invoice_id).await;
     let capture_before = invoice_before["capture_status"].as_str().unwrap_or("");
-    let queue_before = invoice_before["current_queue_id"].as_str().map(|s| s.to_string());
+    let queue_before = invoice_before["current_queue_id"]
+        .as_str()
+        .map(|s| s.to_string());
 
     // The invoice must be in a pre-submission state for routing to trigger.
     assert_eq!(
@@ -376,7 +378,9 @@ async fn test_resolve_ocr_exception_advances_capture_status() {
     );
 
     // current_queue_id should no longer point to the Exception queue.
-    let queue_after = invoice_after["current_queue_id"].as_str().map(|s| s.to_string());
+    let queue_after = invoice_after["current_queue_id"]
+        .as_str()
+        .map(|s| s.to_string());
     assert_ne!(
         queue_before, queue_after,
         "After approve, invoice should have moved off the Exception queue"
@@ -390,7 +394,8 @@ async fn test_resolve_ocr_exception_rejected_does_not_route() {
     let token = get_auth_token(&app).await;
 
     let image_data = create_minimal_image();
-    let (status, json) = upload_file(&app, &token, "reject_test.png", "image/png", &image_data).await;
+    let (status, json) =
+        upload_file(&app, &token, "reject_test.png", "image/png", &image_data).await;
     assert!(
         status == axum::http::StatusCode::OK || status == axum::http::StatusCode::CREATED,
         "Upload should succeed, got {}",
@@ -403,8 +408,13 @@ async fn test_resolve_ocr_exception_rejected_does_not_route() {
 
     // Fetch pre-resolution state.
     let (_, invoice_before) = fetch_invoice(&app, &token, invoice_id).await;
-    let capture_before = invoice_before["capture_status"].as_str().unwrap_or("").to_string();
-    let queue_before = invoice_before["current_queue_id"].as_str().map(|s| s.to_string());
+    let capture_before = invoice_before["capture_status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let queue_before = invoice_before["current_queue_id"]
+        .as_str()
+        .map(|s| s.to_string());
 
     // Resolve with reject — should NOT trigger routing.
     let (resolve_status, resolve_body) =
@@ -428,7 +438,9 @@ async fn test_resolve_ocr_exception_rejected_does_not_route() {
         "Reject should NOT change capture_status"
     );
 
-    let queue_after = invoice_after["current_queue_id"].as_str().map(|s| s.to_string());
+    let queue_after = invoice_after["current_queue_id"]
+        .as_str()
+        .map(|s| s.to_string());
     assert_eq!(
         queue_before, queue_after,
         "Reject should NOT move the invoice off its current queue"
@@ -442,8 +454,14 @@ async fn test_resolve_ocr_exception_idempotent() {
     let token = get_auth_token(&app).await;
 
     let image_data = create_minimal_image();
-    let (status, json) =
-        upload_file(&app, &token, "idempotent_test.png", "image/png", &image_data).await;
+    let (status, json) = upload_file(
+        &app,
+        &token,
+        "idempotent_test.png",
+        "image/png",
+        &image_data,
+    )
+    .await;
     assert!(
         status == axum::http::StatusCode::OK || status == axum::http::StatusCode::CREATED,
         "Upload should succeed, got {}",
@@ -455,9 +473,11 @@ async fn test_resolve_ocr_exception_idempotent() {
         .expect("Response should have invoice_id");
 
     // First resolve — should advance routing.
-    let (resolve_status_1, _) =
-        resolve_ocr_exception(&app, &token, invoice_id, "approve").await;
-    assert!(resolve_status_1.is_success(), "First resolve should succeed");
+    let (resolve_status_1, _) = resolve_ocr_exception(&app, &token, invoice_id, "approve").await;
+    assert!(
+        resolve_status_1.is_success(),
+        "First resolve should succeed"
+    );
 
     let (_, invoice_after_first) = fetch_invoice(&app, &token, invoice_id).await;
     let capture_after_first = invoice_after_first["capture_status"]
@@ -471,8 +491,7 @@ async fn test_resolve_ocr_exception_idempotent() {
     // Second resolve (duplicate) — should succeed without error and not
     // double-route. The handler is idempotent because capture_status is no
     // longer ready_for_review after the first resolve.
-    let (resolve_status_2, _) =
-        resolve_ocr_exception(&app, &token, invoice_id, "approve").await;
+    let (resolve_status_2, _) = resolve_ocr_exception(&app, &token, invoice_id, "approve").await;
     assert!(
         resolve_status_2.is_success(),
         "Second resolve should succeed (idempotent), got {}",

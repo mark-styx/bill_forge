@@ -92,12 +92,20 @@ mod tests {
     fn ocr_confusable_zero_cost() {
         // B <-> 8 is free
         let sim = ocr_levenshtein_similarity("ABCD", "A8CD");
-        assert!(sim > 0.9, "OCR confusable should be high similarity: {}", sim);
+        assert!(
+            sim > 0.9,
+            "OCR confusable should be high similarity: {}",
+            sim
+        );
     }
 
     #[test]
     fn lookalike_vendor_names() {
         let sim = ocr_levenshtein_similarity("Acme Corp", "Acme C0rp");
-        assert!(sim >= 0.85, "Acme Corp vs Acme C0rp should be >= 0.85: {}", sim);
+        assert!(
+            sim >= 0.85,
+            "Acme Corp vs Acme C0rp should be >= 0.85: {}",
+            sim
+        );
     }
 }

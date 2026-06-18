@@ -39,7 +39,10 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/sla", get(approval_sla))
         .route("/cash-flow/obligations", get(cash_flow_obligations))
         .route("/cash-flow/forecast", get(ap_cash_flow_forecast))
-        .route("/cash-flow/forecast/simulate", post(ap_cash_flow_forecast_simulate))
+        .route(
+            "/cash-flow/forecast/simulate",
+            post(ap_cash_flow_forecast_simulate),
+        )
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
         .route("/digests/:id", delete(delete_digest))
@@ -1165,8 +1168,7 @@ async fn compute_ap_forecast(
                             inv.processing_status.as_str(),
                             "approved" | "ready_for_payment"
                         ) {
-                            effective_date =
-                                effective_date + chrono::Duration::days(shift as i64);
+                            effective_date = effective_date + chrono::Duration::days(shift as i64);
                             effective_date = effective_date.max(today);
                         }
                     }
@@ -1240,8 +1242,7 @@ async fn compute_ap_forecast(
     // Scenario may override the threshold.
     let threshold_override = scenario.and_then(|s| s.override_funding_threshold_cents);
     let funding_threshold = threshold_override.unwrap_or_else(|| {
-        let nonzero_amounts: Vec<i64> =
-            daily_expected.iter().copied().filter(|&a| a > 0).collect();
+        let nonzero_amounts: Vec<i64> = daily_expected.iter().copied().filter(|&a| a > 0).collect();
         let median_amount = if nonzero_amounts.is_empty() {
             0i64
         } else {
@@ -1249,8 +1250,7 @@ async fn compute_ap_forecast(
             sorted.sort();
             sorted[sorted.len() / 2]
         };
-        min_daily_funding_threshold
-            .unwrap_or_else(|| (median_amount as f64 * 1.5) as i64)
+        min_daily_funding_threshold.unwrap_or_else(|| (median_amount as f64 * 1.5) as i64)
     });
 
     // Build daily forecast

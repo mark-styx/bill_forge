@@ -142,9 +142,9 @@ fn test_integration_module_from_str_round_trips() {
         ("edi", Module::Edi),
     ];
     for (slug, expected) in &cases {
-        let parsed: Module = slug.parse().unwrap_or_else(|e| {
-            panic!("Failed to parse {:?}: {}", slug, e)
-        });
+        let parsed: Module = slug
+            .parse()
+            .unwrap_or_else(|e| panic!("Failed to parse {:?}: {}", slug, e));
         assert_eq!(parsed, *expected);
         assert_eq!(expected.as_str(), *slug);
     }

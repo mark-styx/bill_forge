@@ -12,9 +12,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use billforge_core::public_api::{
-    self, verify_pat, RateLimiter, ALLOWED_EVENT_TYPES,
-};
+use billforge_core::public_api::{self, verify_pat, RateLimiter, ALLOWED_EVENT_TYPES};
 use billforge_core::{
     domain::{InvoiceFilters, InvoiceId},
     traits::InvoiceRepository,
@@ -75,17 +73,13 @@ where
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let app_state = parts
-            .extensions
-            .get::<AppState>()
-            .cloned()
-            .ok_or_else(|| {
-                public_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "AppState not available",
-                )
-            })?;
+        let app_state = parts.extensions.get::<AppState>().cloned().ok_or_else(|| {
+            public_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "AppState not available",
+            )
+        })?;
 
         // Extract Bearer token from Authorization header
         let auth_header = parts
@@ -111,9 +105,7 @@ where
         // Verify PAT against the metadata database
         let token = verify_pat(&app_state.db.metadata(), bearer)
             .await
-            .map_err(|msg| {
-                public_error(StatusCode::UNAUTHORIZED, "invalid_token", &msg)
-            })?;
+            .map_err(|msg| public_error(StatusCode::UNAUTHORIZED, "invalid_token", &msg))?;
 
         // Enforce per-key rate limit
         let limiter = parts
@@ -128,26 +120,28 @@ where
                 )
             })?;
 
-        if let Err(retry_after) = limiter.0.check(token.api_key_id, token.rate_limit_per_minute).await {
-            return Err(
-                (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    [
-                        (header::RETRY_AFTER, retry_after.to_string()),
-                        (header::CONTENT_TYPE, "application/json".to_string()),
-                    ],
-                    Json(PublicApiErrorBody {
-                        error: PublicApiErrorDetail {
-                            code: "rate_limited".to_string(),
-                            message: format!(
-                                "Rate limit exceeded. Retry after {} seconds.",
-                                retry_after
-                            ),
-                        },
-                    }),
-                )
-                    .into_response(),
-            );
+        if let Err(retry_after) = limiter
+            .0
+            .check(token.api_key_id, token.rate_limit_per_minute)
+            .await
+        {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (header::RETRY_AFTER, retry_after.to_string()),
+                    (header::CONTENT_TYPE, "application/json".to_string()),
+                ],
+                Json(PublicApiErrorBody {
+                    error: PublicApiErrorDetail {
+                        code: "rate_limited".to_string(),
+                        message: format!(
+                            "Rate limit exceeded. Retry after {} seconds.",
+                            retry_after
+                        ),
+                    },
+                }),
+            )
+                .into_response());
         }
 
         Ok(Self(token))
@@ -188,9 +182,8 @@ async fn list_invoices(
     PublicApiAuth(token): PublicApiAuth,
     Query(query): Query<ListInvoicesQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    public_api::require_scope(&token, "invoices:read").map_err(|msg| {
-        ApiError(Error::Forbidden(msg))
-    })?;
+    public_api::require_scope(&token, "invoices:read")
+        .map_err(|msg| ApiError(Error::Forbidden(msg)))?;
 
     let tenant_id = TenantId::from_uuid(token.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
@@ -230,9 +223,8 @@ async fn get_invoice(
     PublicApiAuth(token): PublicApiAuth,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    public_api::require_scope(&token, "invoices:read").map_err(|msg| {
-        ApiError(Error::Forbidden(msg))
-    })?;
+    public_api::require_scope(&token, "invoices:read")
+        .map_err(|msg| ApiError(Error::Forbidden(msg)))?;
 
     let tenant_id = TenantId::from_uuid(token.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
@@ -296,9 +288,8 @@ async fn create_webhook_subscription(
     PublicApiAuth(token): PublicApiAuth,
     Json(body): Json<CreateWebhookSubscriptionRequest>,
 ) -> Result<Json<WebhookSubscriptionResponse>, Response> {
-    public_api::require_scope(&token, "webhooks:write").map_err(|msg| {
-        public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg)
-    })?;
+    public_api::require_scope(&token, "webhooks:write")
+        .map_err(|msg| public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg))?;
 
     // Validate target_url is https
     if !body.target_url.starts_with("https://") {
@@ -380,11 +371,19 @@ async fn list_webhook_subscriptions(
     State(state): State<AppState>,
     PublicApiAuth(token): PublicApiAuth,
 ) -> Result<Json<WebhookSubscriptionListResponse>, Response> {
-    public_api::require_scope(&token, "webhooks:read").map_err(|msg| {
-        public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg)
-    })?;
+    public_api::require_scope(&token, "webhooks:read")
+        .map_err(|msg| public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg))?;
 
-    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Vec<String>,
+            bool,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
         r#"SELECT id, target_url, event_types, is_active, created_at
            FROM webhook_subscriptions
            WHERE tenant_id = $1
@@ -404,14 +403,16 @@ async fn list_webhook_subscriptions(
 
     let subscriptions = rows
         .into_iter()
-        .map(|(id, url, events, active, created)| WebhookSubscriptionResponse {
-            id: id.to_string(),
-            target_url: url,
-            event_types: events,
-            is_active: active,
-            created_at: created.to_rfc3339(),
-            signing_secret: None, // Never return secret on list
-        })
+        .map(
+            |(id, url, events, active, created)| WebhookSubscriptionResponse {
+                id: id.to_string(),
+                target_url: url,
+                event_types: events,
+                is_active: active,
+                created_at: created.to_rfc3339(),
+                signing_secret: None, // Never return secret on list
+            },
+        )
         .collect();
 
     Ok(Json(WebhookSubscriptionListResponse { subscriptions }))
@@ -440,25 +441,23 @@ async fn delete_webhook_subscription(
     PublicApiAuth(token): PublicApiAuth,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PublicSuccessResponse>, Response> {
-    public_api::require_scope(&token, "webhooks:write").map_err(|msg| {
-        public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg)
-    })?;
+    public_api::require_scope(&token, "webhooks:write")
+        .map_err(|msg| public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg))?;
 
-    let result = sqlx::query(
-        r#"DELETE FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2"#,
-    )
-    .bind(id)
-    .bind(token.tenant_id)
-    .execute(&*state.db.metadata())
-    .await
-    .map_err(|e| {
-        tracing::warn!(error = %e, "Failed to delete webhook subscription");
-        public_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "Failed to delete subscription",
-        )
-    })?;
+    let result =
+        sqlx::query(r#"DELETE FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2"#)
+            .bind(id)
+            .bind(token.tenant_id)
+            .execute(&*state.db.metadata())
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "Failed to delete webhook subscription");
+                public_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "Failed to delete subscription",
+                )
+            })?;
 
     if result.rows_affected() == 0 {
         return Err(public_error(

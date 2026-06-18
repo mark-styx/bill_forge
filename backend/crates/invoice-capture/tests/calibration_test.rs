@@ -146,7 +146,12 @@ fn bucket_corrections_materially_lower_calibrated_confidence() {
 
     // Phase 1: 100 extractions, 0 corrections per bucket => calibrated ≈ 0.99
     let mut buckets_before = HashMap::new();
-    for field in &["invoice_number", "invoice_date", "vendor_name", "total_amount"] {
+    for field in &[
+        "invoice_number",
+        "invoice_date",
+        "vendor_name",
+        "total_amount",
+    ] {
         buckets_before.insert(
             (field.to_string(), 9),
             BucketCalibration {
@@ -171,7 +176,12 @@ fn bucket_corrections_materially_lower_calibrated_confidence() {
     // correction handler calling record_field_outcome(was_corrected=true)),
     // the calibrated value should drop dramatically.
     let mut buckets_after = HashMap::new();
-    for field in &["invoice_number", "invoice_date", "vendor_name", "total_amount"] {
+    for field in &[
+        "invoice_number",
+        "invoice_date",
+        "vendor_name",
+        "total_amount",
+    ] {
         buckets_after.insert(
             (field.to_string(), 9),
             BucketCalibration {

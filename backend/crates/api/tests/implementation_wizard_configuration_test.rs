@@ -36,7 +36,13 @@ fn privacy_mode_set_confirmed_at_when_enabled() {
     recompute_statuses(&mut state, false);
 
     assert!(state.phases.go_live.checks.privacy_mode_confirmed);
-    assert!(state.phases.configuration.configuration.privacy_mode.confirmed_at.is_some());
+    assert!(state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at
+        .is_some());
 }
 
 #[test]
@@ -97,13 +103,29 @@ fn percent_complete_reflects_derived_signals_not_booleans() {
     assert!(!state.phases.go_live.checks.sample_invoice_routed);
 
     // Complete configuration phase
-    state.phases.configuration.configuration.privacy_mode.confirmed_at = Some(Utc::now());
-    state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .capture_channels
+        .email_forwarding
+        .verified_at = Some(Utc::now());
     state.phases.configuration.configuration.module_entitlements = vec![ModuleEntitlement {
         module_key: "invoice_capture".to_string(),
         enabled: true,
     }];
-    state.phases.configuration.configuration.notification_approvals.approved_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals
+        .approved_at = Some(Utc::now());
     recompute_statuses(&mut state, true); // now pass routed=true
     assert_eq!(percent_complete(&state), 80); // 4/5 = 80%
     assert!(state.phases.go_live.checks.sample_invoice_routed);
@@ -162,7 +184,11 @@ fn notification_approvals_sets_derived_signal() {
     let mut state = default_state(Utc::now());
     assert!(!state.phases.go_live.checks.notifications_acknowledged);
 
-    state.phases.configuration.configuration.notification_approvals = NotificationApprovalsConfig {
+    state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals = NotificationApprovalsConfig {
         ap_team_distribution: vec!["ap-team@company.com".to_string()],
         escalation_distribution: vec![],
         approved_at: Some(Utc::now()),
@@ -178,17 +204,33 @@ fn configuration_phase_status_transitions() {
     assert_eq!(state.phases.configuration.status, PhaseStatus::NotStarted);
 
     // Set just privacy mode -> InProgress
-    state.phases.configuration.configuration.privacy_mode.confirmed_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at = Some(Utc::now());
     recompute_statuses(&mut state, false);
     assert_eq!(state.phases.configuration.status, PhaseStatus::InProgress);
 
     // Complete all sub-sections -> Complete
-    state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .capture_channels
+        .email_forwarding
+        .verified_at = Some(Utc::now());
     state.phases.configuration.configuration.module_entitlements = vec![ModuleEntitlement {
         module_key: "invoice_capture".to_string(),
         enabled: true,
     }];
-    state.phases.configuration.configuration.notification_approvals.approved_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals
+        .approved_at = Some(Utc::now());
     recompute_statuses(&mut state, false);
     assert_eq!(state.phases.configuration.status, PhaseStatus::Complete);
 }
@@ -264,7 +306,14 @@ fn privacy_mode_allows_tenant_admin() {
 
     // Verify the wizard state reflects the privacy-mode write when authorized
     let mut state = default_state(Utc::now());
-    assert!(!state.phases.configuration.configuration.privacy_mode.enabled);
+    assert!(
+        !state
+            .phases
+            .configuration
+            .configuration
+            .privacy_mode
+            .enabled
+    );
     assert!(state
         .phases
         .configuration
@@ -281,7 +330,14 @@ fn privacy_mode_allows_tenant_admin() {
     };
     recompute_statuses(&mut state, false);
 
-    assert!(state.phases.configuration.configuration.privacy_mode.enabled);
+    assert!(
+        state
+            .phases
+            .configuration
+            .configuration
+            .privacy_mode
+            .enabled
+    );
     assert!(state
         .phases
         .configuration

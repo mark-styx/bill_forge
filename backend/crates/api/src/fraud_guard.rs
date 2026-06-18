@@ -13,9 +13,9 @@
 //! All checks are deterministic and tenant-local (no external WHOIS calls).
 //! Results are stored in the existing `screening_results` JSONB column.
 
+use billforge_core::domain::VendorId;
 use billforge_core::text_similarity::ocr_levenshtein_similarity;
 use billforge_core::types::TenantId;
-use billforge_core::domain::VendorId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -47,7 +47,11 @@ impl RiskLevel {
     }
 
     pub fn max(a: Self, b: Self) -> Self {
-        if a.rank() >= b.rank() { a } else { b }
+        if a.rank() >= b.rank() {
+            a
+        } else {
+            b
+        }
     }
 }
 
@@ -170,13 +174,12 @@ pub async fn check_lookalike_vendor(
     exclude_vendor_id: Option<&VendorId>,
     pool: &PgPool,
 ) -> LookalikeSignal {
-    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT id, name FROM vendors WHERE tenant_id = $1 AND status = 'active'",
-    )
-    .bind(*tenant_id.as_uuid())
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM vendors WHERE tenant_id = $1 AND status = 'active'")
+            .bind(*tenant_id.as_uuid())
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     let candidate_upper = candidate_name.to_uppercase();
     let mut best: Option<LookalikeMatch> = None;
@@ -203,8 +206,15 @@ pub async fn check_lookalike_vendor(
         }
     }
 
-    let risk = if best.is_some() { RiskLevel::High } else { RiskLevel::Low };
-    LookalikeSignal { risk, top_match: best }
+    let risk = if best.is_some() {
+        RiskLevel::High
+    } else {
+        RiskLevel::Low
+    };
+    LookalikeSignal {
+        risk,
+        top_match: best,
+    }
 }
 
 /// Check `vendor_banking_verifications` for more than one row in the last 30 days
@@ -231,8 +241,15 @@ pub async fn check_recent_bank_change(
     // Threshold on > 1, not > 0: the current banking-change row is already
     // inserted by the time this check runs, so a count of 1 is normal.
     // Only flag high when there was a *prior* change within 30 days.
-    let risk = if recent > 1 { RiskLevel::High } else { RiskLevel::Low };
-    BankChangeSignal { risk, recent_changes: recent }
+    let risk = if recent > 1 {
+        RiskLevel::High
+    } else {
+        RiskLevel::Low
+    };
+    BankChangeSignal {
+        risk,
+        recent_changes: recent,
+    }
 }
 
 /// Direct ISO country code comparison. Mismatch = high, missing data = unknown.
@@ -286,7 +303,10 @@ pub async fn run_fraud_guard(
         check_recent_bank_change(tenant_id, vid, pool).await
     } else {
         // No vendor row yet — cannot have prior bank changes
-        BankChangeSignal { risk: RiskLevel::Low, recent_changes: 0 }
+        BankChangeSignal {
+            risk: RiskLevel::Low,
+            recent_changes: 0,
+        }
     };
 
     let country_mismatch = check_country_mismatch(vendor_country, bank_country);
@@ -315,11 +335,7 @@ pub async fn run_fraud_guard(
 
 /// Upsert `(tenant_id, domain, now())` into `vendor_domain_first_seen`.
 /// `ON CONFLICT DO NOTHING` keeps the original first-seen timestamp.
-pub async fn upsert_domain_first_seen(
-    tenant_id: &TenantId,
-    domain: &str,
-    pool: &PgPool,
-) {
+pub async fn upsert_domain_first_seen(tenant_id: &TenantId, domain: &str, pool: &PgPool) {
     if domain.is_empty() {
         return;
     }
@@ -410,11 +426,26 @@ pub fn build_screening_results(
     );
 
     // Fraud-guard signals
-    map.insert("domain_age".to_string(), serde_json::to_value(&signals.domain_age).unwrap_or_default());
-    map.insert("lookalike".to_string(), serde_json::to_value(&signals.lookalike).unwrap_or_default());
-    map.insert("bank_change".to_string(), serde_json::to_value(&signals.bank_change).unwrap_or_default());
-    map.insert("country_mismatch".to_string(), serde_json::to_value(&signals.country_mismatch).unwrap_or_default());
-    map.insert("overall_risk".to_string(), serde_json::to_value(&signals.overall_risk).unwrap_or_default());
+    map.insert(
+        "domain_age".to_string(),
+        serde_json::to_value(&signals.domain_age).unwrap_or_default(),
+    );
+    map.insert(
+        "lookalike".to_string(),
+        serde_json::to_value(&signals.lookalike).unwrap_or_default(),
+    );
+    map.insert(
+        "bank_change".to_string(),
+        serde_json::to_value(&signals.bank_change).unwrap_or_default(),
+    );
+    map.insert(
+        "country_mismatch".to_string(),
+        serde_json::to_value(&signals.country_mismatch).unwrap_or_default(),
+    );
+    map.insert(
+        "overall_risk".to_string(),
+        serde_json::to_value(&signals.overall_risk).unwrap_or_default(),
+    );
 
     serde_json::Value::Object(map)
 }

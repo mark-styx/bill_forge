@@ -232,10 +232,13 @@ async fn list_conversations_handler(
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
 
-    let conversations = agent.list_conversations(&tenant_id, user_id).await.map_err(|e| {
-        tracing::error!("List conversations error: {}", e);
-        Error::Internal("Failed to list conversations".into())
-    })?;
+    let conversations = agent
+        .list_conversations(&tenant_id, user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("List conversations error: {}", e);
+            Error::Internal("Failed to list conversations".into())
+        })?;
     Ok(Json(conversations))
 }
 

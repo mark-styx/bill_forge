@@ -100,14 +100,8 @@ pub struct InvoiceBudgetCheckResult {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_budgets).post(create_budget))
-        .route(
-            "/check",
-            get(check_budget),
-        )
-        .route(
-            "/check-invoice/:invoice_id",
-            get(check_invoice_budget),
-        )
+        .route("/check", get(check_budget))
+        .route("/check-invoice/:invoice_id", get(check_invoice_budget))
         .route("/:id", patch(update_budget).delete(delete_budget))
 }
 
@@ -377,7 +371,8 @@ async fn check_invoice_budget(
     Path(invoice_id): Path<Uuid>,
 ) -> ApiResult<Json<InvoiceBudgetCheckResult>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let result = check_invoice_against_budgets(&pool, *tenant.tenant_id.as_uuid(), invoice_id).await?;
+    let result =
+        check_invoice_against_budgets(&pool, *tenant.tenant_id.as_uuid(), invoice_id).await?;
     Ok(Json(result))
 }
 
@@ -471,10 +466,16 @@ pub async fn check_invoice_against_budgets(
         results.push(check);
     }
 
-    let violations: Vec<BudgetCheckResult> =
-        results.iter().filter(|r| r.status == "block").cloned().collect();
-    let warnings: Vec<BudgetCheckResult> =
-        results.iter().filter(|r| r.status == "warn").cloned().collect();
+    let violations: Vec<BudgetCheckResult> = results
+        .iter()
+        .filter(|r| r.status == "block")
+        .cloned()
+        .collect();
+    let warnings: Vec<BudgetCheckResult> = results
+        .iter()
+        .filter(|r| r.status == "warn")
+        .cloned()
+        .collect();
 
     Ok(InvoiceBudgetCheckResult {
         blocked: !violations.is_empty(),
@@ -512,7 +513,9 @@ async fn check_single_dimension(
         Some(row) => {
             let id: Uuid = row.try_get("id").unwrap_or_default();
             let amt: i64 = row.try_get("amount_cents").unwrap_or(0);
-            let enf: String = row.try_get("enforcement").unwrap_or_else(|_| "warn".to_string());
+            let enf: String = row
+                .try_get("enforcement")
+                .unwrap_or_else(|_| "warn".to_string());
             (Some(id), amt, enf)
         }
         None => {
@@ -586,7 +589,9 @@ async fn sum_committed_for_scope(
     .bind(date)
     .fetch_optional(pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to query budget period: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to query budget period: {}", e))
+    })?;
 
     let Some((period_start, period_end)) = period else {
         return Ok(0);

@@ -23,7 +23,10 @@ fn notification_validation_rejects_empty_ap_team_distribution() {
     let _escalation: Vec<String> = vec!["manager@company.com".to_string()];
 
     let ap_valid = !ap_team.is_empty() && ap_team.iter().any(|e| is_valid_notification_email(e));
-    assert!(!ap_valid, "Empty AP team distribution should fail validation");
+    assert!(
+        !ap_valid,
+        "Empty AP team distribution should fail validation"
+    );
 }
 
 #[test]
@@ -31,8 +34,12 @@ fn notification_validation_rejects_empty_escalation_distribution() {
     let _ap_team: Vec<String> = vec!["ap@company.com".to_string()];
     let escalation: Vec<String> = vec![];
 
-    let esc_valid = !escalation.is_empty() && escalation.iter().any(|e| is_valid_notification_email(e));
-    assert!(!esc_valid, "Empty escalation distribution should fail validation");
+    let esc_valid =
+        !escalation.is_empty() && escalation.iter().any(|e| is_valid_notification_email(e));
+    assert!(
+        !esc_valid,
+        "Empty escalation distribution should fail validation"
+    );
 }
 
 #[test]
@@ -41,7 +48,8 @@ fn notification_validation_accepts_valid_emails() {
     let escalation: Vec<String> = vec!["manager@company.com".to_string()];
 
     let ap_valid = !ap_team.is_empty() && ap_team.iter().any(|e| is_valid_notification_email(e));
-    let esc_valid = !escalation.is_empty() && escalation.iter().any(|e| is_valid_notification_email(e));
+    let esc_valid =
+        !escalation.is_empty() && escalation.iter().any(|e| is_valid_notification_email(e));
     assert!(ap_valid, "Valid AP team email should pass");
     assert!(esc_valid, "Valid escalation email should pass");
 }
@@ -70,7 +78,14 @@ fn email_forwarding_not_verified_without_inbound_evidence() {
 
     // No verified_at set — the wizard should NOT show forwarding as verified
     assert!(
-        state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at.is_none(),
+        state
+            .phases
+            .configuration
+            .configuration
+            .capture_channels
+            .email_forwarding
+            .verified_at
+            .is_none(),
         "verified_at must be None when no inbound message has been recorded"
     );
     assert!(
@@ -84,11 +99,24 @@ fn email_forwarding_verified_after_server_evidence() {
     let mut state = default_state(Utc::now());
 
     // Simulate what the handler does after finding an inbound message
-    state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
+    state
+        .phases
+        .configuration
+        .configuration
+        .capture_channels
+        .email_forwarding
+        .verified_at = Some(Utc::now());
     recompute_statuses(&mut state, false);
 
     assert!(
-        state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at.is_some(),
+        state
+            .phases
+            .configuration
+            .configuration
+            .capture_channels
+            .email_forwarding
+            .verified_at
+            .is_some(),
         "verified_at must be set when an inbound message exists"
     );
     assert!(
@@ -105,7 +133,12 @@ fn email_forwarding_verified_after_server_evidence() {
 fn module_entitlements_initially_empty() {
     let state = default_state(Utc::now());
     assert!(
-        state.phases.configuration.configuration.module_entitlements.is_empty(),
+        state
+            .phases
+            .configuration
+            .configuration
+            .module_entitlements
+            .is_empty(),
         "Module entitlements should start empty"
     );
 }
@@ -127,7 +160,15 @@ fn module_entitlements_populated_from_server_data() {
     ];
     recompute_statuses(&mut state, false);
 
-    assert_eq!(state.phases.configuration.configuration.module_entitlements.len(), 2);
+    assert_eq!(
+        state
+            .phases
+            .configuration
+            .configuration
+            .module_entitlements
+            .len(),
+        2
+    );
     assert_eq!(
         state.phases.configuration.configuration.module_entitlements[0].module_key,
         "invoice_capture"
@@ -175,12 +216,20 @@ fn email_validation_matches_handler_logic() {
 #[test]
 fn notification_approvals_with_valid_emails_advances_state() {
     let mut state = default_state(Utc::now());
-    assert!(
-        state.phases.configuration.configuration.notification_approvals.approved_at.is_none()
-    );
+    assert!(state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals
+        .approved_at
+        .is_none());
 
     // Simulate the handler with valid distributions
-    state.phases.configuration.configuration.notification_approvals = NotificationApprovalsConfig {
+    state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals = NotificationApprovalsConfig {
         ap_team_distribution: vec!["ap-team@company.com".to_string()],
         escalation_distribution: vec!["manager@company.com".to_string()],
         approved_at: Some(Utc::now()),
@@ -188,13 +237,11 @@ fn notification_approvals_with_valid_emails_advances_state() {
     recompute_statuses(&mut state, false);
 
     assert!(state.phases.go_live.checks.notifications_acknowledged);
-    assert!(
-        state
-            .phases
-            .configuration
-            .configuration
-            .notification_approvals
-            .approved_at
-            .is_some()
-    );
+    assert!(state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals
+        .approved_at
+        .is_some());
 }

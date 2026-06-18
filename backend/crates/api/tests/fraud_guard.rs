@@ -114,7 +114,14 @@ async fn lookalike_vendor_flagged_on_create(pool: sqlx::PgPool) {
     insert_user(&pool, &tenant_id, user_id).await;
 
     // Insert an existing vendor "Acme Corp"
-    let existing_id = insert_vendor(&pool, &tenant_id, "Acme Corp", Some("acme@example.com"), None).await;
+    let existing_id = insert_vendor(
+        &pool,
+        &tenant_id,
+        "Acme Corp",
+        Some("acme@example.com"),
+        None,
+    )
+    .await;
 
     // Make sure it's active
     sqlx::query("UPDATE vendors SET status = 'active' WHERE id = $1")
@@ -145,11 +152,18 @@ async fn lookalike_vendor_flagged_on_create(pool: sqlx::PgPool) {
         "should have a top match"
     );
     let m = signals.lookalike.top_match.unwrap();
-    assert!(m.similarity >= 0.85, "similarity should be >= 0.85, got {}", m.similarity);
+    assert!(
+        m.similarity >= 0.85,
+        "similarity should be >= 0.85, got {}",
+        m.similarity
+    );
     assert_eq!(m.vendor_name, "Acme Corp");
 
     // Overall risk should be high because lookalike is high
-    assert_eq!(signals.overall_risk, billforge_api::fraud_guard::RiskLevel::High);
+    assert_eq!(
+        signals.overall_risk,
+        billforge_api::fraud_guard::RiskLevel::High
+    );
 }
 
 // ============================================================================
@@ -172,11 +186,17 @@ async fn country_mismatch_flagged_as_high_risk(pool: sqlx::PgPool) {
 
     // Matching countries should be low
     let signal_match = billforge_api::fraud_guard::check_country_mismatch(Some("US"), Some("us"));
-    assert_eq!(signal_match.risk, billforge_api::fraud_guard::RiskLevel::Low);
+    assert_eq!(
+        signal_match.risk,
+        billforge_api::fraud_guard::RiskLevel::Low
+    );
 
     // Missing data should be unknown
     let signal_missing = billforge_api::fraud_guard::check_country_mismatch(None, Some("US"));
-    assert_eq!(signal_missing.risk, billforge_api::fraud_guard::RiskLevel::Unknown);
+    assert_eq!(
+        signal_missing.risk,
+        billforge_api::fraud_guard::RiskLevel::Unknown
+    );
 }
 
 // ============================================================================
@@ -193,8 +213,7 @@ async fn recent_bank_change_flagged_as_high_risk(pool: sqlx::PgPool) {
     setup_schema(&pool, &tenant_id).await;
     insert_user(&pool, &tenant_id, user_id).await;
 
-    let vendor_id =
-        insert_vendor(&pool, &tenant_id, "Test Vendor Bank Change", None, None).await;
+    let vendor_id = insert_vendor(&pool, &tenant_id, "Test Vendor Bank Change", None, None).await;
 
     let vendor_id_obj = VendorId(vendor_id);
     let repo = VendorRepositoryImpl::new(pool.clone());
@@ -269,8 +288,7 @@ async fn first_bank_change_is_not_flagged(pool: sqlx::PgPool) {
     setup_schema(&pool, &tenant_id).await;
     insert_user(&pool, &tenant_id, user_id).await;
 
-    let vendor_id =
-        insert_vendor(&pool, &tenant_id, "Test Vendor First Change", None, None).await;
+    let vendor_id = insert_vendor(&pool, &tenant_id, "Test Vendor First Change", None, None).await;
 
     let vendor_id_obj = VendorId(vendor_id);
     let repo = VendorRepositoryImpl::new(pool.clone());
@@ -327,7 +345,8 @@ async fn brand_new_domain_flagged_as_high_risk(pool: sqlx::PgPool) {
 
     // No domain record exists — should be flagged as high (brand new)
     let signal =
-        billforge_api::fraud_guard::check_domain_age(&tenant_id, "brand-new-domain.com", &pool).await;
+        billforge_api::fraud_guard::check_domain_age(&tenant_id, "brand-new-domain.com", &pool)
+            .await;
 
     assert_eq!(signal.risk, billforge_api::fraud_guard::RiskLevel::High);
     assert_eq!(signal.domain, "brand-new-domain.com");
@@ -438,7 +457,12 @@ fn build_screening_results_includes_all_keys() {
     };
 
     let screener = billforge_api::ofac_screening::OfacScreener::load_from_embedded();
-    let json = billforge_api::fraud_guard::build_screening_results(&signals, &screener, "Clean Test Vendor", None);
+    let json = billforge_api::fraud_guard::build_screening_results(
+        &signals,
+        &screener,
+        "Clean Test Vendor",
+        None,
+    );
 
     // OFAC/AVS/Plaid keys
     assert!(json.get("ofac").is_some(), "should have ofac key");
@@ -446,12 +470,21 @@ fn build_screening_results_includes_all_keys() {
     assert!(json.get("plaid").is_some(), "should have plaid key");
 
     // Fraud-guard keys
-    assert!(json.get("domain_age").is_some(), "should have domain_age key");
+    assert!(
+        json.get("domain_age").is_some(),
+        "should have domain_age key"
+    );
     assert!(json.get("lookalike").is_some(), "should have lookalike key");
-    assert!(json.get("bank_change").is_some(), "should have bank_change key");
+    assert!(
+        json.get("bank_change").is_some(),
+        "should have bank_change key"
+    );
     assert!(
         json.get("country_mismatch").is_some(),
         "should have country_mismatch key"
     );
-    assert!(json.get("overall_risk").is_some(), "should have overall_risk key");
+    assert!(
+        json.get("overall_risk").is_some(),
+        "should have overall_risk key"
+    );
 }

@@ -146,9 +146,15 @@ impl StripeClient {
         for (i, item) in params.additional_line_items.iter().enumerate() {
             let idx = i + 1; // base plan is [0], add-ons start at [1]
             form.push((format!("line_items[{}][price]", idx), item.price_id.clone()));
-            form.push((format!("line_items[{}][quantity]", idx), item.quantity.to_string()));
+            form.push((
+                format!("line_items[{}][quantity]", idx),
+                item.quantity.to_string(),
+            ));
         }
-        info!(additional_line_items = params.additional_line_items.len(), "Checkout session line items");
+        info!(
+            additional_line_items = params.additional_line_items.len(),
+            "Checkout session line items"
+        );
 
         for (k, v) in &params.metadata {
             form.push((format!("metadata[{}]", k), v.clone()));
@@ -709,7 +715,10 @@ mod tests {
         for (i, item) in params.additional_line_items.iter().enumerate() {
             let idx = i + 1;
             form.push((format!("line_items[{}][price]", idx), item.price_id.clone()));
-            form.push((format!("line_items[{}][quantity]", idx), item.quantity.to_string()));
+            form.push((
+                format!("line_items[{}][quantity]", idx),
+                item.quantity.to_string(),
+            ));
         }
 
         for (k, v) in &params.metadata {
@@ -745,15 +754,24 @@ mod tests {
         let form = build_checkout_form_body(&params);
 
         // Base plan at [0]
-        assert!(form.contains(&("line_items[0][price]".to_string(), "price_starter_monthly".to_string())));
+        assert!(form.contains(&(
+            "line_items[0][price]".to_string(),
+            "price_starter_monthly".to_string()
+        )));
         assert!(form.contains(&("line_items[0][quantity]".to_string(), "1".to_string())));
 
         // Add-on 1 at [1]
-        assert!(form.contains(&("line_items[1][price]".to_string(), "price_reporting_monthly".to_string())));
+        assert!(form.contains(&(
+            "line_items[1][price]".to_string(),
+            "price_reporting_monthly".to_string()
+        )));
         assert!(form.contains(&("line_items[1][quantity]".to_string(), "1".to_string())));
 
         // Add-on 2 at [2]
-        assert!(form.contains(&("line_items[2][price]".to_string(), "price_ai_assistant_monthly".to_string())));
+        assert!(form.contains(&(
+            "line_items[2][price]".to_string(),
+            "price_ai_assistant_monthly".to_string()
+        )));
         assert!(form.contains(&("line_items[2][quantity]".to_string(), "1".to_string())));
 
         // Total: 6 base fields + 4 add-on fields = 10

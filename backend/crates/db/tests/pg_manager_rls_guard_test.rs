@@ -69,8 +69,10 @@ async fn pg_manager_rejects_superuser_role() {
 #[cfg_attr(not(feature = "integration"), ignore)]
 async fn pg_manager_accepts_billforge_app_role() {
     let url = app_role_url();
-    let template = tenant_template()
-        .replace("postgres://postgres:postgres@", &format!("postgres://{APP_ROLE}:{APP_ROLE_PASSWORD}@"));
+    let template = tenant_template().replace(
+        "postgres://postgres:postgres@",
+        &format!("postgres://{APP_ROLE}:{APP_ROLE_PASSWORD}@"),
+    );
 
     let result = PgManager::new(&url, template).await;
 

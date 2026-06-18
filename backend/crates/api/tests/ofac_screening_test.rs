@@ -13,11 +13,17 @@ fn exact_normalized_match_returns_fail() {
     // "AL-QAEDA" with different casing and hyphen
     let outcome = screener.screen("Al-Qaeda", None);
     assert_eq!(outcome.status, "fail", "exact match should be fail");
-    assert!(!outcome.matches.is_empty(), "should have at least one match");
+    assert!(
+        !outcome.matches.is_empty(),
+        "should have at least one match"
+    );
 
     // Try another: "GAZPROMBANK" with different casing
     let outcome2 = screener.screen("gazprombank", None);
-    assert_eq!(outcome2.status, "fail", "exact match on primary name should be fail");
+    assert_eq!(
+        outcome2.status, "fail",
+        "exact match on primary name should be fail"
+    );
 }
 
 /// Vendor name exactly matches a seeded alias.
@@ -29,7 +35,10 @@ fn alias_match_returns_fail() {
     let outcome = screener.screen("Cozy Bear", None);
     assert_eq!(outcome.status, "fail", "alias match should be fail");
     assert!(
-        outcome.matches.iter().any(|m| m.matched_name.contains("COZY BEAR")),
+        outcome
+            .matches
+            .iter()
+            .any(|m| m.matched_name.contains("COZY BEAR")),
         "should match the COZY BEAR alias"
     );
 
@@ -72,7 +81,10 @@ fn clean_vendor_returns_pass() {
 
     let outcome = screener.screen("Acme Coffee LLC", None);
     assert_eq!(outcome.status, "pass", "clean vendor should pass");
-    assert!(outcome.matches.is_empty(), "clean vendor should have no matches");
+    assert!(
+        outcome.matches.is_empty(),
+        "clean vendor should have no matches"
+    );
 
     let outcome2 = screener.screen("Bob's Plumbing Service", None);
     assert_eq!(outcome2.status, "pass");
@@ -125,13 +137,22 @@ fn build_screening_results_returns_not_configured_for_avs_plaid() {
 
     // AVS should be not_configured
     let avs = json.get("avs").expect("should have avs key");
-    assert_eq!(avs["status"], "not_configured", "avs status should be not_configured");
+    assert_eq!(
+        avs["status"], "not_configured",
+        "avs status should be not_configured"
+    );
 
     // Plaid should be not_configured
     let plaid = json.get("plaid").expect("should have plaid key");
-    assert_eq!(plaid["status"], "not_configured", "plaid status should be not_configured");
+    assert_eq!(
+        plaid["status"], "not_configured",
+        "plaid status should be not_configured"
+    );
 
     // OFAC should be pass for a clean name
     let ofac = json.get("ofac").expect("should have ofac key");
-    assert_eq!(ofac["status"], "pass", "ofac status should be pass for clean name");
+    assert_eq!(
+        ofac["status"], "pass",
+        "ofac status should be pass for clean name"
+    );
 }

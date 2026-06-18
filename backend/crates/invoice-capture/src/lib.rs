@@ -7,15 +7,14 @@ pub mod ocr;
 pub mod service;
 
 pub use calibration::{
-    calibrated_confidence, compute_first_pass_accuracy, tenant_first_pass_accuracy,
+    bucket_for, calibrated_confidence, compute_first_pass_accuracy, tenant_first_pass_accuracy,
     BucketCalibration, FieldAccuracy, FirstPassAccuracy, OcrCalibrationStore,
-    PgOcrCalibrationStore, bucket_for,
-    MIN_EXTRACTIONS_FOR_ACCURACY, OCR_FIRST_PASS_ACCURACY_THRESHOLD,
+    PgOcrCalibrationStore, MIN_EXTRACTIONS_FOR_ACCURACY, OCR_FIRST_PASS_ACCURACY_THRESHOLD,
 };
 pub use ocr::{
+    check_health, load_for_tenant, mark_unhealthy, run_private_ocr, try_private_inference_ocr,
     HealthStatus, OcrComparison, OcrComparisonResult, OcrProvider, PrivateInferenceConfig,
-    PrivateInferenceError, ProviderResult, check_health, load_for_tenant, mark_unhealthy,
-    run_private_ocr, try_private_inference_ocr,
+    PrivateInferenceError, ProviderResult,
 };
 pub use service::{
     ocr_routing_decision, resolve_ocr_provider_name, InvoiceCaptureService, OcrRoutingDecision,

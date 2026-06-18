@@ -486,7 +486,9 @@ async fn sync_contacts(
         .bind(&xero_contact.ContactID)
         .fetch_optional(&*pool)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to look up existing vendor: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to look up existing vendor: {}", e))
+        })?;
 
         let db_err = |e: sqlx::Error| billforge_core::Error::Database(e.to_string());
         let result: Result<(), billforge_core::Error> = if let Some((vendor_id,)) = existing {

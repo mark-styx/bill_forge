@@ -21,8 +21,6 @@ pub(crate) mod documents;
 #[cfg(feature = "edi")]
 pub mod edi;
 pub mod email_actions;
-#[cfg(feature = "netsuite")]
-pub mod netsuite;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub mod health;
@@ -30,17 +28,19 @@ pub mod implementation;
 pub mod inbound_email;
 pub mod invoices;
 pub mod mobile;
+#[cfg(feature = "netsuite")]
+pub mod netsuite;
 pub mod notifications;
 pub mod policies;
 pub mod predictive;
-#[cfg(feature = "edi")]
-pub mod purchase_orders;
 pub mod public_api;
 pub mod public_signup;
+#[cfg(feature = "edi")]
+pub mod purchase_orders;
 pub mod qbo;
-pub mod recurring_patterns;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
+pub mod recurring_patterns;
 pub(crate) mod reports;
 pub mod routing;
 #[cfg(feature = "sage-intacct")]
@@ -95,10 +95,7 @@ pub fn create_router(state: AppState) -> Router {
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
         // Stripe webhook - bypasses tenant auth (tenant identity from session metadata)
-        .nest(
-            "/api/v1/billing",
-            billing::public_routes(),
-        )
+        .nest("/api/v1/billing", billing::public_routes())
         // Public API (PAT auth, not session JWT) — rate limiter attached via extension
         .nest(
             "/api/external/v1",
@@ -109,10 +106,7 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(Extension(state.clone())),
         )
         // Self-serve signup + pricing plans (no auth)
-        .nest(
-            "/api/public",
-            public_signup::public_routes(),
-        )
+        .nest("/api/public", public_signup::public_routes())
         // Sandbox promote endpoint (authenticated, inside the auth-gated tree below)
         // Mounted before the api_routes() call so it can be merged in later if needed.
         .with_state(state.clone())
@@ -190,7 +184,10 @@ fn api_routes(state: AppState) -> Router<AppState> {
             invoices::routes().merge(crate::state_machine::routes()),
         )
         // Vendor Management module
-        .nest("/vendors", vendors::routes().merge(vendor_portal_onboarding::review_routes()))
+        .nest(
+            "/vendors",
+            vendors::routes().merge(vendor_portal_onboarding::review_routes()),
+        )
         // Invoice Processing module
         .nest("/workflows", workflows::routes())
         // Reporting module
@@ -202,12 +199,12 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Data export
         .nest("/export", export::routes())
         // Document storage
-        .nest("/documents", documents::routes().merge(document_qa::routes()))
-        // Audit logs + evidence bundle export
         .nest(
-            "/audit",
-            audit::routes().merge(audit_bundle::routes()),
+            "/documents",
+            documents::routes().merge(document_qa::routes()),
         )
+        // Audit logs + evidence bundle export
+        .nest("/audit", audit::routes().merge(audit_bundle::routes()))
         // Sandbox/Development persona management
         .nest("/sandbox", sandbox::routes())
         // Server-backed implementation wizard

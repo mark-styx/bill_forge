@@ -105,7 +105,9 @@ impl WorkflowEngine {
             () => {
                 if let (Some(ref pool), Some(vendor_id)) = (&self.pool, invoice.vendor_id) {
                     let _ = crate::recurring_patterns::detect_or_update_pattern(
-                        &**pool, *tenant_id.as_uuid(), vendor_id,
+                        &**pool,
+                        *tenant_id.as_uuid(),
+                        vendor_id,
                     )
                     .await;
                 }
@@ -118,8 +120,8 @@ impl WorkflowEngine {
                 crate::recurring_patterns::find_pattern(&**pool, *tenant_id.as_uuid(), vendor_id)
                     .await
             {
-                let line_items_json = serde_json::to_value(&invoice.line_items)
-                    .unwrap_or(serde_json::json!([]));
+                let line_items_json =
+                    serde_json::to_value(&invoice.line_items).unwrap_or(serde_json::json!([]));
                 let match_result = crate::recurring_patterns::evaluate_pattern_match(
                     invoice.total_amount.amount,
                     invoice.invoice_date,
@@ -128,7 +130,10 @@ impl WorkflowEngine {
                 );
 
                 if pattern.auto_approve_enabled
-                    && matches!(match_result, crate::recurring_patterns::PatternMatchResult::Eligible)
+                    && matches!(
+                        match_result,
+                        crate::recurring_patterns::PatternMatchResult::Eligible
+                    )
                 {
                     tracing::info!(
                         invoice_id = %invoice.id.as_uuid(),
@@ -574,11 +579,15 @@ impl WorkflowEngine {
             // pattern row (the primary detection gap identified in review).
             if let (Some(ref pool), Ok(Some(invoice))) = (
                 &self.pool,
-                self.invoice_repo.get_by_id(tenant_id, &approval.invoice_id).await,
+                self.invoice_repo
+                    .get_by_id(tenant_id, &approval.invoice_id)
+                    .await,
             ) {
                 if let Some(vendor_id) = invoice.vendor_id {
                     let _ = crate::recurring_patterns::detect_or_update_pattern(
-                        &**pool, *tenant_id.as_uuid(), vendor_id,
+                        &**pool,
+                        *tenant_id.as_uuid(),
+                        vendor_id,
                     )
                     .await;
                 }

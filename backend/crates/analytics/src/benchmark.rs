@@ -422,14 +422,22 @@ mod tests {
         // should return None. This test validates the logic in isolation.
         let cohort_size: i64 = 4;
         let should_return_none = cohort_size < 5;
-        assert!(should_return_none, "Cohort size {} is below floor of 5", cohort_size);
+        assert!(
+            should_return_none,
+            "Cohort size {} is below floor of 5",
+            cohort_size
+        );
     }
 
     #[test]
     fn cohort_size_at_floor_returns_data() {
         let cohort_size: i64 = 5;
         let should_return_data = cohort_size >= 5;
-        assert!(should_return_data, "Cohort size {} meets floor of 5", cohort_size);
+        assert!(
+            should_return_data,
+            "Cohort size {} meets floor of 5",
+            cohort_size
+        );
     }
 
     #[test]
@@ -448,7 +456,9 @@ mod tests {
     #[ignore]
     async fn integration_fetch_cohort_percentiles_with_real_db() {
         let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let pool = PgPool::connect(&db_url).await.expect("Failed to connect to DB");
+        let pool = PgPool::connect(&db_url)
+            .await
+            .expect("Failed to connect to DB");
 
         let result = fetch_cohort_percentiles(&pool, "nonexistent_industry", "1-49", "0-499").await;
         assert!(result.is_ok(), "fetch_cohort_percentiles should not error");

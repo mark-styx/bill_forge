@@ -24,10 +24,7 @@ impl DatabaseManager {
         let migrations_url = std::env::var("DATABASE_URL_MIGRATIONS")
             .ok()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                std::env::var("DATABASE_URL")
-                    .expect("DATABASE_URL not set")
-            });
+            .unwrap_or_else(|| std::env::var("DATABASE_URL").expect("DATABASE_URL not set"));
 
         // Tenant pool template uses DATABASE_URL (the restricted app role) so
         // normal query traffic is subject to RLS.

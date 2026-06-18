@@ -239,9 +239,7 @@ where
         let AuthUser(user) = AuthUser::from_request_parts(parts, state).await?;
 
         if !tenant.has_module(Module::InvoiceCapture) {
-            return Err(ApiError(Error::ModuleNotAvailable(
-                "Documents".to_string(),
-            )));
+            return Err(ApiError(Error::ModuleNotAvailable("Documents".to_string())));
         }
 
         Ok(Self(user, tenant))

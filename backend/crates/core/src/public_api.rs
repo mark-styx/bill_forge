@@ -15,11 +15,8 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<sha2::Sha256>;
 
 /// Allowed event types for webhook subscriptions.
-pub const ALLOWED_EVENT_TYPES: &[&str] = &[
-    "invoice.created",
-    "invoice.approved",
-    "approval.requested",
-];
+pub const ALLOWED_EVENT_TYPES: &[&str] =
+    &["invoice.created", "invoice.approved", "approval.requested"];
 
 /// Represents a verified PAT token's identity and permissions.
 #[derive(Debug, Clone)]
@@ -127,10 +124,7 @@ pub async fn dispatch_webhook(
     payload: serde_json::Value,
 ) {
     // Find active subscriptions matching this event type for this tenant
-    let subscriptions = match sqlx::query_as::<
-        _,
-        (Uuid, Uuid, String, String, bool),
-    >(
+    let subscriptions = match sqlx::query_as::<_, (Uuid, Uuid, String, String, bool)>(
         r#"SELECT id, tenant_id, target_url, signing_secret, is_active
            FROM webhook_subscriptions
            WHERE tenant_id = $1 AND is_active = true AND $2 = ANY(event_types)"#,
@@ -185,7 +179,11 @@ pub async fn dispatch_webhook(
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
-                ((200..300).contains(&status), Some(status as i32), Some(body))
+                (
+                    (200..300).contains(&status),
+                    Some(status as i32),
+                    Some(body),
+                )
             }
             Err(e) => {
                 tracing::warn!(
@@ -240,7 +238,11 @@ pub fn generate_signing_secret() -> String {
 fn rand_random_bytes() -> [u8; 32] {
     // Use a simple approach: hash a UUID with the current timestamp
     let mut result = [0u8; 32];
-    let input = format!("{}-{}", Uuid::new_v4(), chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    let input = format!(
+        "{}-{}",
+        Uuid::new_v4(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
     let hash = Sha256::digest(input.as_bytes());
     result.copy_from_slice(&hash);
     result

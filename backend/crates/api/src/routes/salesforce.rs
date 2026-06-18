@@ -1035,26 +1035,22 @@ async fn push_invoice_payment_status(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
 
     // Load invoice (vendor_id needed for mapping lookup)
-    let invoice: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, vendor_id FROM invoices WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id)
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
+    let invoice: Option<(Uuid, Option<Uuid>)> =
+        sqlx::query_as("SELECT id, vendor_id FROM invoices WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant.tenant_id.as_uuid())
+            .bind(invoice_id)
+            .fetch_optional(&*pool)
+            .await
+            .ok()
+            .flatten();
 
-    let (_inv_id, vendor_id_opt) = invoice.ok_or_else(|| {
-        billforge_core::Error::NotFound {
-            resource_type: "invoice".to_string(),
-            id: invoice_id.to_string(),
-        }
+    let (_inv_id, vendor_id_opt) = invoice.ok_or_else(|| billforge_core::Error::NotFound {
+        resource_type: "invoice".to_string(),
+        id: invoice_id.to_string(),
     })?;
 
-    let vendor_id = vendor_id_opt.ok_or_else(|| {
-        billforge_core::Error::Validation("Invoice has no vendor".to_string())
-    })?;
+    let vendor_id = vendor_id_opt
+        .ok_or_else(|| billforge_core::Error::Validation("Invoice has no vendor".to_string()))?;
 
     // Look up Salesforce Account mapping
     let mapping: Option<(String,)> = sqlx::query_as(
@@ -1069,9 +1065,7 @@ async fn push_invoice_payment_status(
     .flatten();
 
     let salesforce_account_id = mapping.map(|(id,)| id).ok_or_else(|| {
-        billforge_core::Error::Validation(
-            "Vendor not mapped to Salesforce Account".to_string(),
-        )
+        billforge_core::Error::Validation("Vendor not mapped to Salesforce Account".to_string())
     })?;
 
     // Get an authenticated Salesforce client (refreshes token if needed)
@@ -1088,15 +1082,22 @@ async fn push_invoice_payment_status(
 
     let value = if has_extras {
         let mut obj = serde_json::Map::new();
-        obj.insert("status".to_string(), serde_json::Value::String(request.status.clone()));
+        obj.insert(
+            "status".to_string(),
+            serde_json::Value::String(request.status.clone()),
+        );
         if let Some(ref paid_at) = request.paid_at {
-            obj.insert("paid_at".to_string(), serde_json::Value::String(paid_at.clone()));
+            obj.insert(
+                "paid_at".to_string(),
+                serde_json::Value::String(paid_at.clone()),
+            );
         }
         if let Some(amount) = request.amount_paid {
             obj.insert(
                 "amount_paid".to_string(),
                 serde_json::Value::Number(
-                    serde_json::Number::from_f64(amount).unwrap_or_else(|| serde_json::Number::from(0)),
+                    serde_json::Number::from_f64(amount)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
                 ),
             );
         }
@@ -1136,11 +1137,9 @@ async fn push_invoice_payment_status(
     .await
     .ok();
 
-    push_result.map_err(|e| {
-        billforge_core::Error::ExternalService {
-            service: "Salesforce".to_string(),
-            message: format!("Failed to push payment status: {}", e),
-        }
+    push_result.map_err(|e| billforge_core::Error::ExternalService {
+        service: "Salesforce".to_string(),
+        message: format!("Failed to push payment status: {}", e),
     })?;
 
     Ok(Json(PushPaymentStatusResponse {

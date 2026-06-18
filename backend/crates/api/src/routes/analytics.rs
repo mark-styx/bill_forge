@@ -177,8 +177,8 @@ async fn get_trends(
 // ---------------------------------------------------------------------------
 
 use billforge_analytics::benchmark::{
-    BenchmarkOptInRequest, BenchmarkResponse, CohortDescriptor,
-    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis,
+    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis, BenchmarkOptInRequest,
+    BenchmarkResponse, CohortDescriptor,
 };
 
 /// Benchmark sub-router mounted at `/analytics/benchmark`
@@ -220,7 +220,9 @@ async fn get_benchmark(
     .bind(tenant_id.as_uuid())
     .fetch_optional(&*metadata_pool)
     .await
-    .map_err(|e| billforge_core::Error::Internal(format!("Failed to read tenant benchmark settings: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Internal(format!("Failed to read tenant benchmark settings: {}", e))
+    })?;
 
     let (opted_in, industry, headcount_band, volume_band) = match row {
         Some(r) => r,
@@ -292,15 +294,21 @@ async fn get_benchmark(
     };
 
     // Fetch cohort percentiles from the SECURITY DEFINER function
-    let (cohort_kpis, cohort_size) =
-        match fetch_cohort_percentiles(&metadata_pool, &cohort.industry, &cohort.headcount_band, &cohort.volume_band).await {
-            Ok(Some((pct, sz))) => (Some(pct), Some(sz)),
-            Ok(None) => (None, None),
-            Err(e) => {
-                tracing::warn!("Failed to fetch cohort percentiles: {}", e);
-                (None, None)
-            }
-        };
+    let (cohort_kpis, cohort_size) = match fetch_cohort_percentiles(
+        &metadata_pool,
+        &cohort.industry,
+        &cohort.headcount_band,
+        &cohort.volume_band,
+    )
+    .await
+    {
+        Ok(Some((pct, sz))) => (Some(pct), Some(sz)),
+        Ok(None) => (None, None),
+        Err(e) => {
+            tracing::warn!("Failed to fetch cohort percentiles: {}", e);
+            (None, None)
+        }
+    };
 
     Ok(Json(BenchmarkResponse {
         opted_in: true,
@@ -351,7 +359,9 @@ async fn benchmark_opt_in(
     .bind(&body.volume_band)
     .execute(&*metadata_pool)
     .await
-    .map_err(|e| billforge_core::Error::Internal(format!("Failed to update benchmark opt-in: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Internal(format!("Failed to update benchmark opt-in: {}", e))
+    })?;
 
     Ok(Json(BenchmarkResponse {
         opted_in: true,

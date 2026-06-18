@@ -363,9 +363,12 @@ async fn create_invoice(
                 tenant_uuid,
                 "invoice.created",
                 invoice_json,
-            ).await;
+            )
+            .await;
         }
-    }).await {
+    })
+    .await
+    {
         tracing::warn!(error = %e, "Webhook dispatch task panicked");
     }
 
@@ -1991,12 +1994,13 @@ async fn suggest_categories(
         .await
     {
         Ok(per_line) => {
-            if let Err(e) = billforge_invoice_processing::categorization::persist_line_categorizations(
-                &*pool,
-                &tenant_id_str,
-                &per_line,
-            )
-            .await
+            if let Err(e) =
+                billforge_invoice_processing::categorization::persist_line_categorizations(
+                    &*pool,
+                    &tenant_id_str,
+                    &per_line,
+                )
+                .await
             {
                 tracing::warn!(
                     tenant_id = %tenant_id_str,
@@ -2393,9 +2397,9 @@ fn emit_capture_timing_metrics(
     // Capture → approval queue / auto-approve outcome.
     let outcome = match final_status {
         ProcessingStatus::PendingApproval => "routed_for_approval",
-        ProcessingStatus::Approved
-        | ProcessingStatus::ReadyForPayment
-        | ProcessingStatus::Paid => "auto_approved",
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment | ProcessingStatus::Paid => {
+            "auto_approved"
+        }
         _ => "exception",
     };
     metrics::observe_capture_to_approval_queue(&tenant_str, outcome, elapsed);
@@ -2407,11 +2411,7 @@ fn emit_capture_timing_metrics(
         | ProcessingStatus::Paid
         | ProcessingStatus::Rejected
         | ProcessingStatus::Voided => {
-            metrics::observe_capture_to_final_status(
-                &tenant_str,
-                final_status.as_str(),
-                elapsed,
-            );
+            metrics::observe_capture_to_final_status(&tenant_str, final_status.as_str(), elapsed);
         }
         _ => {}
     }
@@ -2500,7 +2500,9 @@ async fn resolve_ocr_exception(
     .bind(*tenant.tenant_id.as_uuid())
     .execute(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to update OCR exception status: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to update OCR exception status: {}", e))
+    })?;
 
     if rows.rows_affected() == 0 {
         return Err(billforge_core::Error::NotFound {
@@ -2563,16 +2565,13 @@ async fn resolve_ocr_exception(
                 billforge_db::TenantSettingsFromDb::new(state.db.metadata()),
             ));
 
-            let final_status = engine
-                .process_invoice(&tenant.tenant_id, &invoice)
-                .await?;
+            let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
 
             // Emit capture-to-approval/final-status timing metric.
             emit_capture_timing_metrics(&tenant.tenant_id, final_status, invoice.created_at);
 
             // Update processing status.
-            let invoice_repo =
-                billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+            let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
             invoice_repo
                 .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
                 .await?;
@@ -2591,9 +2590,7 @@ async fn resolve_ocr_exception(
                     QueueType::Payment
                 }
                 ProcessingStatus::PendingApproval => QueueType::Approval,
-                ProcessingStatus::Rejected
-                | ProcessingStatus::Voided
-                | ProcessingStatus::Paid => {
+                ProcessingStatus::Rejected | ProcessingStatus::Voided | ProcessingStatus::Paid => {
                     // Terminal states — no queue assignment needed.
                     return Ok(Json(ResolveOcrExceptionResponse {
                         id,
@@ -2603,15 +2600,13 @@ async fn resolve_ocr_exception(
                 _ => QueueType::Review,
             };
 
-            let queue_repo =
-                billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
-            if let Ok(Some(queue)) =
-                billforge_core::traits::WorkQueueRepository::get_by_type(
-                    &queue_repo,
-                    &tenant.tenant_id,
-                    target_queue_type,
-                )
-                .await
+            let queue_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+            if let Ok(Some(queue)) = billforge_core::traits::WorkQueueRepository::get_by_type(
+                &queue_repo,
+                &tenant.tenant_id,
+                target_queue_type,
+            )
+            .await
             {
                 // Move item off Exception queue onto the target queue.
                 if let Err(e) = billforge_core::traits::WorkQueueRepository::move_item(

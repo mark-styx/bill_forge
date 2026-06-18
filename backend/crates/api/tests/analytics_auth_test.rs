@@ -56,8 +56,13 @@ fn test_jwt_service() -> JwtService {
 
 fn make_token(user_id: &UserId, tenant_id: &TenantId) -> String {
     let jwt = test_jwt_service();
-    jwt.create_access_token(user_id, tenant_id, "analytics-test@example.com", &[Role::ApUser])
-        .expect("token creation should succeed")
+    jwt.create_access_token(
+        user_id,
+        tenant_id,
+        "analytics-test@example.com",
+        &[Role::ApUser],
+    )
+    .expect("token creation should succeed")
 }
 
 /// Build a router that mirrors the production mounting:
@@ -125,7 +130,9 @@ async fn test_analytics_events_requires_auth() {
         .method("POST")
         .uri("/api/v1/analytics/events")
         .header("content-type", "application/json")
-        .body(Body::from(r#"{"event_type":"test","event_category":"test","event_data":{}}"#))
+        .body(Body::from(
+            r#"{"event_type":"test","event_category":"test","event_data":{}}"#,
+        ))
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
@@ -207,7 +214,9 @@ async fn test_analytics_events_accepts_valid_token() {
         .uri("/api/v1/analytics/events")
         .header("authorization", format!("Bearer {}", token))
         .header("content-type", "application/json")
-        .body(Body::from(r#"{"event_type":"test","event_category":"test","event_data":{}}"#))
+        .body(Body::from(
+            r#"{"event_type":"test","event_category":"test","event_data":{}}"#,
+        ))
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();

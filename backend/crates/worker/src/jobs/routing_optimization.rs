@@ -308,8 +308,7 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
     // regardless of whether individual redistribution suggestions were produced.
     // The variance_coefficient from distribution stats is the authoritative signal.
     if stats.variance_coefficient > IMBALANCE_THRESHOLD {
-        if let Err(e) =
-            apply_workload_rebalance(pool, tenant_id, stats.variance_coefficient).await
+        if let Err(e) = apply_workload_rebalance(pool, tenant_id, stats.variance_coefficient).await
         {
             warn!(
                 "Failed to auto-adjust routing weights for tenant {}: {}",
@@ -433,8 +432,8 @@ async fn apply_workload_rebalance(
     };
 
     // 2. Cooldown guard: skip if adjusted within the last N hours
-    let last_auto_adjusted: Option<chrono::DateTime<chrono::Utc>> = row
-        .get("last_auto_adjusted_at");
+    let last_auto_adjusted: Option<chrono::DateTime<chrono::Utc>> =
+        row.get("last_auto_adjusted_at");
     if let Some(last) = last_auto_adjusted {
         let elapsed = chrono::Utc::now() - last;
         if elapsed < chrono::Duration::hours(AUTO_ADJUST_COOLDOWN_HOURS) {
@@ -448,9 +447,18 @@ async fn apply_workload_rebalance(
         }
     }
 
-    let old_w: f64 = row.get::<BigDecimal, _>("workload_weight").to_f64().unwrap_or(0.4);
-    let old_e: f64 = row.get::<BigDecimal, _>("expertise_weight").to_f64().unwrap_or(0.3);
-    let old_a: f64 = row.get::<BigDecimal, _>("availability_weight").to_f64().unwrap_or(0.3);
+    let old_w: f64 = row
+        .get::<BigDecimal, _>("workload_weight")
+        .to_f64()
+        .unwrap_or(0.4);
+    let old_e: f64 = row
+        .get::<BigDecimal, _>("expertise_weight")
+        .to_f64()
+        .unwrap_or(0.3);
+    let old_a: f64 = row
+        .get::<BigDecimal, _>("availability_weight")
+        .to_f64()
+        .unwrap_or(0.3);
 
     // 3. Compute new weights
     let result = match nudge_routing_weights(old_w, old_e, old_a) {
@@ -656,7 +664,10 @@ mod tests {
         let (new_w, new_e, new_a, old_w) = result.expect("should produce a nudge");
         assert_eq!(old_w, 0.4);
         assert!(new_w > 0.4, "workload weight should increase");
-        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights must sum to 1.0");
+        assert!(
+            (new_w + new_e + new_a - 1.0).abs() < 1e-9,
+            "weights must sum to 1.0"
+        );
     }
 
     #[test]
@@ -668,7 +679,10 @@ mod tests {
             new_w <= WEIGHT_MAX + 1e-9,
             "workload weight must not exceed max"
         );
-        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights must sum to 1.0");
+        assert!(
+            (new_w + new_e + new_a - 1.0).abs() < 1e-9,
+            "weights must sum to 1.0"
+        );
     }
 
     #[test]
@@ -685,11 +699,17 @@ mod tests {
         // acceptable because the weights are always renormalized.
         let result = nudge_routing_weights(0.6, 0.1, 0.3);
         let (new_w, new_e, new_a, _) = result.expect("should produce a nudge");
-        assert!(new_w >= 0.0 && new_w <= WEIGHT_MAX + 1e-9,
-            "workload in range: got {}", new_w);
+        assert!(
+            new_w >= 0.0 && new_w <= WEIGHT_MAX + 1e-9,
+            "workload in range: got {}",
+            new_w
+        );
         assert!(new_e >= 0.0, "expertise non-negative: got {}", new_e);
         assert!(new_a >= 0.0, "availability non-negative: got {}", new_a);
-        assert!((new_w + new_e + new_a - 1.0).abs() < 1e-9, "weights sum to 1.0");
+        assert!(
+            (new_w + new_e + new_a - 1.0).abs() < 1e-9,
+            "weights sum to 1.0"
+        );
     }
 
     #[test]
@@ -697,11 +717,23 @@ mod tests {
         // With 0.4/0.3/0.3 default, after nudge workload should be 0.45,
         // remaining 0.55 split proportionally: expertise gets 0.55 * (0.3/0.6) = 0.275,
         // availability gets 0.55 * (0.3/0.6) = 0.275
-        let (new_w, new_e, new_a, _) = nudge_routing_weights(0.4, 0.3, 0.3)
-            .expect("should produce a nudge");
-        assert!((new_w - 0.45).abs() < 1e-9, "workload should be 0.45, got {}", new_w);
-        assert!((new_e - 0.275).abs() < 1e-9, "expertise should be 0.275, got {}", new_e);
-        assert!((new_a - 0.275).abs() < 1e-9, "availability should be 0.275, got {}", new_a);
+        let (new_w, new_e, new_a, _) =
+            nudge_routing_weights(0.4, 0.3, 0.3).expect("should produce a nudge");
+        assert!(
+            (new_w - 0.45).abs() < 1e-9,
+            "workload should be 0.45, got {}",
+            new_w
+        );
+        assert!(
+            (new_e - 0.275).abs() < 1e-9,
+            "expertise should be 0.275, got {}",
+            new_e
+        );
+        assert!(
+            (new_a - 0.275).abs() < 1e-9,
+            "availability should be 0.275, got {}",
+            new_a
+        );
     }
 
     #[test]

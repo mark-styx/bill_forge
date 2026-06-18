@@ -4,8 +4,7 @@
 //! deterministic regex matching (no LLM/network calls).
 
 use billforge_core::domain::{
-    ActionType, ConditionField, ConditionOperator, RuleAction,
-    RuleCondition, WorkflowRuleType,
+    ActionType, ConditionField, ConditionOperator, RuleAction, RuleCondition, WorkflowRuleType,
 };
 use billforge_core::TenantId;
 use regex::Regex;
@@ -139,9 +138,9 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
     let normalized = text.to_lowercase();
 
     // Pattern 1: "over $X require approval from <role>"
-    let re_approval = Regex::new(
-        r"(?i)over\s+\$?([\d,]+(?:\.\d{2})?)\s+require\s+approval\s+from\s+(\w+)"
-    ).unwrap();
+    let re_approval =
+        Regex::new(r"(?i)over\s+\$?([\d,]+(?:\.\d{2})?)\s+require\s+approval\s+from\s+(\w+)")
+            .unwrap();
     if let Some(caps) = re_approval.captures(text) {
         let amount_str = caps.get(1).unwrap().as_str().replace(",", "");
         let amount: f64 = amount_str.parse().map_err(|_| ParseError {
@@ -174,9 +173,7 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
     }
 
     // Pattern 2: "invoices from vendor <name> need <action>"
-    let re_vendor = Regex::new(
-        r"(?i)invoices?\s+from\s+vendor\s+([^,]+?)\s+need\s+(\w+)"
-    ).unwrap();
+    let re_vendor = Regex::new(r"(?i)invoices?\s+from\s+vendor\s+([^,]+?)\s+need\s+(\w+)").unwrap();
     if let Some(caps) = re_vendor.captures(text) {
         let vendor = caps.get(1).unwrap().as_str().trim().to_string();
         let action = caps.get(2).unwrap().as_str().to_lowercase();
@@ -192,17 +189,15 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
             action_json: serde_json::json!({
                 "action": action,
             }),
-            summary: format!(
-                "All invoices from vendor '{}' will be {}.",
-                vendor, action
-            ),
+            summary: format!("All invoices from vendor '{}' will be {}.", vendor, action),
         });
     }
 
     // Pattern 3: "block invoices over $X without PO"
     let re_block = Regex::new(
-        r"(?i)block\s+invoices?\s+over\s+\$?([\d,]+(?:\.\d{2})?)\s+without\s+(?:a\s+)?PO"
-    ).unwrap();
+        r"(?i)block\s+invoices?\s+over\s+\$?([\d,]+(?:\.\d{2})?)\s+without\s+(?:a\s+)?PO",
+    )
+    .unwrap();
     if let Some(caps) = re_block.captures(text) {
         let amount_str = caps.get(1).unwrap().as_str().replace(",", "");
         let amount: f64 = amount_str.parse().map_err(|_| ParseError {
@@ -227,27 +222,19 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
                 "action": "block",
                 "reason": format!("Invoice exceeds ${:.2} and has no PO", amount),
             }),
-            summary: format!(
-                "Invoices over ${:.2} without a PO will be blocked.",
-                amount
-            ),
+            summary: format!("Invoices over ${:.2} without a PO will be blocked.", amount),
         });
     }
 
     // Pattern 4: "route <category> to <approver>"
-    let re_route = Regex::new(
-        r"(?i)route\s+(\w+)\s+to\s+(\w+)"
-    ).unwrap();
+    let re_route = Regex::new(r"(?i)route\s+(\w+)\s+to\s+(\w+)").unwrap();
     if let Some(caps) = re_route.captures(text) {
         let category = caps.get(1).unwrap().as_str().to_lowercase();
         let approver = caps.get(2).unwrap().as_str().to_lowercase();
 
         return Ok(ProposedRule {
             name: format!("Route {} to {}", category, approver),
-            description: format!(
-                "Route invoices in category '{}' to {}",
-                category, approver
-            ),
+            description: format!("Route invoices in category '{}' to {}", category, approver),
             priority: 30,
             guardrail_kind: GuardrailKind::RoutingRule,
             condition_json: serde_json::json!({
@@ -265,9 +252,9 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
     }
 
     // Pattern 5: "cap monthly spend on <category> at $X"
-    let re_budget = Regex::new(
-        r"(?i)cap\s+monthly\s+spend\s+on\s+(\w+)\s+at\s+\$?([\d,]+(?:\.\d{2})?)"
-    ).unwrap();
+    let re_budget =
+        Regex::new(r"(?i)cap\s+monthly\s+spend\s+on\s+(\w+)\s+at\s+\$?([\d,]+(?:\.\d{2})?)")
+            .unwrap();
     if let Some(caps) = re_budget.captures(text) {
         let category = caps.get(1).unwrap().as_str().to_lowercase();
         let amount_str = caps.get(2).unwrap().as_str().replace(",", "");
@@ -279,10 +266,7 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
 
         return Ok(ProposedRule {
             name: format!("Monthly cap: {} at ${:.2}", category, amount),
-            description: format!(
-                "Cap monthly spend on '{}' at ${:.2}",
-                category, amount
-            ),
+            description: format!("Cap monthly spend on '{}' at ${:.2}", category, amount),
             priority: 70,
             guardrail_kind: GuardrailKind::BudgetCap,
             condition_json: serde_json::json!({

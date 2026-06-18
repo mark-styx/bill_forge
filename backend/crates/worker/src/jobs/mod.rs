@@ -207,16 +207,10 @@ async fn process_job_with_retry(
             } else {
                 // Move to dead letter queue
                 if let Err(e) = conn
-                    .lpush::<_, _, ()>(
-                        format!("billforge:jobs:failed:{}", job.tenant_id),
-                        &job.id,
-                    )
+                    .lpush::<_, _, ()>(format!("billforge:jobs:failed:{}", job.tenant_id), &job.id)
                     .await
                 {
-                    error!(
-                        "Failed to move job {} to dead letter queue: {}",
-                        job.id, e
-                    );
+                    error!("Failed to move job {} to dead letter queue: {}", job.id, e);
                 }
                 error!(
                     "Job {} moved to dead letter queue after {} retries",
@@ -414,7 +408,10 @@ mod tests {
                 // Track peak concurrent
                 loop {
                     let seen = p.load(Ordering::SeqCst);
-                    if current <= seen || p.compare_exchange(seen, current, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    if current <= seen
+                        || p.compare_exchange(seen, current, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
                         break;
                     }
                 }

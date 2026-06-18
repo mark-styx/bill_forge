@@ -48,7 +48,11 @@ fn test_tenant_with_reporting_can_access_predictive() {
 #[test]
 fn test_module_not_available_reporting_maps_to_402() {
     let err = Error::ModuleNotAvailable("Reporting".to_string());
-    assert_eq!(err.status_code(), 402, "ModuleNotAvailable must be HTTP 402");
+    assert_eq!(
+        err.status_code(),
+        402,
+        "ModuleNotAvailable must be HTTP 402"
+    );
     assert_eq!(err.error_code(), "MODULE_NOT_AVAILABLE");
 }
 

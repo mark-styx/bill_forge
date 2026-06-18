@@ -698,8 +698,7 @@ mod tests {
         );
 
         // Compute expected weighted result manually.
-        let weighted_sum =
-            0.90 * 0.86 + 0.90 * 0.86 + 0.95 * 0.27 + 0.90 * 0.86;
+        let weighted_sum = 0.90 * 0.86 + 0.90 * 0.86 + 0.95 * 0.27 + 0.90 * 0.86;
         let weight_total = 0.86 + 0.86 + 0.27 + 0.86;
         let expected = weighted_sum / weight_total;
         assert!(

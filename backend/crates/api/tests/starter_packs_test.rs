@@ -87,7 +87,10 @@ fn construction_pack_contains_subcontractor_labor_gl() {
         .gl_accounts
         .iter()
         .find(|a| a.code == "5100" && a.name == "Subcontractor Labor");
-    assert!(found.is_some(), "Construction pack must include 5100 - Subcontractor Labor");
+    assert!(
+        found.is_some(),
+        "Construction pack must include 5100 - Subcontractor Labor"
+    );
 }
 
 #[test]

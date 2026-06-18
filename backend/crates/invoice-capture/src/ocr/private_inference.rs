@@ -126,12 +126,14 @@ pub async fn load_for_tenant(
     .await
     .ok()?;
 
-    row.map(|(enabled, ocr_endpoint_url, kms_key_ref, health_status)| PrivateInferenceConfig {
-        enabled,
-        ocr_endpoint_url,
-        kms_key_ref,
-        health_status: HealthStatus::from_db(&health_status),
-    })
+    row.map(
+        |(enabled, ocr_endpoint_url, kms_key_ref, health_status)| PrivateInferenceConfig {
+            enabled,
+            ocr_endpoint_url,
+            kms_key_ref,
+            health_status: HealthStatus::from_db(&health_status),
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -212,9 +214,7 @@ pub async fn check_health(
         }
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(HEALTH_TIMEOUT)
-        .build();
+    let client = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build();
 
     let new_status = match client {
         Ok(c) => match c.get(&url).send().await {
@@ -243,11 +243,7 @@ pub async fn check_health(
 
 /// Mark the tenant's private-inference endpoint unhealthy (called on
 /// dispatch failure so subsequent requests skip the endpoint).
-pub async fn mark_unhealthy(
-    pool: &sqlx::PgPool,
-    tenant_id: &TenantId,
-    error: &str,
-) {
+pub async fn mark_unhealthy(pool: &sqlx::PgPool, tenant_id: &TenantId, error: &str) {
     let _ = mark_health(pool, tenant_id, HealthStatus::Unhealthy, error).await;
 }
 
@@ -340,7 +336,10 @@ mod tests {
         };
         let result = run_private_ocr(&cfg, b"test").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PrivateInferenceError::NoEndpoint));
+        assert!(matches!(
+            result.unwrap_err(),
+            PrivateInferenceError::NoEndpoint
+        ));
     }
 
     #[tokio::test]
@@ -353,7 +352,10 @@ mod tests {
         };
         let result = run_private_ocr(&cfg, b"test").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PrivateInferenceError::Unhealthy));
+        assert!(matches!(
+            result.unwrap_err(),
+            PrivateInferenceError::Unhealthy
+        ));
     }
 
     #[tokio::test]

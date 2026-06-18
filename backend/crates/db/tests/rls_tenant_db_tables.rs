@@ -32,10 +32,11 @@ async fn setup(tag: &str) -> (PgManager, TenantId, sqlx::PgPool, sqlx::PgPool) {
         .await
         .expect("PgManager");
 
-    let tenant_id: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("rls-tdb-{tag}").as_bytes())
-        .to_string()
-        .parse()
-        .unwrap();
+    let tenant_id: TenantId =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("rls-tdb-{tag}").as_bytes())
+            .to_string()
+            .parse()
+            .unwrap();
 
     manager.delete_tenant(&tenant_id).await.ok();
     manager
@@ -113,10 +114,7 @@ async fn teardown(manager: &PgManager, tenant_id: &TenantId) {
 }
 
 /// Seed a vendor + user so FK-dependent tables can reference them.
-async fn seed_vendor_and_user(
-    pool: &sqlx::PgPool,
-    tenant_uuid: Uuid,
-) -> (Uuid, Uuid) {
+async fn seed_vendor_and_user(pool: &sqlx::PgPool, tenant_uuid: Uuid) -> (Uuid, Uuid) {
     let vendor_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO vendors (id, tenant_id, name, status, routing_rules)
@@ -256,7 +254,10 @@ async fn rls_documents_cross_tenant_blocked() {
     .bind(user_id)
     .execute(&pool)
     .await;
-    assert!(result.is_err(), "INSERT with mismatched tenant_id should be blocked");
+    assert!(
+        result.is_err(),
+        "INSERT with mismatched tenant_id should be blocked"
+    );
 
     teardown(&manager, &tenant_id).await;
 }
@@ -311,7 +312,10 @@ async fn rls_audit_log_cross_tenant_blocked() {
     .bind(user_id)
     .execute(&pool)
     .await;
-    assert!(result.is_err(), "INSERT with mismatched tenant_id should be blocked");
+    assert!(
+        result.is_err(),
+        "INSERT with mismatched tenant_id should be blocked"
+    );
 
     teardown(&manager, &tenant_id).await;
 }
@@ -362,7 +366,10 @@ async fn rls_edi_connections_cross_tenant_blocked() {
     .bind(tenant_uuid)
     .execute(&pool)
     .await;
-    assert!(result.is_err(), "INSERT with mismatched tenant_id should be blocked");
+    assert!(
+        result.is_err(),
+        "INSERT with mismatched tenant_id should be blocked"
+    );
 
     teardown(&manager, &tenant_id).await;
 }

@@ -133,7 +133,11 @@ async fn list_patterns(
         billforge_core::Error::Database(format!("Failed to list recurring patterns: {}", e))
     })?;
 
-    Ok(Json(rows.into_iter().map(RecurringPatternResponse::from).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(RecurringPatternResponse::from)
+            .collect(),
+    ))
 }
 
 /// PATCH /api/v1/recurring-patterns/:id
@@ -260,10 +264,7 @@ async fn update_pattern(
     .fetch_one(&*pool)
     .await
     .map_err(|e| {
-        billforge_core::Error::Database(format!(
-            "Failed to fetch updated recurring pattern: {}",
-            e
-        ))
+        billforge_core::Error::Database(format!("Failed to fetch updated recurring pattern: {}", e))
     })?;
 
     Ok(Json(RecurringPatternResponse::from(row)))

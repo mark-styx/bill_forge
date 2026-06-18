@@ -110,7 +110,14 @@ async fn test_fetch_approval_for_link_returns_pending_approval_info() {
 
     // Use the public re-export to call the helper indirectly through a
     // minimal query that mirrors what the handler does.
-    let row: Option<(uuid::Uuid, String, String, i64, Option<String>, Option<uuid::Uuid>)> = sqlx::query_as(
+    let row: Option<(
+        uuid::Uuid,
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<uuid::Uuid>,
+    )> = sqlx::query_as(
         r#"SELECT
             ar.invoice_id,
             i.invoice_number,
@@ -136,7 +143,10 @@ async fn test_fetch_approval_for_link_returns_pending_approval_info() {
     assert_eq!(vendor, "Test Vendor");
     assert_eq!(amount, 10000);
     assert!(email.is_some());
-    assert!(approver_uid.is_some(), "approver_user_id should be resolved from requested_from");
+    assert!(
+        approver_uid.is_some(),
+        "approver_user_id should be resolved from requested_from"
+    );
 
     cleanup(&pool, tenant_id, approval_id, invoice_id).await;
 }
@@ -167,11 +177,12 @@ async fn test_fetch_approval_for_link_cross_tenant_returns_empty() {
     assert!(row.is_none(), "Cross-tenant query should return no rows");
 
     // Get invoice_id for cleanup
-    let invoice_id: uuid::Uuid = sqlx::query_scalar("SELECT invoice_id FROM approval_requests WHERE id = $1")
-        .bind(approval_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let invoice_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT invoice_id FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     cleanup(&pool, tenant_id, approval_id, invoice_id).await;
 }
 
@@ -196,11 +207,12 @@ async fn test_token_generation_creates_email_action_tokens_rows() {
     let tenant_id_obj = billforge_core::TenantId(tenant_id);
     let user_id_obj = billforge_core::UserId(user_id);
 
-    let invoice_id: uuid::Uuid = sqlx::query_scalar("SELECT invoice_id FROM approval_requests WHERE id = $1")
-        .bind(approval_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let invoice_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT invoice_id FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     let token = token_service
         .generate_token(
@@ -226,7 +238,10 @@ async fn test_token_generation_creates_email_action_tokens_rows() {
     assert_eq!(count, 1, "Token should be stored in email_action_tokens");
 
     // Verify the token is usable once
-    let payload = token_service.validate_token(&token).await.expect("validate");
+    let payload = token_service
+        .validate_token(&token)
+        .await
+        .expect("validate");
     assert_eq!(payload.resource_id, invoice_id);
 
     // Mark used

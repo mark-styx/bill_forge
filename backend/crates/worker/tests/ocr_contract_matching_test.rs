@@ -13,7 +13,9 @@ use billforge_core::{
     domain::{InvoiceId, ProcessingStatus},
     types::TenantId,
 };
-use billforge_invoice_processing::{ContractMatchInput, ContractMatchOutcome, match_invoice_to_contract};
+use billforge_invoice_processing::{
+    match_invoice_to_contract, ContractMatchInput, ContractMatchOutcome,
+};
 use billforge_worker::jobs::ocr_processing::apply_contract_match_outcome;
 use chrono::NaiveDate;
 use sqlx::PgPool;
@@ -185,7 +187,11 @@ async fn test_in_band_non_po_invoice_approved(pool: PgPool) -> sqlx::Result<()> 
         .await
         .expect("should return Some");
 
-    assert_eq!(status, ProcessingStatus::Approved, "InBand should produce Approved");
+    assert_eq!(
+        status,
+        ProcessingStatus::Approved,
+        "InBand should produce Approved"
+    );
 
     // Verify DB state: processing_status = approved.
     let db_status: String =
@@ -259,7 +265,11 @@ async fn test_out_of_band_non_po_invoice_on_hold(pool: PgPool) -> sqlx::Result<(
         .await
         .expect("should return Some");
 
-    assert_eq!(status, ProcessingStatus::OnHold, "OutOfBand should produce OnHold");
+    assert_eq!(
+        status,
+        ProcessingStatus::OnHold,
+        "OutOfBand should produce OnHold"
+    );
 
     // Verify DB state: processing_status = on_hold.
     let db_status: String =
@@ -270,13 +280,14 @@ async fn test_out_of_band_non_po_invoice_on_hold(pool: PgPool) -> sqlx::Result<(
     assert_eq!(db_status, "on_hold");
 
     // Verify notes contains "Contract mismatch".
-    let notes: Option<String> =
-        sqlx::query_scalar("SELECT notes FROM invoices WHERE id = $1")
-            .bind(invoice_id)
-            .fetch_one(&pool)
-            .await?;
+    let notes: Option<String> = sqlx::query_scalar("SELECT notes FROM invoices WHERE id = $1")
+        .bind(invoice_id)
+        .fetch_one(&pool)
+        .await?;
     assert!(
-        notes.as_ref().map_or(false, |n| n.contains("Contract mismatch")),
+        notes
+            .as_ref()
+            .map_or(false, |n| n.contains("Contract mismatch")),
         "Expected notes to contain 'Contract mismatch', got {:?}",
         notes
     );
@@ -338,7 +349,10 @@ async fn test_no_contract_falls_through_to_workflow(pool: PgPool) -> sqlx::Resul
             .bind(invoice_id)
             .fetch_one(&pool)
             .await?;
-    assert_eq!(db_status, "submitted", "Invoice should remain submitted for WorkflowEngine");
+    assert_eq!(
+        db_status, "submitted",
+        "Invoice should remain submitted for WorkflowEngine"
+    );
 
     Ok(())
 }

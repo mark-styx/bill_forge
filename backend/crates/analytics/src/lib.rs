@@ -19,8 +19,8 @@ pub mod service;
 
 pub use anomaly_detection::*;
 pub use benchmark::{
-    BenchmarkKpis, BenchmarkOptInRequest, BenchmarkResponse, CohortDescriptor, CohortPercentiles,
-    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis,
+    compute_tenant_kpis, fetch_cohort_percentiles, publish_tenant_kpis, BenchmarkKpis,
+    BenchmarkOptInRequest, BenchmarkResponse, CohortDescriptor, CohortPercentiles,
 };
 pub use forecasting::*;
 pub use handlers::*;

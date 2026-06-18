@@ -14,7 +14,7 @@ use axum::{
 };
 use billforge_core::{
     domain::{AuditAction, AuditEntry, CreateInvoiceInput, ResourceType, VendorId},
-    traits::{AuditService, InvoiceRepository, VendorRepository, StorageService},
+    traits::{AuditService, InvoiceRepository, StorageService, VendorRepository},
     types::{Money, TenantId},
     Error,
 };
@@ -311,9 +311,10 @@ async fn upload_invoice_pdf(
                     .text()
                     .await
                     .map_err(|e| Error::Validation(format!("Failed to read field: {}", e)))?;
-                amount = Some(text.parse::<i64>().map_err(|_| {
-                    Error::Validation("Invalid amount value".to_string())
-                })?);
+                amount = Some(
+                    text.parse::<i64>()
+                        .map_err(|_| Error::Validation("Invalid amount value".to_string()))?,
+                );
             }
             "currency" => {
                 currency = Some(
@@ -335,22 +336,15 @@ async fn upload_invoice_pdf(
         }
     }
 
-    let file_data = file_bytes.ok_or_else(|| {
-        Error::Validation("Missing required field: file".to_string())
-    })?;
-    let invoice_number_val = invoice_number.ok_or_else(|| {
-        Error::Validation("Missing required field: invoice_number".to_string())
-    })?;
+    let file_data =
+        file_bytes.ok_or_else(|| Error::Validation("Missing required field: file".to_string()))?;
+    let invoice_number_val = invoice_number
+        .ok_or_else(|| Error::Validation("Missing required field: invoice_number".to_string()))?;
 
     // Persist PDF via storage service (upload generates and returns the document_id)
     let document_id = state
         .storage
-        .upload(
-            &tenant_id,
-            "invoice.pdf",
-            &file_data,
-            "application/pdf",
-        )
+        .upload(&tenant_id, "invoice.pdf", &file_data, "application/pdf")
         .await
         .map_err(|e| Error::Database(format!("Failed to store PDF: {}", e)))?;
 
@@ -365,9 +359,10 @@ async fn upload_invoice_pdf(
             id: vendor_id.to_string(),
         })?;
 
-    let parsed_invoice_date = invoice_date
-        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
-    let parsed_due_date = due_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let parsed_invoice_date =
+        invoice_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    let parsed_due_date =
+        due_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
     let currency_val = currency.unwrap_or_else(|| "USD".to_string());
     let byte_size = file_data.len();
 

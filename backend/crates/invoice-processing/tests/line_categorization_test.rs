@@ -6,12 +6,12 @@
 //!  3. Vendor-history fallback -> prior coding reused with high confidence.
 //!  4. Unit-level helpers (keyword detection, split detection, corrections).
 
+use billforge_invoice_processing::categorization::CategoryType;
 use billforge_invoice_processing::categorization::{
     apply_line_correction, categorize_line_by_keywords, collect_gl_signals,
     detect_historical_splits, detect_line_splits, find_matching_prior, HistoricalSplit,
     LineItemInput, PriorLineCoding, VendorHistory,
 };
-use billforge_invoice_processing::categorization::CategoryType;
 use billforge_invoice_processing::feedback_loop::CorrectionRule;
 use uuid::Uuid;
 
@@ -41,7 +41,11 @@ fn test_three_distinct_lines_different_gl_codes_no_splits() {
 
     let gl_codes: Vec<String> = items
         .iter()
-        .map(|item| categorize_line_by_keywords(&item.description).gl_code.clone())
+        .map(|item| {
+            categorize_line_by_keywords(&item.description)
+                .gl_code
+                .clone()
+        })
         .collect();
 
     assert_eq!(gl_codes[0], "6000-Software & Subscriptions");

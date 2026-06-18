@@ -8,7 +8,7 @@
 //! 3. Tenant with private inference disabled → dispatcher behaves identically to today.
 
 use billforge_invoice_capture::ocr::{
-    HealthStatus, PrivateInferenceConfig, PrivateInferenceError, run_private_ocr,
+    run_private_ocr, HealthStatus, PrivateInferenceConfig, PrivateInferenceError,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,10 +73,7 @@ async fn test_private_ocr_transport_failure_triggers_fallback() {
     // Must be a transport-level error (nothing is listening on :1).
     match &err {
         PrivateInferenceError::Transport(msg) => {
-            assert!(
-                !msg.is_empty(),
-                "transport error should contain a message"
-            );
+            assert!(!msg.is_empty(), "transport error should contain a message");
         }
         PrivateInferenceError::Timeout => {
             // Also acceptable — OS-dependent behavior.
@@ -128,7 +125,10 @@ fn test_health_status_roundtrip() {
     assert_eq!(HealthStatus::from_db("healthy"), HealthStatus::Healthy);
     assert_eq!(HealthStatus::from_db("unhealthy"), HealthStatus::Unhealthy);
     assert_eq!(HealthStatus::from_db("unknown"), HealthStatus::Unknown);
-    assert_eq!(HealthStatus::from_db("anything_else"), HealthStatus::Unknown);
+    assert_eq!(
+        HealthStatus::from_db("anything_else"),
+        HealthStatus::Unknown
+    );
 
     assert_eq!(HealthStatus::Healthy.as_str(), "healthy");
     assert_eq!(HealthStatus::Unhealthy.as_str(), "unhealthy");

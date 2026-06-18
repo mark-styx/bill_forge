@@ -3730,9 +3730,7 @@ impl ToolRegistry {
     /// shared permission helper in `proposals.rs` can evaluate roles.
     fn build_user_context_from_agent(context: &AgentContext) -> UserContext {
         let roles = Self::parse_effective_roles(context);
-        let tenant_id = TenantId(
-            Uuid::parse_str(&context.tenant_id).unwrap_or(Uuid::nil()),
-        );
+        let tenant_id = TenantId(Uuid::parse_str(&context.tenant_id).unwrap_or(Uuid::nil()));
         UserContext {
             user_id: UserId(context.user_id),
             tenant_id,
@@ -3997,8 +3995,7 @@ mod permission_guard_tests {
             tool_name: "test_mutating_tool".to_string(),
             approved: true,
         };
-        let result =
-            ToolRegistry::validate_tool_execution_guard(&def, &context, Some(&proposal));
+        let result = ToolRegistry::validate_tool_execution_guard(&def, &context, Some(&proposal));
         assert!(
             result.is_ok(),
             "Mutating tool with approved proposal context should pass"

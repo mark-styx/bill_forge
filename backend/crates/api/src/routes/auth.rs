@@ -103,9 +103,8 @@ async fn provision(
 ) -> ApiResult<Json<AuthResponse>> {
     // Parse industry before provisioning so we can reject unknown values early
     let industry_str = req.industry.as_deref().unwrap_or("generic");
-    let industry = crate::starter_packs::Industry::from_str(industry_str).map_err(|e| {
-        ApiError(billforge_core::Error::Validation(e))
-    })?;
+    let industry = crate::starter_packs::Industry::from_str(industry_str)
+        .map_err(|e| ApiError(billforge_core::Error::Validation(e)))?;
 
     let response = state
         .auth

@@ -389,12 +389,10 @@ struct SageIntacctApiDoc;
         crate::routes::salesforce::update_account_mappings,
         crate::routes::salesforce::push_invoice_payment_status
     ),
-    components(
-        schemas(
-            crate::routes::salesforce::PushPaymentStatusRequest,
-            crate::routes::salesforce::PushPaymentStatusResponse,
-        )
-    )
+    components(schemas(
+        crate::routes::salesforce::PushPaymentStatusRequest,
+        crate::routes::salesforce::PushPaymentStatusResponse,
+    ))
 )]
 struct SalesforceApiDoc;
 
@@ -755,17 +753,15 @@ pub struct PaginationInfo {
         crate::routes::public_api::list_webhook_subscriptions,
         crate::routes::public_api::delete_webhook_subscription,
     ),
-    components(
-        schemas(
-            crate::routes::public_api::ListInvoicesQuery,
-            crate::routes::public_api::CreateWebhookSubscriptionRequest,
-            crate::routes::public_api::WebhookSubscriptionResponse,
-            crate::routes::public_api::WebhookSubscriptionListResponse,
-            crate::routes::public_api::PublicSuccessResponse,
-            crate::routes::public_api::PublicApiErrorBody,
-            crate::routes::public_api::PublicApiErrorDetail,
-        )
-    )
+    components(schemas(
+        crate::routes::public_api::ListInvoicesQuery,
+        crate::routes::public_api::CreateWebhookSubscriptionRequest,
+        crate::routes::public_api::WebhookSubscriptionResponse,
+        crate::routes::public_api::WebhookSubscriptionListResponse,
+        crate::routes::public_api::PublicSuccessResponse,
+        crate::routes::public_api::PublicApiErrorBody,
+        crate::routes::public_api::PublicApiErrorDetail,
+    ))
 )]
 struct PublicApiDoc;
 
@@ -779,15 +775,13 @@ struct PublicApiDoc;
         crate::routes::netsuite::netsuite_status,
         crate::routes::netsuite::sync_vendors,
     ),
-    components(
-        schemas(
-            crate::routes::netsuite::NetSuiteConnectRequest,
-            crate::routes::netsuite::NetSuiteConnectResponse,
-            crate::routes::netsuite::NetSuiteDisconnectResponse,
-            crate::routes::netsuite::NetSuiteStatus,
-            crate::routes::netsuite::SyncResponse,
-        )
-    )
+    components(schemas(
+        crate::routes::netsuite::NetSuiteConnectRequest,
+        crate::routes::netsuite::NetSuiteConnectResponse,
+        crate::routes::netsuite::NetSuiteDisconnectResponse,
+        crate::routes::netsuite::NetSuiteStatus,
+        crate::routes::netsuite::SyncResponse,
+    ))
 )]
 struct NetSuiteApiDoc;
 
@@ -798,15 +792,13 @@ struct NetSuiteApiDoc;
         crate::routes::analytics::get_benchmark,
         crate::routes::analytics::benchmark_opt_in,
     ),
-    components(
-        schemas(
-            billforge_analytics::benchmark::BenchmarkKpis,
-            billforge_analytics::benchmark::CohortPercentiles,
-            billforge_analytics::benchmark::CohortDescriptor,
-            billforge_analytics::benchmark::BenchmarkResponse,
-            billforge_analytics::benchmark::BenchmarkOptInRequest,
-        )
-    )
+    components(schemas(
+        billforge_analytics::benchmark::BenchmarkKpis,
+        billforge_analytics::benchmark::CohortPercentiles,
+        billforge_analytics::benchmark::CohortDescriptor,
+        billforge_analytics::benchmark::BenchmarkResponse,
+        billforge_analytics::benchmark::BenchmarkOptInRequest,
+    ))
 )]
 struct BenchmarkApiDoc;
 
@@ -820,17 +812,15 @@ struct BenchmarkApiDoc;
         crate::routes::close_periods::update_period,
         crate::routes::close_periods::run_close,
     ),
-    components(
-        schemas(
-            crate::routes::close_periods::CreatePeriodRequest,
-            crate::routes::close_periods::UpdatePeriodRequest,
-            crate::routes::close_periods::ClosePeriodResponse,
-            crate::routes::close_periods::RunCloseResponse,
-            crate::routes::close_periods::ReadinessResponse,
-            crate::routes::close_periods::ReadinessTotals,
-            crate::routes::close_periods::ExceptionItem,
-        )
-    )
+    components(schemas(
+        crate::routes::close_periods::CreatePeriodRequest,
+        crate::routes::close_periods::UpdatePeriodRequest,
+        crate::routes::close_periods::ClosePeriodResponse,
+        crate::routes::close_periods::RunCloseResponse,
+        crate::routes::close_periods::ReadinessResponse,
+        crate::routes::close_periods::ReadinessTotals,
+        crate::routes::close_periods::ExceptionItem,
+    ))
 )]
 struct CloseApiDoc;
 

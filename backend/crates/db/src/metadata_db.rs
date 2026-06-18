@@ -18,17 +18,14 @@ impl MetadataDatabase {
     }
 
     pub async fn new(database_url: &str) -> Result<Self> {
-        let mut connect_opts =
-            sqlx::postgres::PgConnectOptions::from_str(database_url).map_err(|e| {
-                Error::Database(format!("Invalid database URL: {}", e))
-            })?;
+        let mut connect_opts = sqlx::postgres::PgConnectOptions::from_str(database_url)
+            .map_err(|e| Error::Database(format!("Invalid database URL: {}", e)))?;
 
         // Pass BILLFORGE_APP_PASSWORD to migration 120 via a session GUC so
         // the role's password stays in sync with compose env vars.
         if let Ok(pw) = std::env::var("BILLFORGE_APP_PASSWORD") {
             if !pw.is_empty() {
-                connect_opts =
-                    connect_opts.options([("billforge.app_password", pw.as_str())]);
+                connect_opts = connect_opts.options([("billforge.app_password", pw.as_str())]);
             }
         }
 
@@ -115,12 +112,7 @@ impl MetadataDatabase {
         ))
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            Error::Migration(format!(
-                "Failed to run is_sandbox migration: {}",
-                e
-            ))
-        })?;
+        .map_err(|e| Error::Migration(format!("Failed to run is_sandbox migration: {}", e)))?;
 
         // Benchmark peer insights: opt-in columns, KPI rollup table, cohort percentile function.
         sqlx::raw_sql(include_str!(
@@ -254,12 +246,11 @@ impl MetadataDatabase {
 
     /// Check whether a tenant is marked as sandbox.
     pub async fn is_tenant_sandbox(&self, tenant_id: &TenantId) -> Result<bool> {
-        let is_sandbox: bool =
-            sqlx::query_scalar("SELECT is_sandbox FROM tenants WHERE id = $1")
-                .bind(tenant_id.as_uuid())
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| Error::Database(format!("Failed to check sandbox flag: {}", e)))?;
+        let is_sandbox: bool = sqlx::query_scalar("SELECT is_sandbox FROM tenants WHERE id = $1")
+            .bind(tenant_id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to check sandbox flag: {}", e)))?;
 
         Ok(is_sandbox)
     }

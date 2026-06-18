@@ -98,10 +98,7 @@ pub async fn detect_or_update_pattern(
     }
 
     // Collect invoice dates (ascending) for cadence computation.
-    let mut dates: Vec<NaiveDate> = rows
-        .iter()
-        .filter_map(|r| r.invoice_date)
-        .collect();
+    let mut dates: Vec<NaiveDate> = rows.iter().filter_map(|r| r.invoice_date).collect();
     dates.sort();
 
     if dates.len() < MIN_SAMPLE_COUNT {
@@ -109,10 +106,7 @@ pub async fn detect_or_update_pattern(
     }
 
     // Compute intervals in days between consecutive dates.
-    let intervals: Vec<i64> = dates
-        .windows(2)
-        .map(|w| (w[1] - w[0]).num_days())
-        .collect();
+    let intervals: Vec<i64> = dates.windows(2).map(|w| (w[1] - w[0]).num_days()).collect();
 
     let cadence_days = median_i64(&intervals) as i32;
 
@@ -210,11 +204,7 @@ pub fn evaluate_pattern_match(
     if amount < lower || amount > upper {
         return PatternMatchResult::Ineligible(format!(
             "Amount {} outside tolerance [{:.0}, {:.0}] (median {} ±{}%)",
-            invoice_amount_cents,
-            lower,
-            upper,
-            pattern.trailing_median_cents,
-            tolerance
+            invoice_amount_cents, lower, upper, pattern.trailing_median_cents, tolerance
         ));
     }
 
@@ -224,7 +214,11 @@ pub fn evaluate_pattern_match(
         let current_signature =
             serde_json::to_value(compute_line_items_signature(invoice_line_items)).ok();
         if let Some(ref curr) = current_signature {
-            if !signatures_match_within_tolerance(expected_signature, curr, pattern.line_item_tolerance_pct) {
+            if !signatures_match_within_tolerance(
+                expected_signature,
+                curr,
+                pattern.line_item_tolerance_pct,
+            ) {
                 return PatternMatchResult::Ineligible(
                     "Line items changed since last pattern sample".to_string(),
                 );
@@ -554,12 +548,8 @@ mod tests {
         let expected = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(); // last + 31 days cadence
         let pattern = make_pattern(31, 100_00, 5.0, 3, Some(last_date), None);
         // Invoice on expected date
-        let result = evaluate_pattern_match(
-            100_00,
-            Some(expected),
-            &serde_json::json!([]),
-            &pattern,
-        );
+        let result =
+            evaluate_pattern_match(100_00, Some(expected), &serde_json::json!([]), &pattern);
         assert_eq!(result, PatternMatchResult::Eligible);
     }
 
@@ -657,8 +647,7 @@ mod tests {
         let ocr_variant = serde_json::json!([
             {"description": "monthly rent   suite 200", "amount": 100_00}
         ]);
-        let pattern =
-            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let pattern = make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
         let result = evaluate_pattern_match(100_00, None, &ocr_variant, &pattern);
         assert_eq!(result, PatternMatchResult::Eligible);
     }
@@ -673,8 +662,7 @@ mod tests {
             {"description": "Rent", "amount": 50_00},
             {"description": "Rent", "amount": 50_00}
         ]);
-        let pattern =
-            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let pattern = make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
         let result = evaluate_pattern_match(100_00, None, &split, &pattern);
         assert_eq!(result, PatternMatchResult::Eligible);
     }
@@ -688,8 +676,7 @@ mod tests {
         let drifted = serde_json::json!([
             {"description": "Rent", "amount": 100_30}
         ]);
-        let pattern =
-            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let pattern = make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
         let result = evaluate_pattern_match(100_00, None, &drifted, &pattern);
         assert_eq!(result, PatternMatchResult::Eligible);
     }
@@ -703,8 +690,7 @@ mod tests {
         let changed = serde_json::json!([
             {"description": "Parking", "amount": 100_00}
         ]);
-        let pattern =
-            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let pattern = make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
         let result = evaluate_pattern_match(100_00, None, &changed, &pattern);
         match result {
             PatternMatchResult::Ineligible(reason) => {
@@ -723,8 +709,7 @@ mod tests {
         let changed = serde_json::json!([
             {"description": "Rent", "amount": 110_00}
         ]);
-        let pattern =
-            make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
+        let pattern = make_pattern_with_signature(30, 100_00, 5.0, 3, None, &original, 0.05);
         let result = evaluate_pattern_match(100_00, None, &changed, &pattern);
         match result {
             PatternMatchResult::Ineligible(reason) => {
@@ -750,7 +735,10 @@ mod tests {
 
     #[test]
     fn normalize_description_strips_punctuation_and_case() {
-        assert_eq!(normalize_description("Monthly Rent - Suite #200"), "monthly rent suite 200");
+        assert_eq!(
+            normalize_description("Monthly Rent - Suite #200"),
+            "monthly rent suite 200"
+        );
         assert_eq!(normalize_description("  WEB   HOSTING  "), "web hosting");
     }
 }

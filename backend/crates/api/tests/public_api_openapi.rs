@@ -91,13 +91,10 @@ fn test_external_api_tag() {
             if method == "parameters" {
                 continue;
             }
-            let tags = op["tags"].as_array().unwrap_or_else(|| {
-                panic!("{} {} should have tags array", method, path_key)
-            });
-            let tag_strs: Vec<&str> = tags
-                .iter()
-                .filter_map(|t| t.as_str())
-                .collect();
+            let tags = op["tags"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} {} should have tags array", method, path_key));
+            let tag_strs: Vec<&str> = tags.iter().filter_map(|t| t.as_str()).collect();
             assert!(
                 tag_strs.contains(&"External API"),
                 "{} {} should have 'External API' tag, got {:?}",
@@ -121,10 +118,11 @@ fn test_external_api_bearer_security() {
         "GET /api/external/v1/invoices should have a security requirement"
     );
 
-    let has_bearer = security
-        .unwrap()
-        .iter()
-        .any(|s| s.as_object().map(|o| o.contains_key("bearer_auth")).unwrap_or(false));
+    let has_bearer = security.unwrap().iter().any(|s| {
+        s.as_object()
+            .map(|o| o.contains_key("bearer_auth"))
+            .unwrap_or(false)
+    });
     assert!(
         has_bearer,
         "GET /api/external/v1/invoices should reference bearer_auth security scheme"

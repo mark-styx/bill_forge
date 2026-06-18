@@ -9,7 +9,7 @@
 
 use base64::Engine as _;
 use billforge_core::{traits::InvoiceRepository, TenantId};
-use ed25519_dalek::{SigningKey, Signer, VerifyingKey, Verifier, Signature};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -169,8 +169,24 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
     insert_invoice(&pool, &tenant_b, inv_b1, "INV-B-001", 30000).await;
 
     insert_user(&pool, &tenant_a, user_a).await;
-    insert_audit_row(&pool, &tenant_a, user_a, &inv_a1.to_string(), "approve", "Invoice").await;
-    insert_audit_row(&pool, &tenant_b, user_a, &inv_b1.to_string(), "approve", "Invoice").await;
+    insert_audit_row(
+        &pool,
+        &tenant_a,
+        user_a,
+        &inv_a1.to_string(),
+        "approve",
+        "Invoice",
+    )
+    .await;
+    insert_audit_row(
+        &pool,
+        &tenant_b,
+        user_a,
+        &inv_b1.to_string(),
+        "approve",
+        "Invoice",
+    )
+    .await;
 
     // Set up signing key
     let (key_b64, _verifying_key) = setup_signing_key();
@@ -192,7 +208,10 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
         page: 1,
         per_page: 10000,
     };
-    let result = invoice_repo.list(&tenant_a, &filters, &pagination).await.unwrap();
+    let result = invoice_repo
+        .list(&tenant_a, &filters, &pagination)
+        .await
+        .unwrap();
     let invoices: Vec<_> = result.data.into_iter().collect();
 
     // Verify tenant A only sees its own invoices
@@ -200,7 +219,10 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
     let invoice_ids: Vec<Uuid> = invoices.iter().map(|i| i.id.0).collect();
     assert!(invoice_ids.contains(&inv_a1), "Should contain inv_a1");
     assert!(invoice_ids.contains(&inv_a2), "Should contain inv_a2");
-    assert!(!invoice_ids.contains(&inv_b1), "Should NOT contain tenant B's invoice");
+    assert!(
+        !invoice_ids.contains(&inv_b1),
+        "Should NOT contain tenant B's invoice"
+    );
 
     // Build a minimal ZIP to verify structure
     let mut zip_buf = Vec::new();
@@ -209,7 +231,8 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
         let opts = zip::write::SimpleFileOptions::default();
 
         // Write one invoice placeholder
-        zip.start_file(&format!("invoices/{}.missing", inv_a1), opts).unwrap();
+        zip.start_file(&format!("invoices/{}.missing", inv_a1), opts)
+            .unwrap();
         zip.write_all(b"placeholder").unwrap();
 
         // Write manifest.json
@@ -219,7 +242,8 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
             "root_hash": "abc123"
         });
         zip.start_file("manifest.json", opts).unwrap();
-        zip.write_all(serde_json::to_string_pretty(&manifest).unwrap().as_bytes()).unwrap();
+        zip.write_all(serde_json::to_string_pretty(&manifest).unwrap().as_bytes())
+            .unwrap();
 
         // Write manifest.sig
         zip.start_file("manifest.sig", opts).unwrap();
@@ -233,13 +257,28 @@ async fn test_bundle_zip_structure(pool: sqlx::PgPool) {
     }
 
     let files = parse_zip(&zip_buf);
-    assert!(files.contains_key("manifest.json"), "ZIP must contain manifest.json");
-    assert!(files.contains_key("manifest.sig"), "ZIP must contain manifest.sig");
-    assert!(files.contains_key("manifest.pubkey"), "ZIP must contain manifest.pubkey");
-    assert!(files.contains_key(&format!("invoices/{}.missing", inv_a1)), "ZIP must contain invoice file");
+    assert!(
+        files.contains_key("manifest.json"),
+        "ZIP must contain manifest.json"
+    );
+    assert!(
+        files.contains_key("manifest.sig"),
+        "ZIP must contain manifest.sig"
+    );
+    assert!(
+        files.contains_key("manifest.pubkey"),
+        "ZIP must contain manifest.pubkey"
+    );
+    assert!(
+        files.contains_key(&format!("invoices/{}.missing", inv_a1)),
+        "ZIP must contain invoice file"
+    );
 
     // Verify tenant B's invoice is NOT in this bundle
-    assert!(!files.contains_key(&format!("invoices/{}.missing", inv_b1)), "Must NOT contain tenant B invoice");
+    assert!(
+        !files.contains_key(&format!("invoices/{}.missing", inv_b1)),
+        "Must NOT contain tenant B invoice"
+    );
 
     std::env::remove_var("BILLFORGE_EVIDENCE_SIGNING_KEY");
 }
@@ -255,7 +294,10 @@ fn test_manifest_hash_chain() {
 
     let files_data: Vec<(&str, &[u8])> = vec![
         ("invoices/test.pdf", b"fake pdf content" as &[u8]),
-        ("ocr/test.diff.json", b"{\"status\": \"no_ocr_record\"}" as &[u8]),
+        (
+            "ocr/test.diff.json",
+            b"{\"status\": \"no_ocr_record\"}" as &[u8],
+        ),
         ("approvals/test.json", b"[]" as &[u8]),
     ];
 
@@ -275,7 +317,14 @@ fn test_manifest_hash_chain() {
         prev_hash = entry_hash;
     }
 
-    let root_hash = entries.last().unwrap().get("entryHash").unwrap().as_str().unwrap().to_string();
+    let root_hash = entries
+        .last()
+        .unwrap()
+        .get("entryHash")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Verify chain: recompute each entry_hash from prev_hash + path + sha256
     let mut verify_prev = prev_init.to_string();
@@ -302,7 +351,9 @@ fn test_manifest_hash_chain() {
 
     let signature = signing_key.sign(manifest_json.as_bytes());
     assert!(
-        verifying_key.verify(manifest_json.as_bytes(), &signature).is_ok(),
+        verifying_key
+            .verify(manifest_json.as_bytes(), &signature)
+            .is_ok(),
         "Signature verification must succeed"
     );
 
@@ -311,7 +362,9 @@ fn test_manifest_hash_chain() {
     let sig_bytes = signature.to_bytes();
     let sig_back = Signature::from_slice(&sig_bytes).expect("valid signature bytes");
     assert!(
-        verifying_key.verify(tampered.as_bytes(), &sig_back).is_err(),
+        verifying_key
+            .verify(tampered.as_bytes(), &sig_back)
+            .is_err(),
         "Tampered manifest must fail signature verification"
     );
 }
@@ -348,7 +401,10 @@ async fn test_tenant_isolation_rejected(pool: sqlx::PgPool) {
         per_page: 10000,
     };
 
-    let result = invoice_repo.list(&tenant_a, &filters, &pagination).await.unwrap();
+    let result = invoice_repo
+        .list(&tenant_a, &filters, &pagination)
+        .await
+        .unwrap();
 
     // Simulate filtering by invoice_ids that include cross-tenant IDs
     let requested_ids = vec![inv_a1, inv_b1];
@@ -359,11 +415,24 @@ async fn test_tenant_isolation_rejected(pool: sqlx::PgPool) {
         .collect();
 
     // Only tenant A's invoice should remain
-    assert_eq!(filtered.len(), 1, "Only tenant A's invoice should be present after cross-tenant filter");
-    assert_eq!(filtered[0].id.0, inv_a1, "The remaining invoice must be tenant A's");
+    assert_eq!(
+        filtered.len(),
+        1,
+        "Only tenant A's invoice should be present after cross-tenant filter"
+    );
+    assert_eq!(
+        filtered[0].id.0, inv_a1,
+        "The remaining invoice must be tenant A's"
+    );
 
     // Verify tenant B's invoice is not in the list at all
-    let result_b = invoice_repo.list(&tenant_a, &filters, &pagination).await.unwrap();
+    let result_b = invoice_repo
+        .list(&tenant_a, &filters, &pagination)
+        .await
+        .unwrap();
     let ids: Vec<Uuid> = result_b.data.iter().map(|i| i.id.0).collect();
-    assert!(!ids.contains(&inv_b1), "Tenant B's invoice must never appear in tenant A's query");
+    assert!(
+        !ids.contains(&inv_b1),
+        "Tenant B's invoice must never appear in tenant A's query"
+    );
 }

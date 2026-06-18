@@ -291,10 +291,7 @@ async fn sync_vendors(
     let skipped = 0u64;
 
     for ns_vendor in &vendors {
-        let vendor_name = ns_vendor
-            .company_name
-            .as_deref()
-            .unwrap_or_default();
+        let vendor_name = ns_vendor.company_name.as_deref().unwrap_or_default();
         if vendor_name.is_empty() {
             continue;
         }
@@ -302,24 +299,21 @@ async fn sync_vendors(
         let email = ns_vendor.email.as_deref().unwrap_or("");
 
         // Check if vendor already exists by name
-        let existing: Option<(uuid::Uuid,)> = sqlx::query_as(
-            "SELECT id FROM vendors WHERE name = $1 LIMIT 1",
-        )
-        .bind(vendor_name)
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
+        let existing: Option<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM vendors WHERE name = $1 LIMIT 1")
+                .bind(vendor_name)
+                .fetch_optional(&*pool)
+                .await
+                .ok()
+                .flatten();
 
         if let Some((vendor_id,)) = existing {
-            sqlx::query(
-                "UPDATE vendors SET email = $2, updated_at = NOW() WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(email)
-            .execute(&*pool)
-            .await
-            .ok();
+            sqlx::query("UPDATE vendors SET email = $2, updated_at = NOW() WHERE id = $1")
+                .bind(vendor_id)
+                .bind(email)
+                .execute(&*pool)
+                .await
+                .ok();
 
             updated += 1;
         } else {

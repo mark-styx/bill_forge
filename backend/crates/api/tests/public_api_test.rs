@@ -14,8 +14,8 @@ use axum::{
     Extension, Json, Router,
 };
 use billforge_core::public_api::{
-    compute_hmac_signature, generate_signing_secret, require_scope, verify_pat, RateLimiter,
-    PublicApiToken, ALLOWED_EVENT_TYPES,
+    compute_hmac_signature, generate_signing_secret, require_scope, verify_pat, PublicApiToken,
+    RateLimiter, ALLOWED_EVENT_TYPES,
 };
 use billforge_db::DatabaseManager;
 use sha2::{Digest, Sha256};
@@ -251,7 +251,13 @@ async fn test_webhook_subscription_crud_and_delivery_audit() {
 
     let tenant_id = Uuid::new_v4();
     seed_tenant(&pool, tenant_id, "Test Tenant Webhook").await;
-    let (key_id, _bearer) = seed_api_key(&pool, tenant_id, &["webhooks:write", "webhooks:read"], false).await;
+    let (key_id, _bearer) = seed_api_key(
+        &pool,
+        tenant_id,
+        &["webhooks:write", "webhooks:read"],
+        false,
+    )
+    .await;
 
     // Create a webhook subscription
     let sub_id = Uuid::new_v4();
@@ -273,14 +279,13 @@ async fn test_webhook_subscription_crud_and_delivery_audit() {
     .expect("insert subscription");
 
     // Verify subscription exists
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(sub_id)
-    .bind(tenant_id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2")
+            .bind(sub_id)
+            .bind(tenant_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
     assert!(row.is_some());
 
     // Simulate a webhook delivery audit row
@@ -325,13 +330,12 @@ async fn test_webhook_subscription_crud_and_delivery_audit() {
         .await
         .unwrap();
 
-    let check: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM webhook_subscriptions WHERE id = $1",
-    )
-    .bind(sub_id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
+    let check: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM webhook_subscriptions WHERE id = $1")
+            .bind(sub_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
     assert!(check.is_none());
 }
 
@@ -377,24 +381,22 @@ async fn test_tenant_isolation_webhook_subscriptions() {
     .unwrap();
 
     // Tenant A sees only its own subscription
-    let a_subs: Vec<(String,)> = sqlx::query_as(
-        "SELECT target_url FROM webhook_subscriptions WHERE tenant_id = $1",
-    )
-    .bind(tenant_a)
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let a_subs: Vec<(String,)> =
+        sqlx::query_as("SELECT target_url FROM webhook_subscriptions WHERE tenant_id = $1")
+            .bind(tenant_a)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(a_subs.len(), 1);
     assert_eq!(a_subs[0].0, "https://a.example.com/hook");
 
     // Tenant B sees only its own subscription
-    let b_subs: Vec<(String,)> = sqlx::query_as(
-        "SELECT target_url FROM webhook_subscriptions WHERE tenant_id = $1",
-    )
-    .bind(tenant_b)
-    .fetch_all(&pool)
-    .await
-    .unwrap();
+    let b_subs: Vec<(String,)> =
+        sqlx::query_as("SELECT target_url FROM webhook_subscriptions WHERE tenant_id = $1")
+            .bind(tenant_b)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert_eq!(b_subs.len(), 1);
     assert_eq!(b_subs[0].0, "https://b.example.com/hook");
 }

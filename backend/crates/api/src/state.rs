@@ -143,8 +143,7 @@ impl AppState {
         // Build the Teams JWT validator if the Actionable Messages endpoint
         // is enabled. Required env vars are checked here so startup fails
         // fast rather than at the first webhook call.
-        let teams_jwt_validator =
-            Arc::new(Self::build_teams_jwt_validator()?);
+        let teams_jwt_validator = Arc::new(Self::build_teams_jwt_validator()?);
 
         Ok(Self {
             db,
@@ -160,14 +159,12 @@ impl AppState {
     }
 
     fn build_teams_jwt_validator() -> Result<TeamsJwtValidator> {
-        let actions_enabled =
-            std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true");
+        let actions_enabled = std::env::var("TEAMS_ACTIONS_ENABLED").as_deref() == Ok("true");
         if !actions_enabled {
             return Ok(TeamsJwtValidator::disabled());
         }
 
-        let skip_jwt =
-            std::env::var("TEAMS_SKIP_JWT_VALIDATION").as_deref() == Ok("true");
+        let skip_jwt = std::env::var("TEAMS_SKIP_JWT_VALIDATION").as_deref() == Ok("true");
         if skip_jwt {
             tracing::warn!(
                 "TEAMS_SKIP_JWT_VALIDATION=true: building a disabled Teams JWT \

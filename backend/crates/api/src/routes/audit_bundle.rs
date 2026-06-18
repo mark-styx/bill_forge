@@ -16,7 +16,7 @@ use axum::{
 };
 use base64::Engine as _;
 use billforge_core::{traits::InvoiceRepository, types::Role, Error};
-use ed25519_dalek::{SigningKey, Signer};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -162,8 +162,8 @@ async fn export(
     let mut zip_buf = Vec::new();
     {
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-        let zip_options =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let zip_options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
 
         let mut manifest_entries: Vec<ManifestEntry> = Vec::new();
         let mut prev_hash =
@@ -208,9 +208,16 @@ async fn export(
             let approvals_json =
                 serde_json::to_string_pretty(&approvals).unwrap_or_else(|_| "[]".to_string());
             let (sha, size) = hash_and_size(approvals_json.as_bytes());
-            zip.start_file(&approvals_path, zip_options).map_err(zip_err)?;
+            zip.start_file(&approvals_path, zip_options)
+                .map_err(zip_err)?;
             zip.write_all(approvals_json.as_bytes()).map_err(io_err)?;
-            append_entry(&mut manifest_entries, &mut prev_hash, &approvals_path, &sha, size);
+            append_entry(
+                &mut manifest_entries,
+                &mut prev_hash,
+                &approvals_path,
+                &sha,
+                size,
+            );
 
             // 4. GL coding history
             let gl_path = format!("gl_coding/{}.json", inv_id);
@@ -233,7 +240,13 @@ async fn export(
         let (sha, size) = hash_and_size(policy_json.as_bytes());
         zip.start_file(&policy_path, zip_options).map_err(zip_err)?;
         zip.write_all(policy_json.as_bytes()).map_err(io_err)?;
-        append_entry(&mut manifest_entries, &mut prev_hash, &policy_path, &sha, size);
+        append_entry(
+            &mut manifest_entries,
+            &mut prev_hash,
+            &policy_path,
+            &sha,
+            size,
+        );
 
         // 6. WARNING.txt for policy snapshot caveat
         let warning_path = "WARNING.txt".to_string();
@@ -241,9 +254,16 @@ async fn export(
             not the policy in effect when each invoice was originally approved. \
             Historical policy snapshot tracking is planned for a future release.";
         let (sha, size) = hash_and_size(warning.as_bytes());
-        zip.start_file(&warning_path, zip_options).map_err(zip_err)?;
+        zip.start_file(&warning_path, zip_options)
+            .map_err(zip_err)?;
         zip.write_all(warning.as_bytes()).map_err(io_err)?;
-        append_entry(&mut manifest_entries, &mut prev_hash, &warning_path, &sha, size);
+        append_entry(
+            &mut manifest_entries,
+            &mut prev_hash,
+            &warning_path,
+            &sha,
+            size,
+        );
 
         // 7. Manifest
         let root_hash = manifest_entries
@@ -262,21 +282,29 @@ async fn export(
             root_hash: root_hash.clone(),
         };
 
-        let manifest_json = serde_json::to_string_pretty(&manifest)
-            .map_err(|e| ApiError(Error::Internal(format!("Failed to serialize manifest: {}", e))))?;
+        let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| {
+            ApiError(Error::Internal(format!(
+                "Failed to serialize manifest: {}",
+                e
+            )))
+        })?;
 
         // manifest.json
-        zip.start_file("manifest.json", zip_options).map_err(zip_err)?;
+        zip.start_file("manifest.json", zip_options)
+            .map_err(zip_err)?;
         zip.write_all(manifest_json.as_bytes()).map_err(io_err)?;
 
         // manifest.sig - ed25519 signature of manifest.json bytes
         let signature = signing_key.sign(manifest_json.as_bytes());
-        zip.start_file("manifest.sig", zip_options).map_err(zip_err)?;
-        zip.write_all(signature.to_bytes().as_slice()).map_err(io_err)?;
+        zip.start_file("manifest.sig", zip_options)
+            .map_err(zip_err)?;
+        zip.write_all(signature.to_bytes().as_slice())
+            .map_err(io_err)?;
 
         // manifest.pubkey
         let pubkey_bytes = verifying_key.to_bytes();
-        zip.start_file("manifest.pubkey", zip_options).map_err(zip_err)?;
+        zip.start_file("manifest.pubkey", zip_options)
+            .map_err(zip_err)?;
         zip.write_all(pubkey_bytes.as_slice()).map_err(io_err)?;
 
         zip.finish().map_err(zip_err)?;
@@ -351,13 +379,11 @@ async fn fetch_ocr_record(pool: &sqlx::PgPool, invoice_id: &str) -> String {
     .flatten();
 
     match row {
-        Some((raw_text, extracted_fields)) => {
-            serde_json::to_string_pretty(&serde_json::json!({
-                "raw_text": raw_text.unwrap_or_default(),
-                "extracted_fields": extracted_fields.unwrap_or(serde_json::json!({})),
-            }))
-            .unwrap_or_else(|_| r#"{"status": "serialization_error"}"#.to_string())
-        }
+        Some((raw_text, extracted_fields)) => serde_json::to_string_pretty(&serde_json::json!({
+            "raw_text": raw_text.unwrap_or_default(),
+            "extracted_fields": extracted_fields.unwrap_or(serde_json::json!({})),
+        }))
+        .unwrap_or_else(|_| r#"{"status": "serialization_error"}"#.to_string()),
         None => r#"{"status": "no_ocr_record"}"#.to_string(),
     }
 }
@@ -408,20 +434,23 @@ async fn fetch_gl_coding(
     tenant_uuid: &uuid::Uuid,
     invoice_id: &str,
 ) -> Vec<serde_json::Value> {
-    let rows: Vec<(String, Option<serde_json::Value>, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(
-            r#"SELECT action, changes, created_at
+    let rows: Vec<(
+        String,
+        Option<serde_json::Value>,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
+        r#"SELECT action, changes, created_at
                FROM audit_log
                WHERE tenant_id = $1
                  AND resource_id = $2
                  AND (action LIKE 'gl_%' OR resource_type = 'invoice_line_item')
                ORDER BY created_at ASC"#,
-        )
-        .bind(tenant_uuid)
-        .bind(invoice_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    )
+    .bind(tenant_uuid)
+    .bind(invoice_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     rows.into_iter()
         .map(|(action, changes, created_at)| {

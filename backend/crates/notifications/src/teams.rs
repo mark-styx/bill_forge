@@ -507,10 +507,7 @@ impl TeamsClient {
 /// Sends a plain Adaptive Card with a single TextBlock containing the
 /// reply text. Useful for posting AI answers back into the conversation
 /// where an approval card was sent.
-pub async fn post_conversation_reply(
-    webhook_url: &str,
-    text: &str,
-) -> Result<String, TeamsError> {
+pub async fn post_conversation_reply(webhook_url: &str, text: &str) -> Result<String, TeamsError> {
     let http_client = Client::new();
     let payload = serde_json::json!({
         "type": "message",

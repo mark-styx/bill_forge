@@ -16,8 +16,8 @@ pub use self::aws_textract::AwsTextractOcr;
 pub use self::google_vision::GoogleVisionOcr;
 pub use self::ocr_comparison::{OcrComparison, OcrComparisonResult, OcrProvider, ProviderResult};
 pub use self::private_inference::{
-    HealthStatus, PrivateInferenceConfig, PrivateInferenceError, check_health, load_for_tenant,
-    mark_unhealthy, run_private_ocr,
+    check_health, load_for_tenant, mark_unhealthy, run_private_ocr, HealthStatus,
+    PrivateInferenceConfig, PrivateInferenceError,
 };
 pub use self::tesseract::TesseractOcr;
 

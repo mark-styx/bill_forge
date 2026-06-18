@@ -69,8 +69,7 @@ async fn main() -> Result<()> {
             println!("Running migrations...");
             let mut connect_opts = sqlx::postgres::PgConnectOptions::from_str(&database_url)?;
             if let Some(ref pw) = app_pw {
-                connect_opts =
-                    connect_opts.options([("billforge.app_password", pw.as_str())]);
+                connect_opts = connect_opts.options([("billforge.app_password", pw.as_str())]);
             }
             let pool = PgPool::connect_with(connect_opts).await?;
             sqlx::migrate!("../../migrations").run(&pool).await?;

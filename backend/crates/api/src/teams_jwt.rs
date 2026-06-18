@@ -410,6 +410,9 @@ mod tests {
             nbf: None,
         };
         let token = mint_token(&claims, "test-kid");
-        assert!(matches!(v.validate(&token).await, Err(TeamsJwtError::Disabled)));
+        assert!(matches!(
+            v.validate(&token).await,
+            Err(TeamsJwtError::Disabled)
+        ));
     }
 }

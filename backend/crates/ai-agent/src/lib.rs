@@ -48,16 +48,23 @@ pub async fn answer_invoice_question(
     question: &str,
 ) -> Result<String, String> {
     // Load invoice header
-    let header: Option<(String, String, i64, String, Option<String>, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT vendor_name, invoice_number, total_amount_cents, currency, \
+    let header: Option<(
+        String,
+        String,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT vendor_name, invoice_number, total_amount_cents, currency, \
              due_date::text, gl_code, cost_center \
              FROM invoices WHERE id = $1",
-        )
-        .bind(invoice_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to load invoice: {}", e))?;
+    )
+    .bind(invoice_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to load invoice: {}", e))?;
 
     let (vendor_name, invoice_number, total_cents, currency, due_date, gl_code, cost_center) =
         header.ok_or_else(|| "Invoice not found".to_string())?;
@@ -83,9 +90,8 @@ pub async fn answer_invoice_question(
 
     // Build context block
     let amount = total_cents as f64 / 100.0;
-    let mut context = format!(
-        "Invoice #{invoice_number}\nVendor: {vendor_name}\nTotal: {currency} {amount:.2}"
-    );
+    let mut context =
+        format!("Invoice #{invoice_number}\nVendor: {vendor_name}\nTotal: {currency} {amount:.2}");
     if let Some(d) = &due_date {
         context.push_str(&format!("\nDue Date: {d}"));
     }
@@ -100,7 +106,9 @@ pub async fn answer_invoice_question(
         context.push_str("\n\nLine Items:");
         for (desc, qty, _unit, total) in &line_items {
             let qty_str = qty.map(|q| format!(" x{q}")).unwrap_or_default();
-            let total_str = total.map(|c| format!(" ${:.2}", c as f64 / 100.0)).unwrap_or_default();
+            let total_str = total
+                .map(|c| format!(" ${:.2}", c as f64 / 100.0))
+                .unwrap_or_default();
             context.push_str(&format!("\n  - {desc}{qty_str}{total_str}"));
         }
     }
@@ -169,9 +177,8 @@ pub fn build_invoice_qa_prompt(
     notes: &[&str],
 ) -> String {
     let amount = total_cents as f64 / 100.0;
-    let mut context = format!(
-        "Invoice #{invoice_number}\nVendor: {vendor_name}\nTotal: {currency} {amount:.2}"
-    );
+    let mut context =
+        format!("Invoice #{invoice_number}\nVendor: {vendor_name}\nTotal: {currency} {amount:.2}");
     if let Some(d) = due_date {
         context.push_str(&format!("\nDue Date: {d}"));
     }
@@ -186,7 +193,9 @@ pub fn build_invoice_qa_prompt(
         context.push_str("\n\nLine Items:");
         for (desc, qty, total) in line_items {
             let qty_str = qty.map(|q| format!(" x{q}")).unwrap_or_default();
-            let total_str = total.map(|c| format!(" ${:.2}", c as f64 / 100.0)).unwrap_or_default();
+            let total_str = total
+                .map(|c| format!(" ${:.2}", c as f64 / 100.0))
+                .unwrap_or_default();
             context.push_str(&format!("\n  - {desc}{qty_str}{total_str}"));
         }
     }
@@ -221,19 +230,40 @@ mod tests {
             Some("2025-01-15"),
             Some("GL-4000"),
             Some("CC-Engineering"),
-            &[("Widget A", Some(2.0), Some(10000)), ("Widget B", None, Some(5000))],
+            &[
+                ("Widget A", Some(2.0), Some(10000)),
+                ("Widget B", None, Some(5000)),
+            ],
             &["Please expedite"],
         );
 
         assert!(prompt.contains("Acme Corp"), "prompt must mention vendor");
-        assert!(prompt.contains("INV-001"), "prompt must mention invoice number");
+        assert!(
+            prompt.contains("INV-001"),
+            "prompt must mention invoice number"
+        );
         assert!(prompt.contains("150.00"), "prompt must mention total");
-        assert!(prompt.contains("2025-01-15"), "prompt must mention due date");
+        assert!(
+            prompt.contains("2025-01-15"),
+            "prompt must mention due date"
+        );
         assert!(prompt.contains("GL-4000"), "prompt must mention GL code");
-        assert!(prompt.contains("CC-Engineering"), "prompt must mention cost center");
-        assert!(prompt.contains("Widget A"), "prompt must mention first line item");
-        assert!(prompt.contains("Widget B"), "prompt must mention second line item");
-        assert!(prompt.contains("Please expedite"), "prompt must include notes");
+        assert!(
+            prompt.contains("CC-Engineering"),
+            "prompt must mention cost center"
+        );
+        assert!(
+            prompt.contains("Widget A"),
+            "prompt must mention first line item"
+        );
+        assert!(
+            prompt.contains("Widget B"),
+            "prompt must mention second line item"
+        );
+        assert!(
+            prompt.contains("Please expedite"),
+            "prompt must include notes"
+        );
         assert!(
             prompt.contains("Do not speculate"),
             "prompt must instruct against speculation"

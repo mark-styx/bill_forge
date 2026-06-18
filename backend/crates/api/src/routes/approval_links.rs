@@ -249,7 +249,13 @@ pub async fn resolve_approval_for_link(
         .acquire()
         .await
         .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
-    super::workflows::resolve_invoice_approval_status(&mut conn, metadata_pool, tenant_id, invoice_id).await?;
+    super::workflows::resolve_invoice_approval_status(
+        &mut conn,
+        metadata_pool,
+        tenant_id,
+        invoice_id,
+    )
+    .await?;
 
     Ok(())
 }
@@ -296,7 +302,8 @@ async fn approve_via_link(
             "BUDGET_EXCEEDED: {}",
             serde_json::to_string(&budget_check.violations)
                 .unwrap_or_else(|_| "budget exceeded".to_string())
-        ))).into());
+        )))
+        .into());
     }
 
     // Atomically consume the token *before* performing the action.

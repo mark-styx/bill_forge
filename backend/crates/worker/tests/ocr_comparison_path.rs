@@ -72,7 +72,11 @@ fn make_provider_result(
             score += result.vendor_name.confidence * 1.5;
             weight += 1.5;
         }
-        if weight > 0.0 { score / weight } else { 0.0 }
+        if weight > 0.0 {
+            score / weight
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -81,7 +85,11 @@ fn make_provider_result(
         result: if success { Some(result) } else { None },
         processing_time_ms: 100,
         success,
-        error: if success { None } else { Some("mock error".to_string()) },
+        error: if success {
+            None
+        } else {
+            Some("mock error".to_string())
+        },
         confidence_score: confidence,
     }
 }
@@ -129,8 +137,8 @@ fn case_a_primary_high_confidence_picks_primary() {
         "tesseract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     assert_eq!(outcome.selected_provider, "tesseract");
     assert_eq!(
@@ -157,8 +165,8 @@ fn case_b_primary_low_confidence_swaps_to_fallback() {
         "tesseract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     assert_eq!(
         outcome.selected_provider, "aws_textract",
@@ -189,8 +197,8 @@ fn case_b_variant_comparison_picks_fallback_directly() {
         "aws_textract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     assert_eq!(outcome.selected_provider, "aws_textract");
     assert_eq!(
@@ -221,8 +229,8 @@ fn primary_at_threshold_no_swap() {
         "tesseract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     // Primary is exactly at threshold (0.6), not strictly below, so no swap
     assert_eq!(outcome.selected_provider, "tesseract");
@@ -244,8 +252,8 @@ fn fallback_fails_primary_wins_regardless() {
         "tesseract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     assert_eq!(outcome.selected_provider, "tesseract");
 }
@@ -291,8 +299,8 @@ fn no_swap_when_fallback_confidence_equal_to_primary() {
         "tesseract",
     );
 
-    let outcome = select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6)
-        .expect("should succeed");
+    let outcome =
+        select_from_comparison(&cmp, "tesseract", "aws_textract", 0.6).expect("should succeed");
 
     // No swap because fallback_conf is NOT strictly greater than primary_conf
     assert_eq!(outcome.selected_provider, "tesseract");

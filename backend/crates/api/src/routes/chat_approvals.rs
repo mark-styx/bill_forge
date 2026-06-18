@@ -29,9 +29,8 @@ use axum::{
 };
 use billforge_core::{TenantId, UserId};
 use billforge_notifications::{
-    build_invoice_approval_blocks, build_teams_approval_card,
-    slack_post_thread_reply, teams_post_conversation_reply, verify_slack_signature,
-    InvoiceContext, InvoiceLineItem,
+    build_invoice_approval_blocks, build_teams_approval_card, slack_post_thread_reply,
+    teams_post_conversation_reply, verify_slack_signature, InvoiceContext, InvoiceLineItem,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -655,8 +654,7 @@ async fn slack_events(
 
     if let Some((invoice_id,)) = thread {
         // Check if chat AI Q&A is enabled (feature flag, default off)
-        let chat_ai_enabled =
-            std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
+        let chat_ai_enabled = std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
 
         if chat_ai_enabled && is_invoice_question(message_text) {
             // Route to AI assistant
@@ -1146,8 +1144,7 @@ async fn teams_actions(
         }
         "ask" => {
             // AI Q&A via Teams
-            let chat_ai_enabled =
-                std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
+            let chat_ai_enabled = std::env::var("CHAT_AI_QA_ENABLED").as_deref() == Ok("true");
             if !chat_ai_enabled {
                 return Err(ApiError(billforge_core::Error::Validation(
                     "AI Q&A is not enabled".to_string(),
@@ -1183,9 +1180,7 @@ async fn teams_actions(
                 Ok(answer) => {
                     // Post the answer back via the webhook
                     if let Some((webhook_url,)) = webhook_row {
-                        if let Err(e) =
-                            teams_post_conversation_reply(&webhook_url, &answer).await
-                        {
+                        if let Err(e) = teams_post_conversation_reply(&webhook_url, &answer).await {
                             tracing::warn!("Failed to post AI answer reply to Teams: {}", e);
                         }
                     }

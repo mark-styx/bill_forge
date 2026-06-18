@@ -156,10 +156,7 @@ async fn create_vendor(
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
 
     // Run fraud-guard checks before creating the vendor
-    let domain = fraud_guard::extract_domain(
-        input.email.as_deref(),
-        input.website.as_deref(),
-    );
+    let domain = fraud_guard::extract_domain(input.email.as_deref(), input.website.as_deref());
     let vendor_country = input.address.as_ref().map(|a| a.country.as_str());
     let signals = fraud_guard::run_fraud_guard(
         &tenant.tenant_id,
@@ -179,8 +176,8 @@ async fn create_vendor(
     let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
     let ofac_outcome = screener.screen(&input.name, None);
 
-    let needs_hold = signals.overall_risk == fraud_guard::RiskLevel::High
-        || ofac_outcome.status != "pass";
+    let needs_hold =
+        signals.overall_risk == fraud_guard::RiskLevel::High || ofac_outcome.status != "pass";
 
     // If overall risk is high or OFAC flagged, the vendor should start on payment_hold
     let vendor = if needs_hold {
@@ -191,7 +188,11 @@ async fn create_vendor(
                 "OFAC screening: {} ({} match{})",
                 ofac_outcome.status,
                 ofac_outcome.matches.len(),
-                if ofac_outcome.matches.len() != 1 { "es" } else { "" }
+                if ofac_outcome.matches.len() != 1 {
+                    "es"
+                } else {
+                    ""
+                }
             )
         } else {
             "Fraud guard: high-risk signals detected".to_string()
@@ -270,7 +271,11 @@ async fn update_vendor(
             "OFAC screening: {} ({} match{})",
             ofac_outcome.status,
             ofac_outcome.matches.len(),
-            if ofac_outcome.matches.len() != 1 { "es" } else { "" }
+            if ofac_outcome.matches.len() != 1 {
+                "es"
+            } else {
+                ""
+            }
         );
         sqlx::query(
             "UPDATE vendors SET payment_hold = true, payment_hold_reason = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
@@ -281,7 +286,10 @@ async fn update_vendor(
         .execute(&*pool)
         .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to set payment_hold: {}", e)))?;
-        vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?.unwrap_or(vendor);
+        vendor = repo
+            .get_by_id(&tenant.tenant_id, &vendor_id)
+            .await?
+            .unwrap_or(vendor);
     }
 
     let mut audit_entry = AuditEntry::new(
@@ -292,8 +300,7 @@ async fn update_vendor(
         vendor.id.to_string(),
         format!(
             "Updated vendor {} (OFAC: {})",
-            vendor.name,
-            ofac_outcome.status,
+            vendor.name, ofac_outcome.status,
         ),
     )
     .with_user_email(&user.email)
@@ -1214,10 +1221,7 @@ async fn update_banking(
         .await?;
 
     // Run fraud-guard checks for this banking change
-    let domain = fraud_guard::extract_domain(
-        vendor.email.as_deref(),
-        vendor.website.as_deref(),
-    );
+    let domain = fraud_guard::extract_domain(vendor.email.as_deref(), vendor.website.as_deref());
     let vendor_country = vendor.address.as_ref().map(|a| a.country.as_str());
     let signals = fraud_guard::run_fraud_guard(
         &tenant.tenant_id,

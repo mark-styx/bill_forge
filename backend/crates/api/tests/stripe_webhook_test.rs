@@ -52,8 +52,7 @@ fn compute_signature_header(payload: &[u8], secret: &str, timestamp: i64) -> Str
 
     let payload_str = std::str::from_utf8(payload).unwrap_or("");
     let signed_payload = format!("{}.{}", timestamp, payload_str);
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("valid secret length");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("valid secret length");
     mac.update(signed_payload.as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
     format!("t={},v1={}", timestamp, sig)

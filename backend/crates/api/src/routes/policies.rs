@@ -5,11 +5,7 @@ use crate::extractors::InvoiceProcessingAccess;
 use crate::routes::workflows::log_audit_or_record_gap;
 use crate::services::policy_composer::{parse_policy, preview_against_history, ProposedRule};
 use crate::state::AppState;
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, routing::post, Json, Router};
 use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
 use serde::{Deserialize, Serialize};
 
@@ -64,10 +60,9 @@ async fn compose_policy(
 ) -> ApiResult<Json<ComposeResponse>> {
     let text = body.text.trim().to_string();
     if text.is_empty() {
-        return Err(billforge_core::Error::Validation(
-            "Policy text cannot be empty".to_string(),
-        )
-        .into());
+        return Err(
+            billforge_core::Error::Validation("Policy text cannot be empty".to_string()).into(),
+        );
     }
 
     let proposed_rule = parse_policy(&text).map_err(|e| {
@@ -79,9 +74,7 @@ async fn compose_policy(
 
     let mut warnings = Vec::new();
     if preview.matched_count == 0 {
-        warnings.push(
-            "This rule would not match any invoices from the last 90 days.".to_string(),
-        );
+        warnings.push("This rule would not match any invoices from the last 90 days.".to_string());
     }
 
     Ok(Json(ComposeResponse {
@@ -130,12 +123,9 @@ async fn commit_policy(
         actions: body.proposed_rule.to_actions(),
     };
 
-    let rule = billforge_core::traits::WorkflowRuleRepository::create(
-        &repo,
-        &tenant.tenant_id,
-        input,
-    )
-    .await?;
+    let rule =
+        billforge_core::traits::WorkflowRuleRepository::create(&repo, &tenant.tenant_id, input)
+            .await?;
 
     // Audit log with original NL text
     let audit_entry = AuditEntry::new(

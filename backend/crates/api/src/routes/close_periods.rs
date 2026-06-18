@@ -231,8 +231,17 @@ async fn get_current_period_readiness(
 
     // 1. Resolve current open period (latest row where status = 'open')
     let period_row: Option<(
-        Uuid, Uuid, String, String, String, String, String,
-        Option<String>, Option<Uuid>, String, String,
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<Uuid>,
+        String,
+        String,
     )> = sqlx::query_as(
         "SELECT id, tenant_id, period_label, period_start::text, period_end::text, \
                 cutoff_date::text, status, locked_at::text, locked_by_user_id, \
@@ -309,16 +318,19 @@ async fn get_current_period_readiness(
     .bind(&period.period_end)
     .fetch_one(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to count unapproved invoices: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to count unapproved invoices: {}", e))
+    })?;
 
     // accruals_drafted for this period
-    let (accruals_drafted,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM close_accrual_entries WHERE close_period_id = $1",
-    )
-    .bind(period.id)
-    .fetch_one(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to count accruals: {}", e)))?;
+    let (accruals_drafted,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM close_accrual_entries WHERE close_period_id = $1")
+            .bind(period.id)
+            .fetch_one(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to count accruals: {}", e))
+            })?;
 
     // invoices_needing_accrual: unapproved invoices in window with NO matching accrual row
     let (invoices_needing_accrual,): (i64,) = sqlx::query_as(
@@ -336,7 +348,9 @@ async fn get_current_period_readiness(
     .bind(period.id)
     .fetch_one(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to count invoices needing accrual: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to count invoices needing accrual: {}", e))
+    })?;
 
     // invoices_missing_gl_coding: window invoices with null/empty gl_code
     let (invoices_missing_gl_coding,): (i64,) = sqlx::query_as(
@@ -349,20 +363,32 @@ async fn get_current_period_readiness(
     .bind(&period.period_end)
     .fetch_one(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to count invoices missing GL coding: {}", e)))?;
+    .map_err(|e| {
+        billforge_core::Error::Database(format!(
+            "Failed to count invoices missing GL coding: {}",
+            e
+        ))
+    })?;
 
     // days_until_cutoff
-    let days_until_cutoff: Option<i64> = sqlx::query_scalar(
-        "SELECT ($1::date - CURRENT_DATE)::bigint",
-    )
-    .bind(&period.cutoff_date)
-    .fetch_one(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to compute days until cutoff: {}", e)))?;
+    let days_until_cutoff: Option<i64> =
+        sqlx::query_scalar("SELECT ($1::date - CURRENT_DATE)::bigint")
+            .bind(&period.cutoff_date)
+            .fetch_one(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!(
+                    "Failed to compute days until cutoff: {}",
+                    e
+                ))
+            })?;
 
     // 3. Compute score
     let denominator = std::cmp::max(total_invoices, 1);
-    let raw_score = 100.0 * (1.0 - ((invoices_needing_accrual + invoices_missing_gl_coding) as f64 / denominator as f64));
+    let raw_score = 100.0
+        * (1.0
+            - ((invoices_needing_accrual + invoices_missing_gl_coding) as f64
+                / denominator as f64));
     let score = raw_score.round().clamp(0.0, 100.0) as i32;
 
     // 4. Build exceptions checklist
@@ -776,22 +802,23 @@ async fn run_close(
     }
 
     // 4. Attempt ERP posting
-    let erp_result =
-        post_accrual_entries_to_erp(&state, &tenant.tenant_id, &entry_stubs).await;
+    let erp_result = post_accrual_entries_to_erp(&state, &tenant.tenant_id, &entry_stubs).await;
 
     // Derive (erp_post_status, period_status, erp_post_error) from the result.
     let (erp_post_status, period_status, erp_post_error): (String, &str, Option<String>) =
         match &erp_result {
-            ErpPostResult::Posted { journal_id } => {
-                ("posted".to_string(), "locked", None)
-            }
+            ErpPostResult::Posted { journal_id } => ("posted".to_string(), "locked", None),
             ErpPostResult::NoConnection => {
                 // No ERP connection configured - still lock the period.
                 ("pending".to_string(), "locked", None)
             }
             ErpPostResult::Unsupported { reason } => {
                 // ERP posting not implemented - do NOT lock the period.
-                ("unsupported".to_string(), "cutoff_passed", Some(reason.clone()))
+                (
+                    "unsupported".to_string(),
+                    "cutoff_passed",
+                    Some(reason.clone()),
+                )
             }
             ErpPostResult::Failed { error } => {
                 ("failed".to_string(), "cutoff_passed", Some(error.clone()))
@@ -967,15 +994,13 @@ mod tests {
         };
 
         let (erp_post_status, period_status, erp_post_error) = match &erp_result {
-            ErpPostResult::Posted { journal_id: _ } => {
-                ("posted".to_string(), "locked", None)
-            }
-            ErpPostResult::NoConnection => {
-                ("pending".to_string(), "locked", None)
-            }
-            ErpPostResult::Unsupported { reason } => {
-                ("unsupported".to_string(), "cutoff_passed", Some(reason.clone()))
-            }
+            ErpPostResult::Posted { journal_id: _ } => ("posted".to_string(), "locked", None),
+            ErpPostResult::NoConnection => ("pending".to_string(), "locked", None),
+            ErpPostResult::Unsupported { reason } => (
+                "unsupported".to_string(),
+                "cutoff_passed",
+                Some(reason.clone()),
+            ),
             ErpPostResult::Failed { error } => {
                 ("failed".to_string(), "cutoff_passed", Some(error.clone()))
             }

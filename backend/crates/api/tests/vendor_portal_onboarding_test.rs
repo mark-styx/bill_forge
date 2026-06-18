@@ -25,8 +25,14 @@ async fn create_test_state() -> AppState {
         "DATABASE_URL",
         "postgres://postgres@localhost:5432/billforge_test",
     );
-    std::env::set_var("TENANT_DB_PATH", "/tmp/billforge_test_tenants_vp_onboarding");
-    std::env::set_var("LOCAL_STORAGE_PATH", "/tmp/billforge_test_files_vp_onboarding");
+    std::env::set_var(
+        "TENANT_DB_PATH",
+        "/tmp/billforge_test_tenants_vp_onboarding",
+    );
+    std::env::set_var(
+        "LOCAL_STORAGE_PATH",
+        "/tmp/billforge_test_files_vp_onboarding",
+    );
     std::env::set_var("ALLOWED_ORIGINS", "http://localhost:3000");
 
     let config = Config::from_env().expect("Failed to load test config");
@@ -46,7 +52,8 @@ fn vendor_portal_token(jwt_secret: &str) -> String {
         access_token_expiry_hours: 1,
         refresh_token_expiry_days: 1,
     });
-    let tid = TenantId::from_uuid(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
+    let tid =
+        TenantId::from_uuid(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
     let vid = VendorId(uuid::Uuid::new_v4());
     svc.create_vendor_portal_token(&tid, &vid)
         .expect("create vendor portal token")

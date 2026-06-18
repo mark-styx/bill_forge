@@ -21,11 +21,13 @@ use billforge_db::{
 use billforge_invoice_capture::ocr::ocr_comparison::{OcrComparison, OcrWithFallback};
 use billforge_invoice_capture::{
     calibrated_confidence, ocr, ocr_routing_decision, resolve_ocr_provider_name,
-    OcrCalibrationStore, OcrProvider, OcrRoutingDecision,
-    PgOcrCalibrationStore, OCR_CALIBRATED_FIELDS,
+    OcrCalibrationStore, OcrProvider, OcrRoutingDecision, PgOcrCalibrationStore,
+    OCR_CALIBRATED_FIELDS,
 };
 use billforge_invoice_processing::categorization::LineItemInput;
-use billforge_invoice_processing::{ContractMatchInput, ContractMatchOutcome, match_invoice_to_contract};
+use billforge_invoice_processing::{
+    match_invoice_to_contract, ContractMatchInput, ContractMatchOutcome,
+};
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -53,7 +55,10 @@ pub fn select_from_comparison(
 ) -> Result<ComparisonOutcome, String> {
     let best_key = &cmp_result.best_provider;
     let pr = cmp_result.providers.get(best_key).ok_or_else(|| {
-        format!("Comparison best_provider '{}' not found in results", best_key)
+        format!(
+            "Comparison best_provider '{}' not found in results",
+            best_key
+        )
     })?;
 
     if !pr.success {
@@ -71,9 +76,10 @@ pub fn select_from_comparison(
         };
     }
 
-    let extraction = pr.result.as_ref().ok_or_else(|| {
-        "Comparison best provider returned no result".to_string()
-    })?;
+    let extraction = pr
+        .result
+        .as_ref()
+        .ok_or_else(|| "Comparison best provider returned no result".to_string())?;
 
     let primary_conf = cmp_result
         .providers
@@ -89,9 +95,7 @@ pub fn select_from_comparison(
     // Confidence-threshold swap: if the primary provider won but its
     // confidence is below the configured threshold and the fallback
     // scored higher, use the fallback instead.
-    if best_key == primary_provider
-        && primary_conf < min_confidence
-        && fallback_conf > primary_conf
+    if best_key == primary_provider && primary_conf < min_confidence && fallback_conf > primary_conf
     {
         if let Some(fallback_pr) = cmp_result.providers.get(fallback_provider) {
             if let Some(ref fb_extraction) = fallback_pr.result {
@@ -166,7 +170,8 @@ pub async fn process_ocr(
     let pool = config.pg_manager.tenant(&tenant_id).await?;
     let repo = InvoiceRepositoryImpl::new(pool.clone());
     let tenant_settings = load_tenant_settings(config, &tenant_id).await?;
-    let mut effective_ocr_provider = resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
+    let mut effective_ocr_provider =
+        resolve_ocr_provider_name(&config.ocr_provider, &tenant_settings);
     let privacy_mode = if tenant_settings.features.local_ocr_required {
         "local_only"
     } else {
@@ -228,18 +233,15 @@ pub async fn process_ocr(
             if resolved_fallback != effective_ocr_provider {
                 let primary_type = OcrProvider::from_str(&effective_ocr_provider)
                     .unwrap_or(OcrProvider::Tesseract);
-                let fallback_type = OcrProvider::from_str(&resolved_fallback)
-                    .unwrap_or(OcrProvider::Tesseract);
+                let fallback_type =
+                    OcrProvider::from_str(&resolved_fallback).unwrap_or(OcrProvider::Tesseract);
                 let comparison = OcrComparison::new(vec![
                     (primary_type, ocr::create_provider(&effective_ocr_provider)),
                     (fallback_type, ocr::create_provider(&resolved_fallback)),
                 ]);
                 let primary_key = primary_type.as_str().to_string();
                 let fallback_key = fallback_type.as_str().to_string();
-                match comparison
-                    .compare(&doc_bytes, &payload.content_type)
-                    .await
-                {
+                match comparison.compare(&doc_bytes, &payload.content_type).await {
                     Ok(cmp_result) => {
                         match select_from_comparison(
                             &cmp_result,
@@ -388,7 +390,11 @@ pub async fn process_ocr(
             {
                 Ok(weights) => {
                     let bucket_result = calibration_store
-                        .get_field_buckets(&tenant_id, &effective_ocr_provider, OCR_CALIBRATED_FIELDS)
+                        .get_field_buckets(
+                            &tenant_id,
+                            &effective_ocr_provider,
+                            OCR_CALIBRATED_FIELDS,
+                        )
                         .await;
                     let buckets = bucket_result.unwrap_or_default();
                     calibrated_confidence(&raw_fields, &weights, &buckets)
@@ -691,13 +697,8 @@ pub async fn run_straight_through_processing(
 
         match match_invoice_to_contract(pool, &contract_input, *invoice_id.as_uuid()).await {
             Ok(outcome) => {
-                if let Some(status) = apply_contract_match_outcome(
-                    pool,
-                    tenant_id,
-                    invoice_id,
-                    &outcome,
-                )
-                .await
+                if let Some(status) =
+                    apply_contract_match_outcome(pool, tenant_id, invoice_id, &outcome).await
                 {
                     // InBand -> Approved (Payment), OutOfBand/Expired -> OnHold (Review).
                     repo.update_processing_status(tenant_id, invoice_id, status)

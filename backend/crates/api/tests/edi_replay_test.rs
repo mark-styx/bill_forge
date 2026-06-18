@@ -225,7 +225,10 @@ mod integration {
         let third = check_replay_nonce(&pool, tenant_id, nonce)
             .await
             .expect("pool check ok");
-        assert!(!third, "third check (after commit) should be flagged replay");
+        assert!(
+            !third,
+            "third check (after commit) should be flagged replay"
+        );
 
         // Cleanup
         sqlx::query("DELETE FROM edi_webhook_nonces WHERE tenant_id = $1")

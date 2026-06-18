@@ -4,11 +4,11 @@
 //! These are pure unit tests (no database) that exercise the error-to-response
 //! mapping via the shared `ApiError` / `ApiResult` types.
 
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use billforge_api::error::ApiError;
 use billforge_core::Error;
 use http_body_util::BodyExt;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
 use serde_json::Value;
 
 /// Helper: convert an ApiError into a JSON body by running it through the
@@ -82,7 +82,10 @@ async fn test_not_found_error_returns_envelope_shape() {
     let error_obj = json.get("error").expect("root has 'error' key");
     assert_eq!(error_obj["code"], "NOT_FOUND");
     assert!(
-        error_obj["message"].as_str().unwrap_or("").contains("not found"),
+        error_obj["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not found"),
         "message should describe the not-found condition"
     );
 }

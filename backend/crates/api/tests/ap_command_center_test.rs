@@ -8,9 +8,7 @@
 //!
 //!     cargo test -p billforge-api --test ap_command_center_test -- --ignored
 
-use billforge_api::routes::ap_command_center::{
-    ApCommandCenterResponse, BlockingInvoice, Bucket,
-};
+use billforge_api::routes::ap_command_center::{ApCommandCenterResponse, BlockingInvoice, Bucket};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
 use uuid::Uuid;
 
@@ -26,7 +24,10 @@ fn this_week_bounds() -> (NaiveDate, NaiveDate) {
 
 fn next_week_bounds() -> (NaiveDate, NaiveDate) {
     let (this_start, _) = this_week_bounds();
-    (this_start + Duration::days(7), this_start + Duration::days(13))
+    (
+        this_start + Duration::days(7),
+        this_start + Duration::days(13),
+    )
 }
 
 fn make_invoice(
@@ -40,7 +41,10 @@ fn make_invoice(
 ) -> BlockingInvoice {
     BlockingInvoice {
         invoice_id: Uuid::new_v4(),
-        invoice_number: format!("INV-{}", Uuid::new_v4().as_simple().to_string()[..6].to_uppercase()),
+        invoice_number: format!(
+            "INV-{}",
+            Uuid::new_v4().as_simple().to_string()[..6].to_uppercase()
+        ),
         vendor_name: "Test Vendor".to_string(),
         amount_cents,
         due_date,
@@ -63,7 +67,15 @@ fn test_response_serializes_with_two_buckets() {
     let (nw_start, nw_end) = next_week_bounds();
 
     let inv_this = make_invoice(50_000_00, tw_start, None, 0, 0, None, 0);
-    let inv_next = make_invoice(30_000_00, nw_start, Some("Alice"), 3, 5_000_00, Some(nw_start), 0);
+    let inv_next = make_invoice(
+        30_000_00,
+        nw_start,
+        Some("Alice"),
+        3,
+        5_000_00,
+        Some(nw_start),
+        0,
+    );
 
     let resp = ApCommandCenterResponse {
         week_buckets: vec![
@@ -88,7 +100,9 @@ fn test_response_serializes_with_two_buckets() {
     };
 
     let json = serde_json::to_value(&resp).expect("Should serialize");
-    let buckets = json["week_buckets"].as_array().expect("week_buckets is array");
+    let buckets = json["week_buckets"]
+        .as_array()
+        .expect("week_buckets is array");
     assert_eq!(buckets.len(), 2, "Should have exactly 2 buckets");
 
     assert_eq!(buckets[0]["label"], "This week");
@@ -187,7 +201,12 @@ fn test_invoices_assigned_to_correct_buckets() {
     let mut this_week: Vec<&BlockingInvoice> = Vec::new();
     let mut next_week: Vec<&BlockingInvoice> = Vec::new();
 
-    for inv in [&inv_this_early, &inv_this_late, &inv_next_early, &inv_next_late] {
+    for inv in [
+        &inv_this_early,
+        &inv_this_late,
+        &inv_next_early,
+        &inv_next_late,
+    ] {
         if inv.due_date <= tw_end {
             this_week.push(inv);
         } else {
@@ -195,8 +214,16 @@ fn test_invoices_assigned_to_correct_buckets() {
         }
     }
 
-    assert_eq!(this_week.len(), 2, "This-week bucket should have 2 invoices");
-    assert_eq!(next_week.len(), 2, "Next-week bucket should have 2 invoices");
+    assert_eq!(
+        this_week.len(),
+        2,
+        "This-week bucket should have 2 invoices"
+    );
+    assert_eq!(
+        next_week.len(),
+        2,
+        "Next-week bucket should have 2 invoices"
+    );
 
     // Verify totals
     let this_total: i64 = this_week.iter().map(|i| i.amount_cents).sum();
@@ -273,7 +300,10 @@ fn test_late_fee_risk_aggregate_with_vendor_terms() {
 
     let late_total = inv1.late_fee_risk_cents + inv2.late_fee_risk_cents;
 
-    assert_eq!(late_total, 2_250_00, "Late-fee risk aggregates across invoices");
+    assert_eq!(
+        late_total, 2_250_00,
+        "Late-fee risk aggregates across invoices"
+    );
 }
 
 #[test]
@@ -293,7 +323,10 @@ fn test_late_fee_risk_serializes_when_non_zero() {
     };
 
     let json = serde_json::to_value(&inv).expect("Should serialize");
-    assert_eq!(json["late_fee_risk_cents"], 50_000, "Non-zero late-fee risk should serialize");
+    assert_eq!(
+        json["late_fee_risk_cents"], 50_000,
+        "Non-zero late-fee risk should serialize"
+    );
     assert!(json["late_fee_risk_cents"].as_i64().unwrap() > 0);
 }
 
@@ -416,12 +449,14 @@ async fn seed_target_approver(pool: &sqlx::PgPool) -> Uuid {
 
 /// Clean up test data.
 async fn cleanup_test_data(pool: &sqlx::PgPool, invoice_id: Uuid, tenant_id: Uuid) {
-    sqlx::query("DELETE FROM email_notifications WHERE metadata->>'invoice_id' = $1 AND tenant_id = $2")
-        .bind(invoice_id.to_string())
-        .bind(tenant_id)
-        .execute(pool)
-        .await
-        .ok();
+    sqlx::query(
+        "DELETE FROM email_notifications WHERE metadata->>'invoice_id' = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id.to_string())
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .ok();
     sqlx::query("DELETE FROM approval_requests WHERE invoice_id = $1 AND tenant_id = $2")
         .bind(invoice_id)
         .bind(tenant_id)
@@ -546,13 +581,12 @@ async fn reassign_succeeds_and_updates_pending_approval() {
     );
 
     // Verify requested_from now points to the new approver
-    let requested_from: serde_json::Value = sqlx::query_scalar(
-        "SELECT requested_from FROM approval_requests WHERE id = $1",
-    )
-    .bind(approval_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let requested_from: serde_json::Value =
+        sqlx::query_scalar("SELECT requested_from FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(
         requested_from["User"].as_str().unwrap(),
@@ -573,11 +607,13 @@ async fn reassign_succeeds_and_updates_pending_approval() {
     .bind(tenant_id)
     .bind(invoice_id)
     .bind(actor_id)
-    .bind(serde_json::to_string(&serde_json::json!({
-        "reassign_to_user_id": new_approver_id.to_string(),
-        "rows_updated": result.rows_affected(),
-    }))
-    .unwrap_or_default())
+    .bind(
+        serde_json::to_string(&serde_json::json!({
+            "reassign_to_user_id": new_approver_id.to_string(),
+            "rows_updated": result.rows_affected(),
+        }))
+        .unwrap_or_default(),
+    )
     .execute(&pool)
     .await
     .expect("write audit log");
@@ -594,7 +630,10 @@ async fn reassign_succeeds_and_updates_pending_approval() {
     .await
     .unwrap();
 
-    assert_eq!(audit_count, 1, "Exactly one reassign audit row should exist");
+    assert_eq!(
+        audit_count, 1,
+        "Exactly one reassign audit row should exist"
+    );
 
     // Verify metadata contains rows_updated = 1
     let metadata: serde_json::Value = sqlx::query_scalar(
@@ -608,7 +647,10 @@ async fn reassign_succeeds_and_updates_pending_approval() {
     .await
     .unwrap();
 
-    assert_eq!(metadata["rows_updated"], 1, "Audit metadata should have rows_updated = 1");
+    assert_eq!(
+        metadata["rows_updated"], 1,
+        "Audit metadata should have rows_updated = 1"
+    );
 
     cleanup_test_data(&pool, invoice_id, tenant_id).await;
 }
@@ -643,14 +685,13 @@ async fn nudge_enqueues_email_and_writes_audit() {
     .expect("create approval_request");
 
     // Look up the approver's email (seeded by seed_target_approver).
-    let approver_email: String = sqlx::query_scalar(
-        "SELECT email FROM users WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(approver_id)
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await
-    .expect("approver email");
+    let approver_email: String =
+        sqlx::query_scalar("SELECT email FROM users WHERE id = $1 AND tenant_id = $2")
+            .bind(approver_id)
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await
+            .expect("approver email");
 
     // --- Simulate the nudge handler SQL ---
 
@@ -668,7 +709,9 @@ async fn nudge_enqueues_email_and_writes_audit() {
     .bind(tenant_id)
     .bind(invoice_id)
     .bind(actor_id)
-    .bind(serde_json::to_string(&serde_json::json!({ "comment_body": comment })).unwrap_or_default())
+    .bind(
+        serde_json::to_string(&serde_json::json!({ "comment_body": comment })).unwrap_or_default(),
+    )
     .execute(&pool)
     .await
     .expect("write nudge audit");
@@ -775,13 +818,12 @@ async fn nudge_no_email_when_no_pending_approval() {
     // Deliberately do NOT create any approval_requests row.
 
     // Count email rows before
-    let email_before: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let email_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     // Simulate the nudge audit INSERT (handler always writes this)
     let actor_id = Uuid::parse_str(FIXTURE_USER_ID).unwrap();
@@ -796,7 +838,9 @@ async fn nudge_no_email_when_no_pending_approval() {
     .bind(tenant_id)
     .bind(invoice_id)
     .bind(actor_id)
-    .bind(serde_json::to_string(&serde_json::json!({ "comment_body": "nudge" })).unwrap_or_default())
+    .bind(
+        serde_json::to_string(&serde_json::json!({ "comment_body": "nudge" })).unwrap_or_default(),
+    )
     .execute(&pool)
     .await
     .expect("write nudge audit");
@@ -817,7 +861,10 @@ async fn nudge_no_email_when_no_pending_approval() {
     .await
     .expect("query approver");
 
-    assert!(found_approver.is_none(), "No pending approver should be found");
+    assert!(
+        found_approver.is_none(),
+        "No pending approver should be found"
+    );
 
     // Assert audit row was written
     let audit_count: i64 = sqlx::query_scalar(
@@ -833,13 +880,12 @@ async fn nudge_no_email_when_no_pending_approval() {
     assert_eq!(audit_count, 1, "Audit row should still be written");
 
     // Assert no new email_notifications rows
-    let email_after: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let email_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM email_notifications WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         email_after, email_before,
         "No new email_notifications should be enqueued when no pending approval"

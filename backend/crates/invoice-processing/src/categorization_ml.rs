@@ -390,10 +390,9 @@ impl MLCategorizer {
         let mut lines = Vec::with_capacity(line_items.len());
 
         for (idx, item) in line_items.iter().enumerate() {
-            let line_embedding = self.generate_line_embedding(
-                &item.description,
-                vendor_id.unwrap_or(Uuid::nil()),
-            ).await?;
+            let line_embedding = self
+                .generate_line_embedding(&item.description, vendor_id.unwrap_or(Uuid::nil()))
+                .await?;
 
             // Find top-K similar GL categories
             let similar = self
@@ -448,10 +447,7 @@ impl MLCategorizer {
                                 amount: item.amount * (sim / total_weight) as f64,
                                 percentage: (sim / total_weight) as f64,
                                 confidence: (sim * 0.85).min(CONFIDENCE_CEILING) as f64,
-                                rationale: format!(
-                                    "Semantic match (similarity: {:.2})",
-                                    sim
-                                ),
+                                rationale: format!("Semantic match (similarity: {:.2})", sim),
                             })
                             .collect()
                     } else {
@@ -484,10 +480,7 @@ impl MLCategorizer {
                 department: dept_match.map(|m| m.value),
                 cost_center: cc_match.map(|m| m.value),
                 confidence,
-                rationale: format!(
-                    "Semantic match (similarity: {:.2})",
-                    best.1
-                ),
+                rationale: format!("Semantic match (similarity: {:.2})", best.1),
                 source: SuggestionSource::LineItemAnalysis,
                 splits,
             });

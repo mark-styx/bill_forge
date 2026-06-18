@@ -216,9 +216,10 @@ async fn promote(
     AuthUser(user): AuthUser,
     Json(req): Json<PromoteRequest>,
 ) -> ApiResult<Json<PromoteResponse>> {
-    let plan_id: billforge_billing::PlanId = req.plan_id.parse().map_err(|e: String| {
-        ApiError(billforge_core::Error::Validation(e))
-    })?;
+    let plan_id: billforge_billing::PlanId = req
+        .plan_id
+        .parse()
+        .map_err(|e: String| ApiError(billforge_core::Error::Validation(e)))?;
 
     let tenant_id = user.tenant_id.clone();
 
@@ -324,11 +325,46 @@ async fn seed_sandbox_tenant(
 
     // Seed 5 sample vendors
     let vendors = vec![
-        ("Acme Corp", "business", "billing@acme.com", "+1-555-0100", "123 Industrial Way, Chicago, IL 60601", "active"),
-        ("TechSupplies Inc", "business", "ap@techsupplies.com", "+1-555-0101", "456 Tech Park Dr, San Jose, CA 95110", "active"),
-        ("Office Supplies Co", "business", "invoices@officesupplies.com", "+1-555-0102", "789 Commerce St, Dallas, TX 75201", "active"),
-        ("Cloud Services LLC", "business", "billing@cloudservices.io", "+1-555-0103", "321 Server Lane, Seattle, WA 98101", "active"),
-        ("Marketing Agency Pro", "contractor", "invoices@marketingpro.co", "+1-555-0104", "555 Creative Blvd, Austin, TX 78701", "active"),
+        (
+            "Acme Corp",
+            "business",
+            "billing@acme.com",
+            "+1-555-0100",
+            "123 Industrial Way, Chicago, IL 60601",
+            "active",
+        ),
+        (
+            "TechSupplies Inc",
+            "business",
+            "ap@techsupplies.com",
+            "+1-555-0101",
+            "456 Tech Park Dr, San Jose, CA 95110",
+            "active",
+        ),
+        (
+            "Office Supplies Co",
+            "business",
+            "invoices@officesupplies.com",
+            "+1-555-0102",
+            "789 Commerce St, Dallas, TX 75201",
+            "active",
+        ),
+        (
+            "Cloud Services LLC",
+            "business",
+            "billing@cloudservices.io",
+            "+1-555-0103",
+            "321 Server Lane, Seattle, WA 98101",
+            "active",
+        ),
+        (
+            "Marketing Agency Pro",
+            "contractor",
+            "invoices@marketingpro.co",
+            "+1-555-0104",
+            "555 Creative Blvd, Austin, TX 78701",
+            "active",
+        ),
     ];
 
     for (name, vtype, email, phone, address, status) in &vendors {
@@ -349,28 +385,97 @@ async fn seed_sandbox_tenant(
     }
 
     // Get admin user id for created_by field
-    let admin_id: Option<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE tenant_id = $1 LIMIT 1"
-    )
-    .bind(tenant_uuid)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| anyhow::anyhow!("Failed to get admin user: {}", e))?;
+    let admin_id: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE tenant_id = $1 LIMIT 1")
+            .bind(tenant_uuid)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get admin user: {}", e))?;
 
     let admin_uuid = admin_id.unwrap_or_else(uuid::Uuid::new_v4);
 
     // Seed 10 invoices across statuses
     let invoices: Vec<(&str, &str, i64, &str, &str, &str)> = vec![
-        ("INV-001", "Acme Corp", 125000, "ready_for_review", "submitted", "Office equipment order"),
-        ("INV-002", "TechSupplies Inc", 45600, "ready_for_review", "submitted", "Network hardware"),
-        ("INV-003", "Cloud Services LLC", 234500, "reviewed", "pending_approval", "Monthly cloud services"),
-        ("INV-004", "Marketing Agency Pro", 89000, "reviewed", "pending_approval", "Q1 campaign work"),
-        ("INV-005", "Office Supplies Co", 12500, "reviewed", "approved", "Office restock"),
-        ("INV-006", "Acme Corp", 67800, "reviewed", "approved", "Widget delivery"),
-        ("INV-007", "Cloud Services LLC", 156000, "reviewed", "paid", "December infrastructure"),
-        ("INV-008", "TechSupplies Inc", 34000, "reviewed", "paid", "Laptop accessories"),
-        ("INV-009", "Acme Corp", 210000, "reviewed", "on_hold", "Disputed delivery"),
-        ("INV-010", "Office Supplies Co", 8900, "ready_for_review", "submitted", "Stationery order"),
+        (
+            "INV-001",
+            "Acme Corp",
+            125000,
+            "ready_for_review",
+            "submitted",
+            "Office equipment order",
+        ),
+        (
+            "INV-002",
+            "TechSupplies Inc",
+            45600,
+            "ready_for_review",
+            "submitted",
+            "Network hardware",
+        ),
+        (
+            "INV-003",
+            "Cloud Services LLC",
+            234500,
+            "reviewed",
+            "pending_approval",
+            "Monthly cloud services",
+        ),
+        (
+            "INV-004",
+            "Marketing Agency Pro",
+            89000,
+            "reviewed",
+            "pending_approval",
+            "Q1 campaign work",
+        ),
+        (
+            "INV-005",
+            "Office Supplies Co",
+            12500,
+            "reviewed",
+            "approved",
+            "Office restock",
+        ),
+        (
+            "INV-006",
+            "Acme Corp",
+            67800,
+            "reviewed",
+            "approved",
+            "Widget delivery",
+        ),
+        (
+            "INV-007",
+            "Cloud Services LLC",
+            156000,
+            "reviewed",
+            "paid",
+            "December infrastructure",
+        ),
+        (
+            "INV-008",
+            "TechSupplies Inc",
+            34000,
+            "reviewed",
+            "paid",
+            "Laptop accessories",
+        ),
+        (
+            "INV-009",
+            "Acme Corp",
+            210000,
+            "reviewed",
+            "on_hold",
+            "Disputed delivery",
+        ),
+        (
+            "INV-010",
+            "Office Supplies Co",
+            8900,
+            "ready_for_review",
+            "submitted",
+            "Stationery order",
+        ),
     ];
 
     for (inv_num, vendor_name, amount, capture_status, processing_status, notes) in &invoices {
@@ -425,15 +530,24 @@ mod tests {
     #[test]
     fn test_list_public_plans_includes_expected_tiers() {
         let plans = Plan::all_public();
-        assert!(plans.len() >= 3, "Should have at least Free, Starter, Professional");
+        assert!(
+            plans.len() >= 3,
+            "Should have at least Free, Starter, Professional"
+        );
 
-        let free = plans.iter().find(|p| p.id == billforge_billing::PlanId::Free);
+        let free = plans
+            .iter()
+            .find(|p| p.id == billforge_billing::PlanId::Free);
         assert!(free.is_some(), "Free plan should be public");
 
-        let starter = plans.iter().find(|p| p.id == billforge_billing::PlanId::Starter);
+        let starter = plans
+            .iter()
+            .find(|p| p.id == billforge_billing::PlanId::Starter);
         assert!(starter.is_some(), "Starter plan should be public");
 
-        let pro = plans.iter().find(|p| p.id == billforge_billing::PlanId::Professional);
+        let pro = plans
+            .iter()
+            .find(|p| p.id == billforge_billing::PlanId::Professional);
         assert!(pro.is_some(), "Professional plan should be public");
     }
 
@@ -487,10 +601,7 @@ mod tests {
 
     /// Pure function that maps invoice volume and seat count to a recommended plan.
     /// Mirrors the PlanId tier boundaries defined in plans.rs.
-    fn recommend_plan(
-        monthly_invoices: u32,
-        seats: u32,
-    ) -> billforge_billing::Plan {
+    fn recommend_plan(monthly_invoices: u32, seats: u32) -> billforge_billing::Plan {
         if seats > 10 || monthly_invoices > 1000 {
             Plan::enterprise()
         } else if seats > 3 || monthly_invoices > 100 {

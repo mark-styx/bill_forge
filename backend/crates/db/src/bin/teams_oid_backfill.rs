@@ -49,9 +49,7 @@ async fn main() -> Result<()> {
         .database_url
         .or_else(|| std::env::var("DATABASE_URL_MIGRATIONS").ok())
         .or_else(|| std::env::var("DATABASE_URL").ok())
-        .ok_or_else(|| {
-            anyhow!("DATABASE_URL must be provided via --database-url or env var")
-        })?;
+        .ok_or_else(|| anyhow!("DATABASE_URL must be provided via --database-url or env var"))?;
 
     let pool = PgPool::connect(&database_url)
         .await
@@ -101,9 +99,7 @@ async fn main() -> Result<()> {
     let current_oid: Option<String> = row.try_get("aad_object_id")?;
     let is_active: bool = row.try_get("is_active")?;
 
-    println!(
-        "Target row {row_id}: is_active={is_active}, current aad_object_id={current_oid:?}"
-    );
+    println!("Target row {row_id}: is_active={is_active}, current aad_object_id={current_oid:?}");
 
     if cli.dry_run {
         tx.rollback().await.ok();

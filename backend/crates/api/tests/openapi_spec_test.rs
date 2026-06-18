@@ -199,10 +199,16 @@ fn test_openapi_covers_all_mounted_route_groups() {
         ("routing", &["/api/v1/routing/workload"]),
         (
             "public_api",
-            &["/api/external/v1/invoices", "/api/external/v1/webhook-subscriptions"],
+            &[
+                "/api/external/v1/invoices",
+                "/api/external/v1/webhook-subscriptions",
+            ],
         ),
         #[cfg(feature = "netsuite")]
-        ("netsuite", &["/api/v1/netsuite/connect", "/api/v1/netsuite/status"]),
+        (
+            "netsuite",
+            &["/api/v1/netsuite/connect", "/api/v1/netsuite/status"],
+        ),
         (
             "benchmark",
             &[

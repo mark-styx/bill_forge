@@ -84,7 +84,11 @@ pub async fn require_auth(
         Some(t) => t,
         None => {
             warn!(path = %path, "Missing or malformed Authorization header");
-            return json_error_response(StatusCode::UNAUTHORIZED, "unauthenticated", "Authentication required.");
+            return json_error_response(
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "Authentication required.",
+            );
         }
     };
 
@@ -96,10 +100,16 @@ pub async fn require_auth(
         Err(e) => {
             warn!(path = %path, error = %e, "Token validation failed");
             match e {
-                billforge_core::Error::TokenExpired => {
-                    json_error_response(StatusCode::UNAUTHORIZED, "token_expired", "Authentication token has expired.")
-                }
-                _ => json_error_response(StatusCode::UNAUTHORIZED, "invalid_token", "Authentication token is invalid."),
+                billforge_core::Error::TokenExpired => json_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "token_expired",
+                    "Authentication token has expired.",
+                ),
+                _ => json_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_token",
+                    "Authentication token is invalid.",
+                ),
             }
         }
     }
@@ -145,7 +155,11 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
             user_id = %user_context.user_id.as_uuid(),
             "tenant_id is nil on authenticated request"
         );
-        return json_error_response(StatusCode::UNAUTHORIZED, "tenant_unresolved", "No tenant could be resolved for the authenticated user.");
+        return json_error_response(
+            StatusCode::UNAUTHORIZED,
+            "tenant_unresolved",
+            "No tenant could be resolved for the authenticated user.",
+        );
     }
 
     info!(

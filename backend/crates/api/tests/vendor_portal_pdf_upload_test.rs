@@ -47,7 +47,8 @@ fn vendor_portal_token(jwt_secret: &str) -> String {
         access_token_expiry_hours: 1,
         refresh_token_expiry_days: 1,
     });
-    let tid = TenantId::from_uuid(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
+    let tid =
+        TenantId::from_uuid(uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
     let vid = VendorId(uuid::Uuid::new_v4());
     svc.create_vendor_portal_token(&tid, &vid)
         .expect("create vendor portal token")
@@ -59,10 +60,8 @@ fn build_pdf_multipart_body(boundary: &str, file_mime: &str, invoice_number: &st
     // File field
     body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
     body.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"file\"; filename=\"invoice.pdf\"\r\n"
-        )
-        .as_bytes(),
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"invoice.pdf\"\r\n")
+            .as_bytes(),
     );
     body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", file_mime).as_bytes());
     // Minimal valid PDF bytes (header + empty body)

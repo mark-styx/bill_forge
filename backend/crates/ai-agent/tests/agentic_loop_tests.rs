@@ -229,7 +229,9 @@ async fn test_admin_analysis_tools_reject_non_admin_before_db() {
         let err = result.expect_err("non-admin context should be rejected before DB access");
         let msg = err.to_string();
         assert!(
-            msg.contains("admin-only") || msg.contains("Forbidden") || msg.contains("Permission denied"),
+            msg.contains("admin-only")
+                || msg.contains("Forbidden")
+                || msg.contains("Permission denied"),
             "unexpected error for {tool}: {msg}"
         );
     }
@@ -770,7 +772,11 @@ fn test_tool_execution_guard_allows_risky_tool_with_approved_matching_proposal_c
             approved: true,
         };
 
-        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&proposal_context));
+        let result = ToolRegistry::validate_tool_execution_guard(
+            &def,
+            &admin_agent_context(),
+            Some(&proposal_context),
+        );
 
         assert!(
             result.is_ok(),
@@ -796,7 +802,11 @@ fn test_tool_execution_guard_rejects_unapproved_or_mismatched_proposal_context()
             approved: true,
         },
     ] {
-        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&proposal_context));
+        let result = ToolRegistry::validate_tool_execution_guard(
+            &def,
+            &admin_agent_context(),
+            Some(&proposal_context),
+        );
 
         let err = result.expect_err("invalid proposal context should be rejected");
         assert_eq!(

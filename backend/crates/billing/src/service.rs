@@ -9,7 +9,9 @@ use tracing::{info, warn};
 
 use crate::addons::{effective_features, quote_subscription, ModuleAddOn};
 use crate::plans::{Plan, PlanId};
-use crate::stripe::{CheckoutLineItem, CreateCheckoutSessionParams, CreateCustomerParams, StripeClient, WebhookEvent};
+use crate::stripe::{
+    CheckoutLineItem, CreateCheckoutSessionParams, CreateCustomerParams, StripeClient, WebhookEvent,
+};
 use crate::subscription::{BillingCycle, Subscription, SubscriptionId, SubscriptionStatus};
 
 /// Outcome of a checkout flow
@@ -438,20 +440,26 @@ impl BillingService {
             .get("metadata")
             .and_then(|m| m.get("tenant_id"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Validation("checkout.session.completed missing metadata.tenant_id".to_string()))?;
-        let tenant_id = tenant_id_str
-            .parse::<TenantId>()
-            .map_err(|e| Error::Validation(format!("invalid tenant_id in session metadata: {}", e)))?;
+            .ok_or_else(|| {
+                Error::Validation(
+                    "checkout.session.completed missing metadata.tenant_id".to_string(),
+                )
+            })?;
+        let tenant_id = tenant_id_str.parse::<TenantId>().map_err(|e| {
+            Error::Validation(format!("invalid tenant_id in session metadata: {}", e))
+        })?;
 
         // Extract plan_id from session metadata
         let plan_id_str = obj
             .get("metadata")
             .and_then(|m| m.get("plan_id"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Validation("checkout.session.completed missing metadata.plan_id".to_string()))?;
-        let plan_id: PlanId = plan_id_str
-            .parse()
-            .map_err(|e| Error::Validation(format!("invalid plan_id in session metadata: {}", e)))?;
+            .ok_or_else(|| {
+                Error::Validation("checkout.session.completed missing metadata.plan_id".to_string())
+            })?;
+        let plan_id: PlanId = plan_id_str.parse().map_err(|e| {
+            Error::Validation(format!("invalid plan_id in session metadata: {}", e))
+        })?;
 
         // Extract add_on_modules from session metadata (comma-separated)
         let modules_str = obj
@@ -464,18 +472,27 @@ impl BillingService {
         } else {
             modules_str
                 .split(',')
-                .map(|s| s.trim().parse::<Module>().map_err(|e| Error::Validation(format!("invalid add_on_modules in session metadata: {}", e))))
+                .map(|s| {
+                    s.trim().parse::<Module>().map_err(|e| {
+                        Error::Validation(format!(
+                            "invalid add_on_modules in session metadata: {}",
+                            e
+                        ))
+                    })
+                })
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
 
-        let session_id = obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let session_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
 
         // Persist subscription with Stripe-confirmed modules (same path mock branch uses)
-        self.create_subscription_with_modules(&tenant_id, plan_id, BillingCycle::Monthly, &add_on_modules)
-            .await?;
+        self.create_subscription_with_modules(
+            &tenant_id,
+            plan_id,
+            BillingCycle::Monthly,
+            &add_on_modules,
+        )
+        .await?;
 
         info!(
             tenant_id = %tenant_id,
@@ -1028,7 +1045,10 @@ mod tests {
         );
 
         // Verify has_feature returns true for confirmed modules
-        assert!(service.has_feature(&tenant_id, "invoice_processing").await.unwrap());
+        assert!(service
+            .has_feature(&tenant_id, "invoice_processing")
+            .await
+            .unwrap());
         assert!(service.has_feature(&tenant_id, "reporting").await.unwrap());
 
         // Verify enabled_modules synced on tenant

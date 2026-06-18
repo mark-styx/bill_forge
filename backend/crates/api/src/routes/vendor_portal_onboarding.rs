@@ -40,7 +40,10 @@ pub fn portal_routes() -> Router<AppState> {
 pub fn review_routes() -> Router<AppState> {
     Router::new()
         .route("/onboarding-submissions", get(list_submissions))
-        .route("/onboarding-submissions/{id}/decision", post(decide_submission))
+        .route(
+            "/onboarding-submissions/{id}/decision",
+            post(decide_submission),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +141,7 @@ async fn submit_onboarding(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> ApiResult<Json<OnboardingSubmissionResponse>> {
-    let (tenant_id, vendor_id, portal_token_jti) =
-        vendor_onboarding_ctx(&headers, &state.auth)?;
+    let (tenant_id, vendor_id, portal_token_jti) = vendor_onboarding_ctx(&headers, &state.auth)?;
 
     // Multipart fields
     let mut legal_name: Option<String> = None;
@@ -160,19 +162,24 @@ async fn submit_onboarding(
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "legal_name" => {
-                legal_name = Some(field.text().await.map_err(|e| {
-                    Error::Validation(format!("Failed to read legal_name: {}", e))
-                })?);
+                legal_name =
+                    Some(field.text().await.map_err(|e| {
+                        Error::Validation(format!("Failed to read legal_name: {}", e))
+                    })?);
             }
             "dba" => {
-                dba = Some(field.text().await.map_err(|e| {
-                    Error::Validation(format!("Failed to read dba: {}", e))
-                })?);
+                dba = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| Error::Validation(format!("Failed to read dba: {}", e)))?,
+                );
             }
             "address" => {
-                address_json = Some(field.text().await.map_err(|e| {
-                    Error::Validation(format!("Failed to read address: {}", e))
-                })?);
+                address_json =
+                    Some(field.text().await.map_err(|e| {
+                        Error::Validation(format!("Failed to read address: {}", e))
+                    })?);
             }
             "tax_form_type" => {
                 tax_form_type = Some(field.text().await.map_err(|e| {
@@ -180,9 +187,10 @@ async fn submit_onboarding(
                 })?);
             }
             "banking" => {
-                banking_json = Some(field.text().await.map_err(|e| {
-                    Error::Validation(format!("Failed to read banking: {}", e))
-                })?);
+                banking_json =
+                    Some(field.text().await.map_err(|e| {
+                        Error::Validation(format!("Failed to read banking: {}", e))
+                    })?);
             }
             "remit_contacts" => {
                 remit_contacts_json = Some(field.text().await.map_err(|e| {
@@ -214,9 +222,7 @@ async fn submit_onboarding(
         .ok_or_else(|| Error::Validation("Missing required field: tax_form_type".to_string()))?;
 
     if tax_form_type != "w9" && tax_form_type != "w8ben" {
-        return Err(
-            Error::Validation("tax_form_type must be 'w9' or 'w8ben'".to_string()).into(),
-        );
+        return Err(Error::Validation("tax_form_type must be 'w9' or 'w8ben'".to_string()).into());
     }
 
     // Parse JSON fields
@@ -242,11 +248,14 @@ async fn submit_onboarding(
 
     // Upload tax document if provided
     let mut tax_document_id: Option<Uuid> = None;
-    if let (Some(file_data), Some(file_name), Some(mime)) =
-        (tax_file_bytes, tax_file_name.as_deref(), tax_file_mime.as_deref())
-    {
-        let effective_vendor_id = vendor_id.as_ref()
-            .ok_or_else(|| Error::Validation("Tax document upload requires an existing vendor".to_string()))?;
+    if let (Some(file_data), Some(file_name), Some(mime)) = (
+        tax_file_bytes,
+        tax_file_name.as_deref(),
+        tax_file_mime.as_deref(),
+    ) {
+        let effective_vendor_id = vendor_id.as_ref().ok_or_else(|| {
+            Error::Validation("Tax document upload requires an existing vendor".to_string())
+        })?;
 
         let file_path = format!(
             "vendor_documents/{}/{}",
@@ -424,11 +433,7 @@ async fn decide_submission(
     })?;
 
     if submission.status != "pending" {
-        return Err(Error::Conflict(format!(
-            "Submission is already {}",
-            submission.status
-        ))
-        .into());
+        return Err(Error::Conflict(format!("Submission is already {}", submission.status)).into());
     }
 
     match body.decision.as_str() {
@@ -510,14 +515,13 @@ async fn compute_diff_and_confidence(
     if let Some(vid) = vendor_id {
         // Load existing vendor row for comparison
         // vendors.name is the primary name field (maps to legal_name in the diff)
-        let row: Option<(Option<String>, Option<serde_json::Value>)> = sqlx::query_as(
-            "SELECT name, address FROM vendors WHERE id = $1 AND tenant_id = $2",
-        )
-        .bind(vid.0)
-        .bind(*tenant_id.as_uuid())
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| Error::Database(format!("Failed to load vendor for diff: {}", e)))?;
+        let row: Option<(Option<String>, Option<serde_json::Value>)> =
+            sqlx::query_as("SELECT name, address FROM vendors WHERE id = $1 AND tenant_id = $2")
+                .bind(vid.0)
+                .bind(*tenant_id.as_uuid())
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| Error::Database(format!("Failed to load vendor for diff: {}", e)))?;
 
         if let Some((existing_name, existing_address)) = row {
             // Diff legal_name (vendors.name vs submitted legal_name)
@@ -537,9 +541,7 @@ async fn compute_diff_and_confidence(
                 .as_ref()
                 .map(|v| v.to_string())
                 .unwrap_or_default();
-            let submitted_addr_str = address
-                .map(|v| v.to_string())
-                .unwrap_or_default();
+            let submitted_addr_str = address.map(|v| v.to_string()).unwrap_or_default();
             let addr_changed = existing_addr_str != submitted_addr_str;
             diff.insert(
                 "address".to_string(),
@@ -564,14 +566,8 @@ async fn compute_diff_and_confidence(
     // Confidence: v1 heuristic
     // 1.0 for explicitly typed fields, 0.5 for fields where a doc is attached
     let doc_bonus = if has_tax_doc { 0.0 } else { 0.0 };
-    confidence.insert(
-        "legal_name".to_string(),
-        serde_json::json!(1.0),
-    );
-    confidence.insert(
-        "address".to_string(),
-        serde_json::json!(1.0),
-    );
+    confidence.insert("legal_name".to_string(), serde_json::json!(1.0));
+    confidence.insert("address".to_string(), serde_json::json!(1.0));
     confidence.insert(
         "tax_form_type".to_string(),
         serde_json::json!(if has_tax_doc { 1.0 } else { 0.7 }),
@@ -580,10 +576,7 @@ async fn compute_diff_and_confidence(
         "banking".to_string(),
         serde_json::json!(banking.map(|_| 1.0).unwrap_or(0.0)),
     );
-    confidence.insert(
-        "remit_contacts".to_string(),
-        serde_json::json!(0.9),
-    );
+    confidence.insert("remit_contacts".to_string(), serde_json::json!(0.9));
 
     Ok((
         serde_json::Value::Object(diff),
@@ -607,13 +600,20 @@ async fn apply_diff_to_vendor(
         if let Some(ln) = obj.get("legal_name") {
             if ln.get("changed").and_then(|c| c.as_bool()).unwrap_or(false) {
                 set_clauses.push(format!("name = ${}", param_idx));
-                bind_legal_name = ln.get("submitted").and_then(|v| v.as_str()).map(|s| s.to_string());
+                bind_legal_name = ln
+                    .get("submitted")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 param_idx += 1;
             }
         }
 
         if let Some(addr) = obj.get("address") {
-            if addr.get("changed").and_then(|c| c.as_bool()).unwrap_or(false) {
+            if addr
+                .get("changed")
+                .and_then(|c| c.as_bool())
+                .unwrap_or(false)
+            {
                 set_clauses.push(format!("address = ${}::jsonb", param_idx));
                 bind_address = addr.get("submitted").cloned();
                 param_idx += 1;
@@ -622,10 +622,21 @@ async fn apply_diff_to_vendor(
 
         // Banking: store as encrypted columns (placeholder matching 097 pattern)
         if let Some(banking) = obj.get("banking") {
-            if banking.get("changed").and_then(|c| c.as_bool()).unwrap_or(false) {
+            if banking
+                .get("changed")
+                .and_then(|c| c.as_bool())
+                .unwrap_or(false)
+            {
                 if let Some(bank_obj) = banking.get("submitted") {
                     if let Some(account) = bank_obj.get("account_number").and_then(|v| v.as_str()) {
-                        let last_four: String = account.chars().rev().take(4).collect::<String>().chars().rev().collect();
+                        let last_four: String = account
+                            .chars()
+                            .rev()
+                            .take(4)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
                         set_clauses.push(format!("bank_account_last_four = ${}", param_idx));
                         // We'll bind last_four below
                         set_clauses.push(format!("bank_account_encrypted = ${}", param_idx + 1));
@@ -635,10 +646,21 @@ async fn apply_diff_to_vendor(
                         set_clauses.push(format!("bank_account_updated_at = NOW()"));
                         // We need to build the bind values
                         let enc_account = format!("enc:{}", account);
-                        let routing = bank_obj.get("routing_number").and_then(|v| v.as_str()).unwrap_or("");
+                        let routing = bank_obj
+                            .get("routing_number")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let enc_routing = format!("enc:{}", routing);
-                        let bank_name = bank_obj.get("bank_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let account_type = bank_obj.get("account_type").and_then(|v| v.as_str()).unwrap_or("checking").to_string();
+                        let bank_name = bank_obj
+                            .get("bank_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let account_type = bank_obj
+                            .get("account_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("checking")
+                            .to_string();
 
                         let sql = format!(
                             "UPDATE vendors SET {} WHERE id = $1 AND tenant_id = $2",
@@ -658,10 +680,9 @@ async fn apply_diff_to_vendor(
                         query = query.bind(&enc_routing);
                         query = query.bind(&bank_name);
                         query = query.bind(&account_type);
-                        query
-                            .execute(pool)
-                            .await
-                            .map_err(|e| Error::Database(format!("Failed to apply vendor diff: {}", e)))?;
+                        query.execute(pool).await.map_err(|e| {
+                            Error::Database(format!("Failed to apply vendor diff: {}", e))
+                        })?;
                         return Ok(());
                     }
                 }

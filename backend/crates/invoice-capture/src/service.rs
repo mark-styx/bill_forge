@@ -121,11 +121,7 @@ impl InvoiceCaptureService {
     /// Run OCR extraction, using multi-provider comparison when configured.
     ///
     /// Returns the extraction result and the name of the provider that produced it.
-    async fn run_ocr(
-        &self,
-        bytes: &[u8],
-        mime: &str,
-    ) -> Result<(OcrExtractionResult, String)> {
+    async fn run_ocr(&self, bytes: &[u8], mime: &str) -> Result<(OcrExtractionResult, String)> {
         if let Some(ref comparison) = self.comparison {
             let cmp_result = comparison.compare(bytes, mime).await?;
             let best_key = &cmp_result.best_provider;
@@ -139,9 +135,7 @@ impl InvoiceCaptureService {
                 }
             }
             // All providers in comparison failed; fall back to default provider
-            tracing::warn!(
-                "All comparison providers failed, falling back to default provider"
-            );
+            tracing::warn!("All comparison providers failed, falling back to default provider");
             let extraction = self.ocr_provider.extract(bytes, mime).await?;
             Ok((extraction, self.ocr_provider.provider_name().to_string()))
         } else {
@@ -467,8 +461,7 @@ impl InvoiceCaptureService {
             .await?;
 
         // Run OCR (single provider or multi-provider comparison)
-        let (ocr_result, _best_provider) =
-            self.run_ocr(&document_bytes, "application/pdf").await?;
+        let (ocr_result, _best_provider) = self.run_ocr(&document_bytes, "application/pdf").await?;
 
         let confidence = self
             .calculate_confidence_with_calibration(tenant_id, &ocr_result)

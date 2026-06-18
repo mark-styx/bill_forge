@@ -59,7 +59,8 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
         },
     ];
     for ctx in &bad_contexts {
-        let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(ctx));
+        let result =
+            ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(ctx));
         assert!(
             result.is_err(),
             "invalid proposal context should be rejected"
@@ -72,7 +73,8 @@ fn test_respond_to_approval_request_requires_approved_proposal_context() {
         tool_name: "respond_to_approval_request".to_string(),
         approved: true,
     };
-    let result = ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&good_ctx));
+    let result =
+        ToolRegistry::validate_tool_execution_guard(&def, &admin_agent_context(), Some(&good_ctx));
     assert!(
         result.is_ok(),
         "approved matching proposal context should pass"

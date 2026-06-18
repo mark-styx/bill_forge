@@ -104,7 +104,8 @@ async fn create_digest_writes_audit_entry(pool: sqlx::PgPool) {
 
     let changes = row.2.expect("changes JSONB must be present");
     assert_eq!(
-        changes["description"], format!("Upserted report digest {}", digest_id),
+        changes["description"],
+        format!("Upserted report digest {}", digest_id),
         "description should match"
     );
     assert_eq!(changes["new_value"]["id"], digest_id.to_string());

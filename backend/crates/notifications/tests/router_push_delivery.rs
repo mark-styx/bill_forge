@@ -541,9 +541,9 @@ async fn push_blocked_by_quiet_hours() {
     let now = chrono::Utc::now();
     let current_hour: u32 = now.format("%H").to_string().parse().unwrap();
     let start_hour = (current_hour + 23) % 24; // 1 hour before now
-    let end_hour   = (current_hour + 2) % 24;  // 2 hours after now
+    let end_hour = (current_hour + 2) % 24; // 2 hours after now
     let start = format!("{start_hour:02}:00");
-    let end   = format!("{end_hour:02}:00");
+    let end = format!("{end_hour:02}:00");
 
     let prefs = NotificationPreference {
         user_id: user_id.clone(),

@@ -748,20 +748,14 @@ async fn force_rls_blocks_owner_without_tenant_setting() {
     );
 
     // Verify pg_class.relforcerowsecurity = true for all RLS-protected tables
-    let force_rls_tables = vec![
-        "invoices",
-        "users",
-        "vendors",
-        "ai_conversations",
-    ];
+    let force_rls_tables = vec!["invoices", "users", "vendors", "ai_conversations"];
     for table in &force_rls_tables {
-        let forced: (bool,) = sqlx::query_as(
-            "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1",
-        )
-        .bind(table)
-        .fetch_one(&admin_pool)
-        .await
-        .unwrap_or_else(|_| panic!("table {} not found in pg_class", table));
+        let forced: (bool,) =
+            sqlx::query_as("SELECT relforcerowsecurity FROM pg_class WHERE relname = $1")
+                .bind(table)
+                .fetch_one(&admin_pool)
+                .await
+                .unwrap_or_else(|_| panic!("table {} not found in pg_class", table));
         assert!(
             forced.0,
             "FORCE ROW LEVEL SECURITY should be enabled on {}",

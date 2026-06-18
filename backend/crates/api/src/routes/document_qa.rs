@@ -18,9 +18,7 @@ use lopdf::Document as PdfDocument;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use billforge_ai_agent::models::{
-    ProviderChatMessage, ProviderMessageRole, ProviderChatRequest,
-};
+use billforge_ai_agent::models::{ProviderChatMessage, ProviderChatRequest, ProviderMessageRole};
 use billforge_ai_agent::provider::AiProvider;
 use billforge_ai_agent::OpenAiCompatibleProvider;
 
@@ -123,13 +121,17 @@ async fn qa_handler(
     }
 
     // Download the PDF bytes
-    let pdf_bytes = state.storage.download(&tenant.tenant_id, doc_uuid).await.map_err(|e| {
-        tracing::error!("Document download error: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to retrieve document" })),
-        )
-    })?;
+    let pdf_bytes = state
+        .storage
+        .download(&tenant.tenant_id, doc_uuid)
+        .await
+        .map_err(|e| {
+            tracing::error!("Document download error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve document" })),
+            )
+        })?;
 
     // Extract text chunks from PDF
     let chunks = extract_chunks(&pdf_bytes).map_err(|e| {
@@ -227,7 +229,8 @@ async fn qa_handler(
 // ---------------------------------------------------------------------------
 
 fn extract_chunks(pdf_bytes: &[u8]) -> Result<Vec<TextChunk>, String> {
-    let pdf = PdfDocument::load_mem(pdf_bytes).map_err(|e| format!("Failed to parse PDF: {}", e))?;
+    let pdf =
+        PdfDocument::load_mem(pdf_bytes).map_err(|e| format!("Failed to parse PDF: {}", e))?;
 
     let mut chunks = Vec::new();
     let max_pages = pdf.get_pages().len() as u32;

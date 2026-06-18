@@ -423,10 +423,7 @@ impl CategorizationEngine {
                     cost_center = prior.cost_center.clone();
                     source = SuggestionSource::VendorHistory;
                     confidence = 0.85;
-                    rationale = format!(
-                        "Based on prior approved coding ({})",
-                        prior.gl_code
-                    );
+                    rationale = format!("Based on prior approved coding ({})", prior.gl_code);
                 }
             }
 
@@ -443,23 +440,20 @@ impl CategorizationEngine {
 
             // Apply correction rules
             let gl_code_val = gl_code.unwrap_or_else(|| "0000-General".to_string());
-            let corrected_gl = apply_line_correction(
-                &gl_code_val,
-                &correction_rules,
-            );
+            let corrected_gl = apply_line_correction(&gl_code_val, &correction_rules);
 
             let (final_gl, final_conf, final_source) = if corrected_gl != gl_code_val {
-                (corrected_gl, (confidence * 1.1).min(0.99), SuggestionSource::VendorHistory)
+                (
+                    corrected_gl,
+                    (confidence * 1.1).min(0.99),
+                    SuggestionSource::VendorHistory,
+                )
             } else {
                 (gl_code_val, confidence, source)
             };
 
             // 3. Detect splits
-            let splits = detect_line_splits(
-                &item.description,
-                item.amount,
-                vendor_history,
-            );
+            let splits = detect_line_splits(&item.description, item.amount, vendor_history);
 
             lines.push(LineCategorization {
                 line_item_id,
@@ -660,7 +654,11 @@ pub fn categorize_line_by_keywords(description: &str) -> KeywordResult {
         };
     }
 
-    if lower.contains("travel") || lower.contains("flight") || lower.contains("hotel") || lower.contains("meals") {
+    if lower.contains("travel")
+        || lower.contains("flight")
+        || lower.contains("hotel")
+        || lower.contains("meals")
+    {
         return KeywordResult {
             gl_code: "8000-Travel & Entertainment".to_string(),
             department: None,
@@ -685,9 +683,7 @@ pub fn categorize_line_by_keywords(description: &str) -> KeywordResult {
         };
     }
 
-    if lower.contains("consulting")
-        || lower.contains("professional")
-        || lower.contains("services")
+    if lower.contains("consulting") || lower.contains("professional") || lower.contains("services")
     {
         return KeywordResult {
             gl_code: "9000-Professional Services".to_string(),
@@ -850,9 +846,7 @@ pub fn collect_gl_signals(lower: &str) -> Vec<(String, Option<String>, String)> 
             "Office keyword detected".to_string(),
         ));
     }
-    if lower.contains("consulting")
-        || lower.contains("professional")
-        || lower.contains("services")
+    if lower.contains("consulting") || lower.contains("professional") || lower.contains("services")
     {
         signals.push((
             "9000-Professional Services".to_string(),
@@ -879,9 +873,11 @@ pub fn detect_historical_splits(codings: &[PriorLineCoding]) -> Vec<HistoricalSp
     // Group amounts by GL code across all codings
     let mut gl_totals: HashMap<String, (f64, Option<String>, Option<String>)> = HashMap::new();
     for c in codings {
-        let entry = gl_totals
-            .entry(c.gl_code.clone())
-            .or_insert((0.0, c.department.clone(), c.cost_center.clone()));
+        let entry = gl_totals.entry(c.gl_code.clone()).or_insert((
+            0.0,
+            c.department.clone(),
+            c.cost_center.clone(),
+        ));
         entry.0 += c.amount;
     }
 

@@ -70,9 +70,7 @@ pub(crate) async fn emit_meter_if_billable(
     };
     if !matches!(
         status,
-        ProcessingStatus::Approved
-            | ProcessingStatus::ReadyForPayment
-            | ProcessingStatus::Paid
+        ProcessingStatus::Approved | ProcessingStatus::ReadyForPayment | ProcessingStatus::Paid
     ) {
         return;
     }
@@ -125,7 +123,10 @@ pub fn routes() -> Router<AppState> {
         .route("/approvals/:id/approve", post(approve))
         .route("/approvals/:id/reject", post(reject))
         .route("/approvals/:id/approval-link", post(get_approval_link))
-        .route("/approvals/:id/resend-approval-email", post(resend_approval_email))
+        .route(
+            "/approvals/:id/resend-approval-email",
+            post(resend_approval_email),
+        )
         // Bulk operations
         .route("/bulk", post(bulk_operation))
         // Workflow templates
@@ -1162,7 +1163,13 @@ async fn approve(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
+    resolve_invoice_approval_status(
+        &mut *tx,
+        Some(&state.db.metadata()),
+        &tenant.tenant_id,
+        info.invoice_id,
+    )
+    .await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -1323,7 +1330,13 @@ async fn reject(
     }
 
     // Resolve invoice approval status (only transitions if ALL requests resolved)
-    resolve_invoice_approval_status(&mut *tx, Some(&state.db.metadata()), &tenant.tenant_id, info.invoice_id).await?;
+    resolve_invoice_approval_status(
+        &mut *tx,
+        Some(&state.db.metadata()),
+        &tenant.tenant_id,
+        info.invoice_id,
+    )
+    .await?;
 
     tx.commit().await.map_err(|e| {
         billforge_core::Error::Database(format!("Failed to commit transaction: {}", e))
@@ -1665,12 +1678,8 @@ async fn bulk_operation(
 
                 // Emit meter event for billable bulk status transitions.
                 let billable_status = match input.operation {
-                    BulkOperationType::SubmitForPayment => {
-                        Some(ProcessingStatus::ReadyForPayment)
-                    }
-                    BulkOperationType::Approve => {
-                        Some(ProcessingStatus::Approved)
-                    }
+                    BulkOperationType::SubmitForPayment => Some(ProcessingStatus::ReadyForPayment),
+                    BulkOperationType::Approve => Some(ProcessingStatus::Approved),
                     _ => None,
                 };
                 if let Some(status) = billable_status {
@@ -2321,7 +2330,14 @@ async fn fetch_approval_for_link(
     approval_id: uuid::Uuid,
     tenant_uuid: uuid::Uuid,
 ) -> Result<
-    (uuid::Uuid, String, String, i64, Option<String>, Option<uuid::Uuid>),
+    (
+        uuid::Uuid,
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<uuid::Uuid>,
+    ),
     billforge_core::Error,
 > {
     #[derive(sqlx::FromRow)]
@@ -2516,11 +2532,18 @@ async fn resend_approval_email(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let tenant_uuid = *tenant.tenant_id.as_uuid();
 
-    let (invoice_id, invoice_number, vendor_name, total_amount_cents, approver_email, approver_user_id) =
-        fetch_approval_for_link(&pool, approval_id, tenant_uuid).await?;
+    let (
+        invoice_id,
+        invoice_number,
+        vendor_name,
+        total_amount_cents,
+        approver_email,
+        approver_user_id,
+    ) = fetch_approval_for_link(&pool, approval_id, tenant_uuid).await?;
 
-    let approver_email = approver_email
-        .ok_or_else(|| billforge_core::Error::Validation("Approver has no email address".to_string()))?;
+    let approver_email = approver_email.ok_or_else(|| {
+        billforge_core::Error::Validation("Approver has no email address".to_string())
+    })?;
 
     let metadata_pool = state.db.metadata();
     let token_service = make_token_service(metadata_pool.clone());

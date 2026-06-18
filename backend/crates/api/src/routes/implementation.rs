@@ -39,7 +39,10 @@ pub fn routes() -> Router<AppState> {
         .route("/sample-invoices", post(upload_sample_invoices))
         .route("/checklist", patch(update_checklist))
         .route("/configuration/privacy-mode", put(update_privacy_mode))
-        .route("/configuration/capture-channels", put(update_capture_channels))
+        .route(
+            "/configuration/capture-channels",
+            put(update_capture_channels),
+        )
         .route(
             "/configuration/capture-channels/email/verify",
             post(verify_email_forwarding),
@@ -294,7 +297,9 @@ pub async fn get_status(
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -328,7 +333,9 @@ pub async fn sync_erp(
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -350,7 +357,9 @@ pub async fn update_erp_sub_items(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -387,7 +396,9 @@ pub async fn select_approval_template(
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
 
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -488,7 +499,9 @@ pub async fn update_checklist(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -521,11 +534,15 @@ pub async fn update_privacy_mode(
         .map_err(|_| billforge_core::Error::Internal("DATABASE_URL missing".into()))?;
     let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e))
+        })?;
     metadata_db
         .update_tenant_settings(&tenant.tenant_id, &settings)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to persist privacy settings: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to persist privacy settings: {}", e))
+        })?;
 
     wizard.phases.configuration.configuration.privacy_mode = PrivacyModeConfig {
         enabled: request.enabled,
@@ -542,7 +559,9 @@ pub async fn update_privacy_mode(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -562,13 +581,29 @@ pub async fn update_capture_channels(
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 
     if let Some(address) = request.email_forwarding_address {
-        wizard.phases.configuration.configuration.capture_channels.email_forwarding.address = address;
+        wizard
+            .phases
+            .configuration
+            .configuration
+            .capture_channels
+            .email_forwarding
+            .address = address;
     }
     if let Some(manual_upload_enabled) = request.manual_upload_enabled {
-        wizard.phases.configuration.configuration.capture_channels.manual_upload_enabled = manual_upload_enabled;
+        wizard
+            .phases
+            .configuration
+            .configuration
+            .capture_channels
+            .manual_upload_enabled = manual_upload_enabled;
     }
     if let Some(erp_sync_enabled) = request.erp_sync_enabled {
-        wizard.phases.configuration.configuration.capture_channels.erp_sync_enabled = erp_sync_enabled;
+        wizard
+            .phases
+            .configuration
+            .configuration
+            .capture_channels
+            .erp_sync_enabled = erp_sync_enabled;
     }
 
     tracing::info!(
@@ -579,7 +614,9 @@ pub async fn update_capture_channels(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -614,7 +651,13 @@ pub async fn verify_email_forwarding(
         ).into());
     };
 
-    wizard.phases.configuration.configuration.capture_channels.email_forwarding.verified_at = Some(Utc::now());
+    wizard
+        .phases
+        .configuration
+        .configuration
+        .capture_channels
+        .email_forwarding
+        .verified_at = Some(Utc::now());
 
     tracing::info!(
         tenant_id = %tenant.tenant_id,
@@ -626,7 +669,9 @@ pub async fn verify_email_forwarding(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -651,7 +696,9 @@ pub async fn acknowledge_module_entitlements(
         .map_err(|_| billforge_core::Error::Internal("DATABASE_URL missing".into()))?;
     let metadata_db = billforge_db::MetadataDatabase::new(&database_url)
         .await
-        .map_err(|e| billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e)))?;
+        .map_err(|e| {
+            billforge_core::Error::Database(format!("Failed to connect to metadata DB: {}", e))
+        })?;
 
     let tenant_record = metadata_db
         .get_tenant(&tenant.tenant_id)
@@ -659,17 +706,24 @@ pub async fn acknowledge_module_entitlements(
         .map_err(|e| billforge_core::Error::Database(format!("Failed to load tenant: {}", e)))?;
 
     let server_entitlements: Vec<ModuleEntitlement> = if let Some(record) = tenant_record {
-        let modules: Vec<billforge_core::Module> = serde_json::from_value(record.enabled_modules.0.clone())
-            .unwrap_or_default();
-        modules.into_iter().map(|m| ModuleEntitlement {
-            module_key: m.as_str().to_string(),
-            enabled: true,
-        }).collect()
+        let modules: Vec<billforge_core::Module> =
+            serde_json::from_value(record.enabled_modules.0.clone()).unwrap_or_default();
+        modules
+            .into_iter()
+            .map(|m| ModuleEntitlement {
+                module_key: m.as_str().to_string(),
+                enabled: true,
+            })
+            .collect()
     } else {
         Vec::new()
     };
 
-    wizard.phases.configuration.configuration.module_entitlements = server_entitlements;
+    wizard
+        .phases
+        .configuration
+        .configuration
+        .module_entitlements = server_entitlements;
 
     tracing::info!(
         tenant_id = %tenant.tenant_id,
@@ -679,7 +733,9 @@ pub async fn acknowledge_module_entitlements(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 #[utoipa::path(
@@ -696,23 +752,40 @@ pub async fn update_notification_approvals(
     Json(request): Json<UpdateNotificationApprovalsRequest>,
 ) -> ApiResult<Json<ImplementationStatusResponse>> {
     // Validate distributions are non-empty with at least one syntactically valid email each
-    let validate_email = |s: &str| s.contains('@') && !s.trim().is_empty() && !s.chars().any(|c| c.is_whitespace());
+    let validate_email =
+        |s: &str| s.contains('@') && !s.trim().is_empty() && !s.chars().any(|c| c.is_whitespace());
 
-    if request.ap_team_distribution.is_empty() || !request.ap_team_distribution.iter().any(|e| validate_email(e)) {
+    if request.ap_team_distribution.is_empty()
+        || !request
+            .ap_team_distribution
+            .iter()
+            .any(|e| validate_email(e))
+    {
         return Err(billforge_core::Error::Validation(
             "At least one valid AP team distribution email is required.".to_string(),
-        ).into());
+        )
+        .into());
     }
-    if request.escalation_distribution.is_empty() || !request.escalation_distribution.iter().any(|e| validate_email(e)) {
+    if request.escalation_distribution.is_empty()
+        || !request
+            .escalation_distribution
+            .iter()
+            .any(|e| validate_email(e))
+    {
         return Err(billforge_core::Error::Validation(
             "At least one valid escalation distribution email is required.".to_string(),
-        ).into());
+        )
+        .into());
     }
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
 
-    wizard.phases.configuration.configuration.notification_approvals = NotificationApprovalsConfig {
+    wizard
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals = NotificationApprovalsConfig {
         ap_team_distribution: request.ap_team_distribution,
         escalation_distribution: request.escalation_distribution,
         approved_at: Some(Utc::now()),
@@ -726,7 +799,9 @@ pub async fn update_notification_approvals(
     let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
     recompute_statuses(&mut wizard, routed);
     save_state(&pool, &tenant.tenant_id, &wizard).await?;
-    Ok(Json(status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await))
+    Ok(Json(
+        status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
+    ))
 }
 
 async fn load_or_create_state(
@@ -1977,8 +2052,7 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
     state.phases.ocr.count = state.phases.ocr.sample_invoice_ids.len().min(10) as u8;
     state.phases.ocr.status = if state.phases.ocr.count >= 10
         && state.phases.ocr.sufficient_sample
-        && state.phases.ocr.measured_accuracy.unwrap_or(0.0)
-            >= state.phases.ocr.accuracy_threshold
+        && state.phases.ocr.measured_accuracy.unwrap_or(0.0) >= state.phases.ocr.accuracy_threshold
     {
         PhaseStatus::Complete
     } else if state.phases.ocr.count > 0 {
@@ -1990,7 +2064,11 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
     // Configuration phase: derived from sub-sections
     let config = &state.phases.configuration.configuration;
     let privacy_done = config.privacy_mode.confirmed_at.is_some();
-    let channels_done = config.capture_channels.email_forwarding.verified_at.is_some()
+    let channels_done = config
+        .capture_channels
+        .email_forwarding
+        .verified_at
+        .is_some()
         || config.capture_channels.manual_upload_enabled
         || config.capture_channels.erp_sync_enabled;
     let modules_done = !config.module_entitlements.is_empty();
@@ -2006,12 +2084,28 @@ pub fn recompute_statuses(state: &mut ImplementationWizardState, sample_invoice_
     };
 
     // Derive measurable go-live signals from observable state
-    state.phases.go_live.checks.forwarding_email_verified =
-        state.phases.configuration.configuration.capture_channels.email_forwarding.verified_at.is_some();
-    state.phases.go_live.checks.notifications_acknowledged =
-        state.phases.configuration.configuration.notification_approvals.approved_at.is_some();
-    state.phases.go_live.checks.privacy_mode_confirmed =
-        state.phases.configuration.configuration.privacy_mode.confirmed_at.is_some();
+    state.phases.go_live.checks.forwarding_email_verified = state
+        .phases
+        .configuration
+        .configuration
+        .capture_channels
+        .email_forwarding
+        .verified_at
+        .is_some();
+    state.phases.go_live.checks.notifications_acknowledged = state
+        .phases
+        .configuration
+        .configuration
+        .notification_approvals
+        .approved_at
+        .is_some();
+    state.phases.go_live.checks.privacy_mode_confirmed = state
+        .phases
+        .configuration
+        .configuration
+        .privacy_mode
+        .confirmed_at
+        .is_some();
     state.phases.go_live.checks.sample_invoice_routed = sample_invoice_routed;
 
     state.phases.go_live.status = if go_live_complete(&state.phases.go_live.checks) {

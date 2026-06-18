@@ -495,23 +495,33 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
     .await
     .expect("Baseline query should succeed");
 
-    assert_eq!(baseline_rows.len(), 2, "Should have 2 invoices for simulation");
+    assert_eq!(
+        baseline_rows.len(),
+        2,
+        "Should have 2 invoices for simulation"
+    );
 
     // Verify invoice A (pending_approval, due+3)
-    let row_a = baseline_rows.iter().find(|r| {
-        let num: String = r.get("processing_status");
-        num == "pending_approval"
-    }).expect("Should find pending_approval invoice");
+    let row_a = baseline_rows
+        .iter()
+        .find(|r| {
+            let num: String = r.get("processing_status");
+            num == "pending_approval"
+        })
+        .expect("Should find pending_approval invoice");
     let due_a: chrono::NaiveDate = row_a.get("due_date");
     assert_eq!(due_a, today + chrono::Duration::days(3));
     let dd_a: Option<chrono::NaiveDate> = row_a.get("discount_deadline");
     assert_eq!(dd_a, Some(today + chrono::Duration::days(5)));
 
     // Verify invoice B (approved, due+10)
-    let row_b = baseline_rows.iter().find(|r| {
-        let num: String = r.get("processing_status");
-        num == "approved"
-    }).expect("Should find approved invoice");
+    let row_b = baseline_rows
+        .iter()
+        .find(|r| {
+            let num: String = r.get("processing_status");
+            num == "approved"
+        })
+        .expect("Should find approved invoice");
     let dd_b: Option<chrono::NaiveDate> = row_b.get("discount_deadline");
     assert_eq!(dd_b, Some(today + chrono::Duration::days(2)));
 

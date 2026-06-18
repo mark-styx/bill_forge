@@ -493,26 +493,30 @@ impl WinstonAgent {
                 tools: provider_tools.clone(),
             };
 
-            provider_response = self.provider.chat_completion(next_request).await.map_err(|e| {
-                warn!(
-                    selected_provider = %selected_provider,
-                    selected_model = %selected_model,
-                    model_route = ?selected_route,
-                    conversation_id = %conversation_id,
-                    tenant_id = %tenant_id,
-                    user_id = %user_id,
-                    error_kind = ?e.kind,
-                    iteration = iterations,
-                    "AI follow-up turn after tool call failed"
-                );
-                ProviderTurnError {
-                    selected_provider: selected_provider.clone(),
-                    selected_model: selected_model.clone(),
-                    selected_route,
-                    latency_ms,
-                    provider_error: e,
-                }
-            })?;
+            provider_response = self
+                .provider
+                .chat_completion(next_request)
+                .await
+                .map_err(|e| {
+                    warn!(
+                        selected_provider = %selected_provider,
+                        selected_model = %selected_model,
+                        model_route = ?selected_route,
+                        conversation_id = %conversation_id,
+                        tenant_id = %tenant_id,
+                        user_id = %user_id,
+                        error_kind = ?e.kind,
+                        iteration = iterations,
+                        "AI follow-up turn after tool call failed"
+                    );
+                    ProviderTurnError {
+                        selected_provider: selected_provider.clone(),
+                        selected_model: selected_model.clone(),
+                        selected_route,
+                        latency_ms,
+                        provider_error: e,
+                    }
+                })?;
             iterations += 1;
         }
 
@@ -538,25 +542,29 @@ impl WinstonAgent {
                 stop: None,
                 tools: None,
             };
-            provider_response = self.provider.chat_completion(terminator_request).await.map_err(|e| {
-                warn!(
-                    selected_provider = %selected_provider,
-                    selected_model = %selected_model,
-                    model_route = ?selected_route,
-                    conversation_id = %conversation_id,
-                    tenant_id = %tenant_id,
-                    user_id = %user_id,
-                    error_kind = ?e.kind,
-                    "AI terminator turn after max iterations failed"
-                );
-                ProviderTurnError {
-                    selected_provider: selected_provider.clone(),
-                    selected_model: selected_model.clone(),
-                    selected_route,
-                    latency_ms,
-                    provider_error: e,
-                }
-            })?;
+            provider_response = self
+                .provider
+                .chat_completion(terminator_request)
+                .await
+                .map_err(|e| {
+                    warn!(
+                        selected_provider = %selected_provider,
+                        selected_model = %selected_model,
+                        model_route = ?selected_route,
+                        conversation_id = %conversation_id,
+                        tenant_id = %tenant_id,
+                        user_id = %user_id,
+                        error_kind = ?e.kind,
+                        "AI terminator turn after max iterations failed"
+                    );
+                    ProviderTurnError {
+                        selected_provider: selected_provider.clone(),
+                        selected_model: selected_model.clone(),
+                        selected_route,
+                        latency_ms,
+                        provider_error: e,
+                    }
+                })?;
         }
 
         let assistant_content = provider_response.message.content.clone();

@@ -148,7 +148,7 @@ mod integration {
         let vendor_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO vendors (id, name, vendor_type, status, created_at, updated_at)
-             VALUES ($1, 'Pre-existing Vendor', 'business', 'active', NOW(), NOW())"
+             VALUES ($1, 'Pre-existing Vendor', 'business', 'active', NOW(), NOW())",
         )
         .bind(vendor_id)
         .execute(&pool)
@@ -175,7 +175,7 @@ mod integration {
         // Vendor INSERT succeeds
         sqlx::query(
             "INSERT INTO vendors (id, name, vendor_type, email, status, created_at, updated_at)
-             VALUES ($1, 'New Vendor', 'business', 'test@example.com', 'active', NOW(), NOW())"
+             VALUES ($1, 'New Vendor', 'business', 'test@example.com', 'active', NOW(), NOW())",
         )
         .bind(new_vendor_id)
         .execute(&mut *tx)
@@ -193,28 +193,28 @@ mod integration {
         .await;
 
         // The mapping insert should have failed
-        assert!(mapping_result.is_err(), "Expected unique constraint violation");
+        assert!(
+            mapping_result.is_err(),
+            "Expected unique constraint violation"
+        );
         // Transaction should be implicitly rolled back (vendor INSERT is also rolled back)
         tx.rollback().await.unwrap();
 
         // Verify: only one mapping row exists (the original)
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM xero_contact_mappings WHERE tenant_id = $1"
-        )
-        .bind(tenant_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM xero_contact_mappings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count.0, 1, "Should still have exactly one mapping row");
 
         // Verify: the orphaned vendor was NOT left behind
-        let vendor_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM vendors WHERE id = $1"
-        )
-        .bind(new_vendor_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let vendor_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vendors WHERE id = $1")
+            .bind(new_vendor_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(vendor_count.0, 0, "Orphaned vendor should not exist");
     }
 
@@ -231,7 +231,7 @@ mod integration {
 
         sqlx::query(
             "INSERT INTO vendors (id, name, vendor_type, email, status, created_at, updated_at)
-             VALUES ($1, 'Happy Vendor', 'business', 'happy@example.com', 'active', NOW(), NOW())"
+             VALUES ($1, 'Happy Vendor', 'business', 'happy@example.com', 'active', NOW(), NOW())",
         )
         .bind(vendor_id)
         .execute(&mut *tx)
@@ -251,13 +251,11 @@ mod integration {
         tx.commit().await.unwrap();
 
         // Verify vendor was created
-        let vendor: Option<(String,)> = sqlx::query_as(
-            "SELECT name FROM vendors WHERE id = $1"
-        )
-        .bind(vendor_id)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let vendor: Option<(String,)> = sqlx::query_as("SELECT name FROM vendors WHERE id = $1")
+            .bind(vendor_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
         assert!(vendor.is_some());
         assert_eq!(vendor.unwrap().0, "Happy Vendor");
 
@@ -284,13 +282,12 @@ mod integration {
         .unwrap();
 
         // Verify sync log status
-        let log_status: Option<(String,)> = sqlx::query_as(
-            "SELECT status FROM xero_sync_log WHERE id = $1"
-        )
-        .bind(sync_id)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let log_status: Option<(String,)> =
+            sqlx::query_as("SELECT status FROM xero_sync_log WHERE id = $1")
+                .bind(sync_id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(log_status.is_some());
         assert_eq!(log_status.unwrap().0, "completed");
 
@@ -301,13 +298,12 @@ mod integration {
             .await
             .unwrap();
 
-        let last_sync: Option<(Option<chrono::DateTime<chrono::Utc>>,)> = sqlx::query_as(
-            "SELECT last_sync_at FROM xero_connections WHERE tenant_id = $1"
-        )
-        .bind(tenant_id)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let last_sync: Option<(Option<chrono::DateTime<chrono::Utc>>,)> =
+            sqlx::query_as("SELECT last_sync_at FROM xero_connections WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(last_sync.is_some());
         assert!(last_sync.unwrap().0.is_some(), "last_sync_at should be set");
     }

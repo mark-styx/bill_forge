@@ -10,11 +10,7 @@ use crate::stripe::{CreateMeterEventParams, StripeClient};
 use crate::subscription::SubscriptionUsage;
 
 /// Successful-processing statuses that should count toward billable usage.
-const BILLABLE_PROCESSING_STATUSES: &[&str] = &[
-    "approved",
-    "ready_for_payment",
-    "paid",
-];
+const BILLABLE_PROCESSING_STATUSES: &[&str] = &["approved", "ready_for_payment", "paid"];
 
 /// Query invoice and vendor counts for a tenant within a billing period window.
 ///
@@ -122,8 +118,7 @@ pub async fn record_invoice_meter_event(
         "unit_price_cents".to_string(),
         plan.metered_invoice_unit_price_cents.to_string(),
     );
-    let payload_json = serde_json::to_value(&payload)
-        .unwrap_or_default();
+    let payload_json = serde_json::to_value(&payload).unwrap_or_default();
 
     // Attempt to send to Stripe; persist outbox row regardless of outcome.
     let send_result = stripe
@@ -199,10 +194,7 @@ pub async fn retry_pending_meter_events(
     stripe: &StripeClient,
     limit: i64,
 ) -> Result<RetryReport> {
-    let rows = sqlx::query_as::<
-        _,
-        (uuid::Uuid, uuid::Uuid, String, String, serde_json::Value),
-    >(
+    let rows = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, String, serde_json::Value)>(
         r#"SELECT id, tenant_id, event_name, stripe_customer_id, payload
            FROM stripe_meter_events
            WHERE status IN ('pending', 'failed')
@@ -227,10 +219,7 @@ pub async fn retry_pending_meter_events(
             .get("invoice_id")
             .and_then(|v| uuid::Uuid::parse_str(v).ok())
             .unwrap_or_default();
-        let tenant_id_str = payload
-            .get("tenant_id")
-            .cloned()
-            .unwrap_or_default();
+        let tenant_id_str = payload.get("tenant_id").cloned().unwrap_or_default();
         let identifier = format!("tenant:{tenant_id_str}:invoice:{invoice_id}");
 
         let result = stripe
