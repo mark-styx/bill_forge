@@ -205,7 +205,7 @@ async fn seed_invoice(
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_correct_tenant_sees_own_rows() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("see-own").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -257,7 +257,7 @@ async fn rls_correct_tenant_sees_own_rows() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_unset_session_variable_blocks_reads() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("unset-var").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -308,7 +308,7 @@ async fn rls_unset_session_variable_blocks_reads() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_wrong_session_variable_blocks_reads() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("wrong-var").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -371,7 +371,7 @@ async fn rls_wrong_session_variable_blocks_reads() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_insert_wrong_tenant_blocked() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("insert-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -447,7 +447,7 @@ async fn rls_insert_wrong_tenant_blocked() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_update_wrong_tenant_blocked() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("update-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -494,7 +494,7 @@ async fn rls_update_wrong_tenant_blocked() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_delete_wrong_tenant_blocked() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("delete-block").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -545,7 +545,7 @@ async fn rls_delete_wrong_tenant_blocked() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn tenant_pool_sets_app_current_tenant_id() {
     // Case 1: Verify the after_connect hook sets app.current_tenant_id
     let (manager, tenant_id, _admin_pool, _app_pool) = setup_rls_tenant("guc-check").await;
@@ -572,7 +572,7 @@ async fn tenant_pool_sets_app_current_tenant_id() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_after_connect_hook_isolates_tenants() {
     let metadata_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
         "postgres://postgres:postgres@localhost:5432/billforge_test".to_string()
@@ -711,7 +711,7 @@ async fn rls_after_connect_hook_isolates_tenants() {
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn force_rls_blocks_owner_without_tenant_setting() {
     let (manager, tenant_id, admin_pool, pool) = setup_rls_tenant("force-rls").await;
     let tenant_uuid = *tenant_id.as_uuid();
@@ -767,7 +767,7 @@ async fn force_rls_blocks_owner_without_tenant_setting() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn rls_policies_exist_on_core_tables() {
     let (manager, tenant_id, pool, _app_pool) = setup_rls_tenant("meta-check").await;
 

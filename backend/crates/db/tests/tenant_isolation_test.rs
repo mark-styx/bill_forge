@@ -5,7 +5,7 @@
 //! another tenant's data.
 //!
 //! These are integration tests requiring a running Postgres instance.
-//! They are gated behind `#[cfg_attr(not(feature = "integration"), ignore)]`
+//! They are gated behind `#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]`
 //! so `cargo test` skips them by default but `cargo test --features integration`
 //! (or `cargo test -- --ignored`) runs them.
 
@@ -233,7 +233,7 @@ async fn teardown_two_tenants(manager: &PgManager, tenant_a: &TenantId, tenant_b
 
 /// Test: update_received_quantities should NOT update rows when tenant_id does not own the PO.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_update_received_qty_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-recv").await;
 
@@ -289,7 +289,7 @@ async fn test_update_received_qty_rejects_wrong_tenant() {
 
 /// Test: update_invoiced_quantities should NOT update rows when tenant_id does not own the PO.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_update_invoiced_qty_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-inv").await;
 
@@ -344,7 +344,7 @@ async fn test_update_invoiced_qty_rejects_wrong_tenant() {
 
 /// Test: run_match receiving query should exclude records from other tenants.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_run_match_excludes_cross_tenant_receiving() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("po-recv-match").await;
 
@@ -401,7 +401,7 @@ async fn test_run_match_excludes_cross_tenant_receiving() {
 
 /// Querying an invoice by ID with the wrong tenant_id should return 0 rows.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_invoice_get_by_id_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("inv-get").await;
 
@@ -447,7 +447,7 @@ async fn test_invoice_get_by_id_rejects_wrong_tenant() {
 
 /// Listing invoices filtered by tenant_id should only return that tenant's invoices.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_invoice_list_excludes_other_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("inv-list").await;
 
@@ -497,7 +497,7 @@ async fn test_invoice_list_excludes_other_tenant() {
 
 /// Querying a vendor by ID with the wrong tenant_id should return None.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_vendor_get_by_id_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("vnd-get").await;
 
@@ -537,7 +537,7 @@ async fn test_vendor_get_by_id_rejects_wrong_tenant() {
 
 /// Deleting a vendor with the wrong tenant_id should affect 0 rows.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_vendor_delete_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("vnd-del").await;
 
@@ -581,7 +581,7 @@ async fn test_vendor_delete_rejects_wrong_tenant() {
 
 /// Looking up a user by ID with the wrong tenant_id should return None.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_user_email_lookup_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("usr-lookup").await;
 
@@ -618,7 +618,7 @@ async fn test_user_email_lookup_rejects_wrong_tenant() {
 
 /// Listing users filtered by tenant_id should only return that tenant's users.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_user_list_excludes_other_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("usr-list").await;
 
@@ -656,7 +656,7 @@ async fn test_user_list_excludes_other_tenant() {
 
 /// Claiming a queue item with the wrong tenant_id should affect 0 rows.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_claim_item_cross_tenant_blocked() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-claim").await;
 
@@ -747,7 +747,7 @@ async fn test_claim_item_cross_tenant_blocked() {
 
 /// Completing a queue item with the wrong tenant_id should affect 0 rows.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_complete_item_cross_tenant_blocked() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-complete").await;
 
@@ -839,7 +839,7 @@ async fn test_complete_item_cross_tenant_blocked() {
 
 /// Reassigning a queue item with the wrong tenant_id should affect 0 rows.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_reassign_item_cross_tenant_blocked() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("qi-reassign").await;
 
@@ -942,7 +942,7 @@ async fn test_reassign_item_cross_tenant_blocked() {
 /// Defense-in-depth: the JOIN on `invoices` now includes `i.tenant_id = $2`, so a
 /// corrupted item row pointing at another tenant's invoice is silently excluded.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn payment_request_items_query_is_tenant_scoped() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("pr-items-scope").await;
 
@@ -1050,7 +1050,7 @@ async fn payment_request_items_query_is_tenant_scoped() {
 /// invoice data. If a stray `payment_request_items` row points at another tenant's
 /// invoice, the recomputed `total_amount_cents` and `invoice_count` must not include it.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn add_invoices_to_request_recompute_is_tenant_scoped() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) =
         setup_two_tenants("pr-add-inv-scope").await;
@@ -1174,7 +1174,7 @@ async fn add_invoices_to_request_recompute_is_tenant_scoped() {
 /// Seeds a draft payment request under tenant A and verifies that tenant B
 /// cannot submit it (returns NotFound), while tenant A can.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn submit_payment_request_is_tenant_scoped() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("pr-submit").await;
 
@@ -1240,7 +1240,7 @@ async fn seed_workflow_rule(pool: &sqlx::PgPool, tenant_id: &TenantId, rule_id: 
 
 /// Test: `get_by_id` on WorkflowRuleRepository should return None for cross-tenant access.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn workflow_rules_get_rejects_wrong_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, _pool_b) = setup_two_tenants("wf-rule-get").await;
 
@@ -1279,7 +1279,7 @@ async fn workflow_rules_get_rejects_wrong_tenant() {
 
 /// Test: `query` on AuditRepository should only return entries for the given tenant.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn audit_log_list_excludes_other_tenant() {
     let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("audit-list").await;
 

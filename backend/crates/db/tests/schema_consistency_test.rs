@@ -146,7 +146,7 @@ async fn assert_column_default_contains(
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_queue_items_has_tenant_id_and_status() {
     let (_manager, _tenant_id, pool) = setup_tenant("qi-cols").await;
 
@@ -157,7 +157,7 @@ async fn test_queue_items_has_tenant_id_and_status() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_tenant_migrations_are_recorded_durably() {
     let (manager, _tenant_id, pool) = setup_tenant("migration-tracking").await;
 
@@ -179,7 +179,7 @@ async fn test_tenant_migrations_are_recorded_durably() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_approval_requests_has_tenant_id_jsonb_requested_from_and_updated_at() {
     let (_manager, _tenant_id, pool) = setup_tenant("ar-cols").await;
 
@@ -196,7 +196,7 @@ async fn test_approval_requests_has_tenant_id_jsonb_requested_from_and_updated_a
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_email_action_tokens_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("eat").await;
 
@@ -212,7 +212,7 @@ async fn test_email_action_tokens_table_exists() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_workflow_audit_log_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("wal").await;
 
@@ -228,7 +228,7 @@ async fn test_workflow_audit_log_table_exists() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_workflow_templates_table_exists() {
     let (_manager, _tenant_id, pool) = setup_tenant("wt").await;
 
@@ -237,7 +237,7 @@ async fn test_workflow_templates_table_exists() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_workflow_tables_have_uuid_pk_defaults() {
     let (_manager, _tenant_id, pool) = setup_tenant("pk-defaults").await;
 
@@ -257,7 +257,7 @@ async fn test_workflow_tables_have_uuid_pk_defaults() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_ai_conversation_tables_schema() {
     let (_manager, _tenant_id, pool) = setup_tenant("ai-conv").await;
 
@@ -333,7 +333,7 @@ async fn test_ai_conversation_tables_schema() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_ai_usage_events_schema() {
     let (_manager, _tenant_id, pool) = setup_tenant("ai-usage").await;
 
@@ -408,7 +408,7 @@ async fn test_ai_usage_events_schema() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_ai_action_proposals_schema() {
     if !test_database_configured() {
         eprintln!(

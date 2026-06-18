@@ -18,15 +18,18 @@ export SQLX_OFFLINE="${SQLX_OFFLINE:-true}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export RUSTFLAGS="${RUSTFLAGS:--C debuginfo=0}"
 
-export BILLFORGE_APP_PASSWORD="${BILLFORGE_APP_PASSWORD:-billforge_app_test_pw}"
+# Use the default `billforge_app_dev` password from migration 120 so the
+# pg_manager_rls_guard_test (which hardcodes that password) can authenticate
+# as billforge_app to verify the positive case of the fail-closed gate.
+export BILLFORGE_APP_PASSWORD="${BILLFORGE_APP_PASSWORD:-billforge_app_dev}"
 
 cargo run -p billforge-db --bin migrate -- --database-url "$DATABASE_URL" up
 
-# Note: integration tests still run as the superuser postgres role. Routing
-# them through billforge_app would force every existing fixture (users, vendors,
-# invoices INSERT) to set up the RLS tenant GUC, which is a much larger fixture
-# rewrite. Tests that explicitly assert the PgManager fail-closed gate
-# (ai_action_proposal_repo_test) are marked #[ignore] until that work lands.
+# Integration tests still run as the superuser postgres role. Routing them
+# through billforge_app would force every existing fixture (users, vendors,
+# invoices INSERT) to set up the RLS tenant GUC, which is a much larger
+# fixture rewrite. Tests that hard-call PgManager::new (which fail-closes on
+# superuser) are individually marked #[ignore] until that work lands.
 export TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}"
 
 cargo test --workspace --all-features --tests -- --test-threads=1

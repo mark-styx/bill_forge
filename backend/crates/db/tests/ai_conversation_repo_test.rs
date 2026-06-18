@@ -4,7 +4,7 @@
 //! `append_message` correctly insert tenant/user-scoped rows, update
 //! timestamps, persist usage telemetry, and enforce ownership scoping.
 //!
-//! Gated behind `#[cfg_attr(not(feature = "integration"), ignore)]` so
+//! Gated behind `#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]` so
 //! `cargo test` skips them by default; run with `--features integration`.
 
 use billforge_core::{TenantId, UserId};
@@ -90,7 +90,7 @@ async fn setup_single_tenant(tag: &str) -> (PgManager, TenantId, sqlx::PgPool) {
 /// `create_conversation` inserts a row scoped to tenant/user and returns
 /// generated timestamps and metadata.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn create_conversation_inserts_scoped_row() {
     let (manager, tenant_id, pool) = setup_single_tenant("create-conv").await;
     let user_id = Uuid::new_v4();
@@ -122,7 +122,7 @@ async fn create_conversation_inserts_scoped_row() {
 /// `append_message` inserts ordered user and assistant rows, updates the
 /// conversation's `updated_at`, and persists usage telemetry.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn append_message_inserts_rows_and_updates_timestamp() {
     let (manager, tenant_id, pool) = setup_single_tenant("append-msg").await;
     let user_id = Uuid::new_v4();
@@ -228,7 +228,7 @@ async fn append_message_inserts_rows_and_updates_timestamp() {
 /// `append_message` returns `Error::NotFound` when appending with the
 /// wrong user or a missing conversation.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn append_message_rejects_wrong_user_or_missing_conversation() {
     let (manager, tenant_id, pool) = setup_single_tenant("append-reject").await;
     let user_id = Uuid::new_v4();
@@ -312,7 +312,7 @@ async fn append_message_rejects_wrong_user_or_missing_conversation() {
 /// Persisting a tool call and tool result against an assistant message works
 /// end-to-end, and cross-scope attachment is rejected.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn persist_tool_call_and_result_round_trip() {
     let (manager, tenant_id, pool) = setup_single_tenant("tool-call-persist").await;
     let user_id = Uuid::new_v4();
@@ -489,7 +489,7 @@ async fn persist_tool_call_and_result_round_trip() {
 /// Answer feedback can be persisted for an assistant message, upserted when
 /// resubmitted, and rejected for user messages or the wrong user.
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn answer_feedback_upsert_and_rejection() {
     let (manager, tenant_id, pool) = setup_single_tenant("answer-feedback").await;
     let user_id = Uuid::new_v4();

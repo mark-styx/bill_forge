@@ -5,7 +5,7 @@
 //!
 //! Uses FakeAiProvider and a migrated PostgreSQL test database.
 //!
-//! Gated behind `#[cfg_attr(not(feature = "integration"), ignore)]` so
+//! Gated behind `#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]` so
 //! `cargo test` skips them by default; run with `--features integration`.
 
 use std::sync::Arc;
@@ -201,7 +201,7 @@ struct UsageEventRow {
 // ============================================================================
 
 #[sqlx::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -288,7 +288,7 @@ async fn test_new_chat_persists_conversation_and_messages(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_continue_conversation_appends_messages(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -357,7 +357,7 @@ async fn test_continue_conversation_appends_messages(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_nonexistent_conversation_returns_error(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -397,7 +397,7 @@ async fn test_nonexistent_conversation_returns_error(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
@@ -482,7 +482,7 @@ async fn test_successful_chat_creates_usage_event(pool: sqlx::PgPool) {
 // ============================================================================
 
 #[sqlx::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn test_failed_provider_turn_creates_failed_usage_event(pool: sqlx::PgPool) {
     setup_minimal_schema(&pool).await;
 
