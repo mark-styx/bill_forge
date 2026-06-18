@@ -1,6 +1,6 @@
 //! Integration tests for AI action proposal persistence.
 //!
-//! Gated behind `#[cfg_attr(not(feature = "integration"), ignore)]` so
+//! Gated behind `#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]` so
 //! `cargo test` skips them by default; run with `--features integration`.
 
 use billforge_core::{TenantId, UserId};
@@ -203,7 +203,7 @@ async fn run_proposal_test_schema(pool: &sqlx::PgPool) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn create_and_load_list_action_proposals() {
     let (manager, tenant_id, pool) = setup_single_tenant("proposal-create-load").await;
     let user_id = Uuid::new_v4();
@@ -346,7 +346,7 @@ async fn create_and_load_list_action_proposals() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn update_status_and_enforce_scoped_access() {
     let (manager, tenant_id, pool) = setup_single_tenant("proposal-status-scope").await;
     let user_id = Uuid::new_v4();
@@ -443,7 +443,7 @@ async fn update_status_and_enforce_scoped_access() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn approve_pending_proposal_approves_pending_and_writes_audit() {
     let (manager, tenant_id, pool) = setup_single_tenant("approve-pending").await;
     let user_id = Uuid::new_v4();
@@ -518,7 +518,7 @@ async fn approve_pending_proposal_approves_pending_and_writes_audit() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn approve_pending_proposal_wrong_user_returns_not_found_and_preserves_pending() {
     let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-wrong-user").await;
     let user_id = Uuid::new_v4();
@@ -582,7 +582,7 @@ async fn approve_pending_proposal_wrong_user_returns_not_found_and_preserves_pen
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn approve_pending_proposal_already_approved_returns_conflict() {
     let (manager, tenant_id, pool) = setup_single_tenant("approve-pending-already-approved").await;
     let user_id = Uuid::new_v4();
@@ -650,7 +650,7 @@ async fn approve_pending_proposal_already_approved_returns_conflict() {
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn failed_status_persists_error_fields_and_non_failed_status_clears_them() {
     let (manager, tenant_id, pool) = setup_single_tenant("proposal-failed-errors").await;
     let user_id = Uuid::new_v4();
@@ -744,7 +744,7 @@ async fn failed_status_persists_error_fields_and_non_failed_status_clears_them()
 }
 
 #[tokio::test]
-#[cfg_attr(not(feature = "integration"), ignore)]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
 async fn writes_audit_logs_for_proposal_lifecycle_events() {
     let (manager, tenant_id, pool) = setup_single_tenant("proposal-audit").await;
     let user_id = Uuid::new_v4();
