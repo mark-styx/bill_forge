@@ -225,9 +225,16 @@ async fn list_conversations_handler(
     State(state): State<AppState>,
     AiAssistantAccess(user, _tenant): AiAssistantAccess,
 ) -> ApiResult<Json<Vec<Conversation>>> {
-    let pool = (*state.db.metadata()).clone();
+    // Resolve the tenant-scoped pool so conversation listing targets the
+    // tenant database (which has ai_conversations/ai_messages per
+    // migrations 082/083) rather than the shared metadata database,
+    // matching the tenant-isolation pattern used by chat_handler.
+    let pool = state.db.tenant(&user.tenant_id).await?;
+    let pool = (*pool).clone();
+
     let provider = build_provider();
-    let agent = WinstonAgent::new(pool, provider);
+    let agent =
+        WinstonAgent::new(pool, provider).with_enabled_modules(_tenant.enabled_modules.clone());
 
     let tenant_id = user.tenant_id.0.to_string();
     let user_id = user.user_id.0;
