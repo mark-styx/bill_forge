@@ -8,6 +8,15 @@
 //!
 //! Issue #284: Auto-adjusts routing config weights when workload imbalance
 //! exceeds a threshold, closing the learning loop beyond expertise scores.
+//!
+//! Issue #396: The adjustment is bidirectional and driven by an observed
+//! routing-outcome signal, the rejection rate of recent rows in
+//! `routing_optimization_log.outcome`. A high rejection rate nudges
+//! `workload_weight` UP (favor balancing harder); a low rejection rate
+//! nudges it DOWN toward the install baseline (let expertise/availability
+//! re-assert). Variance over loads is kept only as a cold-start fallback
+//! when there is not yet enough outcome data. `enable_pattern_learning`
+//! on `routing_configuration` gates the whole adjustment.
 
 use anyhow::{Context, Result};
 use billforge_core::{
@@ -33,8 +42,37 @@ const WEIGHT_NUDGE_STEP: f64 = 0.05;
 const WEIGHT_MIN: f64 = 0.1;
 const WEIGHT_MAX: f64 = 0.7;
 
+/// Floor for `workload_weight` when nudging DOWN. We only revert toward,
+/// not below, this install baseline so a healthy routing window cannot
+/// erode workload balancing entirely.
+const WEIGHT_MIN_BASELINE: f64 = 0.2;
+
 /// Cooldown period between auto-adjustments for the same tenant (hours).
 const AUTO_ADJUST_COOLDOWN_HOURS: i64 = 24;
+
+/// Minimum number of outcome-tagged routing rows required before we trust
+/// the rejection-rate signal. Below this we fall back to cold-start
+/// behavior (variance-only, Up-only).
+const MIN_OUTCOME_SAMPLES: i64 = 20;
+
+/// Rejection-rate dead band. At or above HIGH we nudge UP; at or below
+/// LOW we nudge DOWN; in between we do nothing.
+const REJECTION_RATE_HIGH: f64 = 0.15;
+const REJECTION_RATE_LOW: f64 = 0.05;
+
+/// Direction of a workload-weight nudge.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum NudgeDirection {
+    Up,
+    Down,
+}
+
+/// Aggregated routing-outcome signal over the recent window.
+#[derive(Debug, Clone, Copy)]
+struct RoutingOutcomeSignal {
+    rejection_rate: f64,
+    sample_size: i64,
+}
 
 /// Run routing optimization for all tenants
 pub async fn run_routing_optimization(
@@ -304,17 +342,14 @@ async fn check_workload_balance(pool: &PgPool, tenant_id: &TenantId) -> Result<(
         );
     }
 
-    // Issue #284: Auto-adjust routing weights when imbalance is significant,
-    // regardless of whether individual redistribution suggestions were produced.
-    // The variance_coefficient from distribution stats is the authoritative signal.
-    if stats.variance_coefficient > IMBALANCE_THRESHOLD {
-        if let Err(e) = apply_workload_rebalance(pool, tenant_id, stats.variance_coefficient).await
-        {
-            warn!(
-                "Failed to auto-adjust routing weights for tenant {}: {}",
-                tenant_id, e
-            );
-        }
+    // Issue #396: trigger decision moved into apply_workload_rebalance so it
+    // can weigh observed routing outcome quality, not only the variance
+    // proxy. Variance is still passed in as a cold-start fallback signal.
+    if let Err(e) = apply_workload_rebalance(pool, tenant_id, stats.variance_coefficient).await {
+        warn!(
+            "Failed to auto-adjust routing weights for tenant {}: {}",
+            tenant_id, e
+        );
     }
 
     Ok(())
@@ -345,28 +380,44 @@ async fn cleanup_old_routing_logs(pool: &PgPool, tenant_id: &TenantId) -> Result
     Ok(())
 }
 
-/// Nudge routing weights toward correcting workload imbalance.
+/// Nudge routing weights either toward more or less workload-balancing,
+/// based on observed routing outcome quality.
 ///
-/// Increases `workload_weight` by `WEIGHT_NUDGE_STEP`, then proportionally
-/// renormalizes `expertise_weight` + `availability_weight` so the three
-/// still sum to 1.0. All weights are clamped to `[WEIGHT_MIN, WEIGHT_MAX]`.
+/// `Up`: increase `workload_weight` by `WEIGHT_NUDGE_STEP` (clamped to
+/// `WEIGHT_MAX`). Returns `None` if already at `WEIGHT_MAX`.
 ///
-/// Returns `Some((old_workload, new_workload))` if a change was made,
-/// or `None` if the weight was already at `WEIGHT_MAX`.
+/// `Down`: decrease `workload_weight` by `WEIGHT_NUDGE_STEP` (floored at
+/// `WEIGHT_MIN_BASELINE`). Returns `None` if already at or below baseline.
+///
+/// In either case, `expertise_weight` + `availability_weight` are
+/// proportionally renormalized so all three weights sum to 1.0. Individual
+/// values are clamped to `[WEIGHT_MIN, WEIGHT_MAX]` during the proportional
+/// rebalance, then the result is renormalized so the sum is still 1.0.
 fn nudge_routing_weights(
     workload_weight: f64,
     expertise_weight: f64,
     availability_weight: f64,
+    direction: NudgeDirection,
 ) -> Option<(f64, f64, f64, f64)> {
     // Returns (new_workload, new_expertise, new_availability, old_workload)
 
     let old_workload = workload_weight;
 
-    // Increase workload weight
-    let new_workload = (workload_weight + WEIGHT_NUDGE_STEP).min(WEIGHT_MAX);
-    if (new_workload - old_workload).abs() < 1e-9 {
-        return None; // Already at max, nothing to do
-    }
+    let new_workload = match direction {
+        NudgeDirection::Up => {
+            let candidate = (workload_weight + WEIGHT_NUDGE_STEP).min(WEIGHT_MAX);
+            if (candidate - old_workload).abs() < 1e-9 {
+                return None; // Already at max, nothing to do
+            }
+            candidate
+        }
+        NudgeDirection::Down => {
+            if workload_weight <= WEIGHT_MIN_BASELINE + 1e-9 {
+                return None; // Already at or below baseline, nothing to do
+            }
+            (workload_weight - WEIGHT_NUDGE_STEP).max(WEIGHT_MIN_BASELINE)
+        }
+    };
 
     let remaining = 1.0 - new_workload;
     let other_sum = expertise_weight + availability_weight;
@@ -392,16 +443,63 @@ fn nudge_routing_weights(
     Some((new_workload, new_expertise, new_availability, old_workload))
 }
 
-/// Auto-adjust routing config weights when workload imbalance is detected.
+/// Compute the recent routing-outcome signal for a tenant.
 ///
-/// This closes the routing learning loop (issue #284): instead of merely
-/// logging the imbalance, we nudge the `workload_weight` up so the routing
-/// engine favours less-loaded approvers more strongly on future runs.
+/// Reads `routing_optimization_log` over the last 30 days and returns the
+/// rejection rate plus sample size. Returns `None` when there are fewer
+/// than `MIN_OUTCOME_SAMPLES` outcome-tagged rows, so we never act on noise.
+async fn compute_routing_outcome_signal(
+    pool: &PgPool,
+    tenant_id: &TenantId,
+) -> Result<Option<RoutingOutcomeSignal>> {
+    // NOTE: routing_optimization_log.tenant_id is VARCHAR(255) (migration 051),
+    // so we bind as &str. Using the non-macro sqlx::query so the build does
+    // not require a cached query manifest for this analytic SELECT.
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE outcome = 'rejected') AS rejected,
+            COUNT(*) FILTER (WHERE outcome IS NOT NULL) AS total
+        FROM routing_optimization_log
+        WHERE tenant_id = $1
+            AND created_at > NOW() - INTERVAL '30 days'
+        "#,
+    )
+    .bind(tenant_id.as_str())
+    .fetch_one(pool)
+    .await
+    .context("Failed to compute routing outcome signal")?;
+
+    let total: i64 = row.try_get::<Option<i64>, _>("total")?.unwrap_or(0);
+    if total < MIN_OUTCOME_SAMPLES {
+        return Ok(None);
+    }
+
+    let rejected: i64 = row.try_get::<Option<i64>, _>("rejected")?.unwrap_or(0);
+    let rejection_rate = rejected as f64 / total as f64;
+
+    Ok(Some(RoutingOutcomeSignal {
+        rejection_rate,
+        sample_size: total,
+    }))
+}
+
+/// Auto-adjust routing config weights based on observed routing outcomes.
+///
+/// This closes the routing learning loop (issue #284 / #396): instead of
+/// merely logging the imbalance, we nudge `workload_weight` in the
+/// direction that the recent rejection rate suggests:
+/// - High rejection rate → nudge UP (lean harder on workload balancing)
+/// - Low rejection rate → nudge DOWN toward the install baseline (let
+///   expertise/availability re-assert)
+/// - Insufficient outcome data → fall back to the variance proxy (UP only)
 ///
 /// Guards:
+/// - `enable_pattern_learning` must be true.
 /// - Only adjusts if the last auto-adjustment was > 24h ago (or never).
 /// - Persists the new weights to `routing_configuration`.
-/// - Writes an audit trail entry to `workflow_audit_log`.
+/// - Writes an audit trail entry to `workflow_audit_log` including the
+///   direction, rejection rate, and sample size.
 async fn apply_workload_rebalance(
     pool: &PgPool,
     tenant_id: &TenantId,
@@ -409,13 +507,13 @@ async fn apply_workload_rebalance(
 ) -> Result<()> {
     let tid = tenant_id.as_uuid();
 
-    // 1. Load current weights and cooldown timestamp
+    // 1. Load current weights, cooldown timestamp, and learning flag
     //    NOTE: routing_configuration.tenant_id is VARCHAR(255) (migration 051),
     //    so we bind as &str, not UUID.
     let row = sqlx::query(
         r#"
         SELECT workload_weight, expertise_weight, availability_weight,
-               last_auto_adjusted_at
+               last_auto_adjusted_at, enable_pattern_learning
         FROM routing_configuration
         WHERE tenant_id = $1
         "#,
@@ -431,7 +529,17 @@ async fn apply_workload_rebalance(
         None => return Ok(()),
     };
 
-    // 2. Cooldown guard: skip if adjusted within the last N hours
+    // 2. Honor the tenant-controlled learning flag (issue #396).
+    let enable_pattern_learning: bool = row.get("enable_pattern_learning");
+    if !enable_pattern_learning {
+        info!(
+            "Skipping auto-adjust: enable_pattern_learning=false for tenant {}",
+            tenant_id
+        );
+        return Ok(());
+    }
+
+    // 3. Cooldown guard: skip if adjusted within the last N hours
     let last_auto_adjusted: Option<chrono::DateTime<chrono::Utc>> =
         row.get("last_auto_adjusted_at");
     if let Some(last) = last_auto_adjusted {
@@ -460,20 +568,54 @@ async fn apply_workload_rebalance(
         .to_f64()
         .unwrap_or(0.3);
 
-    // 3. Compute new weights
-    let result = match nudge_routing_weights(old_w, old_e, old_a) {
+    // 4. Read outcome signal and decide direction.
+    let outcome = compute_routing_outcome_signal(pool, tenant_id).await?;
+    let direction = match outcome.as_ref() {
+        Some(sig) if sig.rejection_rate >= REJECTION_RATE_HIGH => NudgeDirection::Up,
+        Some(sig) if sig.rejection_rate <= REJECTION_RATE_LOW && old_w > WEIGHT_MIN_BASELINE => {
+            NudgeDirection::Down
+        }
+        Some(sig) => {
+            info!(
+                "Skipping auto-adjust for tenant {}: outcome quality nominal \
+                 (rejection_rate {:.3}, sample_size {}), no nudge",
+                tenant_id, sig.rejection_rate, sig.sample_size
+            );
+            return Ok(());
+        }
+        None => {
+            // Cold-start fallback (preserves the issue #284 behavior): only
+            // nudge UP, and only when the variance proxy crosses the
+            // threshold. This keeps tenants with no outcome history from
+            // running with a learning loop that can't see anything.
+            if imbalance_score > IMBALANCE_THRESHOLD {
+                NudgeDirection::Up
+            } else {
+                info!(
+                    "Skipping auto-adjust for tenant {}: insufficient outcome data \
+                     and variance {:.2}% within threshold {:.2}%",
+                    tenant_id, imbalance_score, IMBALANCE_THRESHOLD
+                );
+                return Ok(());
+            }
+        }
+    };
+
+    // 5. Compute new weights in the chosen direction.
+    let result = match nudge_routing_weights(old_w, old_e, old_a, direction) {
         Some(r) => r,
         None => {
             info!(
-                "No weight adjustment needed for tenant {} (workload_weight already at max)",
-                tenant_id
+                "No weight adjustment needed for tenant {} (workload_weight already at \
+                 the {:?} bound)",
+                tenant_id, direction
             );
             return Ok(());
         }
     };
     let (new_w, new_e, new_a, _old_workload) = result;
 
-    // 4. Persist the new weights and update cooldown timestamp
+    // 6. Persist the new weights and update cooldown timestamp
     //    NOTE: routing_configuration.tenant_id is VARCHAR(255) (migration 051).
     sqlx::query(
         r#"
@@ -494,7 +636,7 @@ async fn apply_workload_rebalance(
     .await
     .context("Failed to persist auto-adjusted routing weights")?;
 
-    // 5. Write audit trail
+    // 7. Write audit trail including the loop-observability fields.
     let old_weights = serde_json::json!({
         "workload_weight": old_w,
         "expertise_weight": old_e,
@@ -505,6 +647,11 @@ async fn apply_workload_rebalance(
         "expertise_weight": new_e,
         "availability_weight": new_a,
     });
+
+    let direction_label = match direction {
+        NudgeDirection::Up => "up",
+        NudgeDirection::Down => "down",
+    };
 
     sqlx::query(
         r#"
@@ -525,15 +672,29 @@ async fn apply_workload_rebalance(
     .bind(serde_json::json!({
         "imbalance_score": imbalance_score,
         "nudge_step": WEIGHT_NUDGE_STEP,
+        "direction": direction_label,
+        "rejection_rate": outcome.as_ref().map(|s| s.rejection_rate),
+        "sample_size": outcome.as_ref().map(|s| s.sample_size),
     }))
     .execute(pool)
     .await
     .context("Failed to insert routing auto-adjust audit entry")?;
 
     info!(
-        "Auto-adjusted routing weights for tenant {}: workload {:.3} -> {:.3}, \
-         expertise {:.3} -> {:.3}, availability {:.3} -> {:.3} (imbalance: {:.1}%)",
-        tenant_id, old_w, new_w, old_e, new_e, old_a, new_a, imbalance_score
+        "Auto-adjusted routing weights for tenant {} ({}): workload {:.3} -> {:.3}, \
+         expertise {:.3} -> {:.3}, availability {:.3} -> {:.3} (imbalance: {:.1}%, \
+         rejection_rate: {:?}, sample_size: {:?})",
+        tenant_id,
+        direction_label,
+        old_w,
+        new_w,
+        old_e,
+        new_e,
+        old_a,
+        new_a,
+        imbalance_score,
+        outcome.as_ref().map(|s| s.rejection_rate),
+        outcome.as_ref().map(|s| s.sample_size),
     );
 
     Ok(())
@@ -655,12 +816,12 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Issue #284: Weight nudging unit tests
+    // Issue #284 / #396: Weight nudging unit tests
     // ------------------------------------------------------------------
 
     #[test]
     fn test_nudge_routing_weights_increases_workload() {
-        let result = nudge_routing_weights(0.4, 0.3, 0.3);
+        let result = nudge_routing_weights(0.4, 0.3, 0.3, NudgeDirection::Up);
         let (new_w, new_e, new_a, old_w) = result.expect("should produce a nudge");
         assert_eq!(old_w, 0.4);
         assert!(new_w > 0.4, "workload weight should increase");
@@ -673,7 +834,7 @@ mod tests {
     #[test]
     fn test_nudge_routing_weights_clamps_to_max() {
         // workload_weight near max: 0.68 + 0.05 = 0.73, clamped to 0.7
-        let result = nudge_routing_weights(0.68, 0.16, 0.16);
+        let result = nudge_routing_weights(0.68, 0.16, 0.16, NudgeDirection::Up);
         let (new_w, new_e, new_a, _old) = result.expect("should produce a nudge");
         assert!(
             new_w <= WEIGHT_MAX + 1e-9,
@@ -687,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_nudge_routing_weights_returns_none_at_max() {
-        let result = nudge_routing_weights(WEIGHT_MAX, 0.15, 0.15);
+        let result = nudge_routing_weights(WEIGHT_MAX, 0.15, 0.15, NudgeDirection::Up);
         assert!(result.is_none(), "should return None when already at max");
     }
 
@@ -697,7 +858,7 @@ mod tests {
         // and the primary constraint (sum == 1.0) holds. Normalization after
         // clamping can push a value slightly below WEIGHT_MIN, which is
         // acceptable because the weights are always renormalized.
-        let result = nudge_routing_weights(0.6, 0.1, 0.3);
+        let result = nudge_routing_weights(0.6, 0.1, 0.3, NudgeDirection::Up);
         let (new_w, new_e, new_a, _) = result.expect("should produce a nudge");
         assert!(
             new_w >= 0.0 && new_w <= WEIGHT_MAX + 1e-9,
@@ -714,11 +875,12 @@ mod tests {
 
     #[test]
     fn test_nudge_routing_weights_proportional_rebalance() {
-        // With 0.4/0.3/0.3 default, after nudge workload should be 0.45,
+        // With 0.4/0.3/0.3 default, after Up nudge workload should be 0.45,
         // remaining 0.55 split proportionally: expertise gets 0.55 * (0.3/0.6) = 0.275,
         // availability gets 0.55 * (0.3/0.6) = 0.275
         let (new_w, new_e, new_a, _) =
-            nudge_routing_weights(0.4, 0.3, 0.3).expect("should produce a nudge");
+            nudge_routing_weights(0.4, 0.3, 0.3, NudgeDirection::Up)
+                .expect("should produce a nudge");
         assert!(
             (new_w - 0.45).abs() < 1e-9,
             "workload should be 0.45, got {}",
@@ -738,10 +900,90 @@ mod tests {
 
     #[test]
     fn test_imbalance_threshold_sanity() {
-        // Ensure the threshold constant is reasonable
+        // Ensure the threshold constants are reasonable
         assert!(IMBALANCE_THRESHOLD > 0.0);
         assert!(WEIGHT_NUDGE_STEP > 0.0);
         assert!(WEIGHT_MIN < WEIGHT_MAX);
+        assert!(WEIGHT_MIN_BASELINE >= WEIGHT_MIN);
+        assert!(WEIGHT_MIN_BASELINE < WEIGHT_MAX);
         assert!(AUTO_ADJUST_COOLDOWN_HOURS > 0);
+        assert!(REJECTION_RATE_LOW < REJECTION_RATE_HIGH);
+        assert!(MIN_OUTCOME_SAMPLES > 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Issue #396: bidirectional nudge tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn nudge_up_from_default_renormalizes_to_one() {
+        let (new_w, new_e, new_a, old_w) =
+            nudge_routing_weights(0.4, 0.3, 0.3, NudgeDirection::Up)
+                .expect("should nudge up");
+        assert_eq!(old_w, 0.4);
+        assert!(new_w > old_w, "workload should increase");
+        assert!(
+            (new_w + new_e + new_a - 1.0).abs() < 1e-9,
+            "weights must sum to 1.0"
+        );
+    }
+
+    #[test]
+    fn nudge_down_from_elevated_renormalizes_to_one() {
+        let (new_w, new_e, new_a, old_w) =
+            nudge_routing_weights(0.5, 0.25, 0.25, NudgeDirection::Down)
+                .expect("should nudge down");
+        assert_eq!(old_w, 0.5);
+        assert!(new_w < old_w, "workload should decrease, got {}", new_w);
+        assert!(
+            new_w >= WEIGHT_MIN_BASELINE - 1e-9,
+            "workload must not fall below baseline, got {}",
+            new_w
+        );
+        assert!(
+            (new_w + new_e + new_a - 1.0).abs() < 1e-9,
+            "weights must sum to 1.0"
+        );
+    }
+
+    #[test]
+    fn nudge_up_at_max_returns_none() {
+        let result = nudge_routing_weights(WEIGHT_MAX, 0.15, 0.15, NudgeDirection::Up);
+        assert!(result.is_none(), "should return None when already at max");
+    }
+
+    #[test]
+    fn nudge_down_at_baseline_returns_none() {
+        let result =
+            nudge_routing_weights(WEIGHT_MIN_BASELINE, 0.4, 0.4, NudgeDirection::Down);
+        assert!(
+            result.is_none(),
+            "should return None when already at baseline"
+        );
+    }
+
+    #[test]
+    fn nudge_down_then_up_round_trips_within_epsilon() {
+        // Start from default, nudge down, then up, and confirm we land close
+        // to where we started (within floating-point and renormalization noise).
+        let (w_down, e_down, a_down, _) =
+            nudge_routing_weights(0.45, 0.275, 0.275, NudgeDirection::Down)
+                .expect("should nudge down from elevated");
+        let (w_back, e_back, a_back, _) =
+            nudge_routing_weights(w_down, e_down, a_down, NudgeDirection::Up)
+                .expect("should nudge up again");
+
+        // Sum invariant
+        assert!(
+            (w_back + e_back + a_back - 1.0).abs() < 1e-9,
+            "weights must sum to 1.0 after round trip"
+        );
+        // Round-trip should bring workload close to the original 0.45.
+        // Renormalization makes this only approximate, so allow a loose epsilon.
+        assert!(
+            (w_back - 0.45).abs() < 1e-3,
+            "workload should round-trip close to 0.45, got {}",
+            w_back
+        );
     }
 }
