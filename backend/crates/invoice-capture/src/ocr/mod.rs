@@ -161,7 +161,6 @@ pub(crate) fn select_local_only_provider_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use billforge_core::traits::OcrService;
 
     #[tokio::test]
     async fn try_private_inference_short_circuits_when_local_ocr_required() {
