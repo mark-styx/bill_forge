@@ -577,6 +577,7 @@ impl PredictiveRepository {
                 tenant_id,
                 seasonality_threshold_override,
                 ci_width_multiplier,
+                level_bias_correction,
                 mape_30d
             FROM forecast_model_tuning
             WHERE tenant_id = $1
@@ -591,6 +592,7 @@ impl PredictiveRepository {
             tenant_id: r.try_get("tenant_id").unwrap_or(tenant_id),
             seasonality_threshold_override: row_to_f64(r.try_get("seasonality_threshold_override").ok()),
             ci_width_multiplier: row_to_f64(r.try_get("ci_width_multiplier").ok()),
+            level_bias_correction: row_to_f64(r.try_get("level_bias_correction").ok()),
             mape_30d: row_to_f64(r.try_get("mape_30d").ok()),
         }))
     }
@@ -602,6 +604,7 @@ impl PredictiveRepository {
         tenant_id: Uuid,
         seasonality_threshold_override: Option<f64>,
         ci_width_multiplier: Option<f64>,
+        level_bias_correction: Option<f64>,
         mape_30d: Option<f64>,
     ) -> Result<Option<ForecastTuningRow>> {
         let previous = self.get_forecast_tuning(tenant_id).await?;
@@ -612,13 +615,15 @@ impl PredictiveRepository {
                 tenant_id,
                 seasonality_threshold_override,
                 ci_width_multiplier,
+                level_bias_correction,
                 mape_30d,
                 updated_at,
                 created_at
-            ) VALUES ($1, $2, $3, $4, NOW(), NOW())
+            ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
             ON CONFLICT (tenant_id) DO UPDATE SET
                 seasonality_threshold_override = EXCLUDED.seasonality_threshold_override,
                 ci_width_multiplier = EXCLUDED.ci_width_multiplier,
+                level_bias_correction = EXCLUDED.level_bias_correction,
                 mape_30d = EXCLUDED.mape_30d,
                 updated_at = NOW()
             "#,
@@ -626,6 +631,7 @@ impl PredictiveRepository {
         .bind(tenant_id)
         .bind(seasonality_threshold_override)
         .bind(ci_width_multiplier)
+        .bind(level_bias_correction)
         .bind(mape_30d)
         .execute(&self.pool)
         .await
@@ -755,6 +761,9 @@ pub struct ForecastTuningRow {
     pub tenant_id: Uuid,
     pub seasonality_threshold_override: Option<f64>,
     pub ci_width_multiplier: Option<f64>,
+    /// Multiplicative correction applied to ArimaForecaster predicted_value
+    /// (issue #398). Learned from signed bias; flows into `ForecasterTuning`.
+    pub level_bias_correction: Option<f64>,
     pub mape_30d: Option<f64>,
 }
 

@@ -22,6 +22,7 @@ pub fn forecaster_tuning_from_row(row: ForecastTuningRow) -> ForecasterTuning {
         tenant_id: row.tenant_id,
         seasonality_threshold_override: row.seasonality_threshold_override,
         ci_width_multiplier: row.ci_width_multiplier,
+        level_bias_correction: row.level_bias_correction,
         mape_30d: row.mape_30d,
     }
 }

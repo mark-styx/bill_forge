@@ -7,6 +7,13 @@ use chrono::Utc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+/// Lower bound for the per-tenant level-bias correction (issue #398). Bounded
+/// to keep a single tuning cycle from shifting the projected level by more
+/// than 50%.
+pub const LEVEL_BIAS_CORRECTION_MIN: f64 = -0.5;
+/// Upper bound for the per-tenant level-bias correction (issue #398).
+pub const LEVEL_BIAS_CORRECTION_MAX: f64 = 0.5;
+
 /// Per-tenant forecaster parameter overrides learned from observed outcomes.
 ///
 /// Populated by the forecast-tuning worker job from the `forecast_accuracy_log`
@@ -22,6 +29,11 @@ pub struct ForecasterTuning {
     /// Multiplier applied to the 1.96σ confidence interval half-width. 1.0
     /// leaves the interval unchanged; >1.0 widens it.
     pub ci_width_multiplier: Option<f64>,
+    /// Learned multiplicative correction applied to predicted_value to fold
+    /// observed signed bias back into the forecast level (issue #398). A
+    /// negative value shrinks systematically-overshooting forecasts; positive
+    /// grows systematically-undershooting ones. `None` leaves the level alone.
+    pub level_bias_correction: Option<f64>,
     /// Most recent 30-day MAPE observed for this tenant, stored for
     /// observability/audit. Not consumed by the forecaster itself.
     pub mape_30d: Option<f64>,
@@ -37,6 +49,14 @@ impl ForecasterTuning {
     /// Effective CI half-width multiplier. Falls back to 1.0 (no widening).
     pub fn ci_multiplier(&self) -> f64 {
         self.ci_width_multiplier.unwrap_or(1.0)
+    }
+
+    /// Effective level-bias correction, clamped to a safe single-cycle band.
+    /// Falls back to 0.0 (no shift) when no override is present.
+    pub fn level_bias_correction(&self) -> f64 {
+        self.level_bias_correction
+            .unwrap_or(0.0)
+            .clamp(LEVEL_BIAS_CORRECTION_MIN, LEVEL_BIAS_CORRECTION_MAX)
     }
 }
 
@@ -269,6 +289,18 @@ impl ForecastingModel for ArimaForecaster {
 
         let predicted_value = trend_forecast + seasonal_adjustment;
 
+        // Fold observed signed bias back into the projected level (issue #398).
+        // This is the closed-loop arm that the original tuning surface lacked:
+        // without it, the worker could only widen confidence bands and loosen
+        // seasonality detection. The correction is a small multiplicative shift
+        // bounded by [LEVEL_BIAS_CORRECTION_MIN, LEVEL_BIAS_CORRECTION_MAX].
+        let bias_correction = self
+            .tuning
+            .as_ref()
+            .map(|t| t.level_bias_correction())
+            .unwrap_or(0.0);
+        let predicted_value = predicted_value * (1.0 + bias_correction);
+
         // Calculate confidence interval
         // Scale confidence interval width with sqrt of horizon days.
         // Uncertainty in cumulative forecasts grows proportionally to sqrt(time).
@@ -479,6 +511,7 @@ mod tests {
                 tenant_id: Uuid::nil(),
                 seasonality_threshold_override: None,
                 ci_width_multiplier: Some(1.25),
+                level_bias_correction: None,
                 mape_30d: Some(30.0),
             };
             let mut f = ArimaForecaster::with_tuning(tuning);
@@ -509,5 +542,44 @@ mod tests {
         let t = ForecasterTuning::default();
         assert_eq!(t.seasonality_threshold(), 0.5);
         assert_eq!(t.ci_multiplier(), 1.0);
+        assert_eq!(t.level_bias_correction(), 0.0);
+    }
+
+    /// Issue #398: a learned `level_bias_correction` actually shifts the
+    /// predicted level (effective intercept), not just the confidence band.
+    /// This is the canonical proof that observed signed bias now feeds back
+    /// into forecast output, closing the loop the original tuning surface left
+    /// open.
+    #[tokio::test]
+    async fn with_tuning_level_bias_correction_shifts_predicted_value() {
+        let data = create_test_timeseries();
+
+        let baseline = {
+            let mut f = ArimaForecaster::with_tuning(ForecasterTuning::default());
+            f.fit(&data).await.unwrap();
+            f.forecast(ForecastHorizon::Days30).await.unwrap()
+        };
+
+        let corrected = {
+            let tuning = ForecasterTuning {
+                tenant_id: Uuid::nil(),
+                seasonality_threshold_override: None,
+                ci_width_multiplier: None,
+                level_bias_correction: Some(-0.20),
+                mape_30d: None,
+            };
+            let mut f = ArimaForecaster::with_tuning(tuning);
+            f.fit(&data).await.unwrap();
+            f.forecast(ForecastHorizon::Days30).await.unwrap()
+        };
+
+        let expected = baseline.predicted_value * 0.80;
+        assert!(
+            (corrected.predicted_value - expected).abs() < 1e-6,
+            "level_bias_correction=-0.20 should scale predicted_value by 0.80 ({} -> expected {}, got {})",
+            baseline.predicted_value,
+            expected,
+            corrected.predicted_value
+        );
     }
 }

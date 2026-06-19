@@ -447,6 +447,7 @@ async fn test_forecast_tuning_row_widens_ci_via_with_tuning() {
         tenant_id,
         seasonality_threshold_override: None,
         ci_width_multiplier: Some(1.25),
+        level_bias_correction: None,
         mape_30d: Some(30.0),
     };
 

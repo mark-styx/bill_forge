@@ -29,7 +29,7 @@ fn empty_history_writes_no_tuning() {
 }
 
 /// High MAPE (above 25%) widens the CI multiplier to 1.25 and records the
-/// observed MAPE, without touching the seasonality threshold.
+/// observed MAPE, without touching the seasonality threshold or level.
 #[test]
 fn high_mape_widens_ci_multiplier() {
     let d = compute_tuning_decision(30.0, 0.0, 10).expect("history present");
@@ -37,6 +37,10 @@ fn high_mape_widens_ci_multiplier() {
     assert!(
         d.seasonality_threshold_override.is_none(),
         "MAPE alone must not loosen the seasonality threshold"
+    );
+    assert!(
+        d.level_bias_correction.is_none(),
+        "MAPE alone must not shift the projected level"
     );
     assert_eq!(d.mape_30d, Some(30.0));
 }
@@ -73,6 +77,42 @@ fn bias_at_threshold_does_not_trigger_loosening() {
     let d = compute_tuning_decision(5.0, 10.0, 10).expect("history present");
     assert!(d.seasonality_threshold_override.is_none());
     assert!(d.ci_width_multiplier.is_none());
+    assert!(d.level_bias_correction.is_none());
+}
+
+/// Issue #398: positive (overshoot) bias above the threshold emits a negative
+/// `level_bias_correction` so the next forecast's projected level shrinks.
+/// 20% bias * 0.5 damping = 0.10, sign-flipped = -0.10.
+#[test]
+fn positive_bias_emits_negative_level_correction() {
+    let d = compute_tuning_decision(10.0, 20.0, 30).expect("history present");
+    let c = d.level_bias_correction.expect("expected a correction");
+    assert!(
+        (c - (-0.10)).abs() < 1e-9,
+        "expected -0.10, got {}",
+        c
+    );
+}
+
+/// Issue #398: negative (undershoot) bias above the threshold emits a positive
+/// `level_bias_correction` so the next forecast's projected level grows.
+#[test]
+fn negative_bias_emits_positive_level_correction() {
+    let d = compute_tuning_decision(10.0, -20.0, 30).expect("history present");
+    let c = d.level_bias_correction.expect("expected a correction");
+    assert!(
+        (c - 0.10).abs() < 1e-9,
+        "expected 0.10, got {}",
+        c
+    );
+}
+
+/// Issue #398: |bias| at the 10% threshold (not strictly greater) must not
+/// emit a level correction. Pairs with `bias_at_threshold_does_not_trigger_loosening`.
+#[test]
+fn bias_at_threshold_emits_no_level_correction() {
+    let d = compute_tuning_decision(5.0, 10.0, 10).expect("history present");
+    assert!(d.level_bias_correction.is_none());
 }
 
 /// When both MAPE and bias are high, both overrides are applied and the row
@@ -93,6 +133,7 @@ fn low_mape_low_bias_records_mape_only() {
     let d = compute_tuning_decision(5.0, 2.0, 50).expect("history present");
     assert!(d.ci_width_multiplier.is_none());
     assert!(d.seasonality_threshold_override.is_none());
+    assert!(d.level_bias_correction.is_none());
     assert_eq!(d.mape_30d, Some(5.0));
 }
 
@@ -110,6 +151,13 @@ fn overrides_clamp_to_safe_ranges() {
             (0.1..=0.9).contains(&th),
             "seasonality threshold out of band: {}",
             th
+        );
+    }
+    if let Some(c) = d.level_bias_correction {
+        assert!(
+            (-0.5..=0.5).contains(&c),
+            "level_bias_correction out of band: {}",
+            c
         );
     }
 }

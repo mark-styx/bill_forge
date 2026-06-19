@@ -51,6 +51,16 @@ const SEASONALITY_THRESHOLD_MAX: f64 = 0.9;
 const CI_MULTIPLIER_MIN: f64 = 1.0;
 const CI_MULTIPLIER_MAX: f64 = 2.0;
 
+/// Fraction of observed signed bias folded back into the next forecast's
+/// predicted level (issue #398). Damping below 1.0 keeps the closed loop from
+/// oscillating when residual noise inflates the signed bias estimate.
+const BIAS_CORRECTION_DAMPING: f64 = 0.5;
+
+/// Safe bounds for the learned level-bias correction. Matches
+/// `LEVEL_BIAS_CORRECTION_MIN/MAX` in `billforge_analytics::forecasting`.
+const LEVEL_BIAS_CORRECTION_MIN: f64 = -0.5;
+const LEVEL_BIAS_CORRECTION_MAX: f64 = 0.5;
+
 /// Cooldown between tuning writes for the same tenant (hours).
 const TUNING_COOLDOWN_HOURS: i64 = 24;
 
@@ -63,6 +73,9 @@ pub struct TuningDecision {
     pub seasonality_threshold_override: Option<f64>,
     /// Multiplier applied to the 1.96σ CI half-width. `None` keeps 1.0.
     pub ci_width_multiplier: Option<f64>,
+    /// Multiplicative correction folded into `ArimaForecaster::forecast()`'s
+    /// predicted_value (issue #398). `None` leaves the projected level alone.
+    pub level_bias_correction: Option<f64>,
     /// Most recent 30-day MAPE observed for this tenant (percent).
     pub mape_30d: Option<f64>,
 }
@@ -74,7 +87,10 @@ pub struct TuningDecision {
 /// - No history (`sample_count <= 0`) -> `None`, so the caller writes nothing.
 /// - MAPE > 25% -> widen CI multiplier to 1.25 (clamped to `[1.0, 2.0]`).
 /// - |signed bias| > 10% -> loosen seasonality threshold by 0.05 (clamped to
-///   `[0.1, 0.9]`).
+///   `[0.1, 0.9]`) AND fold half the observed bias back into the projected
+///   level via `level_bias_correction` (issue #398), clamped to `[-0.5, 0.5]`.
+///   Sign is flipped because positive bias = forecast overshoot, so the
+///   correction must shrink the next forecast.
 /// - Otherwise the row still records the observed `mape_30d` for observability,
 ///   with `None` overrides so `ArimaForecaster` falls back to defaults.
 pub fn compute_tuning_decision(
@@ -92,16 +108,25 @@ pub fn compute_tuning_decision(
         None
     };
 
-    let seasonality_threshold_override = if signed_bias_pct.abs() > HIGH_BIAS_THRESHOLD {
-        let loosened = DEFAULT_SEASONALITY_THRESHOLD - BIAS_SEASONALITY_LOOSEN_STEP;
-        Some(loosened.clamp(SEASONALITY_THRESHOLD_MIN, SEASONALITY_THRESHOLD_MAX))
-    } else {
-        None
-    };
+    let (seasonality_threshold_override, level_bias_correction) =
+        if signed_bias_pct.abs() > HIGH_BIAS_THRESHOLD {
+            let loosened = DEFAULT_SEASONALITY_THRESHOLD - BIAS_SEASONALITY_LOOSEN_STEP;
+            let threshold =
+                Some(loosened.clamp(SEASONALITY_THRESHOLD_MIN, SEASONALITY_THRESHOLD_MAX));
+
+            let correction = (-signed_bias_pct / 100.0) * BIAS_CORRECTION_DAMPING;
+            let correction =
+                Some(correction.clamp(LEVEL_BIAS_CORRECTION_MIN, LEVEL_BIAS_CORRECTION_MAX));
+
+            (threshold, correction)
+        } else {
+            (None, None)
+        };
 
     Some(TuningDecision {
         seasonality_threshold_override,
         ci_width_multiplier,
+        level_bias_correction,
         mape_30d: Some(mape),
     })
 }
@@ -179,6 +204,7 @@ async fn tune_tenant_forecast(pool: &PgPool, tenant_id: &TenantId) -> Result<()>
             tenant_uuid,
             decision.seasonality_threshold_override,
             decision.ci_width_multiplier,
+            decision.level_bias_correction,
             decision.mape_30d,
         )
         .await
@@ -194,6 +220,7 @@ async fn tune_tenant_forecast(pool: &PgPool, tenant_id: &TenantId) -> Result<()>
         sample_count = agg.sample_count,
         ci_multiplier = ?decision.ci_width_multiplier,
         seasonality_threshold = ?decision.seasonality_threshold_override,
+        level_bias_correction = ?decision.level_bias_correction,
         "Updated forecast model tuning"
     );
 
@@ -233,6 +260,7 @@ async fn write_tuning_audit(
         Some(row) => json!({
             "seasonality_threshold_override": row.seasonality_threshold_override,
             "ci_width_multiplier": row.ci_width_multiplier,
+            "level_bias_correction": row.level_bias_correction,
             "mape_30d": row.mape_30d,
         }),
         None => serde_json::Value::Null,
@@ -240,6 +268,7 @@ async fn write_tuning_audit(
     let new_values = json!({
         "seasonality_threshold_override": decision.seasonality_threshold_override,
         "ci_width_multiplier": decision.ci_width_multiplier,
+        "level_bias_correction": decision.level_bias_correction,
         "mape_30d": decision.mape_30d,
     });
 
@@ -297,8 +326,9 @@ mod tests {
     fn high_mape_widens_ci_multiplier() {
         let d = compute_tuning_decision(30.0, 0.0, 10).expect("history present");
         assert_eq!(d.ci_width_multiplier, Some(1.25));
-        // MAPE under control: no seasonality loosening.
+        // MAPE under control: no seasonality loosening, no bias correction.
         assert!(d.seasonality_threshold_override.is_none());
+        assert!(d.level_bias_correction.is_none());
         // Observed MAPE is recorded for observability.
         assert_eq!(d.mape_30d, Some(30.0));
     }
@@ -317,6 +347,8 @@ mod tests {
         assert_eq!(d.seasonality_threshold_override, Some(0.45));
         // MAPE under control: no CI widening.
         assert!(d.ci_width_multiplier.is_none());
+        // Positive bias = overshoot, so the level correction is negative.
+        assert!(d.level_bias_correction.is_some());
     }
 
     #[test]
@@ -325,6 +357,8 @@ mod tests {
         // seasonality threshold.
         let d = compute_tuning_decision(10.0, -15.0, 10).expect("history present");
         assert_eq!(d.seasonality_threshold_override, Some(0.45));
+        // Negative bias = undershoot, so the level correction is positive.
+        assert!(d.level_bias_correction.is_some());
     }
 
     #[test]
@@ -332,6 +366,7 @@ mod tests {
         // |bias| exactly at threshold is not strictly greater.
         let d = compute_tuning_decision(5.0, 10.0, 10).expect("history present");
         assert!(d.seasonality_threshold_override.is_none());
+        assert!(d.level_bias_correction.is_none());
     }
 
     #[test]
@@ -341,6 +376,7 @@ mod tests {
         let d = compute_tuning_decision(5.0, 2.0, 50).expect("history present");
         assert!(d.ci_width_multiplier.is_none());
         assert!(d.seasonality_threshold_override.is_none());
+        assert!(d.level_bias_correction.is_none());
         assert_eq!(d.mape_30d, Some(5.0));
     }
 
@@ -354,6 +390,13 @@ mod tests {
         }
         if let Some(th) = d.seasonality_threshold_override {
             assert!((SEASONALITY_THRESHOLD_MIN..=SEASONALITY_THRESHOLD_MAX).contains(&th));
+        }
+        if let Some(c) = d.level_bias_correction {
+            assert!(
+                (LEVEL_BIAS_CORRECTION_MIN..=LEVEL_BIAS_CORRECTION_MAX).contains(&c),
+                "level_bias_correction out of band: {}",
+                c
+            );
         }
     }
 }
