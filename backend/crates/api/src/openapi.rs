@@ -234,6 +234,7 @@ pub struct ApiDoc;
         crate::routes::invoices::list_invoices,
         crate::routes::invoices::create_invoice,
         crate::routes::invoices::upload_invoice,
+        crate::routes::invoices::bulk_upload_invoices,
         crate::routes::invoices::get_invoice,
         crate::routes::invoices::update_invoice,
         crate::routes::invoices::delete_invoice,
@@ -241,7 +242,11 @@ pub struct ApiDoc;
         crate::routes::invoices::submit_for_processing,
         crate::routes::invoices::suggest_categories,
     ),
-    components(schemas(crate::routes::invoices::UploadResponse,))
+    components(schemas(
+        crate::routes::invoices::UploadResponse,
+        crate::routes::invoices::BulkUploadResponse,
+        crate::routes::invoices::BulkUploadItemResult,
+    ))
 )]
 struct InvoiceApiDoc;
 

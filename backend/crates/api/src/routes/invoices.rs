@@ -26,7 +26,7 @@ use billforge_invoice_capture::{
 use billforge_invoice_processing::feedback_loop::{
     CategorizationFeedback, FeedbackLearning, FeedbackType,
 };
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -40,6 +40,7 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(list_invoices))
         .route("/", post(create_invoice))
         .route("/upload", post(upload_invoice))
+        .route("/upload/bulk", post(bulk_upload_invoices))
         .route("/stream", get(invoice_stream))
         .route("/:id", get(get_invoice))
         .route("/:id", put(update_invoice))
@@ -697,6 +698,39 @@ pub struct UploadResponse {
     pub potential_duplicates: Vec<DuplicateMatch>,
 }
 
+// ---------------------------------------------------------------------------
+// Bulk upload (#371)
+// ---------------------------------------------------------------------------
+
+/// Maximum number of files accepted in a single bulk upload request.
+pub const BULK_MAX_FILES: usize = 50;
+
+/// Upper bound on parallel per-file processing within a single bulk request.
+pub const BULK_MAX_CONCURRENCY: usize = 4;
+
+/// Per-file outcome in a bulk upload response.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BulkUploadItemResult {
+    pub filename: String,
+    /// "ok" on success, "error" on per-file failure.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invoice_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Aggregated response for `POST /invoices/upload/bulk` (#371).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BulkUploadResponse {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub results: Vec<BulkUploadItemResult>,
+}
+
 #[utoipa::path(
     post,
     path = "/invoices/upload",
@@ -912,6 +946,170 @@ pub(crate) async fn upload_invoice_file(
         message,
         potential_duplicates,
     })
+}
+
+/// `POST /invoices/upload/bulk` - multi-file invoice upload for high-volume
+/// tenants (#371).
+///
+/// Accepts multiple `file` multipart fields in a single HTTP request, enforces
+/// a per-request file-count cap (`BULK_MAX_FILES`), processes uploads with
+/// bounded concurrency (`BULK_MAX_CONCURRENCY`), and returns a per-file result
+/// array. Reuses the same `upload_invoice_file` core path as the single-file
+/// `upload_invoice` handler so storage, OCR enqueue/sync, audit logging, and
+/// duplicate detection all run identically per file. Every per-file task runs
+/// under the same authenticated `AuthUser`/tenant context, preserving strict
+/// tenant isolation.
+///
+/// Per-file size and processing failures are recorded as error entries rather
+/// than aborting the whole batch; the request only fails up-front when zero
+/// files are sent or the file count exceeds the cap.
+#[utoipa::path(
+    post,
+    path = "/invoices/upload/bulk",
+    tag = "Invoices",
+    responses(
+        (status = 200, description = "Bulk invoice upload results", body = BulkUploadResponse),
+        (status = 400, description = "Invalid upload: zero files or count exceeds cap"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn bulk_upload_invoices(
+    State(state): State<AppState>,
+    InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
+    mut multipart: Multipart,
+) -> ApiResult<Json<BulkUploadResponse>> {
+    // 1. Drain the multipart stream once, collecting every `file` field.
+    //    This fixes the upload_capture-style "last file wins" pattern: we collect
+    //    into a Vec instead of overwriting a single slot.
+    let mut files: Vec<(String, String, Vec<u8>)> = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| billforge_core::Error::Validation(format!("Upload error: {}", e)))?
+    {
+        if field.name().unwrap_or("") != "file" {
+            continue;
+        }
+        let file_name = field.file_name().unwrap_or("document.pdf").to_string();
+        let content_type = field
+            .content_type()
+            .unwrap_or("application/pdf")
+            .to_string();
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| billforge_core::Error::Validation(format!("Failed to read file: {}", e)))?
+            .to_vec();
+        files.push((file_name, content_type, data));
+    }
+
+    // 2. Reject empty payloads and over-cap payloads up front.
+    if files.is_empty() {
+        return Err(billforge_core::Error::Validation(
+            "No files provided. Attach at least one 'file' multipart field.".to_string(),
+        )
+        .into());
+    }
+    if files.len() > BULK_MAX_FILES {
+        return Err(billforge_core::Error::Validation(format!(
+            "Too many files: received {} but the bulk upload limit is {} files per request.",
+            files.len(),
+            BULK_MAX_FILES
+        ))
+        .into());
+    }
+
+    // 3. Process each file with bounded concurrency. upload_invoice_file
+    //    enforces MAX_FILE_SIZE (per-file storage guard) and emits one
+    //    audit-log entry per successfully-created invoice using the existing
+    //    audit logger; we only translate per-file errors into result entries.
+    let mut indexed: Vec<(usize, BulkUploadItemResult)> =
+        futures::stream::iter(files.into_iter().enumerate())
+            .map(|(idx, (file_name, content_type, data))| {
+                let state = state.clone();
+                let user = user.clone();
+                let tenant = tenant.clone();
+                async move {
+                    let item = process_bulk_item(
+                        &state,
+                        &user,
+                        &tenant,
+                        idx,
+                        file_name,
+                        content_type,
+                        data,
+                    )
+                    .await;
+                    (idx, item)
+                }
+            })
+            .buffer_unordered(BULK_MAX_CONCURRENCY)
+            .collect()
+            .await;
+
+    // buffer_unordered emits in completion order; restore request order so
+    // callers can correlate results back to their input parts.
+    indexed.sort_by_key(|(idx, _)| *idx);
+    let results: Vec<BulkUploadItemResult> = indexed.into_iter().map(|(_, r)| r).collect();
+
+    let succeeded = results.iter().filter(|r| r.status == "ok").count();
+    let failed = results.len() - succeeded;
+
+    Ok(Json(BulkUploadResponse {
+        total: results.len(),
+        succeeded,
+        failed,
+        results,
+    }))
+}
+
+/// Run the shared single-file upload path for one bulk item and translate the
+/// outcome into a `BulkUploadItemResult`. Per-file errors (size, storage, OCR)
+/// become `status: "error"` entries instead of aborting the batch.
+async fn process_bulk_item(
+    state: &AppState,
+    user: &UserContext,
+    tenant: &TenantContext,
+    idx: usize,
+    file_name: String,
+    content_type: String,
+    data: Vec<u8>,
+) -> BulkUploadItemResult {
+    let capture_started = Instant::now();
+    match upload_invoice_file(
+        state,
+        user,
+        tenant,
+        file_name.clone(),
+        content_type,
+        &data,
+        capture_started,
+    )
+    .await
+    {
+        Ok(resp) => BulkUploadItemResult {
+            filename: file_name,
+            status: "ok".to_string(),
+            invoice_id: Some(resp.invoice_id),
+            document_id: Some(resp.document_id),
+            error: None,
+        },
+        Err(api_err) => {
+            tracing::warn!(
+                bulk_index = idx,
+                filename = %file_name,
+                error = %api_err.0,
+                "Bulk upload item failed"
+            );
+            BulkUploadItemResult {
+                filename: file_name,
+                status: "error".to_string(),
+                invoice_id: None,
+                document_id: None,
+                error: Some(api_err.0.to_string()),
+            }
+        }
+    }
 }
 
 /// Enqueue an OCR processing job to the Redis job queue.
