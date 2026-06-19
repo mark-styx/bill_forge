@@ -75,10 +75,7 @@ impl WorkflowRepositoryImpl {
         .unwrap_or_else(|| request.invoice_id.0.to_string());
 
         let title = format!("Approval needed: {}", invoice_ref);
-        let message = format!(
-            "Approval request {} is pending your review.",
-            request.id
-        );
+        let message = format!("Approval request {} is pending your review.", request.id);
         let link = format!("/processing/approvals/{}", request.id);
 
         for approver_id in approver_ids {
@@ -1011,10 +1008,7 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
 
         // Best-effort in-app notification fanout for the bell (refs #375).
         // Wrapped so a feed write can never fail the approval-request POST.
-        if let Err(e) = self
-            .fanout_approval_notification(tenant_id, &request)
-            .await
-        {
+        if let Err(e) = self.fanout_approval_notification(tenant_id, &request).await {
             tracing::warn!(
                 approval_request_id = %request.id,
                 tenant_id = %tenant_id.as_uuid(),

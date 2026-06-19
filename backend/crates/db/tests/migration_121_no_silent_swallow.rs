@@ -23,7 +23,8 @@ use uuid::Uuid;
 /// The committed migration source. `include_str!` re-reads this file from
 /// disk on every recompile, so the static check always reflects the current
 /// source tree, not a stale snapshot.
-const MIGRATION_121_SQL: &str = include_str!("../../../migrations/121_enable_rls_tenant_db_tables.sql");
+const MIGRATION_121_SQL: &str =
+    include_str!("../../../migrations/121_enable_rls_tenant_db_tables.sql");
 
 /// The anti-pattern that must never return to migration 121. Case-insensitive
 /// so variant capitalisations (`exception when others then null`) are caught.
@@ -38,10 +39,7 @@ fn migration_121_does_not_silently_swallow_rls_errors() {
     // 1. No blanket `EXCEPTION WHEN OTHERS THEN NULL` may remain anywhere in
     //    the migration. Each DO block now propagates any RLS-application
     //    failure so the migration aborts loudly instead of reporting success.
-    let count = MIGRATION_121_SQL
-        .to_lowercase()
-        .matches(SWALLOW)
-        .count();
+    let count = MIGRATION_121_SQL.to_lowercase().matches(SWALLOW).count();
     assert_eq!(
         count, 0,
         "migration 121 must not swallow RLS errors with blanket \
@@ -68,7 +66,9 @@ fn migration_121_does_not_silently_swallow_rls_errors() {
     //    longer be masked by a swallow now that migration 120 (which creates
     //    `billforge_app`) is its declared prerequisite.
     assert!(
-        MIGRATION_121_SQL.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO billforge_app"),
+        MIGRATION_121_SQL.contains(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO billforge_app"
+        ),
         "migration 121 must still grant privileges to billforge_app"
     );
 }
@@ -94,13 +94,10 @@ async fn migration_121_aborts_when_rls_precondition_broken() {
         .await
         .expect("PgManager");
 
-    let tenant_id: TenantId = Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        b"m121-no-silent-swallow",
-    )
-    .to_string()
-    .parse()
-    .unwrap();
+    let tenant_id: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"m121-no-silent-swallow")
+        .to_string()
+        .parse()
+        .unwrap();
 
     // Start from a clean, fully-migrated tenant DB so the `documents` table
     // exists and migration 121 has already been recorded as applied.

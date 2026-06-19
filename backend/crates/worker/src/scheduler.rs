@@ -58,6 +58,14 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    let redis_client6 = redis_client.clone();
+    let pg_manager6 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_vendor_risk_rescan_task(redis_client6, pg_manager6).await {
+            error!("Vendor risk rescan scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -209,6 +217,45 @@ async fn enqueue_routing_optimization_jobs(
     pg_manager: Arc<billforge_db::PgManager>,
 ) -> Result<()> {
     enqueue_jobs_for_active_tenants(conn, pg_manager, JobType::RoutingOptimization).await
+}
+
+/// Schedule vendor risk rescan jobs daily (configurable via VENDOR_RISK_RESCAN_CRON_SECS).
+///
+/// VENDOR_RISK_RESCAN_CRON_SECS overrides the default 24h interval so an
+/// operator can run a one-off rescan or tighten the cadence without redeploying.
+async fn schedule_vendor_risk_rescan_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    let interval_secs = std::env::var("VENDOR_RISK_RESCAN_CRON_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(24 * 60 * 60);
+
+    let mut interval = interval(Duration::from_secs(interval_secs));
+
+    info!(
+        interval_secs,
+        "Vendor risk rescan scheduler started (default daily, override via VENDOR_RISK_RESCAN_CRON_SECS)"
+    );
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_vendor_risk_rescan_jobs(&mut conn, pg_manager.clone()).await {
+            Ok(_) => info!("Enqueued vendor risk rescan job"),
+            Err(e) => error!("Failed to enqueue vendor risk rescan job: {}", e),
+        }
+    }
+}
+
+/// Enqueue a vendor risk rescan job per active tenant.
+async fn enqueue_vendor_risk_rescan_jobs(
+    conn: &mut redis::aio::Connection,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    enqueue_jobs_for_active_tenants(conn, pg_manager, JobType::VendorRiskRescan).await
 }
 
 async fn enqueue_jobs_for_active_tenants(

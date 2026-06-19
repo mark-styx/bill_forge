@@ -71,6 +71,7 @@ const navigation: NavItem[] = [
     ]
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
+  { name: 'Vendor Risk', href: '/vendor-risk', icon: AlertTriangle, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
   { name: 'Cash Position War Room', href: '/finance/war-room', icon: Radar, module: 'reporting' },
   { name: 'Discounts', href: '/discounts', icon: Percent, module: null },

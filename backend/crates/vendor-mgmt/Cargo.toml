@@ -16,3 +16,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# OFAC screener reads vendor rows directly from the tenant pool.
+sqlx = { workspace = true }

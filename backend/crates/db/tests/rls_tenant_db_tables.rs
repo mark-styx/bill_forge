@@ -482,10 +482,7 @@ async fn rls_approval_requests_cross_tenant_blocked() {
         .fetch_one(&pool)
         .await
         .expect("count");
-    assert_eq!(
-        count.0, 0,
-        "Wrong tenant should see 0 approval_requests"
-    );
+    assert_eq!(count.0, 0, "Wrong tenant should see 0 approval_requests");
 
     // Simulate mark_sla_alert_sent's bare-id UPDATE under the wrong tenant.
     // RLS makes the row invisible, so rows_affected() must be 0 instead of

@@ -1281,6 +1281,24 @@ async fn update_banking(
         tracing::warn!(error = %e, "Failed to log audit entry");
     }
 
+    // Continuous vendor-risk monitor (#381): a banking-detail change is a
+    // leading BEC-fraud signal. Write a critical vendor_risk_alert now so the
+    // per-tenant risk dashboard surfaces it and payment release stays blocked
+    // until acknowledged. Idempotent on (vendor_id, alert_type, open + same
+    // payload hash) so a duplicate PUT does not create duplicate alerts.
+    if let Err(e) = crate::routes::vendor_risk_alerts::insert_banking_change_alert(
+        &pool,
+        &tenant.tenant_id,
+        vendor_id.0,
+        verification.id,
+        prev_last_four,
+        &new_last_four,
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "Failed to insert banking-change risk alert");
+    }
+
     Ok(Json(serde_json::json!({
         "status": "accepted",
         "verification_id": verification.id,
@@ -1522,15 +1540,25 @@ async fn list_banking_verifications(
 
 /// Check if payments are blocked for a vendor due to pending banking verification.
 /// Used by ERP sync and payment code to guard against BEC fraud.
+///
+/// Also blocks when an open critical vendor_risk_alert exists for the vendor
+/// (continuous risk monitor #381), preserving the OFAC + banking-verification
+/// holds already in place.
 pub async fn is_payment_blocked(
     pool: &sqlx::PgPool,
     tenant_id: &TenantId,
     vendor_id: &VendorId,
 ) -> bool {
     let repo = billforge_db::repositories::VendorRepositoryImpl::new(Arc::new(pool.clone()));
-    repo.has_pending_banking_verification(tenant_id, vendor_id)
+    if repo
+        .has_pending_banking_verification(tenant_id, vendor_id)
         .await
         .unwrap_or(false)
+    {
+        return true;
+    }
+    crate::routes::vendor_risk_alerts::vendor_has_open_critical_alert(pool, tenant_id, vendor_id.0)
+        .await
 }
 
 #[cfg(test)]

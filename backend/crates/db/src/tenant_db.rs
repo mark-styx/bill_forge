@@ -672,5 +672,12 @@ pub async fn run_banking_verification_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    apply_migration(
+        pool,
+        "135_vendor_risk_alerts.sql",
+        include_str!("../../../migrations/135_vendor_risk_alerts.sql"),
+    )
+    .await?;
+
     Ok(())
 }

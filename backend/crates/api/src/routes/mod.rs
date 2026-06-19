@@ -40,7 +40,12 @@ pub mod health;
 ))]
 pub mod implementation;
 pub mod inbound_email;
-#[cfg(all(feature = "capture", feature = "processing", feature = "analytics", feature = "billing"))]
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing"
+))]
 pub mod invoices;
 pub mod mobile;
 #[cfg(feature = "netsuite")]
@@ -70,6 +75,7 @@ pub(crate) mod settings;
 pub mod theme;
 pub mod vendor_portal;
 pub mod vendor_portal_onboarding;
+pub mod vendor_risk_alerts;
 pub mod vendor_statements;
 pub(crate) mod vendors;
 #[cfg(feature = "workday")]
@@ -209,7 +215,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Vendor Management module
         .nest(
             "/vendors",
-            vendors::routes().merge(vendor_portal_onboarding::review_routes()),
+            vendors::routes()
+                .merge(vendor_portal_onboarding::review_routes())
+                .merge(vendor_risk_alerts::routes()),
         )
         // Dashboard metrics
         .nest("/dashboard", dashboard::routes())

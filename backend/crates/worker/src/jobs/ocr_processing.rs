@@ -732,8 +732,7 @@ pub async fn run_straight_through_processing(
         Arc::new(InvoiceRepositoryImpl::new(pool.clone())) as Arc<dyn InvoiceRepository>,
         Arc::new(workflow_repo) as Arc<dyn WorkflowRuleRepository>,
         Arc::new(WorkflowRepositoryImpl::new(pool.clone())) as Arc<dyn ApprovalRepository>,
-        Arc::new(WorkflowRepositoryImpl::new(pool.clone()))
-            as Arc<dyn WorkflowTemplateRepository>,
+        Arc::new(WorkflowRepositoryImpl::new(pool.clone())) as Arc<dyn WorkflowTemplateRepository>,
     )
     .with_routing(Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),

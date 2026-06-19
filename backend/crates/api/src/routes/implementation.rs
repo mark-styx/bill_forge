@@ -11,14 +11,15 @@ use axum::{
 use billforge_core::{
     domain::{
         ActionType, CreatePOLineItemInput, CreatePurchaseOrderInput, CreateWorkflowTemplateInput,
-        Invoice, InvoiceFilters, StageType, WorkflowRule, WorkflowRuleType,
-        WorkflowTemplateStage,
+        Invoice, InvoiceFilters, StageType, WorkflowRule, WorkflowRuleType, WorkflowTemplateStage,
     },
-    traits::{InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository, WorkflowTemplateRepository},
+    traits::{
+        InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository,
+        WorkflowTemplateRepository,
+    },
     types::{Money, Pagination, TenantId, UserId},
     Error, Role,
 };
-use std::collections::HashSet;
 use billforge_quickbooks::{
     QBAccount, QBPurchaseOrder, QBPurchaseOrderLine, QBVendor, QuickBooksClient,
     QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig,
@@ -29,6 +30,7 @@ use billforge_xero::{
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -40,7 +42,10 @@ pub fn routes() -> Router<AppState> {
         .route("/approval-template", post(select_approval_template))
         .route("/sample-invoices", post(upload_sample_invoices))
         .route("/checklist", patch(update_checklist))
-        .route("/backtest", get(get_readiness_backtest).post(run_readiness_backtest))
+        .route(
+            "/backtest",
+            get(get_readiness_backtest).post(run_readiness_backtest),
+        )
         .route("/configuration/privacy-mode", put(update_privacy_mode))
         .route(
             "/configuration/capture-channels",
@@ -2561,13 +2566,8 @@ mod tests {
         let auto_approval = vec![sample_auto_approval_rule(5_000)];
         let mapped: HashSet<Uuid> = HashSet::new();
 
-        let scorecard = compute_readiness_scorecard(
-            &[],
-            &routing,
-            &auto_approval,
-            &mapped,
-            Some(Utc::now()),
-        );
+        let scorecard =
+            compute_readiness_scorecard(&[], &routing, &auto_approval, &mapped, Some(Utc::now()));
 
         assert_eq!(scorecard.sample_size, 0);
         assert_eq!(scorecard.auto_route_coverage, 0.0);
@@ -2590,7 +2590,11 @@ mod tests {
 
         let mut invoices = Vec::new();
         for idx in 0..10 {
-            let vendor_id = if idx < 8 { mapped_vendor } else { unmapped_vendor };
+            let vendor_id = if idx < 8 {
+                mapped_vendor
+            } else {
+                unmapped_vendor
+            };
             invoices.push(sample_invoice(vendor_id, 2_500));
         }
 
@@ -2613,7 +2617,11 @@ mod tests {
             + READINESS_WEIGHT_AUTO_APPROVE * 1.0
             + READINESS_WEIGHT_VENDOR_MAP * 0.8;
         assert!((scorecard.readiness_score - expected_score).abs() < 1e-6);
-        assert!(scorecard.passes_threshold, "expected score {} to clear threshold {}", scorecard.readiness_score, READINESS_THRESHOLD);
+        assert!(
+            scorecard.passes_threshold,
+            "expected score {} to clear threshold {}",
+            scorecard.readiness_score, READINESS_THRESHOLD
+        );
     }
 
     /// Build a workflow routing rule that matches invoices below an amount

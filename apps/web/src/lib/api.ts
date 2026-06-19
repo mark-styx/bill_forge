@@ -3425,3 +3425,52 @@ export const policiesApi = {
       original_text,
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Vendor Risk Alerts (continuous vendor-risk monitor - refs #381)
+// ---------------------------------------------------------------------------
+
+export type VendorRiskSeverity = 'critical' | 'high' | 'medium' | 'low';
+export type VendorRiskAlertType =
+  | 'sanctions_hit'
+  | 'pep_hit'
+  | 'banking_change'
+  | 'address_drift'
+  | 'tax_id_reverify_failed'
+  | 'beneficial_owner_change';
+
+export interface VendorRiskAlert {
+  id: string;
+  vendor_id: string;
+  vendor_name: string;
+  alert_type: VendorRiskAlertType;
+  severity: VendorRiskSeverity;
+  status: 'open' | 'acknowledged';
+  payload: Record<string, unknown>;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  created_at: string;
+}
+
+export interface VendorRiskAlertList {
+  items: VendorRiskAlert[];
+}
+
+export interface VendorRiskAcknowledgeResponse {
+  status: 'acknowledged';
+  alert_id: string;
+  payment_hold_cleared: boolean;
+}
+
+export const vendorRiskApi = {
+  list: (params?: {
+    severity?: VendorRiskSeverity;
+    vendor_id?: string;
+    status?: 'open' | 'acknowledged';
+  }) => api.get<VendorRiskAlertList>('/api/v1/vendors/risk-alerts', params),
+
+  acknowledge: (alertId: string) =>
+    api.post<VendorRiskAcknowledgeResponse>(
+      `/api/v1/vendors/risk-alerts/${alertId}/acknowledge`,
+    ),
+};

@@ -927,7 +927,7 @@ mod tests {
         CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InvoiceFilters, InvoiceId,
         WorkflowTemplateId,
     };
-    use billforge_core::types::{Money, Pagination, PaginatedResponse};
+    use billforge_core::types::{Money, PaginatedResponse, Pagination};
     use std::sync::Mutex;
 
     /// Invoice repo stub: `process_invoice` does not call it on the happy path.
@@ -1270,7 +1270,10 @@ mod tests {
         // always-matching AutoApproval rule that would otherwise approve the
         // invoice, so a PendingApproval outcome proves the template took over.
         let (engine, approval_repo) = build_test_engine(
-            Some(template_with_stages(vec![template_approval_stage(vec![], vec![])])),
+            Some(template_with_stages(vec![template_approval_stage(
+                vec![],
+                vec![],
+            )])),
             vec![auto_approval_rule()],
         );
         let invoice = template_test_invoice();
@@ -1287,7 +1290,11 @@ mod tests {
         );
 
         let requests = approval_repo.requests();
-        assert_eq!(requests.len(), 1, "exactly one template-driven approval request");
+        assert_eq!(
+            requests.len(),
+            1,
+            "exactly one template-driven approval request"
+        );
         assert!(
             matches!(&requests[0].requested_from, ApprovalTarget::Role(role) if role == "approver"),
             "no routing provider configured -> fallback to approver role"
@@ -1302,8 +1309,7 @@ mod tests {
     async fn process_invoice_falls_through_to_rules_when_no_template() {
         // With no default template, the existing rule-based path must run
         // unchanged: the always-matching AutoApproval rule should approve.
-        let (engine, _approval_repo) =
-            build_test_engine(None, vec![auto_approval_rule()]);
+        let (engine, _approval_repo) = build_test_engine(None, vec![auto_approval_rule()]);
         let invoice = template_test_invoice();
 
         let status = engine

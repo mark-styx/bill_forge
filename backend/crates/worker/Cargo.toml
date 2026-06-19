@@ -50,6 +50,11 @@ billforge-reporting = { path = "../reporting" }
 billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-analytics = { path = "../analytics" }
 billforge-invoice-capture = { path = "../invoice-capture" }
+billforge-vendor-mgmt = { path = "../vendor-mgmt" }
+
+# Vendor risk rescan: deterministic payload hashing for alert idempotency
+sha2 = "0.10"
+hex = "0.4"
 
 # Metrics
 prometheus = { version = "0.13", default-features = false }

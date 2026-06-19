@@ -120,14 +120,16 @@ async fn setup_two_tenants(
         .await
         .expect("PgManager");
 
-    let tenant_a: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("inbox-a-{tag}").as_bytes())
-        .to_string()
-        .parse()
-        .unwrap();
-    let tenant_b: TenantId = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("inbox-b-{tag}").as_bytes())
-        .to_string()
-        .parse()
-        .unwrap();
+    let tenant_a: TenantId =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("inbox-a-{tag}").as_bytes())
+            .to_string()
+            .parse()
+            .unwrap();
+    let tenant_b: TenantId =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("inbox-b-{tag}").as_bytes())
+            .to_string()
+            .parse()
+            .unwrap();
 
     manager.delete_tenant(&tenant_a).await.ok();
     manager.delete_tenant(&tenant_b).await.ok();
@@ -144,8 +146,14 @@ async fn setup_two_tenants(
     let pool_b = (*manager.tenant(&tenant_b).await.expect("pool B")).clone();
 
     // run_tenant_migrations provisions in_app_notifications (migration 134).
-    manager.run_tenant_migrations(&pool_a).await.expect("migrate A");
-    manager.run_tenant_migrations(&pool_b).await.expect("migrate B");
+    manager
+        .run_tenant_migrations(&pool_a)
+        .await
+        .expect("migrate A");
+    manager
+        .run_tenant_migrations(&pool_b)
+        .await
+        .expect("migrate B");
     seed_tenant(&pool_a, &tenant_a, &format!("Inbox A {tag}")).await;
     seed_tenant(&pool_b, &tenant_b, &format!("Inbox B {tag}")).await;
 
@@ -203,7 +211,15 @@ async fn producer_writes_notification_on_approval_request_creation() {
     seed_user(&pool_a, &tenant_a, approver_a).await;
     seed_user(&pool_a, &tenant_a, creator_a).await;
     seed_vendor(&pool_a, &tenant_a, vendor_a).await;
-    seed_invoice(&pool_a, &tenant_a, invoice_a, vendor_a, creator_a, "PROD-INV-001").await;
+    seed_invoice(
+        &pool_a,
+        &tenant_a,
+        invoice_a,
+        vendor_a,
+        creator_a,
+        "PROD-INV-001",
+    )
+    .await;
     seed_workflow_rule(&pool_a, &tenant_a, rule_a).await;
 
     let before = count_unread(&pool_a, approver_a).await;
@@ -223,7 +239,9 @@ async fn producer_writes_notification_on_approval_request_creation() {
         created_at: Utc::now(),
         expires_at: Some(Utc::now() + chrono::Duration::hours(24)),
     };
-    repo.create(&tenant_a, request).await.expect("create approval");
+    repo.create(&tenant_a, request)
+        .await
+        .expect("create approval");
 
     let after = count_unread(&pool_a, approver_a).await;
     assert_eq!(
@@ -241,7 +259,10 @@ async fn producer_writes_notification_on_approval_request_creation() {
     .await
     .expect("fetch fanned-out row");
     assert_eq!(kind, "approval_request");
-    assert!(link.as_deref().unwrap_or("").starts_with("/processing/approvals/"));
+    assert!(link
+        .as_deref()
+        .unwrap_or("")
+        .starts_with("/processing/approvals/"));
 
     teardown_two_tenants(&manager, &tenant_a, &_tenant_b).await;
 }
@@ -368,8 +389,7 @@ async fn mark_read_flips_read_at_and_decrements_unread() {
 #[tokio::test]
 #[ignore = "requires Postgres + billforge_app role; run with --ignored"]
 async fn cross_tenant_lookup_by_id_returns_no_rows() {
-    let (manager, tenant_a, tenant_b, pool_a, pool_b) =
-        setup_two_tenants("cross-tenant").await;
+    let (manager, tenant_a, tenant_b, pool_a, pool_b) = setup_two_tenants("cross-tenant").await;
 
     let user_a = Uuid::new_v4();
     let user_b = Uuid::new_v4();
@@ -470,11 +490,13 @@ async fn mark_all_read_clears_unread_for_caller_only() {
     assert_eq!(count_unread(&pool_b, user_b).await, 1);
 
     // Mirrors the POST /notifications/read-all handler UPDATE.
-    sqlx::query("UPDATE in_app_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL")
-        .bind(user_a)
-        .execute(&pool_a)
-        .await
-        .expect("read-all A");
+    sqlx::query(
+        "UPDATE in_app_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL",
+    )
+    .bind(user_a)
+    .execute(&pool_a)
+    .await
+    .expect("read-all A");
 
     assert_eq!(
         count_unread(&pool_a, user_a).await,

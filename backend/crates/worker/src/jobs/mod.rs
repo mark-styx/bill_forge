@@ -20,6 +20,7 @@ pub mod ocr_processing;
 pub mod quickbooks_sync;
 pub mod report_digest;
 pub mod routing_optimization;
+pub mod vendor_risk_rescan;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job {
@@ -51,6 +52,7 @@ pub enum JobType {
     EdiCheckAckStatus,
     OcrProcess,
     ApprovalExpiry,
+    VendorRiskRescan,
 }
 
 impl std::fmt::Display for JobType {
@@ -73,6 +75,7 @@ impl std::fmt::Display for JobType {
             JobType::EdiCheckAckStatus => write!(f, "EdiCheckAckStatus"),
             JobType::OcrProcess => write!(f, "OcrProcess"),
             JobType::ApprovalExpiry => write!(f, "ApprovalExpiry"),
+            JobType::VendorRiskRescan => write!(f, "VendorRiskRescan"),
         }
     }
 }
@@ -305,6 +308,11 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         }
         JobType::ApprovalExpiry => {
             approval_expiry::process_approval_expiry(&tenant_id_str, config).await
+        }
+        JobType::VendorRiskRescan => {
+            vendor_risk_rescan::rescan_tenant(config.pg_manager.clone(), &tenant_id)
+                .await
+                .map(|_| ())
         }
     }
 }
