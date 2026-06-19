@@ -103,7 +103,8 @@ async fn auto_resolve_tenant_exceptions(
     // auto_resolve_eligible=true. The SQL mirrors the signal row in
     // billforge_api::routes::autopilot.
     let rows = sqlx::query_as::<_, SignalRow>(
-        r#"SELECT id, ocr_confidence, categorization_confidence, po_number, gl_code
+        r#"SELECT id, ocr_confidence, categorization_confidence, po_number, gl_code,
+                  ocr_exception_status
            FROM invoices
            WHERE tenant_id = $1
            LIMIT 500"#,
@@ -165,16 +166,38 @@ struct SignalRow {
     categorization_confidence: Option<f32>,
     po_number: Option<String>,
     gl_code: Option<String>,
+    ocr_exception_status: String,
 }
 
 /// Map an exception_type to the detector-emitted confidence for this invoice.
-/// Mirrors the logic in billforge_api::routes::autopilot::build_proposals.
+///
+/// This MUST stay byte-for-byte equivalent to the proposal-emission predicates
+/// in billforge_api::routes::autopilot::build_proposals. If a predicate there
+/// gates a proposal (e.g. `ocr_exception_status == "pending"` for OCR, or
+/// `categorization_confidence < 0.80` for GL ambiguity), the same predicate
+/// must gate a `Some(confidence)` return here. Otherwise the sweep will write
+/// phantom `auto_resolved` rows for invoices that have no actual exception of
+/// that type, inflating the Daily Report and pre-claiming the composite
+/// exception_id so the queue silently suppresses a real exception of the same
+/// type if one later arises.
 fn confidence_for(exception_type: &str, row: &SignalRow) -> Option<f32> {
     match exception_type {
-        "ocr_low_confidence" => row
-            .ocr_confidence
-            .filter(|c| *c < 0.90),
-        "gl_ambiguity" => row.categorization_confidence,
+        // Mirror build_proposals case 1: only pending-review rows with
+        // OCR confidence strictly below 0.90 emit a proposal.
+        "ocr_low_confidence" => {
+            if row.ocr_exception_status != "pending" {
+                return None;
+            }
+            row.ocr_confidence.filter(|c| *c < 0.90)
+        }
+        // Mirror build_proposals case 3: a proposal is emitted only when
+        // categorization_confidence is present and below 0.80, OR when there
+        // is no categorization AND no gl_code yet (the 0.10 fallback).
+        "gl_ambiguity" => match row.categorization_confidence {
+            Some(cat_conf) if cat_conf < 0.80 => Some(cat_conf.clamp(0.0, 1.0)),
+            None if row.gl_code.is_none() => Some(0.10),
+            _ => None,
+        },
         // These exception_types require per-invoice detector state that the
         // sweep does not re-derive; the human-in-the-loop cockpit remains the
         // resolution path for them.
@@ -195,6 +218,7 @@ mod tests {
             categorization_confidence: Some(0.99),
             po_number: None,
             gl_code: None,
+            ocr_exception_status: "pending".to_string(),
         };
         assert_eq!(confidence_for("ocr_low_confidence", &row), Some(0.55));
     }
@@ -207,6 +231,23 @@ mod tests {
             categorization_confidence: None,
             po_number: None,
             gl_code: None,
+            ocr_exception_status: "pending".to_string(),
+        };
+        assert_eq!(confidence_for("ocr_low_confidence", &row), None);
+    }
+
+    #[test]
+    fn confidence_for_ocr_returns_none_when_not_pending() {
+        // Mirrors build_proposals: an OCR exception already resolved must NOT
+        // be re-emitted by the sweep even if ocr_confidence is still low,
+        // otherwise the sweep would write a phantom auto_resolved row.
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.55),
+            categorization_confidence: Some(0.99),
+            po_number: None,
+            gl_code: None,
+            ocr_exception_status: "approved".to_string(),
         };
         assert_eq!(confidence_for("ocr_low_confidence", &row), None);
     }
@@ -219,8 +260,55 @@ mod tests {
             categorization_confidence: Some(0.40),
             po_number: None,
             gl_code: None,
+            ocr_exception_status: "pending".to_string(),
         };
         assert_eq!(confidence_for("gl_ambiguity", &row), Some(0.40));
+    }
+
+    #[test]
+    fn confidence_for_gl_returns_none_when_above_threshold() {
+        // A clean invoice with cat_conf >= 0.80 has no GL ambiguity. Without
+        // this predicate the sweep would pre-claim gl_ambiguity:<id> for every
+        // well-categorized invoice at thresholds below 0.95.
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.95),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+        };
+        assert_eq!(confidence_for("gl_ambiguity", &row), None);
+    }
+
+    #[test]
+    fn confidence_for_gl_falls_back_to_low_confidence_when_uncategorized_and_uncoded() {
+        // Mirrors build_proposals' else-if branch: no categorization AND no
+        // gl_code emits the 0.10 fallback proposal.
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: None,
+            po_number: Some("PO-1".to_string()),
+            gl_code: None,
+            ocr_exception_status: "approved".to_string(),
+        };
+        assert_eq!(confidence_for("gl_ambiguity", &row), Some(0.10));
+    }
+
+    #[test]
+    fn confidence_for_gl_returns_none_when_uncategorized_but_already_coded() {
+        // Mirrors build_proposals: cat_conf is None but gl_code is present,
+        // so no proposal is emitted (the invoice already has a coding).
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: None,
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+        };
+        assert_eq!(confidence_for("gl_ambiguity", &row), None);
     }
 
     #[test]
@@ -231,6 +319,7 @@ mod tests {
             categorization_confidence: Some(0.40),
             po_number: None,
             gl_code: None,
+            ocr_exception_status: "pending".to_string(),
         };
         assert_eq!(confidence_for("missing_po", &row), None);
         assert_eq!(confidence_for("vendor_mismatch", &row), None);
