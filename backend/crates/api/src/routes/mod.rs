@@ -325,7 +325,10 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
         // Mobile App Backend (Device management, dashboard, approvals)
-        .nest("/mobile", mobile::routes())
+        .nest(
+            "/mobile",
+            mobile::routes().merge(approval_links::mobile_routes()),
+        )
         // Tenant settings
         .nest("/settings", settings::routes())
         // User feedback

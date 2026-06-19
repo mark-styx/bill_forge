@@ -15,7 +15,8 @@
 
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse};
-use axum::routing::get;
+use axum::routing::{get, post};
+use axum::Json;
 use axum::Router;
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -23,6 +24,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
+use crate::extractors::{AuthUser, TenantCtx};
+use crate::notifications::sms::{self, SmsChannel, SmsProvider};
 use crate::state::AppState;
 use crate::state_machine::{transition, InvoiceStatus};
 use billforge_core::UserId;
@@ -44,6 +47,53 @@ lazy_static::lazy_static! {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery channel
+// ---------------------------------------------------------------------------
+
+/// Channel through which an approval magic-link token was delivered. Drives
+/// biometric-confirmation requirements on the consume side (SMS / WhatsApp
+/// require an explicit attestation; email does not).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryChannel {
+    /// Email magic link (default; the original single channel).
+    Email,
+    /// SMS text message.
+    Sms,
+    /// WhatsApp Business message.
+    WhatsApp,
+}
+
+impl DeliveryChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeliveryChannel::Email => "email",
+            DeliveryChannel::Sms => "sms",
+            DeliveryChannel::WhatsApp => "whatsapp",
+        }
+    }
+
+    /// Whether this channel requires `biometric_attested: true` on consume.
+    pub fn requires_biometric(&self) -> bool {
+        matches!(self, DeliveryChannel::Sms | DeliveryChannel::WhatsApp)
+    }
+
+    /// Map a [`SmsChannel`] to the equivalent delivery channel.
+    pub fn from_sms_channel(channel: SmsChannel) -> Self {
+        match channel {
+            SmsChannel::Sms => DeliveryChannel::Sms,
+            SmsChannel::WhatsApp => DeliveryChannel::WhatsApp,
+        }
+    }
+}
+
+impl Default for DeliveryChannel {
+    fn default() -> Self {
+        DeliveryChannel::Email
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Claims
 // ---------------------------------------------------------------------------
 
@@ -62,6 +112,10 @@ pub struct ApprovalTokenClaims {
     pub exp: i64,
     /// JWT ID - unique per token, used for single-use enforcement.
     pub jti: Uuid,
+    /// Delivery channel for this token. Older tokens minted before this field
+    /// existed deserialize to the default ([`DeliveryChannel::Email`]).
+    #[serde(default)]
+    pub delivery_channel: DeliveryChannel,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,18 +238,42 @@ impl From<ApprovalError> for crate::error::ApiError {
 #[derive(Debug, Deserialize)]
 struct TokenQuery {
     token: String,
+    /// Required for SMS / WhatsApp channels: the mobile / fallback page sets
+    /// this after the platform biometric prompt succeeds. Ignored for email
+    /// tokens (the confirmation interstitial is sufficient).
+    biometric_attested: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RejectQuery {
     token: String,
     reason: Option<String>,
+    /// See [`TokenQuery::biometric_attested`].
+    biometric_attested: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CommentQuery {
     token: String,
     body: Option<String>,
+}
+
+/// Enforce the biometric-attestation requirement for SMS / WhatsApp channels.
+///
+/// Executives approving via SMS / WhatsApp must confirm via a platform
+/// biometric prompt; the consume handler passes the result here. Email tokens
+/// bypass this check (the confirmation interstitial + session is sufficient).
+pub fn require_biometric_for_channel(
+    channel: DeliveryChannel,
+    biometric_attested: bool,
+) -> Result<(), ApprovalError> {
+    if channel.requires_biometric() && !biometric_attested {
+        return Err(ApprovalError::Core(billforge_core::Error::Validation(
+            "Biometric attestation is required for SMS / WhatsApp approvals"
+                .to_string(),
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +349,13 @@ pub fn routes() -> Router<AppState> {
         .route("/comment", get(comment_via_link))
 }
 
+/// Mobile approval-link routes (mounted under `/api/v1/mobile/approval-links`).
+/// Includes the SMS / WhatsApp send surface; consume still happens through the
+/// shared `/approve` and `/reject` endpoints above.
+pub fn mobile_routes() -> Router<AppState> {
+    Router::new().route("/send-sms", post(send_sms_approval_link))
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -284,6 +369,10 @@ async fn approve_via_link(
     if !claims.action_scope.contains(&"approve".to_string()) {
         return Err(ApprovalError::ActionNotInScope.into());
     }
+
+    // Biometric confirmation gate for SMS / WhatsApp channels. Email bypasses.
+    let biometric_attested = query.biometric_attested.unwrap_or(false);
+    require_biometric_for_channel(claims.delivery_channel, biometric_attested)?;
 
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
@@ -329,7 +418,9 @@ async fn approve_via_link(
         "approve_via_email",
         serde_json::json!({
             "approver_email": claims.approver_email,
-            "channel": "email",
+            "channel": claims.delivery_channel.as_str(),
+            "delivery_channel": claims.delivery_channel.as_str(),
+            "biometric_attested": biometric_attested,
             "jti": claims.jti.to_string(),
         }),
     )
@@ -366,6 +457,10 @@ async fn reject_via_link(
         return Err(ApprovalError::ActionNotInScope.into());
     }
 
+    // Biometric confirmation gate for SMS / WhatsApp channels. Email bypasses.
+    let biometric_attested = query.biometric_attested.unwrap_or(false);
+    require_biometric_for_channel(claims.delivery_channel, biometric_attested)?;
+
     let tenant_id = billforge_core::TenantId(claims.tenant_id);
     let pool = state.db.tenant(&tenant_id).await?;
 
@@ -391,7 +486,9 @@ async fn reject_via_link(
         "reject_via_email",
         serde_json::json!({
             "approver_email": claims.approver_email,
-            "channel": "email",
+            "channel": claims.delivery_channel.as_str(),
+            "delivery_channel": claims.delivery_channel.as_str(),
+            "biometric_attested": biometric_attested,
             "jti": claims.jti.to_string(),
             "reason": reason,
         }),
@@ -531,21 +628,21 @@ fn success_page_html(action_text: &str, invoice_id: &str, color: &str, icon: &st
 
 /// Build a signed approval token for the given parameters.
 /// Defaults TTL to [`TOKEN_TTL_SECS`] (7 days) and generates a random `jti`.
+/// Delivery channel defaults to [`DeliveryChannel::Email`].
 pub fn create_approval_token(
     invoice_id: Uuid,
     approver_email: String,
     tenant_id: Uuid,
     action_scope: Vec<String>,
 ) -> Result<String, ApprovalError> {
-    let claims = ApprovalTokenClaims {
+    mint_approval_token(
         invoice_id,
         approver_email,
         tenant_id,
         action_scope,
-        exp: Utc::now().timestamp() + TOKEN_TTL_SECS,
-        jti: Uuid::new_v4(),
-    };
-    sign_approval_token(&claims)
+        DeliveryChannel::Email,
+        TOKEN_TTL_SECS,
+    )
 }
 
 /// Build a signed approval token with a custom expiry (for testing).
@@ -563,6 +660,276 @@ pub fn create_approval_token_with_exp(
         action_scope,
         exp,
         jti: Uuid::new_v4(),
+        delivery_channel: DeliveryChannel::Email,
     };
     sign_approval_token(&claims)
+}
+
+/// Build a signed approval token for a specific delivery channel and TTL.
+///
+/// Single source of truth for the single-use `jti` + TTL signing logic shared
+/// by the email and SMS/WhatsApp delivery paths. Returns a signed JWT whose
+/// claims can be verified via [`verify_approval_token`] and consumed via
+/// [`consume_token`].
+pub fn mint_approval_token(
+    invoice_id: Uuid,
+    approver_email: String,
+    tenant_id: Uuid,
+    action_scope: Vec<String>,
+    delivery_channel: DeliveryChannel,
+    ttl_secs: i64,
+) -> Result<String, ApprovalError> {
+    let claims = ApprovalTokenClaims {
+        invoice_id,
+        approver_email,
+        tenant_id,
+        action_scope,
+        exp: Utc::now().timestamp() + ttl_secs,
+        jti: Uuid::new_v4(),
+        delivery_channel,
+    };
+    sign_approval_token(&claims)
+}
+
+// ---------------------------------------------------------------------------
+// SMS / WhatsApp delivery surface
+// ---------------------------------------------------------------------------
+
+/// Build the short URL a recipient taps from an SMS / WhatsApp message.
+///
+/// Format: `{APP_URL}/a/{token}`. The frontend resolves `/a/{token}` to the
+/// biometric confirmation interstitial (for SMS / WhatsApp channels) or the
+/// plain approve/reject page (email).
+pub fn build_approval_short_url(token: &str) -> String {
+    let app_url = std::env::var("APP_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+    format!("{}/a/{}", app_url.trim_end_matches('/'), token)
+}
+
+/// Build the SMS / WhatsApp message body for an approval link.
+///
+/// Mirrors the email body shape: vendor-free summary + signed deep link. The
+/// amount is rendered as a plain cents value (localization is deferred).
+pub fn build_approval_sms_body(
+    invoice_number: &str,
+    amount_cents: i64,
+    short_url: &str,
+) -> String {
+    format!(
+        "Approve invoice {} for {} cents: {}",
+        invoice_number, amount_cents, short_url
+    )
+}
+
+/// Tenant-scoped lookup of a recipient's mobile number (E.164) and email.
+///
+/// Phone is resolved from the existing `users.settings->>'phone'` JSONB field
+/// so no schema migration is required. Returns `None` when the user is not in
+/// the caller's tenant or has no phone configured, so the caller can fail
+/// closed.
+pub async fn resolve_recipient_phone(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    recipient_user_id: Uuid,
+) -> Result<Option<(String, String)>, ApprovalError> {
+    let row: Option<(Option<String>, String)> = sqlx::query_as(
+        "SELECT settings->>'phone' AS phone, email \
+         FROM users WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(recipient_user_id)
+    .bind(*tenant_id.as_uuid())
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApprovalError::Core(billforge_core::Error::Database(e.to_string())))?;
+
+    Ok(row.and_then(|(phone, email)| phone.map(|p| (p, email))))
+}
+
+/// Outcome of dispatching an SMS / WhatsApp approval link.
+#[derive(Debug, Clone, Serialize)]
+pub struct SmsDispatchOutcome {
+    /// Provider-issued message id (correlates with delivery receipts).
+    pub message_id: String,
+    /// Short signed URL the recipient taps.
+    pub short_url: String,
+    /// The message body that was sent.
+    pub body: String,
+    /// Delivery channel that was used.
+    pub channel: DeliveryChannel,
+}
+
+/// Core SMS / WhatsApp delivery: mint a single-use approval token for the
+/// recipient, build the short URL + body, and dispatch via `provider`.
+///
+/// Extracted from the HTTP handler so tests can exercise it with a
+/// [`sms::NoopSmsProvider`] without a database or HTTP stack.
+pub async fn dispatch_sms_approval_link(
+    invoice_number: &str,
+    amount_cents: i64,
+    invoice_id: Uuid,
+    approver_email: String,
+    tenant_id: Uuid,
+    to_e164: &str,
+    channel: SmsChannel,
+    provider: &dyn SmsProvider,
+) -> Result<SmsDispatchOutcome, ApprovalError> {
+    let delivery = DeliveryChannel::from_sms_channel(channel);
+    let token = mint_approval_token(
+        invoice_id,
+        approver_email,
+        tenant_id,
+        vec!["approve".to_string(), "reject".to_string()],
+        delivery,
+        TOKEN_TTL_SECS,
+    )?;
+    let short_url = build_approval_short_url(&token);
+    let body = build_approval_sms_body(invoice_number, amount_cents, &short_url);
+
+    let message_id = provider
+        .send(to_e164, &body, channel)
+        .await
+        .map_err(|e| {
+            ApprovalError::Core(billforge_core::Error::ExternalService {
+                service: channel.as_str().to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+    Ok(SmsDispatchOutcome {
+        message_id,
+        short_url,
+        body,
+        channel: delivery,
+    })
+}
+
+/// Build the `approval_link.sent` audit metadata for an SMS dispatch.
+pub fn approval_link_sent_metadata(
+    channel: DeliveryChannel,
+    recipient_user_id: Uuid,
+    phone: &str,
+    message_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "event": "approval_link.sent",
+        "channel": channel.as_str(),
+        "recipient_user_id": recipient_user_id.to_string(),
+        "recipient_phone": phone,
+        "provider_message_id": message_id,
+    })
+}
+
+/// Request body for `POST /api/v1/mobile/approval-links/send-sms`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SendSmsRequest {
+    pub invoice_id: Uuid,
+    pub recipient_user_id: Uuid,
+    pub channel: SmsChannel,
+}
+
+/// Response for the SMS send endpoint.
+#[derive(Debug, Serialize)]
+pub struct SendSmsResponse {
+    pub message_id: String,
+    pub channel: DeliveryChannel,
+    pub short_url: String,
+}
+
+/// Write the `approval_link.sent` audit row to `invoice_audit_log`.
+async fn record_sms_send_audit(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    invoice_id: Uuid,
+    actor_id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<(), ApprovalError> {
+    sqlx::query(
+        r#"INSERT INTO invoice_audit_log
+               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
+           VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_approval', 'approval_link.sent', $5)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(invoice_id)
+    .bind(actor_id)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    .map_err(|e| ApprovalError::Core(billforge_core::Error::Database(e.to_string())))?;
+    Ok(())
+}
+
+/// `POST /api/v1/mobile/approval-links/send-sms`
+///
+/// Resolves the recipient (tenant-scoped), mints a single-use approval token,
+/// builds the short URL + body, dispatches via the configured SMS provider,
+/// and records an `approval_link.sent` audit event.
+pub async fn send_sms_approval_link(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+    Json(req): Json<SendSmsRequest>,
+) -> ApiResult<Json<SendSmsResponse>> {
+    let tenant_id = tenant.tenant_id.clone();
+    let pool = state.db.tenant(&tenant_id).await?;
+
+    // 1. Resolve recipient within the caller's tenant (fail closed).
+    let (phone, email) = resolve_recipient_phone(&pool, &tenant_id, req.recipient_user_id)
+        .await?
+        .ok_or_else(|| {
+            ApprovalError::Core(billforge_core::Error::NotFound {
+                resource_type: "User".to_string(),
+                id: req.recipient_user_id.to_string(),
+            })
+        })?;
+
+    // 2. Look up invoice details (tenant-scoped).
+    let invoice: Option<(String, i64)> = sqlx::query_as(
+        "SELECT invoice_number, COALESCE(total_amount_cents, 0) \
+         FROM invoices WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(req.invoice_id)
+    .bind(*tenant_id.as_uuid())
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| ApprovalError::Core(billforge_core::Error::Database(e.to_string())))?;
+
+    let (invoice_number, amount_cents) = invoice.ok_or_else(|| {
+        ApprovalError::Core(billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: req.invoice_id.to_string(),
+        })
+    })?;
+
+    // 3. Dispatch via the configured provider (Noop in dev / CI).
+    let provider = sms::provider_from_env();
+    let outcome = dispatch_sms_approval_link(
+        &invoice_number,
+        amount_cents,
+        req.invoice_id,
+        email,
+        *tenant_id.as_uuid(),
+        &phone,
+        req.channel,
+        provider.as_ref(),
+    )
+    .await?;
+
+    // 4. Audit the send.
+    let metadata = approval_link_sent_metadata(
+        outcome.channel,
+        req.recipient_user_id,
+        &phone,
+        &outcome.message_id,
+    );
+    record_sms_send_audit(&pool, *tenant_id.as_uuid(), req.invoice_id, *user.user_id.as_uuid(), metadata)
+        .await?;
+
+    Ok(Json(SendSmsResponse {
+        message_id: outcome.message_id,
+        channel: outcome.channel,
+        short_url: outcome.short_url,
+    }))
 }
