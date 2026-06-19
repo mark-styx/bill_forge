@@ -1075,14 +1075,7 @@ fn build_invoice_update_from_ocr(
         updates["po_number"] = serde_json::json!(po);
     }
 
-    let confidence = [
-        result.invoice_number.confidence,
-        result.vendor_name.confidence,
-        result.total_amount.confidence,
-    ]
-    .iter()
-    .sum::<f32>()
-        / 3.0;
+    let confidence = billforge_invoice_capture::compute_overall_confidence(result);
 
     Ok((updates, confidence))
 }
@@ -1209,8 +1202,10 @@ mod tests {
         assert_eq!(updates["vendor_name"], "Test Vendor");
         assert_eq!(updates["invoice_number"], "INV-123");
 
-        // confidence = mean(0.95, 0.85, 0.90) = 0.90
-        let expected_confidence = (0.95 + 0.85 + 0.90) / 3.0;
+        // confidence now flows through the shared billforge_invoice_capture::compute_overall_confidence
+        // helper (9-field mean over populated fields), matching invoice_captures.overall_confidence.
+        // Populated fields here: invoice_number, vendor_name, total_amount, currency.
+        let expected_confidence = (0.95 + 0.85 + 0.90 + 0.99) / 4.0;
         assert!(
             (confidence - expected_confidence).abs() < 0.001,
             "expected confidence {}, got {}",

@@ -21,8 +21,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use billforge_core::domain::OcrExtractionResult;
-use billforge_invoice_capture::{ocr, resolve_ocr_provider_name};
+use billforge_invoice_capture::{compute_overall_confidence, ocr, resolve_ocr_provider_name};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -51,6 +50,13 @@ pub fn routes() -> Router<AppState> {
 #[derive(Debug, Serialize)]
 pub struct CaptureResponse {
     pub capture_id: String,
+    /// ID of the `invoices` row created by bridging this capture into the
+    /// unified upload pipeline (#373). Callers can poll
+    /// `GET /invoices/{invoice_id}` for OCR/routing status exactly as they
+    /// would for a `/invoices/upload` upload. Identical to `capture_id` when
+    /// the bridge is unavailable (single-pillar builds without
+    /// `processing`/`analytics`/`billing`).
+    pub invoice_id: String,
     pub provider: String,
     pub overall_confidence: f32,
     pub privacy_mode: String,
@@ -206,8 +212,57 @@ async fn upload_capture(
         });
     }
 
+    // Bridge the capture into the unified upload pipeline (#373). The
+    // `/invoice-captures` endpoint used to run OCR inline, persist only to the
+    // `invoice_captures`/`invoice_line_items` tables, and never feed the worker
+    // or the routing engine. We now delegate to the same shared per-file
+    // helper that `/invoices/upload` uses, so this capture also:
+    //   - stores the original file via `state.storage.upload`
+    //   - creates an `invoices` row (`InvoiceRepositoryImpl::create`)
+    //   - inserts the matching `documents` row
+    //   - writes an `AuditEntry` (`AuditAction::Create`, `ResourceType::Invoice`)
+    //   - calls `enqueue_ocr_job` (or runs sync OCR as a fallback) so the worker
+    //     performs OCR persistence + `run_straight_through_processing` for
+    //     routing/categorization.
+    //
+    // The `invoice_captures` write above is retained as an OCR provenance
+    // record; it no longer represents a divergent pipeline.
+    //
+    // Gated behind the same feature set as `routes::invoices` so a
+    // single-pillar (`--features capture`) build still compiles. In that
+    // degraded mode we expose `capture_id` as `invoice_id` so the response
+    // shape stays stable; the provenance row is still authoritative.
+    #[cfg(all(
+        feature = "capture",
+        feature = "processing",
+        feature = "analytics",
+        feature = "billing"
+    ))]
+    let invoice_id = {
+        let capture_started = std::time::Instant::now();
+        let upload = crate::routes::invoices::upload_invoice_file(
+            &state,
+            &user,
+            &tenant,
+            filename,
+            mime,
+            &data,
+            capture_started,
+        )
+        .await?;
+        upload.invoice_id
+    };
+    #[cfg(not(all(
+        feature = "capture",
+        feature = "processing",
+        feature = "analytics",
+        feature = "billing"
+    )))]
+    let invoice_id = capture_id.to_string();
+
     let response = CaptureResponse {
         capture_id: capture_id.to_string(),
+        invoice_id,
         provider: effective_provider,
         overall_confidence,
         privacy_mode: privacy_mode.to_string(),
@@ -221,36 +276,10 @@ async fn upload_capture(
 // Confidence helpers
 // ---------------------------------------------------------------------------
 
-/// Average confidence of non-empty extracted fields.
-fn compute_overall_confidence(result: &OcrExtractionResult) -> f32 {
-    let mut sum = 0.0_f32;
-    let mut count = 0_u32;
-
-    macro_rules! accum {
-        ($field:expr) => {
-            if $field.value.is_some() {
-                sum += $field.confidence;
-                count += 1;
-            }
-        };
-    }
-
-    accum!(result.invoice_number);
-    accum!(result.invoice_date);
-    accum!(result.due_date);
-    accum!(result.vendor_name);
-    accum!(result.subtotal);
-    accum!(result.tax_amount);
-    accum!(result.total_amount);
-    accum!(result.currency);
-    accum!(result.po_number);
-
-    if count > 0 {
-        (sum / count as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
-}
+// NOTE: `compute_overall_confidence` now lives in the shared
+// `billforge_invoice_capture` crate (`confidence` module) so the worker and
+// this handler cannot drift apart on confidence math (#373). It is imported
+// above via `billforge_invoice_capture::compute_overall_confidence`.
 
 /// Average confidence of a single line item's fields.
 fn avg_line_confidence(item: &billforge_core::domain::ExtractedLineItem) -> f32 {
@@ -283,48 +312,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_overall_confidence_averages_populated_fields() {
-        let result = OcrExtractionResult {
-            invoice_number: billforge_core::domain::ExtractedField::with_value("INV-1".into(), 0.9),
-            total_amount: billforge_core::domain::ExtractedField::with_value(100.0, 0.8),
-            ..empty_result()
-        };
-        let conf = compute_overall_confidence(&result);
-        assert!((conf - 0.85).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_overall_confidence_clamps_to_one() {
-        let mut result = empty_result();
-        result.invoice_number = billforge_core::domain::ExtractedField::with_value("X".into(), 1.2);
-        let conf = compute_overall_confidence(&result);
-        assert!((conf - 1.0).abs() < 0.001);
-    }
-
-    #[test]
     fn test_accepted_mime_types_include_pdf_png_jpeg() {
         assert!(ACCEPTED_MIME_TYPES.contains(&"application/pdf"));
         assert!(ACCEPTED_MIME_TYPES.contains(&"image/png"));
         assert!(ACCEPTED_MIME_TYPES.contains(&"image/jpeg"));
         assert!(!ACCEPTED_MIME_TYPES.contains(&"text/plain"));
-    }
-
-    fn empty_result() -> OcrExtractionResult {
-        use billforge_core::domain::ExtractedField;
-        OcrExtractionResult {
-            invoice_number: ExtractedField::empty(),
-            invoice_date: ExtractedField::empty(),
-            due_date: ExtractedField::empty(),
-            vendor_name: ExtractedField::empty(),
-            vendor_address: ExtractedField::empty(),
-            subtotal: ExtractedField::empty(),
-            tax_amount: ExtractedField::empty(),
-            total_amount: ExtractedField::empty(),
-            currency: ExtractedField::empty(),
-            po_number: ExtractedField::empty(),
-            line_items: vec![],
-            raw_text: String::new(),
-            processing_time_ms: 0,
-        }
     }
 }
