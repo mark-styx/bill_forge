@@ -332,6 +332,16 @@ impl PgManager {
             )
             .await?;
 
+        // Per-tenant forecast model tuning (refs #367). One row per tenant
+        // holding ArimaForecaster overrides learned from forecast_accuracy_log.
+        migration_runner
+            .apply(
+                pool,
+                "136_forecast_model_tuning.sql",
+                include_str!("../../../migrations/136_forecast_model_tuning.sql"),
+            )
+            .await?;
+
         // Integration webhook support (nonces table + webhook_secret columns)
         migration_runner
             .apply(

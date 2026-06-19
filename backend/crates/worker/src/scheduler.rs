@@ -42,6 +42,14 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    let redis_client3b = redis_client.clone();
+    let pg_manager3b = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_forecast_tuning_task(redis_client3b, pg_manager3b).await {
+            error!("Forecast tuning scheduler failed: {}", e);
+        }
+    });
+
     let redis_client4 = redis_client.clone();
     let pg_manager4 = config.pg_manager.clone();
     tokio::spawn(async move {
@@ -180,6 +188,41 @@ async fn enqueue_forecast_refresh_jobs(
     pg_manager: Arc<billforge_db::PgManager>,
 ) -> Result<()> {
     enqueue_jobs_for_active_tenants(conn, pg_manager, JobType::ForecastRefresh).await
+}
+
+/// Schedule forecast tuning jobs weekly.
+///
+/// The tuning job reads the realized-vs-predicted rows written by
+/// `calculate_forecast_accuracy` and turns them into per-tenant ArimaForecaster
+/// parameter overrides (issue #367). Weekly cadence mirrors the forecast
+/// refresh so tuning always runs after a fresh batch of accuracy rows is
+/// available, and the worker's own 24h cooldown prevents churn.
+async fn schedule_forecast_tuning_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    // Run every 7 days (weekly), aligned with the forecast refresh cadence.
+    let mut interval = interval(Duration::from_secs(7 * 24 * 60 * 60));
+
+    info!("Forecast tuning scheduler started (weekly)");
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_forecast_tuning_jobs(&mut conn, pg_manager.clone()).await {
+            Ok(_) => info!("Enqueued weekly forecast tuning job"),
+            Err(e) => error!("Failed to enqueue forecast tuning job: {}", e),
+        }
+    }
+}
+
+/// Enqueue a forecast tuning job per active tenant.
+async fn enqueue_forecast_tuning_jobs(
+    conn: &mut redis::aio::Connection,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    enqueue_jobs_for_active_tenants(conn, pg_manager, JobType::ForecastTuning).await
 }
 
 /// Enqueue an anomaly detection job

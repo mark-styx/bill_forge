@@ -279,7 +279,6 @@ fn test_anomaly_severity() {
 #[tokio::test]
 async fn test_seasonality_detection() {
     let mut forecaster = ArimaForecaster::new();
-
     // Create data with weekly seasonality
     let now = Utc::now();
     let points: Vec<TimeSeriesPoint> = (0..60)
@@ -403,5 +402,76 @@ fn test_entity_type_match_coverage() {
     assert!(
         !is_supported_entity_type(&approver_json),
         "Approver JSON should not be supported"
+    );
+}
+
+/// Issue #367: when a `forecast_model_tuning` row exists for a tenant,
+/// `PredictiveService` converts it into a `ForecasterTuning` (via
+/// `forecaster_tuning_from_row`) and feeds it to `ArimaForecaster::with_tuning`,
+/// producing a wider confidence interval when the persisted
+/// `ci_width_multiplier > 1.0`. This tests the exact wiring the service uses
+/// to apply learned per-tenant overrides, without needing a live database.
+#[tokio::test]
+async fn test_forecast_tuning_row_widens_ci_via_with_tuning() {
+    use billforge_analytics::forecasting::ForecasterTuning;
+    use billforge_analytics::predictive_repository::ForecastTuningRow;
+    use billforge_analytics::predictive_service::forecaster_tuning_from_row;
+
+    let tenant_id = uuid::Uuid::new_v4();
+
+    // Build the time series once; both forecasters fit the same data.
+    let now = Utc::now();
+    let points: Vec<TimeSeriesPoint> = (0..60)
+        .map(|i| TimeSeriesPoint {
+            timestamp: now - Duration::days(60 - i),
+            value: 1000.0 + (i as f64 * 10.0),
+        })
+        .collect();
+    let ts = TimeSeries {
+        entity_id: "tuned_vendor".to_string(),
+        entity_type: EntityType::Vendor,
+        metric_name: "spend".to_string(),
+        points,
+    };
+
+    // Baseline: no tuning row -> ArimaForecaster::new() behaviour.
+    let baseline = {
+        let mut f = ArimaForecaster::new();
+        f.fit(&ts).await.unwrap();
+        f.forecast(ForecastHorizon::Days30).await.unwrap()
+    };
+
+    // Simulated persisted tuning row with a widened CI multiplier (MAPE > 25%
+    // would drive this from the forecast-tuning worker).
+    let row = ForecastTuningRow {
+        tenant_id,
+        seasonality_threshold_override: None,
+        ci_width_multiplier: Some(1.25),
+        mape_30d: Some(30.0),
+    };
+
+    // PredictiveService uses this exact conversion before calling with_tuning.
+    let tuning: ForecasterTuning = forecaster_tuning_from_row(row);
+    assert_eq!(tuning.tenant_id, tenant_id);
+    assert_eq!(tuning.ci_multiplier(), 1.25);
+    assert_eq!(tuning.seasonality_threshold(), 0.5); // default, no override
+
+    let tuned = {
+        let mut f = ArimaForecaster::with_tuning(tuning);
+        f.fit(&ts).await.unwrap();
+        f.forecast(ForecastHorizon::Days30).await.unwrap()
+    };
+
+    let baseline_width = baseline.confidence_upper - baseline.confidence_lower;
+    let tuned_width = tuned.confidence_upper - tuned.confidence_lower;
+    assert!(
+        tuned_width > baseline_width,
+        "persisted tuning row should widen CI ({} -> {})",
+        baseline_width,
+        tuned_width
+    );
+    assert!(
+        (baseline.predicted_value - tuned.predicted_value).abs() < 1e-6,
+        "predicted value must be unchanged by CI tuning"
     );
 }

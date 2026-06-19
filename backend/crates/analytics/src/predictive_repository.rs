@@ -521,6 +521,119 @@ impl PredictiveRepository {
         })
     }
 
+    /// Aggregate forecast accuracy for the last `days` days.
+    ///
+    /// Returns (mape, signed_bias_pct, sample_count) where:
+    /// - `mape` is the mean of `percentage_error` over rows with a non-null
+    ///   percentage (i.e. excluding zero-actual rows).
+    /// - `signed_bias_pct` is the mean signed deviation
+    ///   `((predicted - actual) / actual) * 100`. Positive means forecasts
+    ///   overshoot actuals; negative means they undershoot.
+    ///
+    /// Used by the forecast-tuning worker to drive per-tenant parameter
+    /// overrides from realized outcomes.
+    pub async fn get_recent_forecast_accuracy(
+        &self,
+        tenant_id: Uuid,
+        days: i32,
+    ) -> Result<ForecastAccuracyAggregate> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                AVG(percentage_error) AS mape,
+                AVG(
+                    CASE
+                        WHEN actual_value <> 0
+                        THEN ((predicted_value - actual_value) / actual_value) * 100.0
+                    END
+                ) AS signed_bias_pct,
+                COUNT(*)::bigint AS sample_count
+            FROM forecast_accuracy_log
+            WHERE tenant_id = $1
+                AND calculated_at > NOW() - INTERVAL '1 day' * $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(days)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to fetch recent forecast accuracy")?;
+
+        let sample_count: i64 = row.try_get("sample_count").unwrap_or(0);
+
+        Ok(ForecastAccuracyAggregate {
+            mape: row.try_get("mape").ok().unwrap_or(0.0),
+            signed_bias_pct: row.try_get("signed_bias_pct").ok().unwrap_or(0.0),
+            sample_count,
+        })
+    }
+
+    /// Fetch persisted ArimaForecaster parameter overrides for a tenant, if any.
+    /// PredictiveService uses this to construct `ArimaForecaster::with_tuning`.
+    pub async fn get_forecast_tuning(&self, tenant_id: Uuid) -> Result<Option<ForecastTuningRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                tenant_id,
+                seasonality_threshold_override,
+                ci_width_multiplier,
+                mape_30d
+            FROM forecast_model_tuning
+            WHERE tenant_id = $1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch forecast_model_tuning row")?;
+
+        Ok(row.map(|r| ForecastTuningRow {
+            tenant_id: r.try_get("tenant_id").unwrap_or(tenant_id),
+            seasonality_threshold_override: row_to_f64(r.try_get("seasonality_threshold_override").ok()),
+            ci_width_multiplier: row_to_f64(r.try_get("ci_width_multiplier").ok()),
+            mape_30d: row_to_f64(r.try_get("mape_30d").ok()),
+        }))
+    }
+
+    /// Upsert per-tenant ArimaForecaster parameter overrides. Returns the
+    /// previous row if one existed (for audit-logging purposes).
+    pub async fn upsert_forecast_tuning(
+        &self,
+        tenant_id: Uuid,
+        seasonality_threshold_override: Option<f64>,
+        ci_width_multiplier: Option<f64>,
+        mape_30d: Option<f64>,
+    ) -> Result<Option<ForecastTuningRow>> {
+        let previous = self.get_forecast_tuning(tenant_id).await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO forecast_model_tuning (
+                tenant_id,
+                seasonality_threshold_override,
+                ci_width_multiplier,
+                mape_30d,
+                updated_at,
+                created_at
+            ) VALUES ($1, $2, $3, $4, NOW(), NOW())
+            ON CONFLICT (tenant_id) DO UPDATE SET
+                seasonality_threshold_override = EXCLUDED.seasonality_threshold_override,
+                ci_width_multiplier = EXCLUDED.ci_width_multiplier,
+                mape_30d = EXCLUDED.mape_30d,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(seasonality_threshold_override)
+        .bind(ci_width_multiplier)
+        .bind(mape_30d)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert forecast_model_tuning row")?;
+
+        Ok(previous)
+    }
+
     /// Fetch time-series data for vendor spend
     pub async fn get_vendor_spend_timeseries(
         &self,
@@ -621,4 +734,32 @@ pub struct ForecastAccuracySummary {
     pub mae: f64,  // Mean Absolute Error
     pub rmse: f64, // Root Mean Squared Error
     pub total_forecasts: i32,
+}
+
+/// Aggregated accuracy metrics for a recent time window, used by the
+/// forecast-tuning worker to drive per-tenant parameter overrides.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ForecastAccuracyAggregate {
+    /// Mean of `percentage_error` over rows with non-null percentage.
+    pub mape: f64,
+    /// Mean signed deviation `((predicted - actual) / actual) * 100`.
+    pub signed_bias_pct: f64,
+    /// Number of rows included in the aggregate.
+    pub sample_count: i64,
+}
+
+/// Persisted ArimaForecaster parameter overrides for a tenant. Returned to
+/// PredictiveService via [`PredictiveRepository::get_forecast_tuning`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForecastTuningRow {
+    pub tenant_id: Uuid,
+    pub seasonality_threshold_override: Option<f64>,
+    pub ci_width_multiplier: Option<f64>,
+    pub mape_30d: Option<f64>,
+}
+
+/// Coerce a sqlx value (DECIMAL/f8/etc.) to a plain f64. Returns `None` when
+/// the underlying SQL value was NULL.
+fn row_to_f64(v: Option<f64>) -> Option<f64> {
+    v
 }

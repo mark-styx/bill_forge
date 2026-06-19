@@ -3,146 +3,40 @@
 //! Provides forecasting models for spend prediction, invoice volume, and approval times.
 
 use crate::predictive_models::*;
-use chrono::{Datelike, Utc};
+use chrono::Utc;
 use tracing::{debug, info};
+use uuid::Uuid;
 
-/// Naive Forecasting Model (baseline)
+/// Per-tenant forecaster parameter overrides learned from observed outcomes.
 ///
-/// Uses historical mean with trend adjustment for simple forecasting.
-pub struct NaiveForecaster {
-    model_version: String,
+/// Populated by the forecast-tuning worker job from the `forecast_accuracy_log`
+/// table and persisted in `forecast_model_tuning`. When `None`, `ArimaForecaster`
+/// keeps its default behaviour (5% CI floor, 0.5 seasonality autocorrelation
+/// threshold) so existing tests continue to hold.
+#[derive(Debug, Clone, Default)]
+pub struct ForecasterTuning {
+    pub tenant_id: Uuid,
+    /// Overrides the 0.5 autocorrelation threshold used to detect seasonality.
+    /// Lower values make the detector more permissive.
+    pub seasonality_threshold_override: Option<f64>,
+    /// Multiplier applied to the 1.96σ confidence interval half-width. 1.0
+    /// leaves the interval unchanged; >1.0 widens it.
+    pub ci_width_multiplier: Option<f64>,
+    /// Most recent 30-day MAPE observed for this tenant, stored for
+    /// observability/audit. Not consumed by the forecaster itself.
+    pub mape_30d: Option<f64>,
 }
 
-impl NaiveForecaster {
-    pub fn new() -> Self {
-        Self {
-            model_version: "naive_v1".to_string(),
-        }
+impl ForecasterTuning {
+    /// Effective autocorrelation threshold. Falls back to the historical 0.5
+    /// constant when no override is present.
+    pub fn seasonality_threshold(&self) -> f64 {
+        self.seasonality_threshold_override.unwrap_or(0.5)
     }
 
-    fn calculate_statistics(&self, data: &TimeSeries) -> PredictiveResult<(f64, f64, bool)> {
-        if data.points.len() < 7 {
-            return Err(PredictiveError::InsufficientData {
-                required: 7,
-                actual: data.points.len(),
-            });
-        }
-
-        // Calculate mean
-        let mean = data.points.iter().map(|p| p.value).sum::<f64>() / data.points.len() as f64;
-
-        // Calculate trend (simple linear regression)
-        let n = data.points.len() as f64;
-        let sum_x: f64 = (0..data.points.len()).map(|i| i as f64).sum();
-        let sum_y: f64 = data.points.iter().map(|p| p.value).sum();
-        let sum_xy: f64 = data
-            .points
-            .iter()
-            .enumerate()
-            .map(|(i, p)| i as f64 * p.value)
-            .sum();
-        let sum_x2: f64 = (0..data.points.len()).map(|i| (i as f64).powi(2)).sum();
-
-        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x.powi(2));
-        let intercept = (sum_y - slope * sum_x) / n;
-
-        // Detect seasonality (simplified: check for weekly patterns)
-        let seasonality_detected = self.detect_weekly_seasonality(&data.points);
-
-        debug!(
-            "Calculated statistics: mean={}, slope={}, intercept={}, seasonality={}",
-            mean, slope, intercept, seasonality_detected
-        );
-
-        Ok((mean, slope, seasonality_detected))
-    }
-
-    fn detect_weekly_seasonality(&self, points: &[TimeSeriesPoint]) -> bool {
-        if points.len() < 14 {
-            return false;
-        }
-
-        // Group by day of week
-        let mut day_totals = vec![0.0; 7];
-        let mut day_counts = vec![0; 7];
-
-        for point in points {
-            let day_of_week = point.timestamp.weekday().num_days_from_monday() as usize;
-            day_totals[day_of_week] += point.value;
-            day_counts[day_of_week] += 1;
-        }
-
-        // Calculate averages per day
-        let day_averages: Vec<f64> = day_totals
-            .iter()
-            .zip(day_counts.iter())
-            .map(|(total, count)| {
-                if *count > 0 {
-                    *total / *count as f64
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-
-        // Check if variance between days is significant
-        let overall_mean = day_averages.iter().sum::<f64>() / 7.0;
-        let variance: f64 = day_averages
-            .iter()
-            .map(|avg| (avg - overall_mean).powi(2))
-            .sum::<f64>()
-            / 7.0;
-
-        // Threshold: if variance > 10% of mean, consider it seasonal
-        variance > (overall_mean * 0.1).powi(2)
-    }
-
-    #[allow(dead_code)]
-    fn calculate_confidence_interval(&self, data: &TimeSeries, forecast_value: f64) -> (f64, f64) {
-        // Calculate standard deviation
-        let mean = data.points.iter().map(|p| p.value).sum::<f64>() / data.points.len() as f64;
-        let variance = data
-            .points
-            .iter()
-            .map(|p| (p.value - mean).powi(2))
-            .sum::<f64>()
-            / data.points.len() as f64;
-        let std_dev = variance.sqrt();
-
-        // 95% confidence interval (±1.96 standard deviations)
-        // Widen interval based on forecast horizon
-        let margin = std_dev * 1.96;
-        (forecast_value - margin, forecast_value + margin)
-    }
-}
-
-impl Default for NaiveForecaster {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait::async_trait]
-impl ForecastingModel for NaiveForecaster {
-    async fn fit(&mut self, data: &TimeSeries) -> PredictiveResult<()> {
-        info!(
-            "Fitting naive forecasting model for entity: {}",
-            data.entity_id
-        );
-        self.calculate_statistics(data)?;
-        Ok(())
-    }
-
-    async fn forecast(&self, _horizon: ForecastHorizon) -> PredictiveResult<Forecast> {
-        // For this simplified implementation, we'll need the data to be stored
-        // In production, this would use stored model parameters
-        Err(PredictiveError::PredictionFailed(
-            "Model must be fit before forecasting".to_string(),
-        ))
-    }
-
-    fn model_name(&self) -> &str {
-        &self.model_version
+    /// Effective CI half-width multiplier. Falls back to 1.0 (no widening).
+    pub fn ci_multiplier(&self) -> f64 {
+        self.ci_width_multiplier.unwrap_or(1.0)
     }
 }
 
@@ -153,6 +47,7 @@ pub struct ArimaForecaster {
     model_version: String,
     data: Option<TimeSeries>,
     statistics: Option<ArimaStatistics>,
+    tuning: Option<ForecasterTuning>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +66,20 @@ impl ArimaForecaster {
             model_version: "arima_v1".to_string(),
             data: None,
             statistics: None,
+            tuning: None,
+        }
+    }
+
+    /// Construct an `ArimaForecaster` whose seasonality threshold and
+    /// confidence-interval width are driven by per-tenant learned overrides.
+    /// When `tuning` carries `None` for both overrides, behaviour is identical
+    /// to [`ArimaForecaster::new`].
+    pub fn with_tuning(tuning: ForecasterTuning) -> Self {
+        Self {
+            model_version: "arima_v1".to_string(),
+            data: None,
+            statistics: None,
+            tuning: Some(tuning),
         }
     }
 
@@ -206,7 +115,8 @@ impl ArimaForecaster {
             .collect();
 
         // Detect seasonality using autocorrelation
-        let (seasonality_detected, seasonal_period) = self.detect_seasonality_autocorr(&detrended);
+        let (seasonality_detected, seasonal_period) =
+            self.detect_seasonality_autocorr(&detrended);
 
         // Calculate seasonal indices and residual standard deviation
         let mean = sum_y / n;
@@ -266,6 +176,15 @@ impl ArimaForecaster {
             return (false, None);
         }
 
+        // Default autocorrelation threshold is 0.5. A per-tenant learned
+        // override (lower = more permissive) can loosen this when the forecast
+        // feedback loop detects that the model is systematically biased.
+        let threshold = self
+            .tuning
+            .as_ref()
+            .map(|t| t.seasonality_threshold())
+            .unwrap_or(0.5);
+
         // Test common seasonal periods (7 days, 30 days)
         let periods_to_test = vec![7, 14, 30];
 
@@ -277,8 +196,7 @@ impl ArimaForecaster {
             // Calculate autocorrelation at lag = period
             let autocorr = self.autocorrelation(data, period, mean, variance);
 
-            // Threshold: autocorrelation > 0.5 indicates seasonality
-            if autocorr > 0.5 {
+            if autocorr > threshold {
                 return (true, Some(period as u32));
             }
         }
@@ -356,10 +274,18 @@ impl ForecastingModel for ArimaForecaster {
         // Uncertainty in cumulative forecasts grows proportionally to sqrt(time).
         // Base: 1.96 * residual_std for 95% CI at 1-day horizon.
         let horizon_days = horizon.days() as f64;
-        let margin = stats.residual_std * 1.96 * (horizon_days / 30.0).sqrt();
+        let ci_multiplier = self
+            .tuning
+            .as_ref()
+            .map(|t| t.ci_multiplier())
+            .unwrap_or(1.0);
+        let margin = stats.residual_std * 1.96 * (horizon_days / 30.0).sqrt() * ci_multiplier;
 
-        // Floor: at least 5% of predicted value to avoid degenerate zero-width intervals
-        let margin = margin.max(predicted_value.abs() * 0.05);
+        // Floor: at least 5% of predicted value to avoid degenerate zero-width
+        // intervals. The floor also scales with the per-tenant CI multiplier so
+        // that learned overrides reliably widen the interval even when the
+        // residual-based margin would otherwise sit below the floor.
+        let margin = margin.max(predicted_value.abs() * 0.05 * ci_multiplier);
 
         // Ensure confidence interval is valid (lower < predicted < upper)
         // Also ensure we don't have negative spend, but preserve the interval relationship
@@ -416,32 +342,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_naive_forecaster_fit() {
-        let mut forecaster = NaiveForecaster::new();
-        let data = create_test_timeseries();
-
-        let result = forecaster.fit(&data).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_naive_forecaster_insufficient_data() {
-        let mut forecaster = NaiveForecaster::new();
-        let data = TimeSeries {
-            entity_id: "test".to_string(),
-            entity_type: EntityType::Vendor,
-            metric_name: "spend".to_string(),
-            points: vec![TimeSeriesPoint {
-                timestamp: Utc::now(),
-                value: 100.0,
-            }],
-        };
-
-        let result = forecaster.fit(&data).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_arima_forecaster_fit() {
         let mut forecaster = ArimaForecaster::new();
         let data = create_test_timeseries();
@@ -462,23 +362,6 @@ mod tests {
         assert!(forecast.predicted_value > 0.0);
         assert!(forecast.confidence_lower <= forecast.predicted_value);
         assert!(forecast.confidence_upper >= forecast.predicted_value);
-    }
-
-    #[test]
-    fn test_detect_weekly_seasonality() {
-        let forecaster = NaiveForecaster::new();
-        let now = Utc::now();
-
-        // Create data with strong weekly pattern
-        let points: Vec<TimeSeriesPoint> = (0..28)
-            .map(|i| TimeSeriesPoint {
-                timestamp: now - Duration::days(28 - i),
-                value: if i % 7 < 5 { 1000.0 } else { 100.0 }, // Weekdays vs weekends
-            })
-            .collect();
-
-        let detected = forecaster.detect_weekly_seasonality(&points);
-        assert!(detected);
     }
 
     #[tokio::test]
@@ -577,5 +460,54 @@ mod tests {
         );
         // The floor is 5% of predicted value; predicted ~500, so width should be >= 2 * 5% * 500 = 50
         // but we just check it's positive to avoid being too brittle
+    }
+
+    /// Tuning override with ci_width_multiplier > 1.0 widens the CI by that
+    /// factor while leaving the predicted value unchanged.
+    #[tokio::test]
+    async fn test_with_tuning_widens_confidence_interval() {
+        let data = create_test_timeseries();
+
+        let baseline = {
+            let mut f = ArimaForecaster::new();
+            f.fit(&data).await.unwrap();
+            f.forecast(ForecastHorizon::Days30).await.unwrap()
+        };
+
+        let widened = {
+            let tuning = ForecasterTuning {
+                tenant_id: Uuid::nil(),
+                seasonality_threshold_override: None,
+                ci_width_multiplier: Some(1.25),
+                mape_30d: Some(30.0),
+            };
+            let mut f = ArimaForecaster::with_tuning(tuning);
+            f.fit(&data).await.unwrap();
+            f.forecast(ForecastHorizon::Days30).await.unwrap()
+        };
+
+        let baseline_width = baseline.confidence_upper - baseline.confidence_lower;
+        let widened_width = widened.confidence_upper - widened.confidence_lower;
+
+        assert!(
+            widened_width > baseline_width,
+            "ci_width_multiplier=1.25 should widen CI ({} -> {})",
+            baseline_width,
+            widened_width
+        );
+        // Predicted value is independent of CI multiplier.
+        assert!(
+            (baseline.predicted_value - widened.predicted_value).abs() < 1e-6,
+            "predicted value must not change under CI widening"
+        );
+    }
+
+    /// Default ForecasterTuning (no overrides) reproduces the historical
+    /// behaviour of ArimaForecaster::new(), so existing tests still hold.
+    #[test]
+    fn test_forecaster_tuning_defaults() {
+        let t = ForecasterTuning::default();
+        assert_eq!(t.seasonality_threshold(), 0.5);
+        assert_eq!(t.ci_multiplier(), 1.0);
     }
 }

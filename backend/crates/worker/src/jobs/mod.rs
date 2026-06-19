@@ -15,6 +15,7 @@ pub mod categorization_training;
 pub mod email_batch;
 pub mod embedding_refresh;
 pub mod forecast_refresh;
+pub mod forecast_tuning;
 pub mod metrics_aggregation;
 pub mod ocr_processing;
 pub mod quickbooks_sync;
@@ -45,6 +46,7 @@ pub enum JobType {
     CategorizationTraining,
     RoutingOptimization,
     ForecastRefresh,
+    ForecastTuning,
     AnomalyDetection,
     EdiProcessInbound,
     EdiSendRemittance,
@@ -68,6 +70,7 @@ impl std::fmt::Display for JobType {
             JobType::CategorizationTraining => write!(f, "CategorizationTraining"),
             JobType::RoutingOptimization => write!(f, "RoutingOptimization"),
             JobType::ForecastRefresh => write!(f, "ForecastRefresh"),
+            JobType::ForecastTuning => write!(f, "ForecastTuning"),
             JobType::AnomalyDetection => write!(f, "AnomalyDetection"),
             JobType::EdiProcessInbound => write!(f, "EdiProcessInbound"),
             JobType::EdiSendRemittance => write!(f, "EdiSendRemittance"),
@@ -275,6 +278,12 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         JobType::ForecastRefresh => {
             forecast_refresh::refresh_tenant_forecasts(config.pg_manager.clone(), &tenant_id).await
         }
+        JobType::ForecastTuning => forecast_tuning::run_tenant_forecast_tuning(
+            config.pg_manager.clone(),
+            &tenant_id,
+        )
+        .await
+        .map(|_| ()),
         JobType::AnomalyDetection => {
             anomaly_detection::detect_tenant_anomalies(config.pg_manager.clone(), &tenant_id).await
         }

@@ -9,9 +9,22 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::anomaly_detection::{DuplicateDetector, InvoiceRecord, StatisticalAnomalyDetector};
-use crate::forecasting::ArimaForecaster;
+use crate::forecasting::{ArimaForecaster, ForecasterTuning};
 use crate::predictive_models::*;
-use crate::predictive_repository::PredictiveRepository;
+use crate::predictive_repository::{ForecastTuningRow, PredictiveRepository};
+
+/// Convert a persisted [`ForecastTuningRow`] into the [`ForecasterTuning`]
+/// struct consumed by [`ArimaForecaster::with_tuning`]. Kept as a free, pub
+/// function so the predictive integration tests can exercise the exact
+/// conversion the service uses without a live database (issue #367).
+pub fn forecaster_tuning_from_row(row: ForecastTuningRow) -> ForecasterTuning {
+    ForecasterTuning {
+        tenant_id: row.tenant_id,
+        seasonality_threshold_override: row.seasonality_threshold_override,
+        ci_width_multiplier: row.ci_width_multiplier,
+        mape_30d: row.mape_30d,
+    }
+}
 
 pub struct PredictiveService {
     repo: PredictiveRepository,
@@ -21,6 +34,26 @@ impl PredictiveService {
     pub fn new(pool: PgPool) -> Self {
         Self {
             repo: PredictiveRepository::new(pool),
+        }
+    }
+
+    /// Build an [`ArimaForecaster`] configured with this tenant's learned
+    /// parameter overrides when a `forecast_model_tuning` row exists (written
+    /// by the forecast-tuning worker from observed outcomes), falling back to
+    /// the default constructor otherwise. Errors fetching the tuning row are
+    /// logged and treated as "no tuning" so a transient DB hiccup never blocks
+    /// forecast generation.
+    async fn build_forecaster(&self, tenant_id: Uuid) -> ArimaForecaster {
+        match self.repo.get_forecast_tuning(tenant_id).await {
+            Ok(Some(row)) => ArimaForecaster::with_tuning(forecaster_tuning_from_row(row)),
+            Ok(None) => ArimaForecaster::new(),
+            Err(e) => {
+                warn!(
+                    "Failed to fetch forecast tuning for tenant {}: {}; using defaults",
+                    tenant_id, e
+                );
+                ArimaForecaster::new()
+            }
         }
     }
 
@@ -56,8 +89,8 @@ impl PredictiveService {
                 continue;
             }
 
-            // Fit ARIMA model
-            let mut forecaster = ArimaForecaster::new();
+            // Fit ARIMA model, applying any learned per-tenant tuning overrides.
+            let mut forecaster = self.build_forecaster(tenant_id).await;
             forecaster
                 .fit(&time_series)
                 .await
@@ -127,8 +160,8 @@ impl PredictiveService {
                 continue;
             }
 
-            // Fit ARIMA model
-            let mut forecaster = ArimaForecaster::new();
+            // Fit ARIMA model, applying any learned per-tenant tuning overrides.
+            let mut forecaster = self.build_forecaster(tenant_id).await;
             if let Err(e) = forecaster.fit(&time_series).await {
                 warn!(
                     "Failed to fit ARIMA model for department {}: {}",
