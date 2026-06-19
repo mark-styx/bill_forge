@@ -24,7 +24,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -39,7 +38,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -54,7 +52,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -69,7 +66,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -84,7 +80,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -99,7 +94,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -114,7 +108,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -129,7 +122,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -144,7 +136,6 @@ BEGIN
             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)
             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -171,7 +162,6 @@ BEGIN
                   AND i.tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid
             ))';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -194,7 +184,6 @@ BEGIN
                   AND v.tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid
             ))';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -217,7 +206,6 @@ BEGIN
                   AND v.tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid
             ))';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -240,7 +228,6 @@ BEGIN
                   AND v.tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid
             ))';
     END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
 
@@ -251,6 +238,5 @@ $$;
 DO $$
 BEGIN
     EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO billforge_app';
-EXCEPTION WHEN OTHERS THEN NULL;
 END
 $$;
