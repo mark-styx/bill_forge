@@ -10,12 +10,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use billforge_core::{
     domain::{
-        ApprovalRequest, ApprovalStatus, CaptureStatus, Invoice, InvoiceId, POLineItem, POStatus,
-        ProcessingStatus, PurchaseOrder, PurchaseOrderId, WorkflowRule, WorkflowRuleId,
-        WorkflowRuleType,
+        ApprovalRequest, ApprovalStatus, CaptureStatus, CreateWorkflowTemplateInput, Invoice,
+        InvoiceId, POLineItem, POStatus, ProcessingStatus, PurchaseOrder, PurchaseOrderId,
+        WorkflowRule, WorkflowRuleId, WorkflowRuleType, WorkflowTemplate, WorkflowTemplateId,
     },
     traits::{
         ApprovalRepository, InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository,
+        WorkflowTemplateRepository,
     },
     types::{Money, TenantId, UserId},
     Result,
@@ -355,7 +356,54 @@ fn build_engine(po_repo: MockPoRepo) -> WorkflowEngine {
         Arc::new(MockInvoiceRepo),
         Arc::new(MockRuleRepoNoRules),
         Arc::new(MockApprovalRepo),
+        Arc::new(MockTemplateRepoNone),
     )
+}
+
+/// Template repo with no default template, so PO tests exercise the rule path.
+struct MockTemplateRepoNone;
+
+#[async_trait]
+impl WorkflowTemplateRepository for MockTemplateRepoNone {
+    async fn create(
+        &self,
+        _tid: &TenantId,
+        _input: CreateWorkflowTemplateInput,
+    ) -> Result<WorkflowTemplate> {
+        unimplemented!()
+    }
+    async fn get_by_id(
+        &self,
+        _tid: &TenantId,
+        _id: &WorkflowTemplateId,
+    ) -> Result<Option<WorkflowTemplate>> {
+        Ok(None)
+    }
+    async fn list(&self, _tid: &TenantId) -> Result<Vec<WorkflowTemplate>> {
+        Ok(vec![])
+    }
+    async fn update(
+        &self,
+        _tid: &TenantId,
+        _id: &WorkflowTemplateId,
+        _input: CreateWorkflowTemplateInput,
+    ) -> Result<WorkflowTemplate> {
+        unimplemented!()
+    }
+    async fn delete(&self, _tid: &TenantId, _id: &WorkflowTemplateId) -> Result<()> {
+        Ok(())
+    }
+    async fn set_active(
+        &self,
+        _tid: &TenantId,
+        _id: &WorkflowTemplateId,
+        _is_active: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+    async fn get_default(&self, _tid: &TenantId) -> Result<Option<WorkflowTemplate>> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------

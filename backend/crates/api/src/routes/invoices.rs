@@ -1311,6 +1311,9 @@ async fn run_sync_straight_through_processing(
         std::sync::Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
             pool.clone(),
         )) as std::sync::Arc<dyn billforge_core::traits::ApprovalRepository>,
+        std::sync::Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+            pool.clone(),
+        )) as std::sync::Arc<dyn billforge_core::traits::WorkflowTemplateRepository>,
     )
     .with_routing(std::sync::Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),
@@ -1718,6 +1721,9 @@ async fn submit_for_processing(
         Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
             pool.clone(),
         )) as Arc<dyn billforge_core::traits::ApprovalRepository>,
+        Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+            pool.clone(),
+        )) as Arc<dyn billforge_core::traits::WorkflowTemplateRepository>,
     )
     .with_routing(Arc::new(billforge_db::RoutingRepository::new(
         pool.as_ref().clone(),
@@ -2556,6 +2562,9 @@ async fn resolve_ocr_exception(
                 Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
                     pool.clone(),
                 )) as Arc<dyn billforge_core::traits::ApprovalRepository>,
+                Arc::new(billforge_db::repositories::WorkflowRepositoryImpl::new(
+                    pool.clone(),
+                )) as Arc<dyn billforge_core::traits::WorkflowTemplateRepository>,
             )
             .with_routing(Arc::new(billforge_db::RoutingRepository::new(
                 pool.as_ref().clone(),

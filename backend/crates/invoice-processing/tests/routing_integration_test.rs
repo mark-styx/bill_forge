@@ -374,6 +374,7 @@ async fn test_routing_engine_present_returns_approver() {
         Arc::new(MockInvoiceRepo),
         Arc::new(MockRuleRepo),
         approval_repo.clone(),
+        Arc::new(MockTemplateRepo),
     )
     .with_routing(Arc::new(MockRoutingProvider::with_context(ctx)));
 
@@ -400,6 +401,7 @@ async fn test_routing_engine_empty_context_falls_back_to_role() {
         Arc::new(MockInvoiceRepo),
         Arc::new(MockRuleRepo),
         approval_repo.clone(),
+        Arc::new(MockTemplateRepo),
     )
     .with_routing(Arc::new(MockRoutingProvider::empty()));
 

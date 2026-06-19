@@ -3,12 +3,13 @@
 use billforge_core::{
     domain::{
         ActionType, ApprovalRequest, ApprovalStatus, ApprovalTarget, Invoice, ProcessingStatus,
-        RuleAction, RuleCondition, WorkflowRule, WorkflowRuleType,
+        RuleAction, RuleCondition, StageType, WorkflowRule, WorkflowRuleId, WorkflowRuleType,
+        WorkflowTemplate, WorkflowTemplateStage,
     },
     intelligent_routing::{IntelligentRoutingEngine, RoutingConfig, RoutingDataProvider},
     traits::{
         ApprovalRepository, AuditService, InvoiceRepository, TenantSettingsProvider,
-        WorkflowRuleRepository,
+        WorkflowRuleRepository, WorkflowTemplateRepository,
     },
     types::{TenantId, TenantSettings, UserId},
     Result,
@@ -27,6 +28,7 @@ pub struct WorkflowEngine {
     invoice_repo: Arc<dyn InvoiceRepository>,
     rule_repo: Arc<dyn WorkflowRuleRepository>,
     approval_repo: Arc<dyn ApprovalRepository>,
+    workflow_template_repo: Arc<dyn WorkflowTemplateRepository>,
     routing_provider: Option<Arc<dyn RoutingDataProvider>>,
     settings_provider: Option<Arc<dyn TenantSettingsProvider>>,
     audit_service: Option<Arc<dyn AuditService>>,
@@ -38,11 +40,13 @@ impl WorkflowEngine {
         invoice_repo: Arc<dyn InvoiceRepository>,
         rule_repo: Arc<dyn WorkflowRuleRepository>,
         approval_repo: Arc<dyn ApprovalRepository>,
+        workflow_template_repo: Arc<dyn WorkflowTemplateRepository>,
     ) -> Self {
         Self {
             invoice_repo,
             rule_repo,
             approval_repo,
+            workflow_template_repo,
             routing_provider: None,
             settings_provider: None,
             audit_service: None,
@@ -84,6 +88,21 @@ impl WorkflowEngine {
             Some(provider) => provider.get(tenant_id).await.unwrap_or_default(),
             None => TenantSettings::default(),
         };
+
+        // Template-first processing: if the tenant has a default workflow
+        // template, drive the invoice through its ordered stages (skip /
+        // auto-advance / route) before consulting rule-based routing. Mirrors
+        // `WorkflowService::process_invoice_through_template`. Falls through to
+        // the existing rule logic when no template exists or every stage was
+        // skipped/auto-advanced.
+        if let Some(template) = self.workflow_template_repo.get_default(tenant_id).await? {
+            if let Some(status) = self
+                .apply_workflow_template(tenant_id, invoice, &template)
+                .await?
+            {
+                return Ok(status);
+            }
+        }
 
         // Get active routing rules
         let routing_rules = self
@@ -355,6 +374,131 @@ impl WorkflowEngine {
         // No approval needed
         try_update_pattern!();
         Ok(ProcessingStatus::Approved)
+    }
+
+    /// Apply a workflow template's ordered stages to an invoice.
+    ///
+    /// Mirrors `WorkflowService::process_invoice_through_template`: iterate
+    /// stages in `order`, skipping stages whose `skip_conditions` all match and
+    /// auto-advancing stages whose `auto_advance_conditions` all match. The
+    /// first actionable stage drives the outcome using the same routing helpers
+    /// the rule path uses (intelligent approval target + approval request for
+    /// approval stages, derived processing status otherwise).
+    ///
+    /// Returns `Some(status)` when a stage captures the invoice, or `None` when
+    /// every stage was skipped/auto-advanced so the caller falls through to
+    /// rule-based processing.
+    async fn apply_workflow_template(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        template: &WorkflowTemplate,
+    ) -> Result<Option<ProcessingStatus>> {
+        let mut stages = template.stages.clone();
+        stages.sort_by_key(|s| s.order);
+
+        for stage in &stages {
+            // Skip conditions - if ALL match, skip this stage entirely.
+            if !stage.skip_conditions.is_empty()
+                && billforge_core::workflow_evaluator::evaluate_conditions(
+                    invoice,
+                    &stage.skip_conditions,
+                )
+            {
+                tracing::info!(
+                    invoice_id = %invoice.id.as_uuid(),
+                    template_id = %template.id,
+                    stage = %stage.name,
+                    source = "template",
+                    "Skipping workflow stage - skip conditions met"
+                );
+                continue;
+            }
+
+            // Auto-advance conditions - if ALL match, auto-complete and advance.
+            if !stage.auto_advance_conditions.is_empty()
+                && billforge_core::workflow_evaluator::evaluate_conditions(
+                    invoice,
+                    &stage.auto_advance_conditions,
+                )
+            {
+                tracing::info!(
+                    invoice_id = %invoice.id.as_uuid(),
+                    template_id = %template.id,
+                    stage = %stage.name,
+                    source = "template",
+                    "Auto-advancing workflow stage - conditions met"
+                );
+                continue;
+            }
+
+            // Stage requires processing - route the invoice here.
+            let status = match stage.stage_type {
+                StageType::Approval => {
+                    self.create_template_stage_approval_request(tenant_id, invoice, stage)
+                        .await?;
+                    ProcessingStatus::PendingApproval
+                }
+                StageType::Payment => ProcessingStatus::ReadyForPayment,
+                _ => ProcessingStatus::Submitted,
+            };
+
+            tracing::info!(
+                invoice_id = %invoice.id.as_uuid(),
+                template_id = %template.id,
+                stage = %stage.name,
+                stage_type = ?stage.stage_type,
+                queue_id = ?stage.queue_id,
+                source = "template",
+                "Workflow template stage captured invoice"
+            );
+
+            return Ok(Some(status));
+        }
+
+        Ok(None)
+    }
+
+    /// Create an approval request for a template-driven Approval stage.
+    ///
+    /// Uses the same intelligent-routing target selection the rule path uses
+    /// (`intelligent_approval_target`), falling back to the generic "approver"
+    /// role. The request is tagged with a nil rule id (no rule originated it)
+    /// and the stage's SLA if present, defaulting to 24 hours otherwise.
+    async fn create_template_stage_approval_request(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        stage: &WorkflowTemplateStage,
+    ) -> Result<()> {
+        let target = self
+            .intelligent_approval_target(tenant_id, invoice)
+            .await
+            .unwrap_or_else(|| ApprovalTarget::Role("approver".to_string()));
+
+        let sla_hours = stage
+            .sla_hours
+            .filter(|h| *h > 0)
+            .map(|h| h as i64)
+            .unwrap_or(24);
+        let now = chrono::Utc::now();
+        let request = ApprovalRequest {
+            id: uuid::Uuid::new_v4(),
+            invoice_id: invoice.id.clone(),
+            tenant_id: tenant_id.clone(),
+            // Template-driven request: no rule originated it.
+            rule_id: WorkflowRuleId(uuid::Uuid::nil()),
+            requested_from: target,
+            status: ApprovalStatus::Pending,
+            comments: None,
+            responded_by: None,
+            responded_at: None,
+            created_at: now,
+            expires_at: Some(now + Duration::hours(sla_hours)),
+        };
+
+        self.approval_repo.create(tenant_id, request).await?;
+        Ok(())
     }
 
     /// Evaluate rule conditions against an invoice
@@ -766,6 +910,443 @@ mod tests {
         assert!(
             !auto_approval_enabled,
             "Lane should be skipped when disabled"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // WorkflowTemplate wiring tests (issue #372)
+    // ---------------------------------------------------------------------------
+    //
+    // These tests prove that `process_invoice` now consults the
+    // `WorkflowTemplateRepository` (template-first) before falling through to
+    // rule-based routing/approval/auto-approval.
+
+    use async_trait::async_trait;
+    use billforge_core::domain::{
+        CaptureStatus, ConditionField, ConditionOperator, CreateInvoiceInput,
+        CreateWorkflowRuleInput, CreateWorkflowTemplateInput, InvoiceFilters, InvoiceId,
+        WorkflowTemplateId,
+    };
+    use billforge_core::types::{Money, Pagination, PaginatedResponse};
+    use std::sync::Mutex;
+
+    /// Invoice repo stub: `process_invoice` does not call it on the happy path.
+    struct StubInvoiceRepo;
+
+    #[async_trait]
+    impl InvoiceRepository for StubInvoiceRepo {
+        async fn create(
+            &self,
+            _tid: &TenantId,
+            _input: CreateInvoiceInput,
+            _uid: Option<&UserId>,
+        ) -> Result<Invoice> {
+            unimplemented!()
+        }
+        async fn get_by_id(&self, _tid: &TenantId, _id: &InvoiceId) -> Result<Option<Invoice>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            _tid: &TenantId,
+            _f: &InvoiceFilters,
+            _p: &Pagination,
+        ) -> Result<PaginatedResponse<Invoice>> {
+            unimplemented!()
+        }
+        async fn update(
+            &self,
+            _tid: &TenantId,
+            _id: &InvoiceId,
+            _u: serde_json::Value,
+        ) -> Result<Invoice> {
+            unimplemented!()
+        }
+        async fn delete(&self, _tid: &TenantId, _id: &InvoiceId) -> Result<()> {
+            Ok(())
+        }
+        async fn update_capture_status(
+            &self,
+            _tid: &TenantId,
+            _id: &InvoiceId,
+            _s: CaptureStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn update_processing_status(
+            &self,
+            _tid: &TenantId,
+            _id: &InvoiceId,
+            _s: ProcessingStatus,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Approval repo that records every request created via `create`.
+    struct RecordingApprovalRepo {
+        created: Mutex<Vec<ApprovalRequest>>,
+    }
+
+    impl RecordingApprovalRepo {
+        fn new() -> Self {
+            Self {
+                created: Mutex::new(Vec::new()),
+            }
+        }
+        fn requests(&self) -> Vec<ApprovalRequest> {
+            self.created.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ApprovalRepository for RecordingApprovalRepo {
+        async fn create(
+            &self,
+            _tid: &TenantId,
+            request: ApprovalRequest,
+        ) -> Result<ApprovalRequest> {
+            self.created.lock().unwrap().push(request.clone());
+            Ok(request)
+        }
+        async fn get_by_id(
+            &self,
+            _tid: &TenantId,
+            _id: uuid::Uuid,
+        ) -> Result<Option<ApprovalRequest>> {
+            Ok(None)
+        }
+        async fn list_for_invoice(
+            &self,
+            _tid: &TenantId,
+            _inv: &InvoiceId,
+        ) -> Result<Vec<ApprovalRequest>> {
+            Ok(vec![])
+        }
+        async fn list_pending_for_user(
+            &self,
+            _tid: &TenantId,
+            _uid: &UserId,
+        ) -> Result<Vec<ApprovalRequest>> {
+            Ok(vec![])
+        }
+        async fn respond(
+            &self,
+            _tid: &TenantId,
+            _id: uuid::Uuid,
+            _status: ApprovalStatus,
+            _comments: Option<String>,
+            _uid: &UserId,
+        ) -> Result<ApprovalRequest> {
+            unimplemented!()
+        }
+        async fn cancel_for_invoice(&self, _tid: &TenantId, _inv: &InvoiceId) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Rule repo that returns a fixed set of active rules, filtered by type.
+    struct StubRuleRepo {
+        rules: Vec<WorkflowRule>,
+    }
+
+    #[async_trait]
+    impl WorkflowRuleRepository for StubRuleRepo {
+        async fn create(
+            &self,
+            _tid: &TenantId,
+            _input: CreateWorkflowRuleInput,
+        ) -> Result<WorkflowRule> {
+            unimplemented!()
+        }
+        async fn get_by_id(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowRuleId,
+        ) -> Result<Option<WorkflowRule>> {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+            _tid: &TenantId,
+            _rt: Option<WorkflowRuleType>,
+        ) -> Result<Vec<WorkflowRule>> {
+            Ok(vec![])
+        }
+        async fn update(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowRuleId,
+            _input: CreateWorkflowRuleInput,
+        ) -> Result<WorkflowRule> {
+            unimplemented!()
+        }
+        async fn delete(&self, _tid: &TenantId, _id: &WorkflowRuleId) -> Result<()> {
+            Ok(())
+        }
+        async fn set_active(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowRuleId,
+            _active: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_active_rules(
+            &self,
+            _tid: &TenantId,
+            rule_type: WorkflowRuleType,
+        ) -> Result<Vec<WorkflowRule>> {
+            Ok(self
+                .rules
+                .iter()
+                .filter(|r| r.rule_type == rule_type)
+                .cloned()
+                .collect())
+        }
+    }
+
+    /// Template repo with a configurable default template.
+    struct StubTemplateRepo {
+        default: Option<WorkflowTemplate>,
+    }
+
+    #[async_trait]
+    impl WorkflowTemplateRepository for StubTemplateRepo {
+        async fn create(
+            &self,
+            _tid: &TenantId,
+            _input: CreateWorkflowTemplateInput,
+        ) -> Result<WorkflowTemplate> {
+            unimplemented!()
+        }
+        async fn get_by_id(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowTemplateId,
+        ) -> Result<Option<WorkflowTemplate>> {
+            Ok(None)
+        }
+        async fn list(&self, _tid: &TenantId) -> Result<Vec<WorkflowTemplate>> {
+            Ok(vec![])
+        }
+        async fn update(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowTemplateId,
+            _input: CreateWorkflowTemplateInput,
+        ) -> Result<WorkflowTemplate> {
+            unimplemented!()
+        }
+        async fn delete(&self, _tid: &TenantId, _id: &WorkflowTemplateId) -> Result<()> {
+            Ok(())
+        }
+        async fn set_active(
+            &self,
+            _tid: &TenantId,
+            _id: &WorkflowTemplateId,
+            _is_active: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_default(&self, _tid: &TenantId) -> Result<Option<WorkflowTemplate>> {
+            Ok(self.default.clone())
+        }
+    }
+
+    fn template_approval_stage(
+        skip_conditions: Vec<RuleCondition>,
+        auto_advance_conditions: Vec<RuleCondition>,
+    ) -> WorkflowTemplateStage {
+        WorkflowTemplateStage {
+            order: 0,
+            name: "approval".to_string(),
+            stage_type: StageType::Approval,
+            queue_id: None,
+            sla_hours: None,
+            escalation_hours: None,
+            requires_action: true,
+            skip_conditions,
+            auto_advance_conditions,
+        }
+    }
+
+    fn template_with_stages(stages: Vec<WorkflowTemplateStage>) -> WorkflowTemplate {
+        WorkflowTemplate {
+            id: WorkflowTemplateId::new(),
+            tenant_id: TenantId::new(),
+            name: "test-template".to_string(),
+            description: None,
+            is_active: true,
+            is_default: true,
+            stages,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// An auto-approval rule with empty (always-matching) conditions.
+    fn auto_approval_rule() -> WorkflowRule {
+        let now = chrono::Utc::now();
+        WorkflowRule {
+            id: WorkflowRuleId(uuid::Uuid::new_v4()),
+            tenant_id: TenantId::new(),
+            name: "auto-approve-all".to_string(),
+            description: None,
+            priority: 0,
+            is_active: true,
+            rule_type: WorkflowRuleType::AutoApproval,
+            conditions: vec![],
+            actions: vec![],
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn template_test_invoice() -> Invoice {
+        Invoice {
+            id: InvoiceId::new(),
+            tenant_id: TenantId::new(),
+            vendor_id: Some(uuid::Uuid::new_v4()),
+            vendor_name: "Test Vendor".to_string(),
+            invoice_number: "INV-001".to_string(),
+            invoice_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            due_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 1).unwrap()),
+            po_number: None,
+            subtotal: Some(Money {
+                amount: 10000,
+                currency: "USD".to_string(),
+            }),
+            tax_amount: Some(Money {
+                amount: 0,
+                currency: "USD".to_string(),
+            }),
+            total_amount: Money {
+                amount: 10000,
+                currency: "USD".to_string(),
+            },
+            currency: "USD".to_string(),
+            line_items: vec![],
+            capture_status: CaptureStatus::Reviewed,
+            processing_status: ProcessingStatus::Draft,
+            current_queue_id: None,
+            assigned_to: None,
+            document_id: uuid::Uuid::new_v4(),
+            supporting_documents: vec![],
+            // None so the ML auto-approval lane never short-circuits.
+            ocr_confidence: None,
+            categorization_confidence: None,
+            department: None,
+            gl_code: None,
+            cost_center: None,
+            notes: None,
+            tags: vec![],
+            custom_fields: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            created_by: Some(UserId(uuid::Uuid::new_v4())),
+        }
+    }
+
+    fn build_test_engine(
+        template: Option<WorkflowTemplate>,
+        rules: Vec<WorkflowRule>,
+    ) -> (WorkflowEngine, std::sync::Arc<RecordingApprovalRepo>) {
+        let approval_repo = std::sync::Arc::new(RecordingApprovalRepo::new());
+        let engine = WorkflowEngine::new(
+            std::sync::Arc::new(StubInvoiceRepo),
+            std::sync::Arc::new(StubRuleRepo { rules }),
+            approval_repo.clone(),
+            std::sync::Arc::new(StubTemplateRepo { default: template }),
+        );
+        (engine, approval_repo)
+    }
+
+    #[tokio::test]
+    async fn process_invoice_uses_template_when_present() {
+        // A template with a single Approval stage should capture the invoice
+        // (PendingApproval + an approval request) and must NOT consult the rule
+        // repo for routing/approval/auto-approval. The rule repo carries an
+        // always-matching AutoApproval rule that would otherwise approve the
+        // invoice, so a PendingApproval outcome proves the template took over.
+        let (engine, approval_repo) = build_test_engine(
+            Some(template_with_stages(vec![template_approval_stage(vec![], vec![])])),
+            vec![auto_approval_rule()],
+        );
+        let invoice = template_test_invoice();
+
+        let status = engine
+            .process_invoice(&invoice.tenant_id, &invoice)
+            .await
+            .expect("template processing should succeed");
+
+        assert_eq!(
+            status,
+            ProcessingStatus::PendingApproval,
+            "template Approval stage should route to pending approval"
+        );
+
+        let requests = approval_repo.requests();
+        assert_eq!(requests.len(), 1, "exactly one template-driven approval request");
+        assert!(
+            matches!(&requests[0].requested_from, ApprovalTarget::Role(role) if role == "approver"),
+            "no routing provider configured -> fallback to approver role"
+        );
+        assert!(
+            requests[0].rule_id.0 == uuid::Uuid::nil(),
+            "template-driven requests carry a nil rule id"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_invoice_falls_through_to_rules_when_no_template() {
+        // With no default template, the existing rule-based path must run
+        // unchanged: the always-matching AutoApproval rule should approve.
+        let (engine, _approval_repo) =
+            build_test_engine(None, vec![auto_approval_rule()]);
+        let invoice = template_test_invoice();
+
+        let status = engine
+            .process_invoice(&invoice.tenant_id, &invoice)
+            .await
+            .expect("rule fall-through should succeed");
+
+        assert_eq!(
+            status,
+            ProcessingStatus::Approved,
+            "no template -> rule-based auto-approval preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_invoice_skips_stage_on_skip_condition_match() {
+        // The template's Approval stage has a skip condition that matches the
+        // invoice (amount > 0). The stage must be skipped and processing must
+        // fall through to the AutoApproval rule -> Approved. If skip logic were
+        // broken, the Approval stage would capture it as PendingApproval.
+        let skip_matches = vec![RuleCondition {
+            field: ConditionField::Amount,
+            operator: ConditionOperator::GreaterThan,
+            value: serde_json::json!(0),
+        }];
+        let (engine, _approval_repo) = build_test_engine(
+            Some(template_with_stages(vec![template_approval_stage(
+                skip_matches,
+                vec![],
+            )])),
+            vec![auto_approval_rule()],
+        );
+        let invoice = template_test_invoice();
+
+        let status = engine
+            .process_invoice(&invoice.tenant_id, &invoice)
+            .await
+            .expect("skip-then-fall-through should succeed");
+
+        assert_eq!(
+            status,
+            ProcessingStatus::Approved,
+            "matching skip condition should skip the stage and fall through to rules"
         );
     }
 }
