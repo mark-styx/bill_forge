@@ -3408,20 +3408,43 @@ export interface PolicyPreviewResponse {
   projected_action_breakdown: Record<string, unknown>;
 }
 
-export interface ComposeResponse {
-  proposed_rule: ProposedRule;
+/** A parsed rule paired with its own 90-day preview and per-rule warnings. */
+export interface ProposedRuleWithPreview {
+  rule: ProposedRule;
   preview: PolicyPreviewResponse;
   warnings: string[];
-  unparseable_segments: string[];
 }
+
+export interface ComposeResponse {
+  /** Authoritative list of parsed rules, each with its own preview. */
+  proposed_rules: ProposedRuleWithPreview[];
+  /** Segments of the input that did not match any known pattern. */
+  unparseable_segments?: string[];
+  /** Backward-compat: the first parsed rule mirrored as a top-level single rule. */
+  proposed_rule?: ProposedRule;
+  /** Backward-compat: preview for the first parsed rule. */
+  preview?: PolicyPreviewResponse;
+  /** Backward-compat: warnings for the first parsed rule. */
+  warnings?: string[];
+}
+
+export type CommitResponse = {
+  success: boolean;
+  rule_id?: string;
+  rule_ids?: string[];
+};
 
 export const policiesApi = {
   compose: (text: string) =>
     api.post<ComposeResponse>('/api/v1/policies/compose', { text }),
 
-  commit: (proposed_rule: ProposedRule, original_text: string) =>
-    api.post<{ success: boolean; rule_id: string }>('/api/v1/policies/commit', {
-      proposed_rule,
+  /**
+   * Commit one or more proposed rules. The list form is authoritative;
+   * `proposed_rules` is sent for compound policies.
+   */
+  commit: (proposed_rules: ProposedRule[], original_text: string) =>
+    api.post<CommitResponse>('/api/v1/policies/commit', {
+      proposed_rules,
       original_text,
     }),
 };

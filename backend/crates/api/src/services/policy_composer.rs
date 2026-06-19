@@ -108,6 +108,13 @@ impl ProposedRule {
                 value: category.clone(),
             });
         }
+        if let Some(department) = conditions_val.get("department") {
+            out.push(RuleCondition {
+                field: ConditionField::Department,
+                operator: ConditionOperator::Equals,
+                value: department.clone(),
+            });
+        }
         if let Some(has_po) = conditions_val.get("has_po") {
             out.push(RuleCondition {
                 field: ConditionField::CustomField,
@@ -285,16 +292,149 @@ pub fn parse_policy(text: &str) -> Result<ProposedRule, ParseError> {
         });
     }
 
+    // Pattern 6: "invoices over $X from <department> go to <role>"
+    // Supports `$10k` shorthand (trailing k = *1000). Used for the marquee
+    // example's first clause ("Invoices over $10k from Marketing go to the CMO").
+    let re_route_amount_dept = Regex::new(
+        r"(?i)invoices?\s+over\s+\$?([\d,]+(?:k)?(?:\.\d{2})?)\s+from\s+([\w &]+?)\s+(?:go|are\s+routed|route)\s+to\s+(?:the\s+)?([\w-]+)",
+    )
+    .unwrap();
+    if let Some(caps) = re_route_amount_dept.captures(text) {
+        let amount_str = caps.get(1).unwrap().as_str();
+        let amount_cents = parse_amount_with_k_shorthand(amount_str).map_err(|msg| ParseError {
+            message: msg,
+            unparseable_segments: vec![amount_str.to_string()],
+        })?;
+        let amount = (amount_cents as f64) / 100.0;
+        let department = caps.get(2).unwrap().as_str().trim().to_lowercase();
+        let role = caps.get(3).unwrap().as_str().to_lowercase();
+
+        return Ok(ProposedRule {
+            name: format!("Route {} invoices over ${:.2} to {}", department, amount, role),
+            description: format!(
+                "Invoices over ${:.2} from {} are routed to {}",
+                amount, department, role
+            ),
+            priority: 35,
+            guardrail_kind: GuardrailKind::RoutingRule,
+            condition_json: serde_json::json!({
+                "amount_greater_than": amount_cents,
+                "department": department,
+            }),
+            action_json: serde_json::json!({
+                "action": "route_to_role",
+                "route_to_role": role,
+            }),
+            summary: format!(
+                "Invoices over ${:.2} from {} will be routed to {}.",
+                amount, department, role
+            ),
+        });
+    }
+
+    // Pattern 7: "(anything|invoices) from (a) new vendor need(s) <role> review/approval"
+    // Used for the marquee example's second clause ("anything from a new vendor
+    // needs Finance review before approval").
+    let re_new_vendor = Regex::new(
+        r"(?i)(?:anything|invoices?)\s+from\s+(?:a\s+)?new\s+vendors?\s+(?:need|require)s?\s+([\w-]+)\s+(?:review|approval)",
+    )
+    .unwrap();
+    if let Some(caps) = re_new_vendor.captures(text) {
+        let role = caps.get(1).unwrap().as_str().to_lowercase();
+
+        return Ok(ProposedRule {
+            name: format!("New vendor approval: {}", role),
+            description: format!("Invoices from new vendors require {} review", role),
+            priority: 60,
+            guardrail_kind: GuardrailKind::ApprovalLimit,
+            condition_json: serde_json::json!({
+                "new_vendor": true,
+            }),
+            action_json: serde_json::json!({
+                "action": "require_approval",
+                "approval_from_role": role,
+            }),
+            summary: format!(
+                "Any invoice from a new vendor will require {} review before approval.",
+                role
+            ),
+        });
+    }
+
     Err(ParseError {
         message: "Could not understand the policy. Try phrases like: \
             \"over $5000 require approval from manager\", \
             \"invoices from vendor Acme need review\", \
             \"block invoices over $10000 without PO\", \
             \"route travel to finance\", \
-            \"cap monthly spend on software at $5000\""
+            \"cap monthly spend on software at $5000\", \
+            \"invoices over $10k from Marketing go to the CMO\", \
+            \"anything from a new vendor needs Finance review\""
             .to_string(),
         unparseable_segments: vec![text.to_string()],
     })
+}
+
+/// Parse an amount string into cents, supporting the `$10k` shorthand where a
+/// trailing `k` (case-insensitive) multiplies by 1000. Commas are stripped.
+fn parse_amount_with_k_shorthand(amount_str: &str) -> Result<i64, String> {
+    let cleaned: String = amount_str.replace(",", "");
+    let has_k = cleaned.chars().any(|c| c.eq_ignore_ascii_case(&'k'));
+    let digits: String = cleaned
+        .chars()
+        .filter(|c| !c.eq_ignore_ascii_case(&'k'))
+        .collect();
+    let multiplier = if has_k { 1000.0 } else { 1.0 };
+    let amount: f64 = digits
+        .parse()
+        .map_err(|_| format!("Invalid amount: {}", amount_str))?;
+    Ok((amount * multiplier * 100.0) as i64)
+}
+
+/// Result of parsing a (possibly compound) NL policy.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedPolicies {
+    pub rules: Vec<ProposedRule>,
+    pub unparseable_segments: Vec<String>,
+}
+
+/// Parse a (possibly compound) natural-language policy into typed rules.
+///
+/// Splits the input on clause-level conjunctions (", and ", "; ", " and ")
+/// without breaking numeric strings like "$10,000" (commas are only followed
+/// by digits there, never whitespace). Each segment is parsed via `parse_policy`;
+/// successes are collected into `rules` and failing segments into
+/// `unparseable_segments`. Returns `Ok` as long as at least one rule parses;
+/// returns `Err` only when no segment parses.
+pub fn parse_policies(text: &str) -> Result<ParsedPolicies, ParseError> {
+    let re_split = Regex::new(r"(?i),\s+and\s+|;\s+|\s+and\s+").unwrap();
+    let segments: Vec<&str> = re_split.split(text).collect();
+
+    let mut rules = Vec::new();
+    let mut unparseable_segments = Vec::new();
+
+    for seg in segments {
+        let trimmed = seg.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match parse_policy(trimmed) {
+            Ok(rule) => rules.push(rule),
+            Err(_) => unparseable_segments.push(trimmed.to_string()),
+        }
+    }
+
+    if rules.is_empty() {
+        Err(ParseError {
+            message: "Could not understand the policy. None of the clauses parsed.".to_string(),
+            unparseable_segments,
+        })
+    } else {
+        Ok(ParsedPolicies {
+            rules,
+            unparseable_segments,
+        })
+    }
 }
 
 /// Evaluate a proposed rule against the last 90 days of invoices.
@@ -368,7 +508,11 @@ pub async fn preview_against_history(
 
         if let Some(ref _cat) = category_filter {
             // Category matching would need department field; include all for preview
-            // since department categorization is approximate
+            // since department categorization is approximate.
+            // The `department` and `new_vendor` conditions added by Patterns 6 & 7
+            // are likewise approximated here: real department/new-vendor signals are
+            // not present on historical invoice rows in this slice, so matched_count
+            // for those rules reflects only the amount/vendor_name filters above.
         }
 
         if matches {
@@ -472,5 +616,61 @@ mod tests {
     fn test_parse_with_commas() {
         let rule = parse_policy("over $10,000 require approval from director").unwrap();
         assert_eq!(rule.condition_json["amount_greater_than"], 1000000);
+    }
+
+    #[test]
+    fn test_parse_marquee_example_compound() {
+        // The exact marquee example from the issue (#382).
+        let text = "Invoices over $10k from Marketing go to the CMO, and anything from a new vendor needs Finance review before approval";
+        let parsed = parse_policies(text).expect("marquee example must parse");
+
+        assert_eq!(
+            parsed.rules.len(),
+            2,
+            "marquee example must produce exactly 2 rules"
+        );
+        assert!(
+            parsed.unparseable_segments.is_empty(),
+            "no segments should be unparseable: {:?}",
+            parsed.unparseable_segments
+        );
+
+        // First clause: routing rule with amount + department + route_to_role.
+        let first = &parsed.rules[0];
+        assert_eq!(first.guardrail_kind, GuardrailKind::RoutingRule);
+        assert_eq!(first.condition_json["amount_greater_than"], 1_000_000);
+        assert_eq!(first.condition_json["department"], "marketing");
+        assert_eq!(first.action_json["route_to_role"], "cmo");
+
+        // Second clause: new-vendor approval with approval_from_role.
+        let second = &parsed.rules[1];
+        assert_eq!(second.guardrail_kind, GuardrailKind::ApprovalLimit);
+        assert_eq!(second.condition_json["new_vendor"], true);
+        assert_eq!(second.action_json["approval_from_role"], "finance");
+    }
+
+    #[test]
+    fn test_parse_partial_compound_returns_parsed_and_segments() {
+        let text = "over $5000 require approval from manager, and frobnicate the widgets";
+        let parsed = parse_policies(text).expect("partial compound should still parse");
+
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(parsed.rules[0].guardrail_kind, GuardrailKind::ApprovalLimit);
+        assert_eq!(
+            parsed.rules[0].action_json["approval_from_role"],
+            "manager"
+        );
+
+        assert_eq!(parsed.unparseable_segments.len(), 1);
+        assert_eq!(parsed.unparseable_segments[0], "frobnicate the widgets");
+    }
+
+    #[test]
+    fn test_amount_k_shorthand() {
+        let rule = parse_policy("invoices over $10k from marketing go to the cmo").unwrap();
+        assert_eq!(rule.guardrail_kind, GuardrailKind::RoutingRule);
+        assert_eq!(rule.condition_json["amount_greater_than"], 1_000_000);
+        assert_eq!(rule.condition_json["department"], "marketing");
+        assert_eq!(rule.action_json["route_to_role"], "cmo");
     }
 }

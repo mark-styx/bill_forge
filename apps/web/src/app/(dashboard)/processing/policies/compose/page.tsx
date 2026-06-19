@@ -35,15 +35,41 @@ const EXAMPLE_POLICIES = [
   'cap monthly spend on software at $5000',
 ];
 
+/** Normalize a ComposeResponse (which may be legacy single-rule or new list-shaped)
+ * into a list of { rule, preview, warnings } items plus unparseable segments. */
+function normalizeResponse(data: ComposeResponse | null): {
+  items: NonNullable<ComposeResponse['proposed_rules']>;
+  unparseable: string[];
+} {
+  if (!data) return { items: [], unparseable: [] };
+  const items =
+    data.proposed_rules && data.proposed_rules.length > 0
+      ? data.proposed_rules
+      : data.proposed_rule && data.preview
+        ? [
+            {
+              rule: data.proposed_rule,
+              preview: data.preview,
+              warnings: data.warnings ?? [],
+            },
+          ]
+        : [];
+  return { items, unparseable: data.unparseable_segments ?? [] };
+}
+
 export default function PolicyComposerPage() {
   const [text, setText] = useState('');
   const [result, setResult] = useState<ComposeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Indices the admin has deselected via per-card checkbox. Empty means all
+  // rules are accepted (the default), which avoids an effect-based init race.
+  const [deselected, setDeselected] = useState<Set<number>>(new Set());
 
   const composeMutation = useMutation({
     mutationFn: (policyText: string) => policiesApi.compose(policyText),
     onSuccess: (data) => {
       setResult(data);
+      setDeselected(new Set());
       setError(null);
     },
     onError: (err) => {
@@ -57,30 +83,55 @@ export default function PolicyComposerPage() {
   });
 
   const commitMutation = useMutation({
-    mutationFn: ({ rule, originalText }: { rule: ProposedRule; originalText: string }) =>
-      policiesApi.commit(rule, originalText),
+    mutationFn: ({
+      rules,
+      originalText,
+    }: {
+      rules: ProposedRule[];
+      originalText: string;
+    }) => policiesApi.commit(rules, originalText),
     onSuccess: () => {
-      toast.success('Policy saved successfully');
+      toast.success('Policies saved successfully');
     },
     onError: (err) => {
       if (err instanceof ApiClientError) {
         toast.error(err.message);
       } else {
-        toast.error('Failed to save policy');
+        toast.error('Failed to save policies');
       }
     },
   });
+
+  // When a new parse result arrives, all rules are accepted by default.
+  const { items, unparseable } = normalizeResponse(result);
 
   const handlePreview = () => {
     if (!text.trim()) return;
     composeMutation.mutate(text.trim());
   };
 
+  const acceptedCount = items.reduce(
+    (n, _, idx) => n + (deselected.has(idx) ? 0 : 1),
+    0,
+  );
+
   const handleSave = () => {
-    if (!result) return;
-    commitMutation.mutate({
-      rule: result.proposed_rule,
-      originalText: text.trim(),
+    const rules = items
+      .filter((_, idx) => !deselected.has(idx))
+      .map((item) => item.rule);
+    if (rules.length === 0) return;
+    commitMutation.mutate({ rules, originalText: text.trim() });
+  };
+
+  const toggleSelected = (idx: number) => {
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
     });
   };
 
@@ -114,6 +165,7 @@ export default function PolicyComposerPage() {
             &ldquo;over $5000 require approval from manager&rdquo;,
             &ldquo;block invoices over $10000 without PO&rdquo;, or
             &ldquo;cap monthly spend on software at $5000&rdquo;.
+            You can also combine clauses with &ldquo;and&rdquo;.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -161,108 +213,144 @@ export default function PolicyComposerPage() {
         </CardContent>
       </Card>
 
-      {result && (
+      {items.length > 0 && (
         <>
-          {/* Parsed Rule Card */}
-          <Card data-testid="parsed-rule-card">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CheckCircle className="h-5 w-5 text-green-500" />
-                Parsed Rule
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div>
-                <span className="font-medium">{result.proposed_rule.name}</span>
-                <p className="text-sm text-muted-foreground">{result.proposed_rule.summary}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">{result.proposed_rule.guardrail_kind.replace('_', ' ')}</Badge>
-                <Badge variant="secondary">Priority: {result.proposed_rule.priority}</Badge>
-              </div>
-              {result.warnings.length > 0 && (
-                <div className="flex items-start gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 text-sm">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>{result.warnings[0]}</span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {/* Unparseable segments warning panel */}
+          {unparseable.length > 0 && (
+            <Card data-testid="unparseable-segments-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                  Unparseable Segments
+                </CardTitle>
+                <CardDescription>
+                  The following clauses could not be turned into rules and were ignored.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-1 text-sm" data-testid="unparseable-segments-list">
+                  {unparseable.map((seg, i) => (
+                    <li key={`${seg}-${i}`} className="italic text-muted-foreground">
+                      &ldquo;{seg}&rdquo;
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* 90-Day Preview */}
-          <Card data-testid="preview-card">
-            <CardHeader>
-              <CardTitle>90-Day Impact Preview</CardTitle>
-              <CardDescription>
-                How this rule would have applied to invoices from the last 90 days.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="text-center p-3 rounded bg-muted">
-                  <div className="text-2xl font-bold" data-testid="matched-count">
-                    {result.preview.matched_count}
+          {/* One card per parsed rule */}
+          {items.map((item, idx) => {
+            const isChecked = !deselected.has(idx);
+            return (
+              <Card key={idx} data-testid="parsed-rule-card">
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelected(idx)}
+                        className="h-4 w-4"
+                        data-testid={`rule-checkbox-${idx}`}
+                      />
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      Parsed Rule {items.length > 1 ? `#${idx + 1}` : ''}
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <span className="font-medium" data-testid={`rule-name-${idx}`}>
+                      {item.rule.name}
+                    </span>
+                    <p className="text-sm text-muted-foreground" data-testid={`rule-summary-${idx}`}>
+                      {item.rule.summary}
+                    </p>
                   </div>
-                  <div className="text-xs text-muted-foreground">Matched</div>
-                </div>
-                <div className="text-center p-3 rounded bg-muted">
-                  <div className="text-2xl font-bold">{result.preview.total_invoices}</div>
-                  <div className="text-xs text-muted-foreground">Total Invoices</div>
-                </div>
-                <div className="text-center p-3 rounded bg-muted">
-                  <div className="text-2xl font-bold">
-                    {result.preview.total_invoices > 0
-                      ? Math.round(
-                          (result.preview.matched_count / result.preview.total_invoices) * 100
-                        )
-                      : 0}
-                    %
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{item.rule.guardrail_kind.replace('_', ' ')}</Badge>
+                    <Badge variant="secondary">Priority: {item.rule.priority}</Badge>
                   </div>
-                  <div className="text-xs text-muted-foreground">Match Rate</div>
-                </div>
-              </div>
 
-              {result.preview.sample_invoices.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm" data-testid="sample-table">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-2 font-medium">Invoice #</th>
-                        <th className="text-left p-2 font-medium">Vendor</th>
-                        <th className="text-right p-2 font-medium">Amount</th>
-                        <th className="text-left p-2 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.preview.sample_invoices.map((inv: InvoiceSummary) => (
-                        <tr key={inv.id} className="border-b last:border-0">
-                          <td className="p-2">{inv.invoice_number ?? '-'}</td>
-                          <td className="p-2">{inv.vendor_name ?? '-'}</td>
-                          <td className="p-2 text-right">{formatAmount(inv.total_amount_cents)}</td>
-                          <td className="p-2">
-                            <Badge variant="outline">{inv.processing_status ?? '-'}</Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                  {/* 90-Day Impact Preview */}
+                  <div className="rounded-md border p-3 space-y-3">
+                    <div className="text-sm font-medium">90-Day Impact Preview</div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="text-center p-3 rounded bg-muted">
+                        <div className="text-2xl font-bold" data-testid={`matched-count-${idx}`}>
+                          {item.preview.matched_count}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Matched</div>
+                      </div>
+                      <div className="text-center p-3 rounded bg-muted">
+                        <div className="text-2xl font-bold">{item.preview.total_invoices}</div>
+                        <div className="text-xs text-muted-foreground">Total Invoices</div>
+                      </div>
+                      <div className="text-center p-3 rounded bg-muted">
+                        <div className="text-2xl font-bold">
+                          {item.preview.total_invoices > 0
+                            ? Math.round(
+                                (item.preview.matched_count / item.preview.total_invoices) * 100,
+                              )
+                            : 0}
+                          %
+                        </div>
+                        <div className="text-xs text-muted-foreground">Match Rate</div>
+                      </div>
+                    </div>
 
-              <Button
-                onClick={handleSave}
-                disabled={commitMutation.isPending}
-                data-testid="save-btn"
-              >
-                {commitMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <Save className="h-4 w-4 mr-2" />
-                )}
-                Save Policy
-              </Button>
-            </CardContent>
-          </Card>
+                    {item.preview.sample_invoices.length > 0 && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm" data-testid={`sample-table-${idx}`}>
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left p-2 font-medium">Invoice #</th>
+                              <th className="text-left p-2 font-medium">Vendor</th>
+                              <th className="text-right p-2 font-medium">Amount</th>
+                              <th className="text-left p-2 font-medium">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {item.preview.sample_invoices.map((inv: InvoiceSummary) => (
+                              <tr key={inv.id} className="border-b last:border-0">
+                                <td className="p-2">{inv.invoice_number ?? '-'}</td>
+                                <td className="p-2">{inv.vendor_name ?? '-'}</td>
+                                <td className="p-2 text-right">{formatAmount(inv.total_amount_cents)}</td>
+                                <td className="p-2">
+                                  <Badge variant="outline">{inv.processing_status ?? '-'}</Badge>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {item.warnings.length > 0 && (
+                      <div className="flex items-start gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 text-sm">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                        <span>{item.warnings[0]}</span>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          <Button
+            onClick={handleSave}
+            disabled={commitMutation.isPending || acceptedCount === 0}
+            data-testid="save-btn"
+          >
+            {commitMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Save className="h-4 w-4 mr-2" />
+            )}
+            Save {acceptedCount > 1 ? `${acceptedCount} Policies` : 'Policy'}
+          </Button>
         </>
       )}
     </div>
