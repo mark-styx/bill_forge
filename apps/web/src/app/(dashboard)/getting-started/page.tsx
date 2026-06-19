@@ -28,6 +28,7 @@ import {
   type ImplementationStatus,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
+import { computeGoLiveProjection, formatGoLiveDate } from './go-live-projection';
 
 const APPROVAL_TEMPLATES = [
   { id: 'amount', label: 'By amount threshold', description: 'Route invoices based on dollar value tiers.' },
@@ -57,12 +58,6 @@ function statusPillClasses(status: ImplementationPhaseStatus): string {
     case 'in_progress': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
     case 'complete': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
   }
-}
-
-function goLiveDate(startedAt: string): string {
-  const start = new Date(startedAt);
-  const target = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
-  return target.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function errorMessage(error: unknown): string {
@@ -403,6 +398,8 @@ export default function GettingStartedPage() {
   }
 
   const { phases } = status;
+  const projection = computeGoLiveProjection(status);
+  const projectionLabel = formatGoLiveDate(projection.targetDate);
   const onTrack = status.percent_complete === 100
     || (status.day_number <= 3 && phases.erp.status !== 'not_started')
     || (status.day_number <= 6 && (phases.erp.status === 'complete' || phases.approvals.status !== 'not_started'))
@@ -416,7 +413,7 @@ export default function GettingStartedPage() {
           <h1 className="text-2xl font-bold text-foreground">Implementation Wizard</h1>
         </div>
         <p className="text-muted-foreground">
-          Day <span data-testid="day-number">{status.day_number}</span> of 14
+          Day <span data-testid="day-number">{status.day_number}</span> of <span data-testid="total-days">{projection.totalDays}</span>
         </p>
         <div className="w-full bg-secondary rounded-full h-2.5">
           <div
@@ -759,7 +756,9 @@ export default function GettingStartedPage() {
           <span>
             {status.percent_complete === 100
               ? 'All phases complete - you are live!'
-              : `On track to go live by ${goLiveDate(status.started_at)}`}
+              : projection.riskAdjusted
+                ? `Projected go-live ${projectionLabel} (adjusted for ${projection.moduleCount} modules${projection.backtestFailed ? ', failed readiness backtest' : ''})`
+                : `On track to go live by ${projectionLabel}`}
           </span>
         </div>
       </div>
