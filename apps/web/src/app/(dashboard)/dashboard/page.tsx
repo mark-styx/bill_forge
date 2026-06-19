@@ -5,6 +5,7 @@ import { reportsApi, dashboardApi, auditApi, type AuditEntry } from '@/lib/api';
 import type { DashboardKpis } from '@billforge/shared-types';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
+import { useInvoiceEvents } from '@/hooks/useInvoiceEvents';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
 import { AnimatedCounter } from '@/components/ui/animated-counter';
 import { GlassCard, SpotlightCard } from '@/components/ui/glass-card';
@@ -98,6 +99,8 @@ export default function DashboardPage() {
   const { hasModule, user } = useAuthStore();
   const { getCurrentColors } = useThemeStore();
   const { getBrandGradient } = useOrganizationTheme();
+
+  useInvoiceEvents();
 
   const colors = getCurrentColors();
   const brandGradient = getBrandGradient();

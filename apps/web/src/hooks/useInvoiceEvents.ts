@@ -38,6 +38,16 @@ export function useInvoiceEvents() {
       // Invalidate the invoice list query
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
 
+      // Invoice state changes ripple through dashboard KPIs, queue counts,
+      // pending approvals, and the audit log - invalidate them all so every
+      // subscribed page (invoices, dashboard, processing) refreshes live.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['pending-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['work-queues'] });
+      queryClient.invalidateQueries({ queryKey: ['audit-recent'] });
+
       // If the payload contains an invoice_id, also invalidate the detail query
       try {
         const payload = JSON.parse(e.data);

@@ -83,6 +83,33 @@ describe('useInvoiceEvents', () => {
     unmount();
   });
 
+  it('invalidates dashboard, processing, and audit query keys on message', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function Wrapper({ children }: { children: ReactNode }) {
+      return createElement(QueryClientProvider, { client: qc }, children);
+    }
+
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+    const { unmount } = renderHook(() => useInvoiceEvents(), { wrapper: Wrapper });
+
+    const es = MockEventSource.instances[0];
+    es.dispatch({ invoice_id: 'abc-123', status: 'approved', kind: 'status_changed' });
+
+    // Dashboard / processing / audit keys must refresh on any invoice event
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['dashboard-summary'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['dashboard-metrics'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['dashboard-kpis'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pending-approvals'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['work-queues'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['audit-recent'] });
+
+    // Existing invoice keys are still invalidated
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['invoices'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['invoice', 'abc-123'] });
+
+    unmount();
+  });
+
   it('closes EventSource on unmount', () => {
     const { unmount } = renderHook(() => useInvoiceEvents(), { wrapper: createWrapper() });
     const es = MockEventSource.instances[0];

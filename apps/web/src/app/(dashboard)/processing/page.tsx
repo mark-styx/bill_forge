@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { workflowsApi, dashboardApi } from '@/lib/api';
+import { useInvoiceEvents } from '@/hooks/useInvoiceEvents';
 import {
   ClipboardCheck,
   Clock,
@@ -16,6 +17,8 @@ import {
 } from 'lucide-react';
 
 export default function ProcessingPage() {
+  useInvoiceEvents();
+
   const { data: approvals, isLoading } = useQuery({
     queryKey: ['pending-approvals'],
     queryFn: () => workflowsApi.listPendingApprovals(),

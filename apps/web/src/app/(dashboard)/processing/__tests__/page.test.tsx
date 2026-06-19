@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ProcessingPage from '../page';
 import { workflowsApi, dashboardApi } from '@/lib/api';
 
+vi.mock('@/hooks/useInvoiceEvents', () => ({
+  useInvoiceEvents: vi.fn(),
+}));
+
 vi.mock('@/lib/api', () => ({
   workflowsApi: {
     listPendingApprovals: vi.fn(),
