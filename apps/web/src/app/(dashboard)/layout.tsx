@@ -32,6 +32,7 @@ import {
   Percent,
   CalendarClock,
   Eye,
+  Radar,
 } from 'lucide-react';
 
 interface NavItem {
@@ -71,6 +72,7 @@ const navigation: NavItem[] = [
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },
   { name: 'Reports', href: '/reports', icon: BarChart3, module: 'reporting' },
+  { name: 'Cash Position War Room', href: '/finance/war-room', icon: Radar, module: 'reporting' },
   { name: 'Discounts', href: '/discounts', icon: Percent, module: null },
   { name: 'Month-End Close', href: '/close', icon: CalendarClock, module: null },
   { name: 'Winston AI Assistant', href: '/ai-assistant', icon: Sparkles, module: 'ai_assistant' },
