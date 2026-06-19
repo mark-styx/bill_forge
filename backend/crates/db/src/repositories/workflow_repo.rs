@@ -32,6 +32,74 @@ impl WorkflowRepositoryImpl {
     pub fn new(pool: Arc<PgPool>) -> Self {
         Self { pool }
     }
+
+    /// Best-effort fanout of an in-app notification to every approver named in
+    /// `request.requested_from`. Mirrors the producer contract documented in the
+    /// in_app_notifications migration (refs #375): title carries an invoice ref
+    /// and a deep-link to /approvals/{id}. Failures bubble as `Error::Database`
+    /// to the single call site, which logs them and swallows.
+    ///
+    /// `Role` targets resolve to no specific user_id, so they are intentionally
+    /// skipped here; the inbox is per-user, and role-to-user fanout is a future
+    /// producer concern (the schema accepts them without change).
+    async fn fanout_approval_notification(
+        &self,
+        tenant_id: &TenantId,
+        request: &ApprovalRequest,
+    ) -> std::result::Result<(), Error> {
+        use billforge_core::domain::ApprovalTarget;
+
+        let approver_ids: Vec<Uuid> = match &request.requested_from {
+            ApprovalTarget::User(user_id) => vec![user_id.0],
+            ApprovalTarget::AnyOf(ids) | ApprovalTarget::AllOf(ids) => {
+                ids.iter().map(|id| id.0).collect()
+            }
+            ApprovalTarget::Role(_) => vec![],
+        };
+
+        if approver_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Resolve a human-readable invoice ref for the title. Lookup failures
+        // fall back to the invoice_id prefix so the notification still lands.
+        let invoice_ref: String = sqlx::query_scalar::<_, Option<String>>(
+            r#"SELECT invoice_number FROM invoices WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(request.invoice_id.0)
+        .bind(*tenant_id.as_uuid())
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to load invoice ref: {}", e)))?
+        .flatten()
+        .unwrap_or_else(|| request.invoice_id.0.to_string());
+
+        let title = format!("Approval needed: {}", invoice_ref);
+        let message = format!(
+            "Approval request {} is pending your review.",
+            request.id
+        );
+        let link = format!("/processing/approvals/{}", request.id);
+
+        for approver_id in approver_ids {
+            sqlx::query(
+                r#"INSERT INTO in_app_notifications
+                       (tenant_id, user_id, kind, title, message, link, created_at)
+                   VALUES ($1, $2, 'approval_request', $3, $4, $5, $6)"#,
+            )
+            .bind(*tenant_id.as_uuid())
+            .bind(approver_id)
+            .bind(&title)
+            .bind(&message)
+            .bind(&link)
+            .bind(Utc::now())
+            .execute(&*self.pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to insert in-app notification: {}", e)))?;
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -940,6 +1008,20 @@ impl ApprovalRepository for WorkflowRepositoryImpl {
         .execute(&*self.pool)
         .await
         .map_err(|e| Error::Database(format!("Failed to create approval request: {}", e)))?;
+
+        // Best-effort in-app notification fanout for the bell (refs #375).
+        // Wrapped so a feed write can never fail the approval-request POST.
+        if let Err(e) = self
+            .fanout_approval_notification(tenant_id, &request)
+            .await
+        {
+            tracing::warn!(
+                approval_request_id = %request.id,
+                tenant_id = %tenant_id.as_uuid(),
+                error = %e,
+                "Failed to write in-app approval notification; approval request still created",
+            );
+        }
 
         Ok(ApprovalRequest {
             expires_at: Some(expires_at),

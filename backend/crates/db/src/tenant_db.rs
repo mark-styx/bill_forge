@@ -73,6 +73,18 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // In-app notification inbox (refs #375). Lives in the tenant DB because the
+    // primary producer — ApprovalRepository::create, which runs on this tenant
+    // pool — writes here immediately after inserting an approval request. The
+    // GET/POST/DELETE handlers under /api/v1/notifications read/write the same
+    // tenant-scoped rows.
+    apply_migration(
+        pool,
+        "134_add_in_app_notifications.sql",
+        include_str!("../../../migrations/134_add_in_app_notifications.sql"),
+    )
+    .await?;
+
     // Non-workflow tables that were historically bundled here
     apply_migration(
         pool,

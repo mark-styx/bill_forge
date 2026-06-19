@@ -10,7 +10,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     routing::{get, post, put},
     Json, Router,
 };
@@ -19,6 +19,11 @@ use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        // In-app inbox feed (refs #375)
+        .route("/", get(list_in_app_notifications))
+        .route("/:id/read", post(mark_in_app_notification_read))
+        .route("/read-all", post(mark_all_in_app_notifications_read))
+        .route("/:id", axum::routing::delete(delete_in_app_notification))
         // Slack OAuth
         .route("/slack/install", post(install_slack))
         .route("/slack/callback", get(slack_callback))
@@ -505,6 +510,188 @@ async fn disconnect_teams(
     .execute(&*state.db.metadata())
     .await
     .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ===========================================================================
+// In-app notification inbox (refs #375)
+//
+// Plain `sqlx::query` (not the `!` macro) is used here because the
+// in_app_notifications table is created by migration 134 and the workspace
+// is built with SQLX_OFFLINE=true; the compile-time-checked macro would
+// require a freshly-prepared .sqlx cache entry for every query against this
+// new table.
+// ===========================================================================
+
+#[derive(Debug, Serialize)]
+pub struct InAppNotificationItem {
+    pub id: Uuid,
+    pub kind: String,
+    pub title: String,
+    pub message: Option<String>,
+    pub link: Option<String>,
+    pub read: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InAppNotificationFeed {
+    pub items: Vec<InAppNotificationItem>,
+    pub unread_count: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct InAppNotificationRow {
+    id: Uuid,
+    kind: String,
+    title: String,
+    message: Option<String>,
+    link: Option<String>,
+    read_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// GET /api/v1/notifications — current user's in-app feed (newest first).
+#[utoipa::path(get, path = "/api/v1/notifications", tag = "Notifications",
+    responses((status = 200, description = "User in-app notification feed")))]
+async fn list_in_app_notifications(
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    State(state): State<AppState>,
+) -> ApiResult<Json<InAppNotificationFeed>> {
+    // in_app_notifications lives in the tenant DB (the approval-request producer
+    // writes there from the tenant pool), so resolve the tenant pool. RLS scopes
+    // both queries to app.current_tenant_id; the explicit user_id filter narrows
+    // further to the calling user's inbox.
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let rows = sqlx::query_as::<_, InAppNotificationRow>(
+        r#"
+        SELECT id, kind, title, message, link, read_at, created_at
+        FROM in_app_notifications
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+        "#,
+    )
+    .bind(&user.user_id.0)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    let unread_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::bigint FROM in_app_notifications
+        WHERE user_id = $1 AND read_at IS NULL
+        "#,
+    )
+    .bind(&user.user_id.0)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    let items = rows
+        .into_iter()
+        .map(|r| InAppNotificationItem {
+            id: r.id,
+            kind: r.kind,
+            title: r.title,
+            message: r.message,
+            link: r.link,
+            read: r.read_at.is_some(),
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(InAppNotificationFeed {
+        items,
+        unread_count,
+    }))
+}
+
+/// POST /api/v1/notifications/{id}/read — mark a single notification read.
+#[utoipa::path(post, path = "/api/v1/notifications/{id}/read", tag = "Notifications",
+    params(("id" = Uuid, Path, description = "Notification id")),
+    responses((status = 200, description = "Notification marked read"), (status = 404, description = "Notification not found for this user/tenant")))]
+async fn mark_in_app_notification_read(
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE in_app_notifications
+        SET read_at = NOW()
+        WHERE id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(&user.user_id.0)
+    .execute(&*pool)
+    .await
+    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError(billforge_core::Error::NotFound {
+            resource_type: "Notification".to_string(),
+            id: id.to_string(),
+        }));
+    }
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /api/v1/notifications/read-all — mark all unread notifications read.
+#[utoipa::path(post, path = "/api/v1/notifications/read-all", tag = "Notifications",
+    responses((status = 200, description = "All notifications marked read")))]
+async fn mark_all_in_app_notifications_read(
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    State(state): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    sqlx::query(
+        r#"
+        UPDATE in_app_notifications
+        SET read_at = NOW()
+        WHERE user_id = $1 AND read_at IS NULL
+        "#,
+    )
+    .bind(&user.user_id.0)
+    .execute(&*pool)
+    .await
+    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// DELETE /api/v1/notifications/{id} — hard delete a single notification.
+#[utoipa::path(delete, path = "/api/v1/notifications/{id}", tag = "Notifications",
+    params(("id" = Uuid, Path, description = "Notification id")),
+    responses((status = 200, description = "Notification deleted"), (status = 404, description = "Notification not found for this user/tenant")))]
+async fn delete_in_app_notification(
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let result = sqlx::query(
+        r#"
+        DELETE FROM in_app_notifications
+        WHERE id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(&user.user_id.0)
+    .execute(&*pool)
+    .await
+    .map_err(|e| ApiError(billforge_core::Error::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError(billforge_core::Error::NotFound {
+            resource_type: "Notification".to_string(),
+            id: id.to_string(),
+        }));
+    }
 
     Ok(Json(serde_json::json!({ "success": true })))
 }

@@ -2259,8 +2259,44 @@ export interface UpdateNotificationPreferencesInput {
   quiet_hours_timezone?: string;
 }
 
+// ---------------------------------------------------------------------------
+// In-app notification inbox (refs #375)
+//
+// Mirrors the JSON shape returned by GET /api/v1/notifications. The bell in
+// notification-center.tsx consumes a `Notification` with a small fixed set of
+// `type` values ('info' | 'success' | 'warning' | 'error'), so callers map
+// `kind` -> `type` at the call site (see apps/web/src/app/(dashboard)/layout.tsx).
+// ---------------------------------------------------------------------------
+
+export interface InAppNotification {
+  id: string;
+  kind: string;
+  title: string;
+  message: string | null;
+  link: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+export interface InAppNotificationFeed {
+  items: InAppNotification[];
+  unread_count: number;
+}
+
 // Notifications API
 export const notificationsApi = {
+  // In-app inbox feed (refs #375)
+  list: () => api.get<InAppNotificationFeed>('/api/v1/notifications'),
+
+  markRead: (id: string) =>
+    api.post<{ success: boolean }>(`/api/v1/notifications/${encodeURIComponent(id)}/read`),
+
+  markAllRead: () =>
+    api.post<{ success: boolean }>('/api/v1/notifications/read-all'),
+
+  remove: (id: string) =>
+    api.delete<{ success: boolean }>(`/api/v1/notifications/${encodeURIComponent(id)}`),
+
   // Slack
   installSlack: (redirectUrl?: string) => {
     const qs = redirectUrl ? `?redirect_url=${encodeURIComponent(redirectUrl)}` : '';

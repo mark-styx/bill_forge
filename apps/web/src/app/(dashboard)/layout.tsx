@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/stores/auth';
@@ -8,6 +8,7 @@ import { useThemeStore } from '@/stores/theme';
 import { useOrganizationTheme } from '@/components/organization-theme-provider';
 import { CommandPalette, CommandPaletteTrigger } from '@/components/ui/command-palette';
 import { NotificationCenter, type Notification } from '@/components/ui/notification-center';
+import { notificationsApi } from '@/lib/api';
 import {
   FileText,
   ClipboardCheck,
@@ -99,6 +100,51 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const brandGradient = getBrandGradient();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  // Map a server-sourced in-app notification kind onto the bell's presentational
+  // Notification type (refs #375). Approval requests are actionable -> 'warning'
+  // so they stand out; everything else falls back to 'info'.
+  const toNotification = (n: {
+    id: string;
+    kind: string;
+    title: string;
+    message: string | null;
+    link: string | null;
+    read: boolean;
+    created_at: string;
+  }): Notification => ({
+    id: n.id,
+    type: n.kind === 'approval_request' ? 'warning' : 'info',
+    title: n.title,
+    message: n.message ?? '',
+    timestamp: n.created_at,
+    read: n.read,
+    actionUrl: n.link ?? undefined,
+    actionLabel: n.link ? 'View' : undefined,
+    module: 'processing',
+  });
+
+  const refreshNotifications = useCallback(async () => {
+    // Best-effort: on 401/forbidden or any error, leave the list as-is so the
+    // bell never crashes the dashboard (the API client surfaces auth failures
+    // by rejecting; we swallow them here).
+    try {
+      const feed = await notificationsApi.list();
+      setNotifications(feed.items.map(toNotification));
+    } catch {
+      // Intentionally ignored; bell degrades to last-known state (or empty).
+    }
+    // toNotification is a stable pure mapper; not a dependency that needs listing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch on mount and poll every 60s. Polling is the smallest viable transport
+  // (SSE/WebSocket push is explicitly out of scope for this slice).
+  useEffect(() => {
+    refreshNotifications();
+    const interval = setInterval(refreshNotifications, 60_000);
+    return () => clearInterval(interval);
+  }, [refreshNotifications]);
 
   // Close sidebar on Escape key
   useEffect(() => {
@@ -316,14 +362,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   setNotifications((prev) =>
                     prev.map((n) => (n.id === id ? { ...n, read: true } : n))
                   );
+                  // Fire-and-forget; the optimistic update already reflects intent.
+                  notificationsApi.markRead(id).catch(() => { /* bell degrades */ });
                 }}
                 onMarkAllAsRead={() => {
                   setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                  notificationsApi.markAllRead().catch(() => { /* bell degrades */ });
                 }}
                 onDelete={(id) => {
                   setNotifications((prev) => prev.filter((n) => n.id !== id));
+                  notificationsApi.remove(id).catch(() => { /* bell degrades */ });
                 }}
-                onClearAll={() => setNotifications([])}
+                onClearAll={() => {
+                  // Bell's "clear all" maps to "mark all read" server-side so the
+                  // unread badge goes to zero without nuking history for everyone.
+                  setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                  notificationsApi.markAllRead().catch(() => { /* bell degrades */ });
+                }}
               />
 
               {/* Settings */}
