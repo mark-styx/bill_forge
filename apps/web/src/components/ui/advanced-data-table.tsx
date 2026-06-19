@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
 import {
   ChevronDown,
@@ -201,6 +202,102 @@ export function AdvancedDataTable<T extends Record<string, any>>({
   const isAllSelected = data.length > 0 && selectedRows.length === data.length;
   const isSomeSelected = selectedRows.length > 0 && selectedRows.length < data.length;
 
+  // Virtualization: only window rows when the dataset is large enough to jank.
+  // Below the threshold we render every row verbatim so small pages stay byte-identical.
+  const VIRTUALIZE_THRESHOLD = 50;
+  const shouldVirtualize = !isLoading && data.length > VIRTUALIZE_THRESHOLD;
+  const tableContainerRef = React.useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: shouldVirtualize ? data.length : 0,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => 56,
+    overscan: 8,
+  });
+
+  // Total column count (used for spacer rows, loading + empty states)
+  const colSpan = visibleColumns.length + (selectable ? 1 : 0) + (rowActions ? 1 : 0);
+
+  // Shared row renderer used by both the virtualized and non-virtualized paths so
+  // row markup stays byte-identical between them.
+  const renderRow = (item: T, index: number) => {
+    const key = getRowKey ? getRowKey(item) : index.toString();
+    const isSelected = selectedRows.includes(key);
+
+    return (
+      <tr
+        key={key}
+        onClick={() => onRowClick?.(item)}
+        className={cn(
+          'transition-colors',
+          onRowClick && 'cursor-pointer',
+          highlightOnHover && 'hover:bg-secondary/50',
+          striped && index % 2 === 1 && 'bg-secondary/20',
+          isSelected && 'bg-primary/5',
+          getRowClassName?.(item, index)
+        )}
+      >
+        {/* Row checkbox */}
+        {selectable && (
+          <td className="w-12 px-4 py-3" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => handleSelectRow(item)}
+              className="rounded border-border text-primary focus:ring-primary"
+            />
+          </td>
+        )}
+        {visibleColumns.map((column) => {
+          const value = column.accessorKey
+            ? item[column.accessorKey]
+            : undefined;
+          const content = column.cell
+            ? column.cell(item, index)
+            : value;
+
+          return (
+            <td
+              key={column.id}
+              className={cn(
+                'px-4 text-foreground',
+                compact ? 'py-2' : 'py-3',
+                column.align === 'center' && 'text-center',
+                column.align === 'right' && 'text-right',
+                column.sticky === 'left' && 'sticky left-0 bg-card',
+                column.sticky === 'right' && 'sticky right-0 bg-card'
+              )}
+            >
+              {content}
+            </td>
+          );
+        })}
+        {/* Row actions */}
+        {rowActions && (
+          <td className="w-12 px-4 py-3" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-1 rounded hover:bg-secondary">
+                  <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {rowActions(item)}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </td>
+        )}
+      </tr>
+    );
+  };
+
+  // Virtualized window: top/bottom spacer rows preserve total scroll height while
+  // only the visible rows + overscan are mounted in the DOM.
+  const virtualItems = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
+  const totalSize = shouldVirtualize ? rowVirtualizer.getTotalSize() : 0;
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+  const paddingBottom =
+    virtualItems.length > 0 ? totalSize - virtualItems[virtualItems.length - 1].end : 0;
+
   return (
     <div className={cn('space-y-4', className)}>
       {/* Toolbar */}
@@ -351,10 +448,12 @@ export function AdvancedDataTable<T extends Record<string, any>>({
 
       {/* Table */}
       <div
+        ref={tableContainerRef}
         className={cn(
-          'overflow-x-auto rounded-xl bg-card',
+          'overflow-auto rounded-xl bg-card',
           bordered ? 'border border-border' : 'shadow-sm'
         )}
+        style={shouldVirtualize ? { maxHeight: '70vh' } : undefined}
       >
         <table className="w-full text-sm">
           <thead
@@ -365,7 +464,7 @@ export function AdvancedDataTable<T extends Record<string, any>>({
             <tr className="border-b border-border">
               {/* Select all checkbox */}
               {selectable && (
-                <th className="w-12 px-4 py-3">
+                <th scope="col" className="w-12 px-4 py-3">
                   <input
                     type="checkbox"
                     checked={isAllSelected}
@@ -377,41 +476,73 @@ export function AdvancedDataTable<T extends Record<string, any>>({
                   />
                 </th>
               )}
-              {visibleColumns.map((column) => (
-                <th
-                  key={column.id}
-                  className={cn(
-                    'px-4 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider',
-                    compact ? 'py-2' : 'py-3',
-                    column.sortable && 'cursor-pointer select-none hover:text-foreground',
-                    column.align === 'center' && 'text-center',
-                    column.align === 'right' && 'text-right',
-                    column.sticky === 'left' && 'sticky left-0 bg-card z-20',
-                    column.sticky === 'right' && 'sticky right-0 bg-card z-20'
-                  )}
-                  style={{
-                    width: column.width,
-                    minWidth: column.minWidth,
-                  }}
-                  onClick={() => column.sortable && handleSort(column.id)}
-                >
-                  <div className="flex items-center gap-1.5">
-                    {column.header}
-                    {column.sortable && sortColumn === column.id && (
-                      sortDirection === 'asc' ? (
-                        <ChevronUp className="w-3.5 h-3.5" />
-                      ) : sortDirection === 'desc' ? (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      ) : null
+              {visibleColumns.map((column) => {
+                const headerLabel =
+                  typeof column.header === 'string' ? column.header : column.id;
+                const isCurrentSort = column.sortable && sortColumn === column.id;
+                const ariaSort = column.sortable
+                  ? isCurrentSort && sortDirection === 'asc'
+                    ? 'ascending'
+                    : isCurrentSort && sortDirection === 'desc'
+                      ? 'descending'
+                      : 'none'
+                  : undefined;
+                const nextDirection =
+                  isCurrentSort && sortDirection === 'asc'
+                    ? 'descending'
+                    : isCurrentSort && sortDirection === 'desc'
+                      ? 'none'
+                      : 'ascending';
+
+                return (
+                  <th
+                    key={column.id}
+                    scope="col"
+                    role={column.sortable ? 'columnheader' : undefined}
+                    aria-sort={ariaSort}
+                    className={cn(
+                      'px-4 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider',
+                      compact ? 'py-2' : 'py-3',
+                      column.sortable && 'cursor-pointer select-none hover:text-foreground',
+                      column.align === 'center' && 'text-center',
+                      column.align === 'right' && 'text-right',
+                      column.sticky === 'left' && 'sticky left-0 bg-card z-20',
+                      column.sticky === 'right' && 'sticky right-0 bg-card z-20'
                     )}
-                    {column.sortable && sortColumn !== column.id && (
-                      <ChevronDown className="w-3.5 h-3.5 opacity-0 group-hover:opacity-30" />
+                    style={{
+                      width: column.width,
+                      minWidth: column.minWidth,
+                    }}
+                  >
+                    {column.sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSort(column.id)}
+                        aria-label={`Sort by ${headerLabel} ${nextDirection}`}
+                        style={{ font: 'inherit', color: 'inherit' }}
+                        className="flex items-center gap-1.5 -mx-1 -my-0.5 px-1 py-0.5 bg-transparent border-0 cursor-pointer select-none"
+                      >
+                        {column.header}
+                        {isCurrentSort &&
+                          (sortDirection === 'asc' ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : sortDirection === 'desc' ? (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          ) : null)}
+                        {column.sortable && !isCurrentSort && (
+                          <ChevronDown className="w-3.5 h-3.5 opacity-0 group-hover:opacity-30" />
+                        )}
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        {column.header}
+                      </div>
                     )}
-                  </div>
-                </th>
-              ))}
+                  </th>
+                );
+              })}
               {/* Row actions column */}
-              {rowActions && <th className="w-12 px-4 py-3" />}
+              {rowActions && <th scope="col" className="w-12 px-4 py-3" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -450,77 +581,30 @@ export function AdvancedDataTable<T extends Record<string, any>>({
                       )}
                 </td>
               </tr>
-            ) : (
-              data.map((item, index) => {
-                const key = getRowKey ? getRowKey(item) : index.toString();
-                const isSelected = selectedRows.includes(key);
-
-                return (
-                  <tr
-                    key={key}
-                    onClick={() => onRowClick?.(item)}
-                    className={cn(
-                      'transition-colors',
-                      onRowClick && 'cursor-pointer',
-                      highlightOnHover && 'hover:bg-secondary/50',
-                      striped && index % 2 === 1 && 'bg-secondary/20',
-                      isSelected && 'bg-primary/5',
-                      getRowClassName?.(item, index)
-                    )}
-                  >
-                    {/* Row checkbox */}
-                    {selectable && (
-                      <td className="w-12 px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => handleSelectRow(item)}
-                          className="rounded border-border text-primary focus:ring-primary"
-                        />
-                      </td>
-                    )}
-                    {visibleColumns.map((column) => {
-                      const value = column.accessorKey
-                        ? item[column.accessorKey]
-                        : undefined;
-                      const content = column.cell
-                        ? column.cell(item, index)
-                        : value;
-
-                      return (
-                        <td
-                          key={column.id}
-                          className={cn(
-                            'px-4 text-foreground',
-                            compact ? 'py-2' : 'py-3',
-                            column.align === 'center' && 'text-center',
-                            column.align === 'right' && 'text-right',
-                            column.sticky === 'left' && 'sticky left-0 bg-card',
-                            column.sticky === 'right' && 'sticky right-0 bg-card'
-                          )}
-                        >
-                          {content}
-                        </td>
-                      );
-                    })}
-                    {/* Row actions */}
-                    {rowActions && (
-                      <td className="w-12 px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button className="p-1 rounded hover:bg-secondary">
-                              <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {rowActions(item)}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    )}
+            ) : shouldVirtualize ? (
+              <>
+                {paddingTop > 0 && (
+                  <tr aria-hidden="true" style={{ height: paddingTop }}>
+                    <td
+                      colSpan={colSpan}
+                      style={{ height: paddingTop, padding: 0, border: 'none' }}
+                    />
                   </tr>
-                );
-              })
+                )}
+                {virtualItems.map((virtualItem) =>
+                  renderRow(data[virtualItem.index], virtualItem.index)
+                )}
+                {paddingBottom > 0 && (
+                  <tr aria-hidden="true" style={{ height: paddingBottom }}>
+                    <td
+                      colSpan={colSpan}
+                      style={{ height: paddingBottom, padding: 0, border: 'none' }}
+                    />
+                  </tr>
+                )}
+              </>
+            ) : (
+              data.map((item, index) => renderRow(item, index))
             )}
           </tbody>
         </table>
