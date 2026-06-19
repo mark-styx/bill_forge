@@ -580,6 +580,16 @@ pub async fn run_ai_rls_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // RLS on migration-005 workflow tables (approval_requests, queue_items,
+    // approval_delegations) that #368 identified as uncovered.  Must run after
+    // 120 so the billforge_app GRANT at the end of the migration succeeds.
+    apply_migration(
+        pool,
+        "133_enable_rls_workflow_tables.sql",
+        include_str!("../../../migrations/133_enable_rls_workflow_tables.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

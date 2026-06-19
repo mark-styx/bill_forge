@@ -157,6 +157,10 @@ const RLS_TABLES: &[&str] = &[
     "vendor_bank_accounts",
     "vendor_statement_settings",
     "vendor_statements",
+    // Migration-005 workflow tables covered by migration 133 (#368)
+    "approval_requests",
+    "queue_items",
+    "approval_delegations",
 ];
 
 // ===========================================================================
@@ -412,6 +416,109 @@ async fn rls_vendor_contacts_cross_tenant_blocked() {
         .await
         .expect("count");
     assert_eq!(count.0, 0, "Wrong tenant should see 0 vendor_contacts");
+
+    teardown(&manager, &tenant_id).await;
+}
+
+// ===========================================================================
+// Test 6: approval_requests — bare-id UPDATE no-ops cross-tenant (#368)
+//
+// Reproduces the dangerous pattern from approval_expiry::mark_sla_alert_sent
+// (`UPDATE approval_requests ... WHERE id = $1` with no tenant_id predicate)
+// and asserts that, with RLS forced, the foreign row is invisible to the
+// wrong tenant so the bare-id UPDATE no-ops instead of mutating it.
+// ===========================================================================
+
+#[tokio::test]
+#[ignore = "requires billforge_app role + RLS-aware fixtures; see #345 follow-up"]
+async fn rls_approval_requests_cross_tenant_blocked() {
+    let (manager, tenant_id, admin_pool, pool) = setup("appr").await;
+    let tenant_uuid = *tenant_id.as_uuid();
+
+    let (vendor_id, user_id) = seed_vendor_and_user(&admin_pool, tenant_uuid).await;
+
+    // Seed an invoice (approval_requests.invoice_id FK)
+    let invoice_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO invoices (id, tenant_id, vendor_id, vendor_name, invoice_number,
+                                total_amount_cents, document_id, created_by)
+         VALUES ($1, $2, $3, 'V', 'INV-APPR', 100, $4, $5)",
+    )
+    .bind(invoice_id)
+    .bind(tenant_uuid)
+    .bind(vendor_id)
+    .bind(Uuid::new_v4())
+    .bind(user_id)
+    .execute(&admin_pool)
+    .await
+    .expect("seed invoice");
+
+    // Seed an approval_request for that invoice under the correct tenant
+    let approval_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO approval_requests (id, tenant_id, invoice_id, requested_from, status)
+         VALUES ($1, $2, $3, $4, 'pending')",
+    )
+    .bind(approval_id)
+    .bind(tenant_uuid)
+    .bind(invoice_id)
+    .bind(serde_json::json!([{"user_id": user_id}]))
+    .execute(&admin_pool)
+    .await
+    .expect("seed approval_request");
+
+    // Correct tenant sees the row
+    set_tenant(&pool, Some(tenant_uuid)).await;
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM approval_requests")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert!(count.0 >= 1, "Correct tenant should see approval_requests");
+
+    // Wrong tenant sees zero rows
+    let wrong_tenant = Uuid::new_v4();
+    set_tenant(&pool, Some(wrong_tenant)).await;
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM approval_requests")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(
+        count.0, 0,
+        "Wrong tenant should see 0 approval_requests"
+    );
+
+    // Simulate mark_sla_alert_sent's bare-id UPDATE under the wrong tenant.
+    // RLS makes the row invisible, so rows_affected() must be 0 instead of
+    // mutating the foreign tenant's approval_request.
+    let result = sqlx::query(
+        r#"
+        UPDATE approval_requests
+        SET breached_notified_at = NOW(), escalated_at = COALESCE(escalated_at, NOW()), updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(approval_id)
+    .execute(&pool)
+    .await
+    .expect("UPDATE should execute (RLS hides rows rather than erroring)");
+    assert_eq!(
+        result.rows_affected(),
+        0,
+        "Bare-id UPDATE under wrong tenant must no-op (RLS hides the row)"
+    );
+
+    // Sanity: the foreign tenant's row was not mutated
+    set_tenant(&pool, Some(tenant_uuid)).await;
+    let (notified,): (Option<chrono::DateTime<chrono::Utc>>,) =
+        sqlx::query_as("SELECT breached_notified_at FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch approval_request");
+    assert!(
+        notified.is_none(),
+        "approval_requests.breached_notified_at must remain NULL after wrong-tenant UPDATE"
+    );
 
     teardown(&manager, &tenant_id).await;
 }
