@@ -1,8 +1,20 @@
-//! Private-inference OCR provider (refs #334)
+//! Customer-hosted remote OCR provider (refs #334)
 //!
-//! Routes OCR requests to a customer-managed endpoint inside the tenant's
-//! VPC / on-prem cluster.  The endpoint is expected to accept a POST with
-//! raw document bytes and return an [`OcrExtractionResult`] JSON payload.
+//! Routes OCR requests to a customer-managed endpoint reachable over HTTP.
+//! The endpoint is expected to accept a POST with raw document bytes and
+//! return an [`OcrExtractionResult`] JSON payload.
+//!
+//! **This is NOT in-process inference.** Document bytes leave the BillForge
+//! process and are sent over the network to the URL configured in
+//! `tenant_private_inference.ocr_endpoint_url`. The endpoint may live in
+//! the tenant's VPC / on-prem cluster, but from BillForge's perspective it
+//! is a remote service reached via outbound HTTP. This provider does **not**
+//! satisfy a tenant's `local_ocr_required` policy — for in-process OCR see
+//! the sibling `tesseract` module.
+//!
+//! Callers that need to honor `local_ocr_required` must gate dispatch via
+//! `super::try_private_inference_ocr`, which short-circuits when the
+//! policy is on.
 //!
 //! Health is tracked lazily: on dispatch failure the row is marked
 //! `unhealthy` so subsequent requests fall back to the standard provider
@@ -140,8 +152,14 @@ pub async fn load_for_tenant(
 // Run private OCR
 // ---------------------------------------------------------------------------
 
-/// POST document bytes to the tenant's private OCR endpoint and parse the
-/// standardised [`OcrExtractionResult`] response.
+/// POST document bytes to the tenant's customer-hosted OCR endpoint and
+/// parse the standardised [`OcrExtractionResult`] response.
+///
+/// **Network egress.** This performs an outbound HTTP POST of
+/// `document_bytes` to `cfg.ocr_endpoint_url`. It is NOT in-process
+/// inference and does NOT satisfy a `local_ocr_required` policy. Callers
+/// that need to honor that policy must gate dispatch themselves; see
+/// `super::try_private_inference_ocr`.
 pub async fn run_private_ocr(
     cfg: &PrivateInferenceConfig,
     document_bytes: &[u8],
@@ -158,6 +176,17 @@ pub async fn run_private_ocr(
     if cfg.health_status != HealthStatus::Healthy {
         return Err(PrivateInferenceError::Unhealthy);
     }
+
+    // Audit log: document bytes are about to leave the BillForge process.
+    // Defense in depth — the `local_ocr_required` policy is enforced by the
+    // caller in `super::try_private_inference_ocr`, but emit a structured
+    // event here so operators can detect leakage if a future caller forgets
+    // the guard.
+    tracing::info!(
+        endpoint = %url,
+        bytes = document_bytes.len(),
+        "private_inference.dispatch — POSTing document bytes to customer-hosted OCR endpoint (outbound HTTP, not in-process)"
+    );
 
     let client = reqwest::Client::builder()
         .timeout(OCR_TIMEOUT)

@@ -573,7 +573,7 @@ export default function GettingStartedPage() {
             <div className="flex items-center gap-3">
               <SubItemToggle
                 checked={phases.configuration.configuration.privacy_mode.enabled}
-                label="Require local OCR processing"
+                label="Require in-process OCR (Tesseract)"
                 disabled={pending !== null}
                 onChange={() => configurePrivacyMode(!phases.configuration.configuration.privacy_mode.enabled)}
               />
@@ -581,6 +581,10 @@ export default function GettingStartedPage() {
                 <span className="text-xs text-green-600 dark:text-green-400">Confirmed</span>
               )}
             </div>
+            <p className="text-xs text-muted-foreground pl-6">
+              Document bytes never leave this BillForge process. Disables the customer-hosted
+              private-inference endpoint for this tenant.
+            </p>
           </div>
 
           <div className="space-y-2">

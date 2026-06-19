@@ -214,17 +214,28 @@ pub async fn process_ocr(
         }
     };
 
-    // Run OCR — try private inference first when enabled and healthy (#334),
-    // then fall back to the standard privacy_mode-driven provider selection.
-    let ocr_result = if let Some(pi_result) =
-        ocr::try_private_inference_ocr(&pool, &tenant_id, &doc_bytes).await
+    // Run OCR — try customer-hosted private inference first when enabled and
+    // healthy (#334), but only if the tenant has not required strictly
+    // in-process OCR (#385). The `local_ocr_required` flag pins the tenant
+    // to the in-process Tesseract provider and refuses any HTTP/cloud path.
+    let ocr_result = if let Some(pi_result) = ocr::try_private_inference_ocr(
+        &pool,
+        &tenant_id,
+        &doc_bytes,
+        tenant_settings.features.local_ocr_required,
+    )
+    .await
     {
         Ok(pi_result)
     } else if tenant_settings.features.local_ocr_required {
-        let ocr_provider = ocr::create_provider(&effective_ocr_provider);
-        ocr_provider
-            .extract(&doc_bytes, &payload.content_type)
-            .await
+        match ocr::select_local_only_provider() {
+            Ok(ocr_provider) => {
+                ocr_provider
+                    .extract(&doc_bytes, &payload.content_type)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
     } else if config.ocr_comparison_enabled {
         // Branch A: comparison mode — run both providers and pick the
         // confidence-weighted winner.
