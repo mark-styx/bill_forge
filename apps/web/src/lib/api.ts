@@ -2177,6 +2177,35 @@ export const billingApi = {
     api.post<{ mode: string; url: string }>('/api/v1/billing/checkout', data),
 };
 
+/**
+ * Brief plan shape returned by the unauthenticated public pricing endpoint
+ * (GET /api/public/plans). Mirrors `PublicPlan` / `PlanFeaturesBrief` in
+ * `backend/crates/api/src/routes/public_signup.rs`. Only public plans
+ * (is_public=true) are returned, so Enterprise is never present.
+ */
+export interface PublicPlan {
+  id: string;
+  name: string;
+  description: string;
+  monthly_price_cents: number;
+  annual_price_cents: number;
+  metered_invoice_unit_price_cents: number;
+  features: {
+    max_users: number;
+    max_invoices_per_month: number;
+    max_vendors: number;
+  };
+}
+
+/**
+ * Public billing API - no auth headers required. Used by the marketing
+ * pricing page to source plan data directly from the backend so prices
+ * cannot drift from `backend/crates/billing/src/plans.rs`.
+ */
+export const publicBillingApi = {
+  listPlans: () => api.get<PublicPlan[]>('/api/public/plans'),
+};
+
 // ---------------------------------------------------------------------------
 // Notifications Types
 // ---------------------------------------------------------------------------

@@ -551,6 +551,44 @@ mod tests {
         assert!(pro.is_some(), "Professional plan should be public");
     }
 
+    /// Exercises the actual `list_public_plans` handler (the same function the
+    /// `/api/public/plans` route invokes) and asserts the wire DTO contract:
+    /// Free/Starter/Professional are present with backend prices, and the
+    /// non-public Enterprise plan (is_public=false) is never surfaced.
+    #[tokio::test]
+    async fn test_list_public_plans_handler_excludes_enterprise() {
+        let Json(plans) = match list_public_plans().await {
+            Ok(value) => value,
+            Err(e) => panic!("list_public_plans handler should succeed: {:?}", e.0),
+        };
+
+        let by_id: std::collections::HashMap<&str, &PublicPlan> =
+            plans.iter().map(|p| (p.id.as_str(), p)).collect();
+
+        // Public plans are returned.
+        let free = by_id.get("free").expect("Free plan returned");
+        let starter = by_id.get("starter").expect("Starter plan returned");
+        let pro = by_id
+            .get("professional")
+            .expect("Professional plan returned");
+
+        // Prices flow from `backend/crates/billing/src/plans.rs`, so the
+        // marketing page cannot drift from the backend truth.
+        assert_eq!(free.monthly_price_cents, 0);
+        assert_eq!(starter.monthly_price_cents, 4900, "Starter $49/mo");
+        assert_eq!(pro.monthly_price_cents, 14900, "Professional $149/mo");
+
+        // Enterprise is non-public and must NEVER be returned.
+        assert!(
+            !by_id.contains_key("enterprise"),
+            "Enterprise plan (is_public=false) must not appear in public listing"
+        );
+        assert!(
+            !plans.iter().any(|p| p.name == "Enterprise"),
+            "Enterprise plan name must not appear in public listing"
+        );
+    }
+
     #[test]
     fn test_plan_price_calculation() {
         // Starter: $49/mo + $1.50/invoice

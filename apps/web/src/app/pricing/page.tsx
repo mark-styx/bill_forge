@@ -1,127 +1,86 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useThemeStore } from '@/stores/theme';
 import { GradientButton } from '@/components/ui/gradient-card';
-import { Check, ArrowRight, Calculator } from 'lucide-react';
+import { Check, ArrowRight } from 'lucide-react';
+import { publicBillingApi, type PublicPlan } from '@/lib/api';
 
-// Plan definitions mirroring backend billforge-billing plans.rs
-const PLANS = [
-  {
-    id: 'free',
-    name: 'Free',
-    description: 'Get started with basic invoice capture',
-    monthlyPrice: 0,
-    invoiceUnitPrice: 0,
-    maxUsers: 1,
-    maxInvoices: 25,
-    maxVendors: 5,
-    features: [
-      'Up to 25 invoices/month',
-      '1 user',
-      'Basic OCR',
-      '5 vendors',
-    ],
-    highlight: false,
-  },
-  {
-    id: 'starter',
-    name: 'Starter',
-    description: 'Perfect for small businesses',
-    monthlyPrice: 49,
-    invoiceUnitPrice: 1.5,
-    maxUsers: 3,
-    maxInvoices: Infinity,
-    maxVendors: 50,
-    features: [
-      'Unlimited invoices',
-      'Up to 3 users',
-      'Advanced OCR',
-      '50 vendors',
-      '$1.50 per processed invoice',
-    ],
-    highlight: false,
-  },
-  {
-    id: 'professional',
-    name: 'Professional',
-    description: 'Full AP automation for growing teams',
-    monthlyPrice: 149,
-    invoiceUnitPrice: 1.0,
-    maxUsers: 10,
-    maxInvoices: Infinity,
-    maxVendors: 500,
-    features: [
-      'Unlimited invoices',
-      'Up to 10 users',
-      'AI-powered OCR',
-      '500 vendors',
-      'Custom workflows',
-      'Priority support',
-      'API access',
-      '$1.00 per processed invoice',
-    ],
-    highlight: true,
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    description: 'Custom solutions for large organizations',
-    monthlyPrice: 499,
-    invoiceUnitPrice: 0.65,
-    maxUsers: Infinity,
-    maxInvoices: Infinity,
-    maxVendors: Infinity,
-    features: [
-      'Unlimited everything',
-      'Unlimited users',
-      'AI-powered OCR',
-      'Unlimited vendors',
-      'Custom workflows',
-      'Priority support',
-      'API access',
-      'SSO/SAML',
-      'Dedicated account manager',
-      '$0.65 per processed invoice',
-    ],
-    highlight: false,
-  },
-] as const;
+// Plans come from the backend (GET /api/public/plans -> Plan::all_public()).
+// Enterprise has is_public=false in `backend/crates/billing/src/plans.rs`,
+// so it is never returned here and never rendered on the public page.
+//
+// Plan-card feature copy is presentation only; the source of truth for
+// prices and limits is the backend response (no hardcoded price values).
+const PLAN_FEATURES: Record<string, string[]> = {
+  free: [
+    'Basic OCR',
+    '5 vendors',
+    '1 GB storage',
+  ],
+  starter: [
+    'Up to 3 users',
+    '50 vendors',
+    '10 GB storage',
+    'Vendor management module',
+  ],
+  professional: [
+    'Up to 10 users',
+    '500 vendors',
+    '50 GB storage',
+    'AI-powered OCR',
+    'Custom workflows',
+    'Priority support',
+    'API access',
+  ],
+};
 
-type PlanId = 'free' | 'starter' | 'professional' | 'enterprise';
+// u32::MAX from the backend, serialized as a JSON number.
+const MAX_UINT32 = 4294967295;
 
-export function recommendPlan(invoices: number, seats: number): PlanId {
-  if (seats > 10 || invoices > 1000) return 'enterprise';
-  if (seats > 3 || invoices > 100) return 'professional';
-  if (invoices > 25 || seats > 1) return 'starter';
-  return 'free';
+function formatLimit(value: number, suffix: string): string {
+  if (value >= MAX_UINT32) return `Unlimited ${suffix}`;
+  return `${value} ${suffix}`;
 }
 
-export function estimateMonthlyCost(planId: PlanId, invoices: number): number {
-  const plan = PLANS.find((p) => p.id === planId);
-  if (!plan) return 0;
-  return plan.monthlyPrice + Math.max(0, invoices) * plan.invoiceUnitPrice;
+function planFeatures(plan: PublicPlan): string[] {
+  const base = PLAN_FEATURES[plan.id] ?? [];
+  const limits: string[] = [
+    formatLimit(plan.features.max_invoices_per_month, 'invoices/mo'),
+    formatLimit(plan.features.max_vendors, 'vendors'),
+  ];
+  // Metered per-invoice price only matters on paid plans.
+  if (plan.metered_invoice_unit_price_cents > 0) {
+    const perInvoice = (plan.metered_invoice_unit_price_cents / 100).toFixed(2);
+    limits.push(`$${perInvoice} per processed invoice`);
+  }
+  return [...limits, ...base];
 }
-
-export { PLANS };
 
 export default function PricingPage() {
   const { getCurrentColors } = useThemeStore();
   const colors = getCurrentColors();
 
-  const [monthlyInvoices, setMonthlyInvoices] = useState(50);
-  const [seats, setSeats] = useState(2);
+  const [plans, setPlans] = useState<PublicPlan[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const recommendedPlan = useMemo(
-    () => recommendPlan(monthlyInvoices, seats),
-    [monthlyInvoices, seats]
-  );
-
-  const estimatedCost = useMemo(
-    () => estimateMonthlyCost(recommendedPlan, monthlyInvoices),
-    [recommendedPlan, monthlyInvoices]
-  );
+  useEffect(() => {
+    let cancelled = false;
+    publicBillingApi
+      .listPlans()
+      .then((data) => {
+        if (!cancelled) setPlans(data);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Failed to load plans');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -134,10 +93,6 @@ export default function PricingPage() {
           }}
         />
         <div className="container mx-auto px-4 text-center relative">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium mb-6">
-            <Calculator className="w-4 h-4" />
-            Pricing Calculator
-          </div>
           <h1 className="text-4xl md:text-5xl font-bold text-foreground mb-4">
             Simple, transparent pricing
           </h1>
@@ -147,130 +102,86 @@ export default function PricingPage() {
         </div>
       </section>
 
-      {/* Calculator */}
-      <section className="container mx-auto px-4 -mt-8 mb-16">
-        <div className="max-w-lg mx-auto card p-6 space-y-6">
-          <h2 className="text-lg font-semibold text-foreground text-center">
-            Estimate your monthly cost
-          </h2>
-
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Monthly invoice volume: {monthlyInvoices}
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={2000}
-              step={10}
-              value={monthlyInvoices}
-              onChange={(e) => setMonthlyInvoices(Number(e.target.value))}
-              className="w-full accent-primary"
-              data-testid="invoice-slider"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>0</span>
-              <span>500</span>
-              <span>1,000</span>
-              <span>2,000+</span>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-muted-foreground mb-2">
-              Team seats: {seats}
-            </label>
-            <input
-              type="range"
-              min={1}
-              max={50}
-              step={1}
-              value={seats}
-              onChange={(e) => setSeats(Number(e.target.value))}
-              className="w-full accent-primary"
-              data-testid="seats-slider"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>1</span>
-              <span>10</span>
-              <span>25</span>
-              <span>50</span>
-            </div>
-          </div>
-
+      {/* Plan Cards */}
+      <section className="container mx-auto px-4 pb-20" data-testid="plans-section">
+        {error && (
           <div
-            className="rounded-xl p-4 text-center"
-            style={{ background: `linear-gradient(135deg, hsl(${colors.primary} / 0.1), hsl(${colors.accent} / 0.1))` }}
+            className="max-w-lg mx-auto card p-6 text-center text-muted-foreground"
+            data-testid="plans-error"
           >
-            <p className="text-sm text-muted-foreground mb-1">Recommended plan</p>
-            <p className="text-2xl font-bold text-foreground" data-testid="recommended-plan">
-              {PLANS.find((p) => p.id === recommendedPlan)?.name}
-            </p>
-            <p className="text-3xl font-bold mt-2" style={{ color: `hsl(${colors.primary})` }} data-testid="estimated-price">
-              ${estimatedCost.toFixed(0)}
-              <span className="text-sm font-normal text-muted-foreground">/mo</span>
-            </p>
+            We couldn&apos;t load plans right now. Please try again later.
           </div>
+        )}
 
-          <Link href={`/signup?plan=${recommendedPlan}`} data-testid="signup-cta">
-            <GradientButton gradient="primary" className="w-full">
-              Start free sandbox
-              <ArrowRight className="w-4 h-4 ml-2" />
-            </GradientButton>
-          </Link>
-        </div>
+        {!error && !plans && (
+          <div
+            className="max-w-lg mx-auto card p-6 text-center text-muted-foreground"
+            data-testid="plans-loading"
+          >
+            Loading plans...
+          </div>
+        )}
+
+        {!error && plans && plans.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+            {plans.map((plan) => {
+              const monthlyDollars = plan.monthly_price_cents / 100;
+              return (
+                <div key={plan.id} className="card p-6 flex flex-col">
+                  <div className="mb-4">
+                    <h3 className="text-xl font-bold text-foreground">{plan.name}</h3>
+                    <p className="text-sm text-muted-foreground mt-1">{plan.description}</p>
+                  </div>
+                  <div className="mb-4">
+                    <span className="text-3xl font-bold text-foreground" data-testid={`plan-price-${plan.id}`}>
+                      ${monthlyDollars}
+                    </span>
+                    {monthlyDollars > 0 ? (
+                      <span className="text-sm text-muted-foreground">/mo</span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground ml-1">forever</span>
+                    )}
+                  </div>
+                  <ul className="space-y-2 flex-1 mb-6">
+                    {planFeatures(plan).map((feature) => (
+                      <li key={feature} className="flex items-start gap-2 text-sm">
+                        <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                        <span className="text-foreground">{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <Link href={`/signup?plan=${plan.id}`} className="block" data-testid={`plan-cta-${plan.id}`}>
+                    <GradientButton gradient="primary" className="w-full">
+                      {monthlyDollars === 0 ? 'Get started free' : 'Start free trial'}
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </GradientButton>
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
-      {/* Plan Cards */}
-      <section className="container mx-auto px-4 pb-20">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
-          {PLANS.map((plan) => (
-            <div
-              key={plan.id}
-              className={`card p-6 flex flex-col ${
-                plan.id === recommendedPlan
-                  ? 'ring-2 ring-primary'
-                  : ''
-              } ${plan.highlight ? 'relative' : ''}`}
-            >
-              {plan.highlight && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-primary text-primary-foreground text-xs font-medium">
-                  Most Popular
-                </div>
-              )}
-              <div className="mb-4">
-                <h3 className="text-xl font-bold text-foreground">{plan.name}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{plan.description}</p>
-              </div>
-              <div className="mb-4">
-                <span className="text-3xl font-bold text-foreground">
-                  ${plan.monthlyPrice}
-                </span>
-                {plan.monthlyPrice > 0 && (
-                  <span className="text-sm text-muted-foreground">/mo</span>
-                )}
-                {plan.monthlyPrice === 0 && (
-                  <span className="text-sm text-muted-foreground ml-1">forever</span>
-                )}
-              </div>
-              <ul className="space-y-2 flex-1 mb-6">
-                {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2 text-sm">
-                    <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span className="text-foreground">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-              <Link href={`/signup?plan=${plan.id}`} className="block">
-                <GradientButton
-                  gradient={plan.highlight ? 'primary' : 'primary'}
-                  className="w-full"
-                >
-                  {plan.monthlyPrice === 0 ? 'Get started free' : 'Start free trial'}
-                </GradientButton>
-              </Link>
-            </div>
-          ))}
+      {/* Enterprise - not a public self-serve plan. Contact sales instead of
+          showing a price or a free-trial CTA (mirrors is_public=false in the
+          backend plan definitions). */}
+      <section className="container mx-auto px-4 pb-24">
+        <div
+          className="max-w-3xl mx-auto card p-8 text-center"
+          data-testid="enterprise-contact"
+        >
+          <h2 className="text-2xl font-bold text-foreground mb-2">Need Enterprise?</h2>
+          <p className="text-muted-foreground mb-6">
+            Custom volume pricing, SSO/SAML, dedicated support, and unlimited
+            everything. Talk to our sales team for a tailored quote.
+          </p>
+          <a href="mailto:sales@billforge.com?subject=Enterprise%20pricing%20inquiry">
+            <GradientButton gradient="primary">
+              Contact sales
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </GradientButton>
+          </a>
         </div>
       </section>
     </div>

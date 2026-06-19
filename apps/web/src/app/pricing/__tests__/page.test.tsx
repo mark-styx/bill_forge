@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import PricingPage, { recommendPlan, estimateMonthlyCost } from '../page';
+import { render, screen, waitFor } from '@testing-library/react';
+import PricingPage from '../page';
 
 // Mock useThemeStore
 vi.mock('@/stores/theme', () => ({
@@ -19,64 +19,130 @@ vi.mock('@/components/ui/gradient-card', () => ({
   ),
 }));
 
+// Mock next/link
+vi.mock('next/link', () => ({
+  default: ({ children, ...props }: { children: React.ReactNode; href: string }) => (
+    <a {...props}>{children}</a>
+  ),
+}));
+
+// Mock the public billing API. Plan data must come from the backend
+// (Plan::all_public()), which excludes Enterprise (is_public=false).
+const mockListPublicPlans = vi.fn();
+vi.mock('@/lib/api', () => ({
+  publicBillingApi: {
+    listPlans: (...args: unknown[]) => mockListPublicPlans(...args),
+  },
+}));
+
+// Mirror of the PublicPlan shape returned by GET /api/public/plans.
+// Prices are sourced from `backend/crates/billing/src/plans.rs`.
+function publicPlansFixture() {
+  return [
+    {
+      id: 'free',
+      name: 'Free',
+      description: 'Get started with basic invoice capture',
+      monthly_price_cents: 0,
+      annual_price_cents: 0,
+      metered_invoice_unit_price_cents: 0,
+      features: { max_users: 1, max_invoices_per_month: 25, max_vendors: 5 },
+    },
+    {
+      id: 'starter',
+      name: 'Starter',
+      description: 'Perfect for small businesses',
+      monthly_price_cents: 4900,
+      annual_price_cents: 47000,
+      metered_invoice_unit_price_cents: 150,
+      features: { max_users: 3, max_invoices_per_month: 4294967295, max_vendors: 50 },
+    },
+    {
+      id: 'professional',
+      name: 'Professional',
+      description: 'Full AP automation for growing teams',
+      monthly_price_cents: 14900,
+      annual_price_cents: 142800,
+      metered_invoice_unit_price_cents: 100,
+      features: { max_users: 10, max_invoices_per_month: 4294967295, max_vendors: 500 },
+    },
+  ];
+}
+
 describe('PricingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockListPublicPlans.mockResolvedValue(publicPlansFixture());
   });
 
-  it('renders the pricing calculator with default values', () => {
+  it('renders the hero heading', async () => {
     render(<PricingPage />);
     expect(screen.getByText('Simple, transparent pricing')).toBeInTheDocument();
-    expect(screen.getByTestId('recommended-plan')).toBeInTheDocument();
-    expect(screen.getByTestId('estimated-price')).toBeInTheDocument();
   });
 
-  it('shows Starter for default inputs (50 invoices, 2 seats)', () => {
+  it('renders plans from the public billing API with backend prices', async () => {
     render(<PricingPage />);
-    expect(screen.getByTestId('recommended-plan').textContent).toBe('Starter');
+
+    expect(mockListPublicPlans).toHaveBeenCalledTimes(1);
+
+    // Prices flow from the mocked backend payload, not a hardcoded constant.
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-price-free').textContent).toBe('$0');
+    });
+    expect(screen.getByTestId('plan-price-starter').textContent).toBe('$49');
+    expect(screen.getByTestId('plan-price-professional').textContent).toBe('$149');
   });
 
-  it('updates recommended plan when invoice slider changes', () => {
+  it('renders Free, Starter, and Professional plan names', async () => {
     render(<PricingPage />);
-    const slider = screen.getByTestId('invoice-slider');
-    fireEvent.change(slider, { target: { value: 500 } });
-    expect(screen.getByTestId('recommended-plan').textContent).toBe('Professional');
+    await waitFor(() => {
+      expect(screen.getByText('Free')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Starter')).toBeInTheDocument();
+    expect(screen.getByText('Professional')).toBeInTheDocument();
   });
 
-  it('shows Free for 0 invoices and 1 seat', () => {
+  it('does NOT render the non-public Enterprise plan or its $499 price', async () => {
     render(<PricingPage />);
-    const invSlider = screen.getByTestId('invoice-slider');
-    const seatSlider = screen.getByTestId('seats-slider');
-    fireEvent.change(invSlider, { target: { value: 0 } });
-    fireEvent.change(seatSlider, { target: { value: 1 } });
-    expect(screen.getByTestId('recommended-plan').textContent).toBe('Free');
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-price-professional')).toBeInTheDocument();
+    });
+
+    // No Enterprise plan card and no $499 price anywhere in the plans section.
+    expect(screen.queryByTestId('plan-price-enterprise')).not.toBeInTheDocument();
+    expect(screen.queryByText('$499')).not.toBeInTheDocument();
   });
 
-  it('shows Enterprise for high volume', () => {
+  it('renders a separate contact-sales CTA (not a Start free trial CTA) for Enterprise', async () => {
     render(<PricingPage />);
-    const slider = screen.getByTestId('invoice-slider');
-    fireEvent.change(slider, { target: { value: 2000 } });
-    expect(screen.getByTestId('recommended-plan').textContent).toBe('Enterprise');
+    await waitFor(() => {
+      expect(screen.getByTestId('enterprise-contact')).toBeInTheDocument();
+    });
+
+    // Non-trial CTA: "Contact sales", links to mailto (not /signup).
+    const cta = screen.getByText('Contact sales');
+    const link = cta.closest('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toContain('mailto:');
+    expect(link?.getAttribute('href')).not.toContain('/signup');
   });
 
-  it('CTA link includes selected plan id', () => {
+  it('shows a loading state before plans resolve', async () => {
+    // Never-resolving promise so the loading state stays mounted.
+    mockListPublicPlans.mockReturnValue(new Promise(() => {}));
+
     render(<PricingPage />);
-    const cta = screen.getByTestId('signup-cta');
-    expect(cta.getAttribute('href')).toContain('/signup?plan=');
+    expect(screen.getByTestId('plans-loading')).toBeInTheDocument();
   });
 
-  it('calculates estimated price correctly', () => {
-    expect(estimateMonthlyCost('free', 10)).toBe(0);
-    expect(estimateMonthlyCost('starter', 100)).toBe(49 + 100 * 1.5);
-    expect(estimateMonthlyCost('professional', 100)).toBe(149 + 100 * 1.0);
-    expect(estimateMonthlyCost('enterprise', 100)).toBe(499 + 100 * 0.65);
-  });
+  it('shows an error fallback when the fetch fails', async () => {
+    mockListPublicPlans.mockRejectedValue(new Error('network down'));
 
-  it('recommendPlan returns correct tiers', () => {
-    expect(recommendPlan(0, 1)).toBe('free');
-    expect(recommendPlan(50, 2)).toBe('starter');
-    expect(recommendPlan(500, 5)).toBe('professional');
-    expect(recommendPlan(2000, 5)).toBe('enterprise');
-    expect(recommendPlan(100, 15)).toBe('enterprise');
+    render(<PricingPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId('plans-error')).toBeInTheDocument();
+    });
+    // On error, no plan cards should be rendered.
+    expect(screen.queryByTestId('plan-price-starter')).not.toBeInTheDocument();
   });
 });
