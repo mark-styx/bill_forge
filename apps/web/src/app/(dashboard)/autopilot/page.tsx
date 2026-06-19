@@ -10,6 +10,7 @@ import {
 } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { FileText, Sliders, BarChart3, ListChecks } from 'lucide-react';
+import { toast } from 'sonner';
 
 // ---------------------------------------------------------------------------
 // Static config
@@ -95,7 +96,7 @@ function TabButton({
 
 function SettingsPanel() {
   const queryClient = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const { data: settings, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['autopilot', 'settings'],
     queryFn: () => autopilotApi.getSettings(),
   });
@@ -106,11 +107,33 @@ function SettingsPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot', 'settings'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot', 'queue'] });
+      toast.success('Autopilot settings updated');
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : 'Failed to update autopilot settings');
     },
   });
 
-  if (isLoading || !settings) {
+  if (isLoading) {
     return null;
+  }
+
+  if (isError || !settings) {
+    return (
+      <div className="card p-4" data-testid="autopilot-settings-error">
+        <div className="flex items-center gap-2 mb-2">
+          <Sliders className="w-4 h-4 text-error" />
+          <span className="text-sm font-medium text-foreground">Autopilot Settings</span>
+        </div>
+        <p className="text-sm text-error">Couldn't load Autopilot settings</p>
+        {error instanceof Error && (
+          <p className="text-xs text-muted-foreground mt-1">{error.message}</p>
+        )}
+        <button onClick={() => refetch()} className="btn btn-sm mt-3">
+          Retry
+        </button>
+      </div>
+    );
   }
 
   const toggleType = (t: AutopilotExceptionType) => {
@@ -188,7 +211,7 @@ function QueueTab() {
   const queryClient = useQueryClient();
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['autopilot', 'queue'],
     queryFn: () => autopilotApi.getQueue(),
   });
@@ -203,9 +226,13 @@ function QueueTab() {
       decision: 'confirm' | 'override';
       overrideAction?: { action: string };
     }) => autopilotApi.resolve(item.id, decision, overrideAction),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['autopilot', 'queue'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot', 'report'] });
+      toast.success(variables.decision === 'confirm' ? 'Exception confirmed' : 'Exception overridden');
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : 'Failed to resolve exception');
     },
   });
 
@@ -281,6 +308,16 @@ function QueueTab() {
               <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
               Loading queue...
             </div>
+          </div>
+        ) : isError ? (
+          <div className="text-center py-12" data-testid="autopilot-queue-error">
+            <p className="text-error font-medium mb-1">Couldn't load exception queue</p>
+            {error instanceof Error && (
+              <p className="text-sm text-muted-foreground mb-3">{error.message}</p>
+            )}
+            <button onClick={() => refetch()} className="btn btn-sm">
+              Retry
+            </button>
           </div>
         ) : items.length === 0 ? (
           <div className="text-center py-12">
@@ -401,7 +438,7 @@ function ReportTab() {
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
 
-  const { data: report, isLoading } = useQuery({
+  const { data: report, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['autopilot', 'report', date],
     queryFn: () => autopilotApi.getReport(date),
   });
@@ -436,7 +473,7 @@ function ReportTab() {
             </tr>
           </thead>
           <tbody>
-            {isLoading || !report ? (
+            {isLoading || (!isError && !report) ? (
               <tr>
                 <td colSpan={5} className="text-center py-12 text-muted-foreground">
                   <div className="flex items-center justify-center gap-2">
@@ -445,14 +482,26 @@ function ReportTab() {
                   </div>
                 </td>
               </tr>
-            ) : report.rows.length === 0 ? (
+            ) : isError ? (
+              <tr data-testid="autopilot-report-error">
+                <td colSpan={5} className="text-center py-12">
+                  <p className="text-error font-medium mb-1">Couldn't load daily report</p>
+                  {error instanceof Error && (
+                    <p className="text-sm text-muted-foreground mb-3">{error.message}</p>
+                  )}
+                  <button onClick={() => refetch()} className="btn btn-sm">
+                    Retry
+                  </button>
+                </td>
+              </tr>
+            ) : report!.rows.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center py-12 text-muted-foreground">
                   No decisions recorded for {date}.
                 </td>
               </tr>
             ) : (
-              report.rows.map((row) => (
+              report!.rows.map((row) => (
                 <tr key={row.exception_type}>
                   <td>
                     <span

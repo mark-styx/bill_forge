@@ -1,7 +1,16 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
 import AutopilotPage from '../page';
+
+// Mock sonner so tests can assert toast.success / toast.error calls.
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
@@ -254,5 +263,58 @@ describe('AutopilotPage', () => {
     // effect; resolve is only triggered by the global handler when the target
     // is not an INPUT.
     expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('shows a success toast when confirming an exception via Y', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('OCR Low Confidence')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'y' });
+
+    await waitFor(() => {
+      expect(mockResolve).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Exception confirmed');
+    });
+  });
+
+  it('shows an error toast when the resolve mutation fails', async () => {
+    mockResolve.mockRejectedValueOnce(new Error('boom'));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('OCR Low Confidence')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'y' });
+
+    await waitFor(() => {
+      expect(mockResolve).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('boom');
+    });
+  });
+
+  it('renders a retryable error state when the queue fails to load', async () => {
+    mockGetQueue.mockRejectedValueOnce(new Error('queue down'));
+
+    renderPage();
+
+    const errorState = await screen.findByTestId('autopilot-queue-error');
+    expect(errorState).toHaveTextContent("Couldn't load exception queue");
+    expect(errorState).toHaveTextContent('queue down');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      // First call (failed) + Retry call.
+      expect(mockGetQueue).toHaveBeenCalledTimes(2);
+    });
   });
 });
