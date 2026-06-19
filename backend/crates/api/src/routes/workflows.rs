@@ -58,6 +58,7 @@ pub(crate) async fn log_audit_or_record_gap(
 /// Best-effort emit of a Stripe meter event when an invoice transitions to a
 /// billable processing status (Approved, ReadyForPayment, Paid).  The outbox
 /// UNIQUE(invoice_id, event_name) constraint prevents double-emit.
+#[cfg(feature = "billing")]
 pub(crate) async fn emit_meter_if_billable(
     metadata_pool: &Arc<PgPool>,
     tenant_id: &billforge_core::TenantId,
@@ -88,6 +89,17 @@ pub(crate) async fn emit_meter_if_billable(
         )
         .await;
     }
+}
+
+/// No-op fallback used when the billing pillar is not compiled into this build.
+/// Meter events are unavailable, so the call is silently dropped.
+#[cfg(not(feature = "billing"))]
+pub(crate) async fn emit_meter_if_billable(
+    _metadata_pool: &Arc<PgPool>,
+    _tenant_id: &billforge_core::TenantId,
+    _invoice_id: uuid::Uuid,
+    _status: Option<&billforge_core::domain::ProcessingStatus>,
+) {
 }
 
 pub fn routes() -> Router<AppState> {

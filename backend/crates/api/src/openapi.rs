@@ -85,16 +85,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::auth::refresh,
         crate::routes::auth::logout,
         crate::routes::auth::me,
-        // Invoice endpoints
-        crate::routes::invoices::list_invoices,
-        crate::routes::invoices::create_invoice,
-        crate::routes::invoices::upload_invoice,
-        crate::routes::invoices::get_invoice,
-        crate::routes::invoices::update_invoice,
-        crate::routes::invoices::delete_invoice,
-        crate::routes::invoices::rerun_ocr,
-        crate::routes::invoices::submit_for_processing,
-        crate::routes::invoices::suggest_categories,
         // Dashboard endpoints
         crate::routes::dashboard::get_dashboard_metrics,
         crate::routes::dashboard::get_invoice_metrics,
@@ -113,71 +103,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::vendors::upload_tax_document,
         crate::routes::vendors::list_messages,
         crate::routes::vendors::send_message,
-        // Workflows
-        crate::routes::workflows::list_rules,
-        crate::routes::workflows::get_rule,
-        crate::routes::workflows::create_rule,
-        crate::routes::workflows::update_rule,
-        crate::routes::workflows::delete_rule,
-        crate::routes::workflows::activate_rule,
-        crate::routes::workflows::deactivate_rule,
-        crate::routes::workflows::list_queues,
-        crate::routes::workflows::get_queue,
-        crate::routes::workflows::create_queue,
-        crate::routes::workflows::update_queue,
-        crate::routes::workflows::delete_queue,
-        crate::routes::workflows::list_queue_items,
-        crate::routes::workflows::claim_item,
-        crate::routes::workflows::complete_item,
-        crate::routes::workflows::list_assignment_rules,
-        crate::routes::workflows::get_assignment_rule,
-        crate::routes::workflows::create_assignment_rule,
-        crate::routes::workflows::update_assignment_rule,
-        crate::routes::workflows::delete_assignment_rule,
-        crate::routes::workflows::list_pending_approvals,
-        crate::routes::workflows::get_approval,
-        crate::routes::workflows::approve,
-        crate::routes::workflows::reject,
-        crate::routes::workflows::list_templates,
-        crate::routes::workflows::get_template,
-        crate::routes::workflows::create_template,
-        crate::routes::workflows::update_template,
-        crate::routes::workflows::delete_template,
-        crate::routes::workflows::activate_template,
-        crate::routes::workflows::deactivate_template,
-        crate::routes::workflows::bulk_operation,
-        crate::routes::workflows::put_on_hold,
-        crate::routes::workflows::release_from_hold,
-        crate::routes::workflows::void_invoice,
-        crate::routes::workflows::mark_ready_for_payment,
-        crate::routes::workflows::move_to_queue,
-        crate::routes::workflows::list_delegations,
-        crate::routes::workflows::get_delegation,
-        crate::routes::workflows::create_delegation,
-        crate::routes::workflows::update_delegation,
-        crate::routes::workflows::delete_delegation,
-        crate::routes::workflows::list_approval_limits,
-        crate::routes::workflows::get_approval_limit,
-        crate::routes::workflows::create_approval_limit,
-        crate::routes::workflows::update_approval_limit,
-        crate::routes::workflows::delete_approval_limit,
-        // Reports
-        crate::routes::reports::dashboard_summary,
-        crate::routes::reports::invoices_by_vendor,
-        crate::routes::reports::invoices_by_status,
-        crate::routes::reports::invoice_aging,
-        crate::routes::reports::vendor_spend,
-        crate::routes::reports::workflow_metrics,
-        crate::routes::reports::custom_report,
-        crate::routes::reports::spend_trends,
-        crate::routes::reports::category_breakdown,
-        crate::routes::reports::vendor_performance,
-        crate::routes::reports::approval_analytics,
-        crate::routes::reports::approval_sla,
-        crate::routes::reports::cash_flow_obligations,
-        crate::routes::reports::list_digests,
-        crate::routes::reports::create_digest,
-        crate::routes::reports::delete_digest,
         // Export
         crate::routes::export::export_invoices_csv,
         crate::routes::export::export_invoices_json,
@@ -196,13 +121,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::sandbox::get_current_persona,
         crate::routes::sandbox::switch_persona,
         crate::routes::sandbox::get_tenant_context,
-        // Implementation
-        crate::routes::implementation::get_status,
-        crate::routes::implementation::sync_erp,
-        crate::routes::implementation::update_erp_sub_items,
-        crate::routes::implementation::select_approval_template,
-        crate::routes::implementation::upload_sample_invoices,
-        crate::routes::implementation::update_checklist,
         // Notifications
         crate::routes::notifications::install_slack,
         crate::routes::notifications::slack_callback,
@@ -213,19 +131,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::notifications::disconnect_teams,
         crate::routes::notifications::get_notification_preferences,
         crate::routes::notifications::update_notification_preferences,
-        // Predictive Analytics
-        crate::routes::predictive::get_forecasts,
-        crate::routes::predictive::generate_forecast,
-        crate::routes::predictive::get_forecast_by_id,
-        crate::routes::predictive::get_anomalies,
-        crate::routes::predictive::acknowledge_anomaly,
-        crate::routes::predictive::detect_anomalies,
-        crate::routes::predictive::get_budget_alerts,
-        crate::routes::predictive::dismiss_alert,
-        crate::routes::predictive::get_anomaly_rules,
-        crate::routes::predictive::configure_anomaly_rule,
-        crate::routes::predictive::get_anomaly_rule,
-        crate::routes::predictive::update_anomaly_rule,
         // Mobile
         crate::routes::mobile::register_device,
         crate::routes::mobile::mobile_login,
@@ -272,20 +177,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
         crate::routes::email_actions::handle_reject,
         crate::routes::email_actions::handle_hold,
         crate::routes::email_actions::handle_view,
-        // AI Assistant
-        crate::routes::ai::chat_handler,
-        crate::routes::ai::list_conversations_handler,
-        crate::routes::ai::continue_conversation_handler,
-        crate::routes::ai::list_pending_action_proposals_handler,
-        crate::routes::ai::approve_action_proposal_handler,
-        crate::routes::ai::reject_action_proposal_handler,
-        // Billing
-        crate::routes::billing::list_plans,
-        crate::routes::billing::list_module_addons,
-        crate::routes::billing::quote_billing,
-        crate::routes::billing::get_subscription,
-        crate::routes::billing::get_usage,
-        crate::routes::billing::create_checkout,
         // Routing
         crate::routes::routing::route_invoice,
         crate::routes::routing::get_workload_stats,
@@ -321,7 +212,6 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
             ErrorResponse,
             PaginationInfo,
             crate::routes::auth::MeResponse,
-            crate::routes::invoices::UploadResponse,
             crate::routes::routing::WorkloadResponse,
             crate::routes::routing::WorkloadDistributionStatsResponse,
             crate::routes::routing::ApproverWorkloadSummary,
@@ -329,6 +219,173 @@ BillForge is a multi-tenant system. Include tenant_id in authentication requests
     )
 )]
 pub struct ApiDoc;
+
+/// Invoice (capture + processing) endpoints - compiled in only when all four
+/// pillars backing the invoices surface are enabled.
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing"
+))]
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::invoices::list_invoices,
+        crate::routes::invoices::create_invoice,
+        crate::routes::invoices::upload_invoice,
+        crate::routes::invoices::get_invoice,
+        crate::routes::invoices::update_invoice,
+        crate::routes::invoices::delete_invoice,
+        crate::routes::invoices::rerun_ocr,
+        crate::routes::invoices::submit_for_processing,
+        crate::routes::invoices::suggest_categories,
+    ),
+    components(schemas(crate::routes::invoices::UploadResponse,))
+)]
+struct InvoiceApiDoc;
+
+/// Approval workflow endpoints. The module is always compiled in; billing meter
+/// events emitted from within it are gated separately on the billing feature.
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::workflows::list_rules,
+    crate::routes::workflows::get_rule,
+    crate::routes::workflows::create_rule,
+    crate::routes::workflows::update_rule,
+    crate::routes::workflows::delete_rule,
+    crate::routes::workflows::activate_rule,
+    crate::routes::workflows::deactivate_rule,
+    crate::routes::workflows::list_queues,
+    crate::routes::workflows::get_queue,
+    crate::routes::workflows::create_queue,
+    crate::routes::workflows::update_queue,
+    crate::routes::workflows::delete_queue,
+    crate::routes::workflows::list_queue_items,
+    crate::routes::workflows::claim_item,
+    crate::routes::workflows::complete_item,
+    crate::routes::workflows::list_assignment_rules,
+    crate::routes::workflows::get_assignment_rule,
+    crate::routes::workflows::create_assignment_rule,
+    crate::routes::workflows::update_assignment_rule,
+    crate::routes::workflows::delete_assignment_rule,
+    crate::routes::workflows::list_pending_approvals,
+    crate::routes::workflows::get_approval,
+    crate::routes::workflows::approve,
+    crate::routes::workflows::reject,
+    crate::routes::workflows::list_templates,
+    crate::routes::workflows::get_template,
+    crate::routes::workflows::create_template,
+    crate::routes::workflows::update_template,
+    crate::routes::workflows::delete_template,
+    crate::routes::workflows::activate_template,
+    crate::routes::workflows::deactivate_template,
+    crate::routes::workflows::bulk_operation,
+    crate::routes::workflows::put_on_hold,
+    crate::routes::workflows::release_from_hold,
+    crate::routes::workflows::void_invoice,
+    crate::routes::workflows::mark_ready_for_payment,
+    crate::routes::workflows::move_to_queue,
+    crate::routes::workflows::list_delegations,
+    crate::routes::workflows::get_delegation,
+    crate::routes::workflows::create_delegation,
+    crate::routes::workflows::update_delegation,
+    crate::routes::workflows::delete_delegation,
+    crate::routes::workflows::list_approval_limits,
+    crate::routes::workflows::get_approval_limit,
+    crate::routes::workflows::create_approval_limit,
+    crate::routes::workflows::update_approval_limit,
+    crate::routes::workflows::delete_approval_limit,
+))]
+struct WorkflowApiDoc;
+
+/// Reporting module endpoints - requires the reporting pillar.
+#[cfg(feature = "reporting")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::reports::dashboard_summary,
+    crate::routes::reports::invoices_by_vendor,
+    crate::routes::reports::invoices_by_status,
+    crate::routes::reports::invoice_aging,
+    crate::routes::reports::vendor_spend,
+    crate::routes::reports::workflow_metrics,
+    crate::routes::reports::custom_report,
+    crate::routes::reports::spend_trends,
+    crate::routes::reports::category_breakdown,
+    crate::routes::reports::vendor_performance,
+    crate::routes::reports::approval_analytics,
+    crate::routes::reports::approval_sla,
+    crate::routes::reports::cash_flow_obligations,
+    crate::routes::reports::list_digests,
+    crate::routes::reports::create_digest,
+    crate::routes::reports::delete_digest,
+))]
+struct ReportApiDoc;
+
+/// Implementation wizard endpoints - needs capture + ERP sync + invoice upload types.
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing",
+    feature = "quickbooks",
+    feature = "xero"
+))]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::implementation::get_status,
+    crate::routes::implementation::sync_erp,
+    crate::routes::implementation::update_erp_sub_items,
+    crate::routes::implementation::select_approval_template,
+    crate::routes::implementation::upload_sample_invoices,
+    crate::routes::implementation::update_checklist,
+))]
+struct ImplementationApiDoc;
+
+/// Predictive analytics endpoints - requires the analytics pillar.
+#[cfg(feature = "analytics")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::predictive::get_forecasts,
+    crate::routes::predictive::generate_forecast,
+    crate::routes::predictive::get_forecast_by_id,
+    crate::routes::predictive::get_anomalies,
+    crate::routes::predictive::acknowledge_anomaly,
+    crate::routes::predictive::detect_anomalies,
+    crate::routes::predictive::get_budget_alerts,
+    crate::routes::predictive::dismiss_alert,
+    crate::routes::predictive::get_anomaly_rules,
+    crate::routes::predictive::configure_anomaly_rule,
+    crate::routes::predictive::get_anomaly_rule,
+    crate::routes::predictive::update_anomaly_rule,
+))]
+struct PredictiveApiDoc;
+
+/// AI Assistant (Winston) endpoints - requires the ai-agent pillar.
+#[cfg(feature = "ai-agent")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::ai::chat_handler,
+    crate::routes::ai::list_conversations_handler,
+    crate::routes::ai::continue_conversation_handler,
+    crate::routes::ai::list_pending_action_proposals_handler,
+    crate::routes::ai::approve_action_proposal_handler,
+    crate::routes::ai::reject_action_proposal_handler,
+))]
+struct AiApiDoc;
+
+/// Billing & subscription endpoints - requires the billing pillar.
+#[cfg(feature = "billing")]
+#[derive(OpenApi)]
+#[openapi(paths(
+    crate::routes::billing::list_plans,
+    crate::routes::billing::list_module_addons,
+    crate::routes::billing::quote_billing,
+    crate::routes::billing::get_subscription,
+    crate::routes::billing::get_usage,
+    crate::routes::billing::create_checkout,
+))]
+struct BillingApiDoc;
 
 #[cfg(feature = "quickbooks")]
 #[derive(OpenApi)]
@@ -786,6 +843,7 @@ struct PublicApiDoc;
 struct NetSuiteApiDoc;
 
 /// OpenAPI documentation for the peer benchmarking routes.
+#[cfg(feature = "analytics")]
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -846,7 +904,36 @@ pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     #[cfg(feature = "netsuite")]
     openapi.merge(NetSuiteApiDoc::openapi());
 
+    // Pillar-gated route groups. Each is only merged in when the corresponding
+    // Cargo feature is enabled, mirroring the route mounting in `api_routes`.
+    #[cfg(all(
+        feature = "capture",
+        feature = "processing",
+        feature = "analytics",
+        feature = "billing"
+    ))]
+    openapi.merge(InvoiceApiDoc::openapi());
+    openapi.merge(WorkflowApiDoc::openapi());
+    #[cfg(feature = "reporting")]
+    openapi.merge(ReportApiDoc::openapi());
+    #[cfg(all(
+        feature = "capture",
+        feature = "processing",
+        feature = "analytics",
+        feature = "billing",
+        feature = "quickbooks",
+        feature = "xero"
+    ))]
+    openapi.merge(ImplementationApiDoc::openapi());
+    #[cfg(feature = "analytics")]
+    openapi.merge(PredictiveApiDoc::openapi());
+    #[cfg(feature = "ai-agent")]
+    openapi.merge(AiApiDoc::openapi());
+    #[cfg(feature = "billing")]
+    openapi.merge(BillingApiDoc::openapi());
+
     // v1 surfaces that are always present
+    #[cfg(feature = "analytics")]
     openapi.merge(BenchmarkApiDoc::openapi());
     openapi.merge(CloseApiDoc::openapi());
 

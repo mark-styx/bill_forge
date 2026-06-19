@@ -17,12 +17,12 @@ billforge-core = { path = "../core" }
 billforge-db = { path = "../db" }
 billforge-auth = { path = "../auth" }
 billforge-email = { path = "../email" }
-billforge-billing = { path = "../billing" }
-billforge-ai-agent = { path = "../ai-agent" }
-billforge-invoice-capture = { path = "../invoice-capture" }
-billforge-invoice-processing = { path = "../invoice-processing" }
-billforge-vendor-mgmt = { path = "../vendor-mgmt" }
-billforge-reporting = { path = "../reporting" }
+billforge-billing = { path = "../billing", optional = true }
+billforge-ai-agent = { path = "../ai-agent", optional = true }
+billforge-invoice-capture = { path = "../invoice-capture", optional = true }
+billforge-invoice-processing = { path = "../invoice-processing", optional = true }
+billforge-vendor-mgmt = { path = "../vendor-mgmt", optional = true }
+billforge-reporting = { path = "../reporting", optional = true }
 billforge-quickbooks = { path = "../quickbooks", optional = true }
 billforge-xero = { path = "../xero", optional = true }
 billforge-sage-intacct = { path = "../sage-intacct", optional = true }
@@ -33,7 +33,7 @@ billforge-edi = { path = "../edi", optional = true }
 billforge-netsuite = { path = "../netsuite", optional = true }
 billforge-notifications = { path = "../notifications" }
 billforge-mobile-push = { path = "../mobile-push" }
-billforge-analytics = { path = "../analytics" }
+billforge-analytics = { path = "../analytics", optional = true }
 
 # Web framework
 axum = { workspace = true }
@@ -98,7 +98,14 @@ prometheus = { version = "0.13", default-features = false }
 lazy_static = "1.4"
 
 [features]
-default = ["quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi", "netsuite"]
+default = ["capture", "processing", "vendor-mgmt", "reporting", "billing", "ai-agent", "analytics", "quickbooks", "xero", "sage-intacct", "salesforce", "workday", "bill-com", "edi", "netsuite"]
+capture = ["dep:billforge-invoice-capture"]
+processing = ["dep:billforge-invoice-processing"]
+vendor-mgmt = ["dep:billforge-vendor-mgmt"]
+reporting = ["dep:billforge-reporting"]
+billing = ["dep:billforge-billing"]
+ai-agent = ["dep:billforge-ai-agent"]
+analytics = ["dep:billforge-analytics"]
 quickbooks = ["dep:billforge-quickbooks"]
 xero = ["dep:billforge-xero"]
 sage-intacct = ["dep:billforge-sage-intacct"]

@@ -1,6 +1,8 @@
 //! API routes
 
+#[cfg(feature = "ai-agent")]
 pub mod ai;
+#[cfg(feature = "analytics")]
 pub mod analytics;
 pub mod ap_command_center;
 pub mod approval_links;
@@ -9,13 +11,17 @@ pub mod audit_bundle;
 pub mod auth;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
+#[cfg(feature = "billing")]
 pub mod billing;
 pub mod budgets;
+#[cfg(feature = "ai-agent")]
 pub mod chat_approvals;
 pub mod close_periods;
+#[cfg(feature = "processing")]
 pub mod contracts;
 pub mod dashboard;
 pub mod discounts;
+#[cfg(feature = "ai-agent")]
 pub(crate) mod document_qa;
 pub(crate) mod documents;
 #[cfg(feature = "edi")]
@@ -24,16 +30,27 @@ pub mod email_actions;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub mod health;
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing",
+    feature = "quickbooks",
+    feature = "xero"
+))]
 pub mod implementation;
 pub mod inbound_email;
+#[cfg(all(feature = "capture", feature = "processing", feature = "analytics", feature = "billing"))]
 pub mod invoices;
 pub mod mobile;
 #[cfg(feature = "netsuite")]
 pub mod netsuite;
 pub mod notifications;
 pub mod policies;
+#[cfg(feature = "analytics")]
 pub mod predictive;
 pub mod public_api;
+#[cfg(feature = "billing")]
 pub mod public_signup;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
@@ -41,6 +58,7 @@ pub mod qbo;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
 pub mod recurring_patterns;
+#[cfg(feature = "reporting")]
 pub(crate) mod reports;
 pub mod routing;
 #[cfg(feature = "sage-intacct")]
@@ -76,7 +94,7 @@ pub fn create_router(state: AppState) -> Router {
     // Initialize health check start time
     health::init_start_time();
 
-    Router::new()
+    let router = Router::new()
         // Root landing page
         .route("/", get(landing_page))
         // Health check endpoints
@@ -84,18 +102,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health/live", get(health::liveness))
         .route("/health/ready", get(health::readiness))
         .route("/health/detailed", get(health::detailed_health))
-        .route("/health/ocr", get(health::ocr_health))
         // Prometheus metrics endpoint
         .route("/metrics", get(metrics_handler))
         // Inbound email webhook (no auth — uses shared secret header)
         .nest("/webhooks", inbound_email::routes())
-        // Chat approval surface — Slack/Teams interaction callbacks (no JWT; verified via signing secret)
-        // NOTE: Teams /teams/actions is disabled by default (TEAMS_ACTIONS_ENABLED). See chat_approvals.rs.
-        .nest("/integrations", chat_approvals::routes())
         // API routes
         .nest("/api/v1", api_routes(state.clone()))
-        // Stripe webhook - bypasses tenant auth (tenant identity from session metadata)
-        .nest("/api/v1/billing", billing::public_routes())
         // Public API (PAT auth, not session JWT) — rate limiter attached via extension
         .nest(
             "/api/external/v1",
@@ -104,12 +116,28 @@ pub fn create_router(state: AppState) -> Router {
                     billforge_core::public_api::RateLimiter::new(),
                 )))
                 .layer(Extension(state.clone())),
-        )
+        );
+    // Pillar-gated top-level mounts. Each is only compiled in when its Cargo
+    // feature is enabled, so a single-pillar binary can drop the others.
+    let router = {
+        // OCR-specific health probe (requires the Capture pillar)
+        #[cfg(feature = "capture")]
+        let router = router.route("/health/ocr", get(health::ocr_health));
+        // Chat approval surface — Slack/Teams interaction callbacks (no JWT; verified via signing secret)
+        // NOTE: Teams /teams/actions is disabled by default (TEAMS_ACTIONS_ENABLED). See chat_approvals.rs.
+        #[cfg(feature = "ai-agent")]
+        let router = router.nest("/integrations", chat_approvals::routes());
+        // Stripe webhook - bypasses tenant auth (tenant identity from session metadata)
+        #[cfg(feature = "billing")]
+        let router = router.nest("/api/v1/billing", billing::public_routes());
         // Self-serve signup + pricing plans (no auth)
-        .nest("/api/public", public_signup::public_routes())
-        // Sandbox promote endpoint (authenticated, inside the auth-gated tree below)
-        // Mounted before the api_routes() call so it can be merged in later if needed.
-        .with_state(state.clone())
+        #[cfg(feature = "billing")]
+        let router = router.nest("/api/public", public_signup::public_routes());
+        router
+    };
+    // Sandbox promote endpoint (authenticated, inside the auth-gated tree below)
+    // Mounted before the api_routes() call so it can be merged in later if needed.
+    router.with_state(state.clone())
 }
 
 /// Prometheus metrics endpoint
@@ -178,37 +206,61 @@ fn api_routes(state: AppState) -> Router<AppState> {
                 .layer(middleware::from_fn(rate_limit_auth))
                 .layer(Extension(RateLimiterState::new(20, 60))),
         )
-        // Invoice Capture module + status state machine transitions
-        .nest(
-            "/invoices",
-            invoices::routes().merge(crate::state_machine::routes()),
-        )
         // Vendor Management module
         .nest(
             "/vendors",
             vendors::routes().merge(vendor_portal_onboarding::review_routes()),
         )
-        // Invoice Processing module
-        .nest("/workflows", workflows::routes())
-        // Reporting module
-        .nest("/reports", reports::routes())
         // Dashboard metrics
         .nest("/dashboard", dashboard::routes())
         // AP Command Center (standup view)
         .nest("/dashboard/ap-command-center", ap_command_center::routes())
         // Data export
         .nest("/export", export::routes())
-        // Document storage
-        .nest(
-            "/documents",
-            documents::routes().merge(document_qa::routes()),
-        )
         // Audit logs + evidence bundle export
         .nest("/audit", audit::routes().merge(audit_bundle::routes()))
         // Sandbox/Development persona management
-        .nest("/sandbox", sandbox::routes())
-        // Server-backed implementation wizard
-        .nest("/implementation", implementation::routes());
+        .nest("/sandbox", sandbox::routes());
+    // Pillar-gated route mounts. Each is only compiled in when its Cargo
+    // feature is enabled, so a single-pillar binary can drop the others.
+    let router = {
+        // Invoice Capture + Processing module and status state machine transitions
+        #[cfg(all(
+            feature = "capture",
+            feature = "processing",
+            feature = "analytics",
+            feature = "billing"
+        ))]
+        let router = router.nest(
+            "/invoices",
+            invoices::routes().merge(crate::state_machine::routes()),
+        );
+        // Invoice Processing module (approval workflows); billing meter events
+        // are emitted only when the billing pillar is compiled in.
+        let router = router.nest("/workflows", workflows::routes());
+        // Reporting module
+        #[cfg(feature = "reporting")]
+        let router = router.nest("/reports", reports::routes());
+        // Document storage (+ Q&A when the AI agent pillar is enabled)
+        #[cfg(feature = "ai-agent")]
+        let router = router.nest(
+            "/documents",
+            documents::routes().merge(document_qa::routes()),
+        );
+        #[cfg(not(feature = "ai-agent"))]
+        let router = router.nest("/documents", documents::routes());
+        // Server-backed implementation wizard (needs capture + ERP sync + invoice upload types)
+        #[cfg(all(
+            feature = "capture",
+            feature = "processing",
+            feature = "analytics",
+            feature = "billing",
+            feature = "quickbooks",
+            feature = "xero"
+        ))]
+        let router = router.nest("/implementation", implementation::routes());
+        router
+    };
     // Conditionally include ERP/integration routes, gated by tenant subscription.
     // Compile-time Cargo features control code inclusion; the route_layer gates
     // access at runtime so only tenants with the matching Module add-on can reach
@@ -261,18 +313,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         );
         router
     };
-    router
+    let router = router
         // Notifications (Slack/Teams)
         .nest("/notifications", notifications::routes())
-        // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module
-        .nest(
-            "/analytics/predictive",
-            predictive::routes().layer(middleware::from_fn(require_reporting)),
-        )
-        // Analytics (Usage, Performance, Trends - tenant-scoped via AuthUser)
-        .nest("/analytics", analytics::routes())
-        // Analytics - Benchmark (opt-in peer insights)
-        .nest("/analytics/benchmark", analytics::benchmark_routes())
         // Mobile App Backend (Device management, dashboard, approvals)
         .nest("/mobile", mobile::routes())
         // Tenant settings
@@ -290,12 +333,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
                 .layer(middleware::from_fn(rate_limit_auth))
                 .layer(Extension(RateLimiterState::new(30, 60))),
         )
-        // AI Assistant (Winston)
-        .nest("/ai", ai::routes())
-        // Billing & Subscription
-        .nest("/billing", billing::routes())
-        // Self-serve sandbox promotion (authenticated)
-        .nest("/public", public_signup::promote_route())
         // Vendor Statement Reconciliation
         .merge(vendor_statements::routes())
         // Intelligent Routing & Workload Balancing
@@ -319,8 +356,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/qbo", qbo::routes())
         // Month-end close periods
         .nest("/close-periods", close_periods::routes())
-        // Contracts (non-PO recurring spend matching)
-        .nest("/contracts", contracts::routes())
         // Early-payment discount optimizer
         .nest("/discounts", discounts::routes())
         // Budget guardrails (finance budget configuration & checks)
@@ -328,9 +363,39 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Recurring-pattern detection & auto-approval policies
         .nest("/recurring-patterns", recurring_patterns::routes())
         // Natural-language policy composer (gated on InvoiceProcessing module via extractors)
-        .nest("/policies", policies::routes())
+        .nest("/policies", policies::routes());
+    // Pillar-gated mounts for the remainder of the API surface.
+    let router = {
+        // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module
+        #[cfg(feature = "analytics")]
+        let router = router.nest(
+            "/analytics/predictive",
+            predictive::routes().layer(middleware::from_fn(require_reporting)),
+        );
+        // Analytics (Usage, Performance, Trends - tenant-scoped via AuthUser)
+        #[cfg(feature = "analytics")]
+        let router = router.nest("/analytics", analytics::routes());
+        // Analytics - Benchmark (opt-in peer insights)
+        #[cfg(feature = "analytics")]
+        let router = router.nest("/analytics/benchmark", analytics::benchmark_routes());
+        // AI Assistant (Winston)
+        #[cfg(feature = "ai-agent")]
+        let router = router.nest("/ai", ai::routes());
+        // Billing & Subscription
+        #[cfg(feature = "billing")]
+        let router = router.nest("/billing", billing::routes());
+        // Self-serve sandbox promotion (authenticated)
+        #[cfg(feature = "billing")]
+        let router = router.nest("/public", public_signup::promote_route());
+        // Contracts (non-PO recurring spend matching)
+        #[cfg(feature = "processing")]
+        let router = router.nest("/contracts", contracts::routes());
         // Invoice Capture (standalone OCR upload)
-        .nest("/invoice-captures", crate::invoice_capture::routes())
+        #[cfg(feature = "capture")]
+        let router = router.nest("/invoice-captures", crate::invoice_capture::routes());
+        router
+    };
+    router
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
         .layer(middleware::from_fn(require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
