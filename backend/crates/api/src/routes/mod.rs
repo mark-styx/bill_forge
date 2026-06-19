@@ -9,6 +9,7 @@ pub mod approval_links;
 pub(crate) mod audit;
 pub mod audit_bundle;
 pub mod auth;
+pub mod autopilot;
 #[cfg(feature = "bill-com")]
 pub mod bill_com;
 #[cfg(feature = "billing")]
@@ -374,7 +375,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         // Recurring-pattern detection & auto-approval policies
         .nest("/recurring-patterns", recurring_patterns::routes())
         // Natural-language policy composer (gated on InvoiceProcessing module via extractors)
-        .nest("/policies", policies::routes());
+        .nest("/policies", policies::routes())
+        // Exception-Only Autopilot Cockpit (gated on InvoiceCapture module via extractors)
+        .nest("/autopilot", autopilot::routes());
     // Pillar-gated mounts for the remainder of the API surface.
     let router = {
         // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module

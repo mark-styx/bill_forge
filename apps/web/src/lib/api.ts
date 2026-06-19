@@ -3497,3 +3497,95 @@ export const vendorRiskApi = {
       `/api/v1/vendors/risk-alerts/${alertId}/acknowledge`,
     ),
 };
+
+// ---------------------------------------------------------------------------
+// Autopilot Cockpit (refs #379)
+// ---------------------------------------------------------------------------
+
+export type AutopilotExceptionType =
+  | 'missing_po'
+  | 'vendor_mismatch'
+  | 'duplicate'
+  | 'gl_ambiguity'
+  | 'policy_violation'
+  | 'ocr_low_confidence';
+
+export interface AutopilotProposedResolution {
+  action: string;
+  payload: Record<string, unknown>;
+  rationale: string;
+}
+
+export interface AutopilotQueueItem {
+  id: string;
+  invoice_id: string;
+  exception_type: AutopilotExceptionType;
+  proposed_resolution: AutopilotProposedResolution;
+  confidence: number;
+  auto_resolve_eligible: boolean;
+}
+
+export interface AutopilotQueueResponse {
+  items: AutopilotQueueItem[];
+  threshold: number;
+  enabled_types: AutopilotExceptionType[];
+}
+
+export interface AutopilotOverrideAction {
+  action: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface AutopilotResolveResponse {
+  exception_id: string;
+  decision: 'confirm' | 'override';
+  applied_action: string;
+}
+
+export interface AutopilotReportRow {
+  exception_type: AutopilotExceptionType;
+  auto_resolved: number;
+  human_confirmed: number;
+  overridden: number;
+  still_open: number;
+}
+
+export interface AutopilotUncertainBucket {
+  exception_type: AutopilotExceptionType;
+  avg_confidence: number;
+  open_count: number;
+}
+
+export interface AutopilotReport {
+  date: string;
+  rows: AutopilotReportRow[];
+  uncertain_types: AutopilotUncertainBucket[];
+}
+
+export interface AutopilotSettings {
+  autopilot_threshold: number;
+  autopilot_enabled_types: AutopilotExceptionType[];
+}
+
+export const autopilotApi = {
+  getQueue: () => api.get<AutopilotQueueResponse>('/api/v1/autopilot/queue'),
+
+  resolve: (
+    exceptionId: string,
+    decision: 'confirm' | 'override',
+    overrideAction?: AutopilotOverrideAction,
+  ) =>
+    api.post<AutopilotResolveResponse>('/api/v1/autopilot/resolve', {
+      exception_id: exceptionId,
+      decision,
+      override_action: overrideAction,
+    }),
+
+  getReport: (date?: string) =>
+    api.get<AutopilotReport>('/api/v1/autopilot/report', date ? { date } : undefined),
+
+  getSettings: () => api.get<AutopilotSettings>('/api/v1/autopilot/settings'),
+
+  updateSettings: (settings: Partial<AutopilotSettings>) =>
+    api.put<AutopilotSettings>('/api/v1/autopilot/settings', settings),
+};

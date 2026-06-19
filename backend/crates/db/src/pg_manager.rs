@@ -342,6 +342,18 @@ impl PgManager {
             )
             .await?;
 
+        // Autopilot cockpit decision audit table (refs #379). Per-tenant
+        // confirm/override/auto-resolve log queried by the Daily Report
+        // endpoint. Settings live as JSONB keys on tenants.settings (backfilled
+        // by the same migration against the metadata DB via migrate.rs).
+        migration_runner
+            .apply(
+                pool,
+                "137_autopilot_settings_and_audit.sql",
+                include_str!("../../../migrations/137_autopilot_settings_and_audit.sql"),
+            )
+            .await?;
+
         // Integration webhook support (nonces table + webhook_secret columns)
         migration_runner
             .apply(

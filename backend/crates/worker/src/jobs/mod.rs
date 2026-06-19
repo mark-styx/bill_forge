@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 
 pub mod anomaly_detection;
 pub mod approval_expiry;
+pub mod autopilot_sweep;
 pub mod categorization_training;
 pub mod email_batch;
 pub mod embedding_refresh;
@@ -55,6 +56,7 @@ pub enum JobType {
     OcrProcess,
     ApprovalExpiry,
     VendorRiskRescan,
+    AutopilotSweep,
 }
 
 impl std::fmt::Display for JobType {
@@ -79,6 +81,7 @@ impl std::fmt::Display for JobType {
             JobType::OcrProcess => write!(f, "OcrProcess"),
             JobType::ApprovalExpiry => write!(f, "ApprovalExpiry"),
             JobType::VendorRiskRescan => write!(f, "VendorRiskRescan"),
+            JobType::AutopilotSweep => write!(f, "AutopilotSweep"),
         }
     }
 }
@@ -322,6 +325,10 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
             vendor_risk_rescan::rescan_tenant(config.pg_manager.clone(), &tenant_id)
                 .await
                 .map(|_| ())
+        }
+        JobType::AutopilotSweep => {
+            autopilot_sweep::run_tenant_autopilot_sweep(config.pg_manager.clone(), &tenant_id)
+                .await
         }
     }
 }

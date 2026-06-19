@@ -74,6 +74,14 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    let redis_client7 = redis_client.clone();
+    let pg_manager7 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_autopilot_sweep_task(redis_client7, pg_manager7).await {
+            error!("Autopilot sweep scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -299,6 +307,40 @@ async fn enqueue_vendor_risk_rescan_jobs(
     pg_manager: Arc<billforge_db::PgManager>,
 ) -> Result<()> {
     enqueue_jobs_for_active_tenants(conn, pg_manager, JobType::VendorRiskRescan).await
+}
+
+/// Schedule autopilot sweep jobs hourly (configurable via AUTOPILOT_SWEEP_CRON_SECS).
+///
+/// The sweep confirms autopilot-eligible exceptions automatically so AP staff
+/// only see what truly needs a human. Default cadence is hourly so a tenant
+/// that bumps autopilot_threshold down sees results within an hour.
+async fn schedule_autopilot_sweep_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    let interval_secs = std::env::var("AUTOPILOT_SWEEP_CRON_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60 * 60);
+
+    let mut interval = interval(Duration::from_secs(interval_secs));
+
+    info!(
+        interval_secs,
+        "Autopilot sweep scheduler started (default hourly, override via AUTOPILOT_SWEEP_CRON_SECS)"
+    );
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_jobs_for_active_tenants(&mut conn, pg_manager.clone(), JobType::AutopilotSweep)
+            .await
+        {
+            Ok(_) => info!("Enqueued autopilot sweep jobs"),
+            Err(e) => error!("Failed to enqueue autopilot sweep jobs: {}", e),
+        }
+    }
 }
 
 async fn enqueue_jobs_for_active_tenants(

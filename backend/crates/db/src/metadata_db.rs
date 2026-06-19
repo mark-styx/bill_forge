@@ -17,6 +17,14 @@ impl MetadataDatabase {
         Self { pool }
     }
 
+    /// Borrow the underlying pool. Used by callers that need to run ad-hoc
+    /// SQL against the metadata DB (e.g. the autopilot settings handler, which
+    /// patches two JSONB keys on tenants.settings without going through the
+    /// typed TenantSettings struct).
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     pub async fn new(database_url: &str) -> Result<Self> {
         let mut connect_opts = sqlx::postgres::PgConnectOptions::from_str(database_url)
             .map_err(|e| Error::Database(format!("Invalid database URL: {}", e)))?;
