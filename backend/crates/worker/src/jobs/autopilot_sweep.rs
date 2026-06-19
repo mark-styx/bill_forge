@@ -4,6 +4,12 @@
 //! resolution confidence is at or above the tenant's `autopilot_threshold` AND
 //! the exception_type is in the tenant's `autopilot_enabled_types` list.
 //!
+//! When `autopilot_enabled_types` is **absent** from settings the sweep defaults
+//! to the full set of types it currently supports, so a tenant who has never
+//! touched settings still benefits from auto-resolve. When the key is **present
+//! but an empty array** the tenant has explicitly opted out and the sweep skips
+//! them.
+//!
 //! This is NOT a new ML model: the per-exception confidence is the score the
 //! existing detector already emits (OCR confidence, duplicate similarity,
 //! PO-match score, categorization confidence, policy severity). The cockpit
@@ -44,15 +50,25 @@ pub async fn run_tenant_autopilot_sweep(
         .and_then(|v| v.as_f64())
         .map(|f| f as f32)
         .unwrap_or(0.95);
-    let enabled: Vec<String> = settings_json
-        .get("autopilot_enabled_types")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    // When the key is absent, default to every type the sweep supports today
+    // so a tenant who has never written settings still gets auto-resolve.
+    // When the key is present but empty, the tenant has explicitly opted out.
+    let enabled: Vec<String> = match settings_json.get("autopilot_enabled_types") {
+        Some(v) => v
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => vec![
+            "ocr_low_confidence".to_string(),
+            "gl_ambiguity".to_string(),
+            "missing_po".to_string(),
+            "vendor_mismatch".to_string(),
+        ],
+    };
 
     // Empty enabled list = tenant has opted out of auto-resolve entirely.
     if enabled.is_empty() || threshold <= 0.0 {
@@ -104,7 +120,7 @@ async fn auto_resolve_tenant_exceptions(
     // billforge_api::routes::autopilot.
     let rows = sqlx::query_as::<_, SignalRow>(
         r#"SELECT id, ocr_confidence, categorization_confidence, po_number, gl_code,
-                  ocr_exception_status
+                  ocr_exception_status, vendor_name
            FROM invoices
            WHERE tenant_id = $1
            LIMIT 500"#,
@@ -167,6 +183,7 @@ struct SignalRow {
     po_number: Option<String>,
     gl_code: Option<String>,
     ocr_exception_status: String,
+    vendor_name: String,
 }
 
 /// Map an exception_type to the detector-emitted confidence for this invoice.
@@ -198,9 +215,38 @@ fn confidence_for(exception_type: &str, row: &SignalRow) -> Option<f32> {
             None if row.gl_code.is_none() => Some(0.10),
             _ => None,
         },
-        // These exception_types require per-invoice detector state that the
-        // sweep does not re-derive; the human-in-the-loop cockpit remains the
-        // resolution path for them.
+        // Mirror build_proposals case 2: a proposal is emitted only when
+        // po_number is None or trims to empty.
+        "missing_po" => {
+            let po_missing = row
+                .po_number
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true);
+            if po_missing {
+                Some(0.30)
+            } else {
+                None
+            }
+        }
+        // Mirror build_proposals case 4: a proposal is emitted only when the
+        // vendor_name is blank, contains "unknown", or is the placeholder
+        // "processing...".
+        "vendor_mismatch" => {
+            let lower = row.vendor_name.to_lowercase();
+            if row.vendor_name.trim().is_empty()
+                || lower.contains("unknown")
+                || lower == "processing..."
+            {
+                Some(0.20)
+            } else {
+                None
+            }
+        }
+        // `duplicate` and `policy_violation` require per-invoice detector
+        // state that the sweep does not re-derive (the queue itself defers to
+        // load_pending_duplicates_and_policy from invoice_audit_log); the
+        // human-in-the-loop cockpit remains the resolution path for them.
         _ => None,
     }
 }
@@ -219,6 +265,7 @@ mod tests {
             po_number: None,
             gl_code: None,
             ocr_exception_status: "pending".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("ocr_low_confidence", &row), Some(0.55));
     }
@@ -232,6 +279,7 @@ mod tests {
             po_number: None,
             gl_code: None,
             ocr_exception_status: "pending".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("ocr_low_confidence", &row), None);
     }
@@ -248,6 +296,7 @@ mod tests {
             po_number: None,
             gl_code: None,
             ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("ocr_low_confidence", &row), None);
     }
@@ -261,6 +310,7 @@ mod tests {
             po_number: None,
             gl_code: None,
             ocr_exception_status: "pending".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("gl_ambiguity", &row), Some(0.40));
     }
@@ -277,6 +327,7 @@ mod tests {
             po_number: Some("PO-1".to_string()),
             gl_code: Some("5000".to_string()),
             ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("gl_ambiguity", &row), None);
     }
@@ -292,6 +343,7 @@ mod tests {
             po_number: Some("PO-1".to_string()),
             gl_code: None,
             ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("gl_ambiguity", &row), Some(0.10));
     }
@@ -307,12 +359,115 @@ mod tests {
             po_number: Some("PO-1".to_string()),
             gl_code: Some("5000".to_string()),
             ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
         };
         assert_eq!(confidence_for("gl_ambiguity", &row), None);
     }
 
     #[test]
-    fn confidence_for_unsupported_types_returns_none() {
+    fn confidence_for_missing_po_returns_some_when_po_absent() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: None,
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+        };
+        assert_eq!(confidence_for("missing_po", &row), Some(0.30));
+    }
+
+    #[test]
+    fn confidence_for_missing_po_returns_some_when_po_blank() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("   ".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+        };
+        assert_eq!(confidence_for("missing_po", &row), Some(0.30));
+    }
+
+    #[test]
+    fn confidence_for_missing_po_returns_none_when_po_present() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+        };
+        assert_eq!(confidence_for("missing_po", &row), None);
+    }
+
+    #[test]
+    fn confidence_for_vendor_mismatch_returns_some_when_vendor_unknown() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Unknown Vendor".to_string(),
+        };
+        assert_eq!(confidence_for("vendor_mismatch", &row), Some(0.20));
+    }
+
+    #[test]
+    fn confidence_for_vendor_mismatch_returns_some_when_vendor_blank() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "".to_string(),
+        };
+        assert_eq!(confidence_for("vendor_mismatch", &row), Some(0.20));
+    }
+
+    #[test]
+    fn confidence_for_vendor_mismatch_returns_some_when_vendor_processing() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Processing...".to_string(),
+        };
+        assert_eq!(confidence_for("vendor_mismatch", &row), Some(0.20));
+    }
+
+    #[test]
+    fn confidence_for_vendor_mismatch_returns_none_when_vendor_resolved() {
+        let row = SignalRow {
+            id: Uuid::new_v4(),
+            ocr_confidence: Some(0.95),
+            categorization_confidence: Some(0.99),
+            po_number: Some("PO-1".to_string()),
+            gl_code: Some("5000".to_string()),
+            ocr_exception_status: "approved".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+        };
+        assert_eq!(confidence_for("vendor_mismatch", &row), None);
+    }
+
+    #[test]
+    fn confidence_for_duplicate_and_policy_violation_still_return_none() {
+        // `duplicate` and `policy_violation` require per-invoice detector
+        // state the sweep does not re-derive; without these arms the sweep
+        // would write phantom auto_resolved rows for invoices that have no
+        // exception of that type.
         let row = SignalRow {
             id: Uuid::new_v4(),
             ocr_confidence: Some(0.55),
@@ -320,9 +475,8 @@ mod tests {
             po_number: None,
             gl_code: None,
             ocr_exception_status: "pending".to_string(),
+            vendor_name: "".to_string(),
         };
-        assert_eq!(confidence_for("missing_po", &row), None);
-        assert_eq!(confidence_for("vendor_mismatch", &row), None);
         assert_eq!(confidence_for("duplicate", &row), None);
         assert_eq!(confidence_for("policy_violation", &row), None);
     }
