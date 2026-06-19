@@ -412,6 +412,7 @@ export interface ImplementationStatus {
     go_live: {
       status: ImplementationPhaseStatus;
       checks: ImplementationGoLiveChecks;
+      backtest_scorecard?: ImplementationReadinessScorecard | null;
     };
   };
 }
@@ -422,6 +423,16 @@ export interface ImplementationGoLiveChecks {
   sample_invoice_routed: boolean;
   notifications_acknowledged: boolean;
   privacy_mode_confirmed: boolean;
+}
+
+export interface ImplementationReadinessScorecard {
+  auto_route_coverage: number;
+  auto_approve_coverage: number;
+  vendor_map_coverage: number;
+  sample_size: number;
+  readiness_score: number;
+  passes_threshold: boolean;
+  run_at: string | null;
 }
 
 export interface ImplementationPrivacyModeConfig {
@@ -502,6 +513,10 @@ export const implementationApi = {
       ap_team_distribution: apTeamDistribution,
       escalation_distribution: escalationDistribution,
     }),
+  runReadinessBacktest: () =>
+    api.post<ImplementationReadinessScorecard>('/api/v1/implementation/backtest', {}),
+  getReadinessBacktest: () =>
+    api.get<ImplementationReadinessScorecard>('/api/v1/implementation/backtest'),
 };
 
 // Invoices API

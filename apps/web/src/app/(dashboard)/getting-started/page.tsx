@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Flag,
+  Gauge,
   GitBranch,
   Loader2,
   Mail,
@@ -23,6 +24,7 @@ import {
   type ImplementationGoLiveChecks,
   type ImplementationModuleEntitlement,
   type ImplementationPhaseStatus,
+  type ImplementationReadinessScorecard,
   type ImplementationStatus,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
@@ -65,6 +67,89 @@ function goLiveDate(startedAt: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed';
+}
+
+const READINESS_THRESHOLD_PCT = 75;
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function ReadinessBacktest({
+  scorecard,
+  running,
+  onRun,
+  disabled,
+}: {
+  scorecard: ImplementationReadinessScorecard | null | undefined;
+  running: boolean;
+  onRun: () => void;
+  disabled: boolean;
+}) {
+  const metrics = scorecard
+    ? [
+        { label: 'Auto-route coverage', value: scorecard.auto_route_coverage },
+        { label: 'Auto-approve coverage', value: scorecard.auto_approve_coverage },
+        { label: 'Vendor map coverage', value: scorecard.vendor_map_coverage },
+        { label: 'Readiness score', value: scorecard.readiness_score },
+      ]
+    : [];
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-secondary/30 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+          <Gauge className="w-4 h-4" />
+          Go-live readiness backtest
+        </h4>
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={disabled || running}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-60"
+        >
+          {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gauge className="w-4 h-4" />}
+          {scorecard ? 'Re-run backtest' : 'Run readiness backtest'}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Replays configured workflow and categorization rules against up to 250 historical bills.
+        Passes the gate at {READINESS_THRESHOLD_PCT}%.
+      </p>
+      {scorecard && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                scorecard.passes_threshold
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+              }`}
+              data-testid="readiness-pill"
+            >
+              {scorecard.passes_threshold
+                ? <CheckCircle2 className="w-3 h-3" />
+                : <AlertCircle className="w-3 h-3" />}
+              {scorecard.passes_threshold
+                ? `Ready (${formatPercent(scorecard.readiness_score)})`
+                : `Not ready (${formatPercent(scorecard.readiness_score)})`}
+            </span>
+            <span className="text-xs text-muted-foreground" data-testid="readiness-sample-size">
+              {scorecard.sample_size} bills sampled
+            </span>
+          </div>
+          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="readiness-metrics">
+            {metrics.map((metric) => (
+              <div key={metric.label} className="rounded-md bg-background p-2">
+                <dt className="text-xs text-muted-foreground">{metric.label}</dt>
+                <dd className="text-sm font-semibold text-foreground">{formatPercent(metric.value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SubItemToggle({ checked, label, onChange, disabled }: {
@@ -275,6 +360,21 @@ export default function GettingStartedPage() {
       setPending('config-notifications');
       setError(null);
       setStatus(await implementationApi.updateNotificationApprovals(apTeam, escalation));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const runBacktest = async () => {
+    try {
+      setPending('backtest');
+      setError(null);
+      // POST runs the backtest and persists the scorecard onto the wizard
+      // state; refresh status so the rendered card reflects what landed.
+      await implementationApi.runReadinessBacktest();
+      setStatus(await implementationApi.status());
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -635,6 +735,12 @@ export default function GettingStartedPage() {
             )
           ))}
         </div>
+        <ReadinessBacktest
+          scorecard={phases.go_live.backtest_scorecard}
+          running={pending === 'backtest'}
+          onRun={() => runBacktest()}
+          disabled={pending !== null}
+        />
       </PhaseCard>
 
       <div

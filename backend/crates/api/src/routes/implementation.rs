@@ -10,13 +10,15 @@ use axum::{
 };
 use billforge_core::{
     domain::{
-        CreatePOLineItemInput, CreatePurchaseOrderInput, CreateWorkflowTemplateInput, StageType,
+        ActionType, CreatePOLineItemInput, CreatePurchaseOrderInput, CreateWorkflowTemplateInput,
+        Invoice, InvoiceFilters, StageType, WorkflowRule, WorkflowRuleType,
         WorkflowTemplateStage,
     },
-    traits::{PurchaseOrderRepository, WorkflowTemplateRepository},
-    types::{Money, TenantId, UserId},
+    traits::{InvoiceRepository, PurchaseOrderRepository, WorkflowRuleRepository, WorkflowTemplateRepository},
+    types::{Money, Pagination, TenantId, UserId},
     Error, Role,
 };
+use std::collections::HashSet;
 use billforge_quickbooks::{
     QBAccount, QBPurchaseOrder, QBPurchaseOrderLine, QBVendor, QuickBooksClient,
     QuickBooksEnvironment, QuickBooksOAuth, QuickBooksOAuthConfig,
@@ -38,6 +40,7 @@ pub fn routes() -> Router<AppState> {
         .route("/approval-template", post(select_approval_template))
         .route("/sample-invoices", post(upload_sample_invoices))
         .route("/checklist", patch(update_checklist))
+        .route("/backtest", get(get_readiness_backtest).post(run_readiness_backtest))
         .route("/configuration/privacy-mode", put(update_privacy_mode))
         .route(
             "/configuration/capture-channels",
@@ -142,7 +145,47 @@ pub struct GoLiveChecks {
 pub struct GoLivePhase {
     pub status: PhaseStatus,
     pub checks: GoLiveChecks,
+    /// Cached go-live readiness backtest result. Populated by
+    /// `POST /implementation/backtest` and surfaced in the getting-started UI.
+    /// `#[serde(default)]` keeps existing wizard state rows deserializable.
+    #[serde(default)]
+    pub backtest_scorecard: Option<ReadinessScorecard>,
 }
+
+/// Go-live readiness scorecard produced by backtesting configured workflow
+/// and categorization rules against the ERP-synced historical bill set.
+///
+/// `readiness_score` is a weighted average of the three coverage signals
+/// (0.4 * auto_route + 0.4 * auto_approve + 0.2 * vendor_map). A score of
+/// >= 0.75 marks the tenant ready for cutover.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReadinessScorecard {
+    /// Fraction of sample bills a workflow routing rule matched.
+    pub auto_route_coverage: f32,
+    /// Fraction of sample bills an auto-approval rule (or routing rule with
+    /// an AutoApprove action) would have eligible.
+    pub auto_approve_coverage: f32,
+    /// Fraction of sample bills whose vendor was mapped in the ERP sync.
+    pub vendor_map_coverage: f32,
+    /// Number of historical bills the scorecard was computed over.
+    pub sample_size: u32,
+    /// Weighted readiness score in [0.0, 1.0].
+    pub readiness_score: f32,
+    /// Whether `readiness_score` clears the 0.75 go-live threshold.
+    pub passes_threshold: bool,
+    /// When the backtest was last run. `None` until the first run.
+    #[serde(default)]
+    pub run_at: Option<DateTime<Utc>>,
+}
+
+/// Weight applied to each coverage signal in the readiness score.
+pub const READINESS_WEIGHT_AUTO_ROUTE: f32 = 0.4;
+pub const READINESS_WEIGHT_AUTO_APPROVE: f32 = 0.4;
+pub const READINESS_WEIGHT_VENDOR_MAP: f32 = 0.2;
+/// Minimum weighted score a tenant must reach to pass the readiness gate.
+pub const READINESS_THRESHOLD: f32 = 0.75;
+/// Maximum number of historical bills replayed per backtest run.
+pub const READINESS_BACKTEST_SAMPLE_CAP: u32 = 250;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PrivacyModeConfig {
@@ -502,6 +545,231 @@ pub async fn update_checklist(
     Ok(Json(
         status_response_with_accuracy(&pool, &tenant.tenant_id, wizard, routed).await,
     ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/implementation/backtest",
+    tag = "Implementation",
+    responses((status = 200, description = "Readiness backtest executed", body = ReadinessScorecard))
+)]
+pub async fn run_readiness_backtest(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<ReadinessScorecard>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let mut wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+
+    // Replay configured workflow rules against the historical bill set the
+    // tenant already pulled during ERP sync. Cap the sample so a large tenant
+    // does not stall the wizard. If there is nothing to replay, surface an
+    // explicit zero-score card that fails the threshold rather than erroring.
+    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+    let invoices = invoice_repo
+        .list(
+            &tenant.tenant_id,
+            &InvoiceFilters::default(),
+            &Pagination {
+                page: 1,
+                per_page: READINESS_BACKTEST_SAMPLE_CAP,
+            },
+        )
+        .await?;
+
+    let rule_repo = billforge_db::repositories::WorkflowRepositoryImpl::new(pool.clone());
+    let routing_rules = WorkflowRuleRepository::get_active_rules(
+        &rule_repo,
+        &tenant.tenant_id,
+        WorkflowRuleType::Routing,
+    )
+    .await?;
+    let auto_approval_rules = WorkflowRuleRepository::get_active_rules(
+        &rule_repo,
+        &tenant.tenant_id,
+        WorkflowRuleType::AutoApproval,
+    )
+    .await?;
+
+    let mapped_vendor_ids = load_mapped_vendor_ids(&pool, &tenant.tenant_id).await?;
+
+    let scorecard = compute_readiness_scorecard(
+        &invoices.data,
+        &routing_rules,
+        &auto_approval_rules,
+        &mapped_vendor_ids,
+        Some(Utc::now()),
+    );
+
+    wizard.phases.go_live.backtest_scorecard = Some(scorecard.clone());
+    let routed = has_routed_invoice(&pool, &tenant.tenant_id).await;
+    recompute_statuses(&mut wizard, routed);
+    save_state(&pool, &tenant.tenant_id, &wizard).await?;
+
+    tracing::info!(
+        tenant_id = %tenant.tenant_id,
+        sample_size = scorecard.sample_size,
+        auto_route_coverage = scorecard.auto_route_coverage,
+        auto_approve_coverage = scorecard.auto_approve_coverage,
+        vendor_map_coverage = scorecard.vendor_map_coverage,
+        readiness_score = scorecard.readiness_score,
+        passes_threshold = scorecard.passes_threshold,
+        "Implementation wizard: readiness backtest executed"
+    );
+
+    Ok(Json(scorecard))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/implementation/backtest",
+    tag = "Implementation",
+    responses((status = 200, description = "Cached readiness backtest scorecard", body = ReadinessScorecard))
+)]
+pub async fn get_readiness_backtest(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    TenantCtx(tenant): TenantCtx,
+) -> ApiResult<Json<ReadinessScorecard>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let wizard = load_or_create_state(&pool, &tenant.tenant_id).await?;
+    Ok(Json(
+        wizard
+            .phases
+            .go_live
+            .backtest_scorecard
+            .clone()
+            .unwrap_or_else(empty_scorecard),
+    ))
+}
+
+/// Compute the readiness scorecard by replaying routing / auto-approval
+/// rules and vendor-map coverage across a sample of historical bills.
+///
+/// Pure function so unit tests can synthesize fake bills with stubbed rule
+/// outcomes without touching the database.
+pub fn compute_readiness_scorecard(
+    invoices: &[Invoice],
+    routing_rules: &[WorkflowRule],
+    auto_approval_rules: &[WorkflowRule],
+    mapped_vendor_ids: &HashSet<Uuid>,
+    run_at: Option<DateTime<Utc>>,
+) -> ReadinessScorecard {
+    let sample_size = invoices.len() as u32;
+
+    if invoices.is_empty() {
+        return empty_scorecard_with(sample_size, run_at);
+    }
+
+    let mut auto_route_hits = 0u32;
+    let mut auto_approve_hits = 0u32;
+    let mut vendor_map_hits = 0u32;
+
+    for invoice in invoices {
+        let routed = routing_rules
+            .iter()
+            .any(|rule| evaluate_rule_conditions(invoice, rule));
+        if routed {
+            auto_route_hits += 1;
+        }
+
+        // Auto-approve eligible if an explicit auto-approval rule matches, or
+        // a matched routing rule carries an AutoApprove action.
+        let auto_approve_eligible = auto_approval_rules
+            .iter()
+            .any(|rule| evaluate_rule_conditions(invoice, rule))
+            || routing_rules.iter().any(|rule| {
+                rule.actions
+                    .iter()
+                    .any(|action| action.action_type == ActionType::AutoApprove)
+                    && evaluate_rule_conditions(invoice, rule)
+            });
+        if auto_approve_eligible {
+            auto_approve_hits += 1;
+        }
+
+        if invoice
+            .vendor_id
+            .map(|id| mapped_vendor_ids.contains(&id))
+            .unwrap_or(false)
+        {
+            vendor_map_hits += 1;
+        }
+    }
+
+    let total = sample_size as f32;
+    let auto_route_coverage = auto_route_hits as f32 / total;
+    let auto_approve_coverage = auto_approve_hits as f32 / total;
+    let vendor_map_coverage = vendor_map_hits as f32 / total;
+    let readiness_score = READINESS_WEIGHT_AUTO_ROUTE * auto_route_coverage
+        + READINESS_WEIGHT_AUTO_APPROVE * auto_approve_coverage
+        + READINESS_WEIGHT_VENDOR_MAP * vendor_map_coverage;
+
+    ReadinessScorecard {
+        auto_route_coverage,
+        auto_approve_coverage,
+        vendor_map_coverage,
+        sample_size,
+        readiness_score,
+        passes_threshold: readiness_score >= READINESS_THRESHOLD,
+        run_at,
+    }
+}
+
+/// Evaluate a workflow rule's conditions against an invoice using the shared
+/// `workflow_evaluator`. Empty conditions count as a match so a catch-all
+/// rule is still exercised by the backtest, mirroring the engine behavior.
+fn evaluate_rule_conditions(invoice: &Invoice, rule: &WorkflowRule) -> bool {
+    if rule.conditions.is_empty() {
+        return true;
+    }
+    billforge_core::workflow_evaluator::evaluate_conditions(invoice, &rule.conditions)
+}
+
+/// Scorecard returned when there is no historical sample to replay.
+fn empty_scorecard() -> ReadinessScorecard {
+    empty_scorecard_with(0, None)
+}
+
+fn empty_scorecard_with(sample_size: u32, run_at: Option<DateTime<Utc>>) -> ReadinessScorecard {
+    ReadinessScorecard {
+        auto_route_coverage: 0.0,
+        auto_approve_coverage: 0.0,
+        vendor_map_coverage: 0.0,
+        sample_size,
+        readiness_score: 0.0,
+        passes_threshold: false,
+        run_at,
+    }
+}
+
+/// Load the union of ERP-mapped `billforge_vendor_id` values for the tenant.
+/// Covers both QuickBooks (`quickbooks_vendor_mappings`) and Xero
+/// (`xero_contact_mappings`) so the scorecard reflects whichever ERP the
+/// tenant connected during the wizard.
+async fn load_mapped_vendor_ids(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+) -> Result<HashSet<Uuid>, billforge_core::Error> {
+    let mut ids = HashSet::new();
+    for query in [
+        "SELECT billforge_vendor_id FROM quickbooks_vendor_mappings WHERE tenant_id = $1",
+        "SELECT billforge_vendor_id FROM xero_contact_mappings WHERE tenant_id = $1",
+    ] {
+        let rows: Vec<(Option<Uuid>,)> = sqlx::query_as(query)
+            .bind(tenant_id.as_uuid())
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to load vendor mappings: {}", e))
+            })?;
+        for (vendor_id,) in rows {
+            if let Some(id) = vendor_id {
+                ids.insert(id);
+            }
+        }
+    }
+    Ok(ids)
 }
 
 #[utoipa::path(
@@ -2001,6 +2269,7 @@ pub fn default_state(started_at: DateTime<Utc>) -> ImplementationWizardState {
                     notifications_acknowledged: false,
                     privacy_mode_confirmed: false,
                 },
+                backtest_scorecard: None,
             },
         },
     }
@@ -2282,5 +2551,162 @@ mod tests {
 
         purchase_order.Status = Some("BILLED".to_string());
         assert!(!xero_purchase_order_open(&purchase_order));
+    }
+
+    #[test]
+    fn backtest_with_no_history_returns_zero_score_and_fails_threshold() {
+        // No historical bills at all => zero coverage on every signal and the
+        // tenant cannot pass the readiness gate, regardless of rules.
+        let routing = vec![sample_routing_rule(10_000)];
+        let auto_approval = vec![sample_auto_approval_rule(5_000)];
+        let mapped: HashSet<Uuid> = HashSet::new();
+
+        let scorecard = compute_readiness_scorecard(
+            &[],
+            &routing,
+            &auto_approval,
+            &mapped,
+            Some(Utc::now()),
+        );
+
+        assert_eq!(scorecard.sample_size, 0);
+        assert_eq!(scorecard.auto_route_coverage, 0.0);
+        assert_eq!(scorecard.auto_approve_coverage, 0.0);
+        assert_eq!(scorecard.vendor_map_coverage, 0.0);
+        assert_eq!(scorecard.readiness_score, 0.0);
+        assert!(!scorecard.passes_threshold);
+    }
+
+    #[test]
+    fn backtest_weighted_score_passes_when_three_signals_high() {
+        // Synthesize ten small bills (2500 cents). All match both the routing
+        // rule (amount < 10000) and the auto-approval rule (amount < 5000).
+        // Eight have a mapped vendor, two do not. Expected weighted score:
+        //   0.4 * 1.0 + 0.4 * 1.0 + 0.2 * 0.8 = 0.96 -> passes the 0.75 gate.
+        let mapped_vendor = Uuid::new_v4();
+        let unmapped_vendor = Uuid::new_v4();
+        let mut mapped: HashSet<Uuid> = HashSet::new();
+        mapped.insert(mapped_vendor);
+
+        let mut invoices = Vec::new();
+        for idx in 0..10 {
+            let vendor_id = if idx < 8 { mapped_vendor } else { unmapped_vendor };
+            invoices.push(sample_invoice(vendor_id, 2_500));
+        }
+
+        let routing = vec![sample_routing_rule(10_000)];
+        let auto_approval = vec![sample_auto_approval_rule(5_000)];
+
+        let scorecard = compute_readiness_scorecard(
+            &invoices,
+            &routing,
+            &auto_approval,
+            &mapped,
+            Some(Utc::now()),
+        );
+
+        assert_eq!(scorecard.sample_size, 10);
+        assert_eq!(scorecard.auto_route_coverage, 1.0);
+        assert_eq!(scorecard.auto_approve_coverage, 1.0);
+        assert!((scorecard.vendor_map_coverage - 0.8).abs() < 1e-6);
+        let expected_score = READINESS_WEIGHT_AUTO_ROUTE * 1.0
+            + READINESS_WEIGHT_AUTO_APPROVE * 1.0
+            + READINESS_WEIGHT_VENDOR_MAP * 0.8;
+        assert!((scorecard.readiness_score - expected_score).abs() < 1e-6);
+        assert!(scorecard.passes_threshold, "expected score {} to clear threshold {}", scorecard.readiness_score, READINESS_THRESHOLD);
+    }
+
+    /// Build a workflow routing rule that matches invoices below an amount
+    /// threshold (in cents) and routes them to a queue.
+    fn sample_routing_rule(amount_cents: i64) -> WorkflowRule {
+        use billforge_core::domain::{
+            ConditionField, ConditionOperator, RuleAction, RuleCondition, WorkflowRuleId,
+        };
+        WorkflowRule {
+            id: WorkflowRuleId(Uuid::new_v4()),
+            tenant_id: TenantId::new(),
+            name: "Backtest route-below-amount".to_string(),
+            description: None,
+            priority: 10,
+            is_active: true,
+            rule_type: WorkflowRuleType::Routing,
+            conditions: vec![RuleCondition {
+                field: ConditionField::Amount,
+                operator: ConditionOperator::LessThan,
+                value: serde_json::json!(amount_cents),
+            }],
+            actions: vec![RuleAction {
+                action_type: ActionType::RouteToQueue,
+                params: serde_json::json!({ "queue_id": "ap-review" }),
+            }],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Build an auto-approval rule that matches invoices below an amount
+    /// threshold (in cents).
+    fn sample_auto_approval_rule(amount_cents: i64) -> WorkflowRule {
+        use billforge_core::domain::{
+            ConditionField, ConditionOperator, RuleAction, RuleCondition, WorkflowRuleId,
+        };
+        WorkflowRule {
+            id: WorkflowRuleId(Uuid::new_v4()),
+            tenant_id: TenantId::new(),
+            name: "Backtest small-invoice auto-approve".to_string(),
+            description: None,
+            priority: 20,
+            is_active: true,
+            rule_type: WorkflowRuleType::AutoApproval,
+            conditions: vec![RuleCondition {
+                field: ConditionField::Amount,
+                operator: ConditionOperator::LessThan,
+                value: serde_json::json!(amount_cents),
+            }],
+            actions: vec![RuleAction {
+                action_type: ActionType::AutoApprove,
+                params: serde_json::json!({}),
+            }],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Build a minimal invoice for the backtest tests. Only the fields the
+    /// rule evaluator reads (total amount + vendor id) are populated.
+    fn sample_invoice(vendor_id: Uuid, amount_cents: i64) -> Invoice {
+        use billforge_core::domain::{CaptureStatus, InvoiceId, ProcessingStatus};
+        Invoice {
+            id: InvoiceId::new(),
+            tenant_id: TenantId::new(),
+            vendor_id: Some(vendor_id),
+            vendor_name: format!("Vendor {}", vendor_id),
+            invoice_number: Uuid::new_v4().to_string(),
+            invoice_date: Some(Utc::now().date_naive()),
+            due_date: None,
+            po_number: None,
+            subtotal: Some(Money::new(amount_cents, "USD".to_string())),
+            tax_amount: None,
+            total_amount: Money::new(amount_cents, "USD".to_string()),
+            currency: "USD".to_string(),
+            line_items: Vec::new(),
+            capture_status: CaptureStatus::Reviewed,
+            processing_status: ProcessingStatus::Draft,
+            current_queue_id: None,
+            assigned_to: None,
+            document_id: Uuid::new_v4(),
+            supporting_documents: Vec::new(),
+            ocr_confidence: None,
+            categorization_confidence: None,
+            department: None,
+            gl_code: None,
+            cost_center: None,
+            notes: None,
+            tags: Vec::new(),
+            custom_fields: serde_json::Value::Object(serde_json::Map::new()),
+            created_by: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
     }
 }

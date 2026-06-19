@@ -339,6 +339,8 @@ struct ReportApiDoc;
     crate::routes::implementation::select_approval_template,
     crate::routes::implementation::upload_sample_invoices,
     crate::routes::implementation::update_checklist,
+    crate::routes::implementation::run_readiness_backtest,
+    crate::routes::implementation::get_readiness_backtest,
 ))]
 struct ImplementationApiDoc;
 
