@@ -227,6 +227,38 @@ class ApiClient {
 
     return response.blob();
   }
+
+  async exportCashFlowForecast(body: {
+    format: 'csv' | 'slack' | 'email';
+    horizon_weeks?: number;
+    as_of_date?: string;
+    min_daily_funding_threshold?: number;
+    recipients?: string[];
+    scenario?: ScenarioInputs;
+  }): Promise<{ kind: 'csv'; blob: Blob } | { kind: 'json'; data: unknown }> {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+    };
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/reports/cash-flow/forecast/export`,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+    );
+    if (!response.ok) {
+      let errorBody: ApiErrorBody | null = null;
+      try {
+        errorBody = await response.json();
+      } catch {
+        // non-JSON error body
+      }
+      throw new ApiClientError(response.status, errorBody);
+    }
+    const contentType = response.headers.get('Content-Type') ?? '';
+    if (contentType.includes('text/csv')) {
+      return { kind: 'csv', blob: await response.blob() };
+    }
+    return { kind: 'json', data: await response.json() };
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);
@@ -778,6 +810,15 @@ export const reportsApi = {
 
   solveApCashFlowForecast: (body: SolverInputs) =>
     api.post<SolverResult>('/api/v1/reports/cash-flow/forecast/solve', body),
+
+  exportApCashFlowForecast: (body: {
+    format: 'csv' | 'slack' | 'email';
+    horizon_weeks?: number;
+    as_of_date?: string;
+    min_daily_funding_threshold?: number;
+    recipients?: string[];
+    scenario?: ScenarioInputs;
+  }) => api.exportCashFlowForecast(body),
 
   mlAccuracy: () =>
     api.get<{ accuracy_rate: number; total_suggestions: number; accepted: number; corrected: number; rejected: number }>('/api/v1/invoices/ml-accuracy'),

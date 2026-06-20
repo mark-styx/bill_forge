@@ -9,6 +9,15 @@ vi.mock('@/lib/api', () => ({
   reportsApi: {
     apCashFlowForecast: vi.fn(),
     simulateApCashFlowForecast: vi.fn(),
+    exportApCashFlowForecast: vi.fn(),
+  },
+}));
+
+// Mock sonner toast (used by export handlers)
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
   },
 }));
 
@@ -43,6 +52,7 @@ vi.mock('lucide-react', () => ({
   Target: () => <span>Target</span>,
   CheckCircle2: () => <span>CheckCircle2</span>,
   XCircle: () => <span>XCircle</span>,
+  Download: () => <span>Download</span>,
 }));
 
 import { reportsApi } from '@/lib/api';
@@ -230,5 +240,45 @@ describe('CashFlowForecastPage', () => {
     const chart = screen.getByTestId('bar-chart');
     expect(chart.dataset.keys).toContain('expected');
     expect(chart.dataset.keys).toContain('scenario');
+  });
+
+  it('invokes the export endpoint when the CSV menu action is clicked', async () => {
+    vi.mocked(reportsApi.apCashFlowForecast).mockResolvedValue(mockForecast);
+    vi.mocked(reportsApi.exportApCashFlowForecast).mockResolvedValue({
+      kind: 'csv',
+      blob: new Blob(['week_start,week_end\n'], { type: 'text/csv' }),
+    });
+
+    // jsdom doesn't implement these by default; stub them so the download path
+    // doesn't blow up while we assert on the API call.
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: createObjectURL,
+      configurable: true,
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: revokeObjectURL,
+      configurable: true,
+    });
+
+    renderWithProviders(<CashFlowForecastPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('13-Week Cash Flow Forecast')).toBeInTheDocument();
+    });
+
+    // Open the export menu, then click "Download CSV".
+    fireEvent.click(screen.getByRole('button', { name: /Export/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Download CSV/i }));
+
+    await waitFor(() => {
+      expect(reportsApi.exportApCashFlowForecast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          format: 'csv',
+          horizon_weeks: 13,
+        }),
+      );
+    });
   });
 });

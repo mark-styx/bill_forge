@@ -3,6 +3,7 @@
 import { useMemo, useState, useCallback } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import {
   reportsApi,
   type ApCashFlowSimulation,
@@ -22,6 +23,7 @@ import {
   Target,
   CheckCircle2,
   XCircle,
+  Download,
 } from 'lucide-react';
 
 const formatCents = (value: number, currency = 'USD') =>
@@ -40,6 +42,8 @@ type BreakdownTab = 'vendor' | 'gl';
 
 export default function CashFlowForecastPage() {
   const [breakdownTab, setBreakdownTab] = useState<BreakdownTab>('vendor');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportBusy, setExportBusy] = useState<'csv' | 'slack' | 'email' | null>(null);
 
   // What-If Simulator state
   const [simDelayDays, setSimDelayDays] = useState(0);
@@ -117,6 +121,93 @@ export default function CashFlowForecastPage() {
       setSolveError(err.message || 'Solver failed');
     },
   });
+
+  const buildScenarioForExport = useCallback(() => {
+    if (simDelayDays === 0 && !simCaptureEpd && simVendorShift === 0) {
+      return undefined;
+    }
+    return {
+      pending_approval_delay_days: simDelayDays || null,
+      capture_all_epd: simCaptureEpd || null,
+      vendor_term_shift_days: simVendorShift || null,
+    };
+  }, [simDelayDays, simCaptureEpd, simVendorShift]);
+
+  const handleExportCsv = useCallback(async () => {
+    setExportBusy('csv');
+    setExportMenuOpen(false);
+    try {
+      const result = await reportsApi.exportApCashFlowForecast({
+        format: 'csv',
+        horizon_weeks: 13,
+        scenario: buildScenarioForExport(),
+      });
+      if (result.kind !== 'csv') throw new Error('Unexpected response');
+      const url = URL.createObjectURL(result.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cash-flow-forecast-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('CSV downloaded');
+    } catch (err) {
+      toast.error((err as Error).message || 'CSV export failed');
+    } finally {
+      setExportBusy(null);
+    }
+  }, [buildScenarioForExport]);
+
+  const handleExportSlack = useCallback(async () => {
+    setExportMenuOpen(false);
+    const input = window.prompt('Slack channel ID (or comma-separated channel IDs)');
+    if (!input) return;
+    const recipients = input
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (recipients.length === 0) return;
+    setExportBusy('slack');
+    try {
+      await reportsApi.exportApCashFlowForecast({
+        format: 'slack',
+        horizon_weeks: 13,
+        recipients,
+        scenario: buildScenarioForExport(),
+      });
+      toast.success(`Posted forecast to ${recipients.length} Slack channel(s)`);
+    } catch (err) {
+      toast.error((err as Error).message || 'Slack export failed');
+    } finally {
+      setExportBusy(null);
+    }
+  }, [buildScenarioForExport]);
+
+  const handleExportEmail = useCallback(async () => {
+    setExportMenuOpen(false);
+    const input = window.prompt('Email recipients (comma-separated)');
+    if (!input) return;
+    const recipients = input
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (recipients.length === 0) return;
+    setExportBusy('email');
+    try {
+      await reportsApi.exportApCashFlowForecast({
+        format: 'email',
+        horizon_weeks: 13,
+        recipients,
+        scenario: buildScenarioForExport(),
+      });
+      toast.success(`Forecast emailed to ${recipients.length} recipient(s)`);
+    } catch (err) {
+      toast.error((err as Error).message || 'Email export failed');
+    } finally {
+      setExportBusy(null);
+    }
+  }, [buildScenarioForExport]);
 
   const handleApplySolution = useCallback(() => {
     if (!solveResult) return;
@@ -314,6 +405,50 @@ export default function CashFlowForecastPage() {
               AP-driven funding projection as of {forecast.as_of_date}
             </p>
           </div>
+        </div>
+        <div className="relative">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setExportMenuOpen((open) => !open)}
+            disabled={exportBusy !== null}
+            aria-haspopup="menu"
+            aria-expanded={exportMenuOpen}
+          >
+            <Download className="w-4 h-4 mr-1" />
+            {exportBusy ? `Exporting ${exportBusy}...` : 'Export'}
+          </button>
+          {exportMenuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 mt-2 w-48 rounded-xl border border-border bg-card shadow-lg z-10 overflow-hidden"
+            >
+              <button
+                role="menuitem"
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-secondary/40"
+                onClick={handleExportCsv}
+              >
+                Download CSV
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-secondary/40"
+                onClick={handleExportSlack}
+              >
+                Send to Slack
+              </button>
+              <button
+                role="menuitem"
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-secondary/40"
+                onClick={handleExportEmail}
+              >
+                Email
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

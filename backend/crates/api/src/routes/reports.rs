@@ -5,6 +5,8 @@ use crate::extractors::ReportingAccess;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -46,6 +48,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cash-flow/forecast/solve",
             post(ap_cash_flow_forecast_solve),
+        )
+        .route(
+            "/cash-flow/forecast/export",
+            post(export_cash_flow_forecast),
         )
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
@@ -1242,6 +1248,124 @@ async fn compute_ap_forecast(
         }
     }
 
+    // Project recurring vendor charges into the horizon as low-confidence lines.
+    // Each pattern emits an occurrence every `cadence_days` starting after its
+    // last seen invoice; we skip any occurrence that overlaps an already-scheduled
+    // invoice for the same vendor inside the pattern's window tolerance to avoid
+    // double-counting.
+    let recurring_rows = sqlx::query_as::<_, (
+        Uuid,
+        String,
+        i32,
+        i64,
+        Option<chrono::NaiveDate>,
+        i32,
+    )>(
+        r#"
+        SELECT
+            rp.vendor_id,
+            COALESCE(v.name, 'Recurring vendor') AS vendor_name,
+            rp.cadence_days,
+            rp.trailing_median_cents,
+            rp.last_invoice_date,
+            rp.window_tolerance_days
+        FROM recurring_patterns rp
+        LEFT JOIN vendors v ON v.id = rp.vendor_id
+        WHERE rp.tenant_id = $1
+          AND rp.cadence_days > 0
+          AND rp.trailing_median_cents > 0
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        billforge_core::Error::Database(format!(
+            "Failed to query recurring patterns for forecast: {}",
+            e
+        ))
+    })?;
+
+    // Map vendor_id -> due dates of invoices already scheduled in the horizon,
+    // used below to skip recurring projections that overlap a real invoice.
+    let invoice_vendor_dates: std::collections::HashMap<Uuid, Vec<chrono::NaiveDate>> = {
+        let mut map: std::collections::HashMap<Uuid, Vec<chrono::NaiveDate>> =
+            std::collections::HashMap::new();
+        let invoice_ids: Vec<Uuid> = invoice_rows
+            .iter()
+            .filter(|inv| inv.due_date.is_some())
+            .map(|inv| inv.invoice_id)
+            .collect();
+        if !invoice_ids.is_empty() {
+            let rows: Vec<(Uuid, Uuid)> =
+                sqlx::query_as(r#"SELECT id, vendor_id FROM invoices WHERE id = ANY($1)"#)
+                    .bind(&invoice_ids)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| {
+                        billforge_core::Error::Database(format!(
+                            "Failed to resolve invoice vendor_id for forecast: {}",
+                            e
+                        ))
+                    })?;
+            let id_to_vendor: std::collections::HashMap<Uuid, Uuid> = rows.into_iter().collect();
+            for inv in &invoice_rows {
+                if let (Some(d), Some(vid)) =
+                    (inv.due_date, id_to_vendor.get(&inv.invoice_id))
+                {
+                    map.entry(*vid).or_default().push(d);
+                }
+            }
+        }
+        map
+    };
+
+    let (recurring_low_f, recurring_high_f) = (0.70_f64, 1.30_f64);
+    for (vendor_id, vendor_name, cadence_days, median_cents, last_invoice_date, window_tol_days) in
+        &recurring_rows
+    {
+        let cadence = chrono::Duration::days(*cadence_days as i64);
+        // Start projecting from one cadence after the last seen invoice; if the
+        // pattern has no last_invoice_date or it's in the past, anchor at today.
+        let mut next_date = match last_invoice_date {
+            Some(d) => *d + cadence,
+            None => as_of_date,
+        };
+        // Roll forward to the start of the forecast window.
+        while next_date < as_of_date {
+            next_date = next_date + cadence;
+        }
+        let scheduled_for_vendor = invoice_vendor_dates.get(vendor_id);
+        let mut emitted = 0;
+        while next_date < horizon_end && emitted < 60 {
+            // Skip if a scheduled invoice for this vendor already exists within
+            // the window-tolerance days of the projected occurrence.
+            let overlap = scheduled_for_vendor
+                .map(|dates| {
+                    dates.iter().any(|d| {
+                        let diff = (*d - next_date).num_days().abs();
+                        diff <= *window_tol_days as i64
+                    })
+                })
+                .unwrap_or(false);
+            if !overlap {
+                let offset = (next_date - as_of_date).num_days() as usize;
+                if offset < num_days {
+                    let amount = *median_cents;
+                    daily_expected[offset] += amount;
+                    daily_low[offset] += (amount as f64 * recurring_low_f) as i64;
+                    daily_high[offset] += (amount as f64 * recurring_high_f) as i64;
+                    *daily_vendors[offset].entry(vendor_name.clone()).or_insert(0) += amount;
+                    *daily_gl[offset]
+                        .entry("Uncategorized".to_string())
+                        .or_insert(0) += amount;
+                }
+            }
+            next_date = next_date + cadence;
+            emitted += 1;
+        }
+    }
+
     // Compute funding threshold: if provided use it, otherwise compute median.
     // Scenario may override the threshold.
     let threshold_override = scenario.and_then(|s| s.override_funding_threshold_cents);
@@ -1733,6 +1857,346 @@ async fn ap_cash_flow_forecast_solve(
         target_date: body.target_date,
         achieved_balance_cents: achieved_balance,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Cash-flow forecast export (CSV / Slack / email)
+// ---------------------------------------------------------------------------
+
+/// Export format for the cash-flow forecast.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CashFlowExportFormat {
+    Csv,
+    Slack,
+    Email,
+}
+
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct CashFlowExportRequest {
+    pub format: CashFlowExportFormat,
+    pub horizon_weeks: Option<i32>,
+    pub as_of_date: Option<chrono::NaiveDate>,
+    pub min_daily_funding_threshold: Option<i64>,
+    /// Slack channel ID (for `format=slack`) or list of email recipients (for
+    /// `format=email`).
+    pub recipients: Option<Vec<String>>,
+    /// Optional scenario inputs to apply before exporting.
+    pub scenario: Option<ScenarioInputs>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CashFlowExportResponse {
+    pub format: String,
+    pub delivered: bool,
+    pub recipients: Vec<String>,
+    pub bytes: Option<usize>,
+}
+
+fn build_forecast_csv(forecast: &ApCashFlowForecast) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "week_start,week_end,expected_amount_cents,low_band_cents,high_band_cents,funding_required_days,vendor_breakdown_json,gl_breakdown_json\n",
+    );
+
+    // Aggregate vendor / GL totals per week by summing the daily breakdowns
+    // that fall in the week.
+    for week in &forecast.weekly {
+        let mut vendor_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut gl_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut funding_days = 0i64;
+        for day in &forecast.daily {
+            if day.date >= week.week_start && day.date <= week.week_end {
+                if day.funding_required {
+                    funding_days += 1;
+                }
+                for v in &day.vendor_breakdown {
+                    *vendor_totals.entry(v.name.clone()).or_insert(0) += v.amount_cents;
+                }
+                for g in &day.gl_breakdown {
+                    *gl_totals.entry(g.name.clone()).or_insert(0) += g.amount_cents;
+                }
+            }
+        }
+        let vendor_json = serde_json::to_string(&vendor_totals).unwrap_or_else(|_| "{}".to_string());
+        let gl_json = serde_json::to_string(&gl_totals).unwrap_or_else(|_| "{}".to_string());
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{}\n",
+            week.week_start,
+            week.week_end,
+            week.expected_amount,
+            week.low_band,
+            week.high_band,
+            funding_days,
+            csv_field(&vendor_json),
+            csv_field(&gl_json),
+        ));
+    }
+    out
+}
+
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn build_slack_summary(forecast: &ApCashFlowForecast) -> String {
+    let total: i64 = forecast.weekly.iter().map(|w| w.expected_amount).sum();
+    let funding_days = forecast.daily.iter().filter(|d| d.funding_required).count();
+    let mut sorted = forecast.weekly.clone();
+    sorted.sort_by(|a, b| b.expected_amount.cmp(&a.expected_amount));
+    let top: Vec<String> = sorted
+        .iter()
+        .take(5)
+        .map(|w| {
+            format!(
+                "• {} → {}: ${:.0}",
+                w.week_start,
+                w.week_end,
+                w.expected_amount as f64 / 100.0
+            )
+        })
+        .collect();
+    format!(
+        "*Cash flow forecast* (as of {})\nHorizon: {} weeks  •  Funding-alert days: {}  •  Total expected: ${:.0}\n\n*Top funding weeks*\n{}",
+        forecast.as_of_date,
+        forecast.horizon_weeks,
+        funding_days,
+        total as f64 / 100.0,
+        top.join("\n")
+    )
+}
+
+async fn deliver_slack(
+    metadata_pool: &sqlx::PgPool,
+    tenant_id: &Uuid,
+    channels: &[String],
+    text: &str,
+) -> bool {
+    let token_row: Option<(String,)> = sqlx::query_as(
+        "SELECT bot_access_token FROM slack_connections WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(metadata_pool)
+    .await
+    .ok()
+    .flatten();
+    let token = match token_row.map(|t| t.0) {
+        Some(t) => t,
+        None => {
+            tracing::warn!("No active Slack connection for tenant {}", tenant_id);
+            return false;
+        }
+    };
+    let http = reqwest::Client::new();
+    let mut delivered_any = false;
+    for channel in channels {
+        let body = serde_json::json!({ "channel": channel, "text": text });
+        match http
+            .post("https://slack.com/api/chat.postMessage")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let json: serde_json::Value =
+                    resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+                if json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    delivered_any = true;
+                } else {
+                    tracing::warn!(
+                        "Slack postMessage failed: {}",
+                        json.get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                    );
+                }
+            }
+            Err(e) => tracing::warn!("Slack export request failed: {}", e),
+        }
+    }
+    delivered_any
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/reports/cash-flow/forecast/export",
+    tag = "Reports",
+    request_body = CashFlowExportRequest,
+    responses(
+        (status = 200, description = "Forecast exported (CSV body or delivery confirmation)"),
+        (status = 400, description = "Invalid request"),
+    )
+)]
+async fn export_cash_flow_forecast(
+    State(state): State<AppState>,
+    ReportingAccess(user, tenant): ReportingAccess,
+    Json(body): Json<CashFlowExportRequest>,
+) -> ApiResult<Response> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let horizon_weeks = body.horizon_weeks.unwrap_or(13).clamp(1, 52);
+    let as_of_date = body
+        .as_of_date
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+    let forecast = compute_ap_forecast(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        horizon_weeks,
+        as_of_date,
+        body.min_daily_funding_threshold,
+        body.scenario.as_ref(),
+    )
+    .await?;
+
+    let recipients = body.recipients.clone().unwrap_or_default();
+    let format_label = match body.format {
+        CashFlowExportFormat::Csv => "csv",
+        CashFlowExportFormat::Slack => "slack",
+        CashFlowExportFormat::Email => "email",
+    };
+
+    let (response, delivered, bytes): (Response, bool, Option<usize>) = match body.format {
+        CashFlowExportFormat::Csv => {
+            let csv = build_forecast_csv(&forecast);
+            let bytes = csv.len();
+            let filename = format!("cash-flow-forecast-{}.csv", forecast.as_of_date);
+            let resp = (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{}\"", filename),
+                    ),
+                ],
+                csv,
+            )
+                .into_response();
+            (resp, true, Some(bytes))
+        }
+        CashFlowExportFormat::Slack => {
+            if recipients.is_empty() {
+                return Err(billforge_core::Error::Validation(
+                    "Slack export requires at least one channel in recipients".to_string(),
+                )
+                .into());
+            }
+            let summary = build_slack_summary(&forecast);
+            let bytes = summary.len();
+            let metadata_pool = state.db.metadata();
+            let delivered = deliver_slack(
+                &metadata_pool,
+                tenant.tenant_id.as_uuid(),
+                &recipients,
+                &summary,
+            )
+            .await;
+            let resp = Json(CashFlowExportResponse {
+                format: format_label.to_string(),
+                delivered,
+                recipients: recipients.clone(),
+                bytes: Some(bytes),
+            })
+            .into_response();
+            (resp, delivered, Some(bytes))
+        }
+        CashFlowExportFormat::Email => {
+            if recipients.is_empty() {
+                return Err(billforge_core::Error::Validation(
+                    "Email export requires at least one recipient".to_string(),
+                )
+                .into());
+            }
+            let csv = build_forecast_csv(&forecast);
+            let bytes = csv.len();
+            let subject = format!(
+                "BillForge cash flow forecast — as of {}",
+                forecast.as_of_date
+            );
+            let total: i64 = forecast.weekly.iter().map(|w| w.expected_amount).sum();
+            let funding_days =
+                forecast.daily.iter().filter(|d| d.funding_required).count();
+            let html = format!(
+                "<p>BillForge cash flow forecast as of <strong>{}</strong>.</p>\
+                 <p>Horizon: {} weeks · Total expected outflow: ${:.0} · Funding-alert days: {}</p>\
+                 <p>Weekly breakdown is attached inline as CSV.</p>\
+                 <pre style=\"font-family:monospace;font-size:12px;white-space:pre-wrap;\">{}</pre>",
+                forecast.as_of_date,
+                forecast.horizon_weeks,
+                total as f64 / 100.0,
+                funding_days,
+                html_escape(&csv),
+            );
+            let text = format!(
+                "BillForge cash flow forecast — {}\n\nHorizon: {} weeks\nTotal expected: ${:.0}\nFunding-alert days: {}\n\n{}",
+                forecast.as_of_date,
+                forecast.horizon_weeks,
+                total as f64 / 100.0,
+                funding_days,
+                csv
+            );
+            let email_service = state.email.clone();
+            let mut delivered_any = false;
+            for recipient in &recipients {
+                match email_service.send(recipient, &subject, &html, &text).await {
+                    Ok(_) => delivered_any = true,
+                    Err(e) => tracing::warn!(
+                        "Cash-flow email export to {} failed: {}",
+                        recipient,
+                        e
+                    ),
+                }
+            }
+            let resp = Json(CashFlowExportResponse {
+                format: format_label.to_string(),
+                delivered: delivered_any,
+                recipients: recipients.clone(),
+                bytes: Some(bytes),
+            })
+            .into_response();
+            (resp, delivered_any, Some(bytes))
+        }
+    };
+
+    // Audit-log the export attempt for compliance / monitoring.
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::DataExported,
+        ResourceType::Export,
+        "cash_flow_forecast",
+        format!("Exported cash flow forecast via {}", format_label),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "export_cash_flow_forecast",
+        "format": format_label,
+        "recipients": recipients,
+        "horizon_weeks": horizon_weeks,
+        "as_of_date": as_of_date,
+        "delivered": delivered,
+        "bytes": bytes,
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log cash flow forecast export audit entry");
+    }
+
+    Ok(response)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]

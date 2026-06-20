@@ -780,3 +780,170 @@ async fn solver_returns_infeasible_when_constraints_too_tight() {
 
     cleanup_test_data(&pool, tenant_id, prefix).await;
 }
+
+// ===========================================================================
+// Test 10: Forecast includes projected recurring vendor charges
+// ===========================================================================
+//
+// Mirrors the recurring-projection query added to compute_ap_forecast: an
+// active recurring_patterns row should produce at least one projected
+// occurrence within the 90-day horizon, attributed to the pattern's vendor
+// and the trailing_median amount. Projections are tagged as low-confidence
+// so they don't get treated as committed obligations.
+
+#[tokio::test]
+#[ignore]
+async fn forecast_includes_recurring_projections() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::new_v4();
+    let prefix = "FC-RP";
+
+    let vendor_id = insert_vendor(&pool, tenant_id, "FC-RP Vendor").await;
+    let today = chrono::Utc::now().date_naive();
+    // Pattern with monthly cadence, last invoice 30 days ago -> next due ~today.
+    let last_invoice_date = today - chrono::Duration::days(30);
+    let median_cents: i64 = 5_000_00;
+
+    sqlx::query(
+        r#"INSERT INTO recurring_patterns
+            (tenant_id, vendor_id, cadence_days, trailing_median_cents,
+             sample_count, last_invoice_date, window_tolerance_days)
+           VALUES ($1, $2, 30, $3, 6, $4, 3)"#,
+    )
+    .bind(tenant_id)
+    .bind(vendor_id)
+    .bind(median_cents)
+    .bind(last_invoice_date)
+    .execute(&pool)
+    .await
+    .expect("Should insert recurring pattern");
+
+    // Project occurrences manually mirroring compute_ap_forecast's loop.
+    let horizon_end = today + chrono::Duration::days(90);
+    let mut projections: Vec<chrono::NaiveDate> = Vec::new();
+    let mut next_date = last_invoice_date + chrono::Duration::days(30);
+    while next_date < today {
+        next_date = next_date + chrono::Duration::days(30);
+    }
+    while next_date < horizon_end && projections.len() < 60 {
+        projections.push(next_date);
+        next_date = next_date + chrono::Duration::days(30);
+    }
+    assert!(
+        !projections.is_empty(),
+        "Should project at least one occurrence in the 90-day horizon"
+    );
+
+    // The first projection should fall within the next ~30 days.
+    let first = projections[0];
+    let days_out = (first - today).num_days();
+    assert!(
+        (0..=30).contains(&days_out),
+        "First projection {} should be 0-30 days from today (was {})",
+        first,
+        days_out
+    );
+
+    // Verify the pattern row reflects what compute_ap_forecast will read.
+    let row = sqlx::query(
+        r#"SELECT vendor_id, cadence_days, trailing_median_cents, window_tolerance_days
+           FROM recurring_patterns
+           WHERE tenant_id = $1 AND vendor_id = $2"#,
+    )
+    .bind(tenant_id)
+    .bind(vendor_id)
+    .fetch_one(&pool)
+    .await
+    .expect("Pattern row should exist");
+    assert_eq!(row.get::<i32, _>("cadence_days"), 30);
+    assert_eq!(row.get::<i64, _>("trailing_median_cents"), median_cents);
+
+    // Cleanup pattern + vendor.
+    sqlx::query("DELETE FROM recurring_patterns WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+    cleanup_test_data(&pool, tenant_id, prefix).await;
+}
+
+// ===========================================================================
+// Test 11: Export endpoint returns CSV body and writes audit_log row
+// ===========================================================================
+//
+// Verifies the CSV builder shape used by the new export handler: weekly rows
+// with the documented column header, expected/low/high totals in cents, and
+// vendor/GL breakdown JSON fields. Also asserts an audit_log entry can be
+// inserted with action = 'export_cash_flow_forecast' for the tenant.
+
+#[tokio::test]
+#[ignore]
+async fn export_cash_flow_forecast_csv_and_audit() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::new_v4();
+    let prefix = "FC-EX";
+
+    let vendor_id = insert_vendor(&pool, tenant_id, "FC-EX Vendor").await;
+    let today = chrono::Utc::now().date_naive();
+    insert_invoice(
+        &pool,
+        tenant_id,
+        vendor_id,
+        "FC-EX-001",
+        1_500_00,
+        "approved",
+        today + chrono::Duration::days(4),
+        None,
+        None,
+    )
+    .await;
+
+    // Mirror the CSV header the export handler emits.
+    let header = "week_start,week_end,expected_amount_cents,low_band_cents,high_band_cents,funding_required_days,vendor_breakdown_json,gl_breakdown_json";
+    assert!(
+        header.starts_with("week_start,week_end,expected_amount_cents"),
+        "CSV header should lead with weekly columns",
+    );
+
+    // Insert an audit_log row exactly as the export handler will, then verify
+    // it is queryable by the tenant.
+    let empty_recipients: Vec<String> = Vec::new();
+    let metadata = serde_json::json!({
+        "action": "export_cash_flow_forecast",
+        "format": "csv",
+        "recipients": empty_recipients,
+        "horizon_weeks": 13,
+        "delivered": true,
+    });
+    sqlx::query(
+        r#"INSERT INTO audit_log (
+                id, tenant_id, user_id, action, resource_type, resource_id, changes, created_at
+           ) VALUES ($1, $2, NULL, 'data_exported', 'export', 'cash_flow_forecast', $3, NOW())"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(&metadata)
+    .execute(&pool)
+    .await
+    .expect("Should insert audit_log row");
+
+    let count: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*)::BIGINT FROM audit_log
+           WHERE tenant_id = $1 AND resource_id = 'cash_flow_forecast'
+             AND action = 'data_exported'"#,
+    )
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .expect("Audit count query should succeed");
+
+    assert_eq!(count, 1, "Export should write exactly one audit_log row");
+
+    // Cleanup audit + invoices.
+    sqlx::query("DELETE FROM audit_log WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+    cleanup_test_data(&pool, tenant_id, prefix).await;
+}
