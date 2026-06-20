@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { workflowsApi } from '@/lib/api';
+import { workflowsApi, dashboardApi } from '@/lib/api';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
@@ -47,6 +47,12 @@ export default function ApprovalsPage() {
     queryKey: ['pending-approvals'],
     queryFn: () => workflowsApi.listPendingApprovals(),
   });
+
+  const { data: approvalMetrics, isError: metricsIsError } = useQuery({
+    queryKey: ['approval-metrics'],
+    queryFn: () => dashboardApi.getApprovalMetrics(),
+  });
+  const approvedTodayCount = approvalMetrics?.approved_today;
 
   const approveMutation = useMutation({
     mutationFn: (approvalId: string) => workflowsApi.approve(approvalId),
@@ -240,7 +246,7 @@ export default function ApprovalsPage() {
               <CheckCircle className="w-5 h-5 text-success" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-muted-foreground">Unavailable</p>
+              <p className="text-2xl font-semibold text-foreground">{metricsIsError ? '--' : (approvedTodayCount ?? 0)}</p>
               <p className="text-sm text-muted-foreground">Approved Today</p>
             </div>
           </div>

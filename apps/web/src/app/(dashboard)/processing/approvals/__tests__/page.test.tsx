@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ApprovalsPage from '../page';
-import { workflowsApi } from '@/lib/api';
+import { workflowsApi, dashboardApi } from '@/lib/api';
 
 // Mock the API module
 vi.mock('@/lib/api', () => ({
@@ -11,6 +11,9 @@ vi.mock('@/lib/api', () => ({
     listPendingApprovals: vi.fn(),
     approve: vi.fn(),
     reject: vi.fn(),
+  },
+  dashboardApi: {
+    getApprovalMetrics: vi.fn(),
   },
 }));
 
@@ -91,6 +94,15 @@ describe('ApprovalsPage bulk actions', () => {
     vi.mocked(workflowsApi.listPendingApprovals).mockResolvedValue(mockApprovals as any);
     vi.mocked(workflowsApi.approve).mockResolvedValue({} as any);
     vi.mocked(workflowsApi.reject).mockResolvedValue({} as any);
+    vi.mocked(dashboardApi.getApprovalMetrics).mockResolvedValue({
+      pending_approvals: 3,
+      approved_today: 0,
+      rejected_today: 0,
+      avg_approval_time_hours: 0,
+      approval_rate: 0,
+      escalated: 0,
+      overdue: 0,
+    } as any);
   });
 
   it('renders checkboxes for each row plus a master checkbox', async () => {
@@ -208,6 +220,48 @@ describe('ApprovalsPage bulk actions', () => {
 
     await waitFor(() => {
       expect(mockToast.warning).toHaveBeenCalledWith('2 succeeded, 1 failed');
+    });
+  });
+
+  it('renders live approved_today count in the Approved Today stat card', async () => {
+    vi.mocked(dashboardApi.getApprovalMetrics).mockResolvedValue({
+      pending_approvals: 3,
+      approved_today: 7,
+      rejected_today: 1,
+      avg_approval_time_hours: 2,
+      approval_rate: 0.9,
+      escalated: 0,
+      overdue: 0,
+    } as any);
+
+    renderWithProviders(<ApprovalsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Approved Today')).toBeInTheDocument();
+    });
+
+    const label = screen.getByText('Approved Today');
+    const card = label.closest('div')?.parentElement;
+    expect(card).not.toBeNull();
+    await waitFor(() => {
+      expect(card?.textContent).toContain('7');
+    });
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+  });
+
+  it('renders -- in the Approved Today card when metrics request fails', async () => {
+    vi.mocked(dashboardApi.getApprovalMetrics).mockRejectedValueOnce(new Error('metrics unavailable'));
+
+    renderWithProviders(<ApprovalsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Approved Today')).toBeInTheDocument();
+    });
+
+    const label = screen.getByText('Approved Today');
+    const card = label.closest('div')?.parentElement;
+    await waitFor(() => {
+      expect(card?.textContent).toContain('--');
     });
   });
 

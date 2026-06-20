@@ -14,6 +14,17 @@ vi.mock('@/lib/api', () => ({
     getApprovalLink: vi.fn(),
     resendApprovalEmail: vi.fn(),
   },
+  dashboardApi: {
+    getApprovalMetrics: vi.fn().mockResolvedValue({
+      pending_approvals: 0,
+      approved_today: 0,
+      rejected_today: 0,
+      avg_approval_time_hours: 0,
+      approval_rate: 0,
+      escalated: 0,
+      overdue: 0,
+    }),
+  },
 }));
 
 // Mock next/link
