@@ -365,6 +365,7 @@ struct ImplementationApiDoc;
     crate::routes::predictive::configure_anomaly_rule,
     crate::routes::predictive::get_anomaly_rule,
     crate::routes::predictive::update_anomaly_rule,
+    crate::routes::predictive::recalibrate_anomaly_rules,
 ))]
 struct PredictiveApiDoc;
 

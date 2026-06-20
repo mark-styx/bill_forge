@@ -19,6 +19,8 @@ use billforge_analytics::{
     anomaly_detection::{DuplicateDetector, InvoiceRecord, StatisticalAnomalyDetector},
     forecasting::ArimaForecaster,
     predictive_models::*,
+    predictive_repository::AnomalyRuleConfig,
+    PredictiveService,
 };
 // Error type is accessed via billforge_core::Error to allow From trait conversion
 
@@ -38,6 +40,12 @@ pub struct ForecastQuery {
 #[derive(Debug, Deserialize)]
 pub struct AcknowledgeAnomalyRequest {
     pub notes: Option<String>,
+    /// When TRUE, the acknowledgement is recorded as a confirmed false
+    /// positive and feeds into the per-tenant threshold-recalibration loop.
+    /// Defaults to FALSE so the historical "I saw this" semantics are
+    /// preserved when callers don't set the flag.
+    #[serde(default)]
+    pub false_positive: bool,
 }
 
 /// Request to configure anomaly rules
@@ -76,6 +84,11 @@ pub fn routes() -> Router<AppState> {
         .route("/rules", post(configure_anomaly_rule))
         .route("/rules/:rule_id", get(get_anomaly_rule))
         .route("/rules/:rule_id", post(update_anomaly_rule))
+        // Recalibrate per-tenant anomaly thresholds from acknowledged-false-positive feedback
+        .route(
+            "/anomaly_rules/recalibrate",
+            post(recalibrate_anomaly_rules),
+        )
 }
 
 /// Get forecasts for tenant
@@ -430,7 +443,7 @@ async fn acknowledge_anomaly(
     State(state): State<AppState>,
     user: AuthUser,
     Path(anomaly_id): Path<Uuid>,
-    Json(_payload): Json<AcknowledgeAnomalyRequest>,
+    Json(payload): Json<AcknowledgeAnomalyRequest>,
 ) -> ApiResult<Json<()>> {
     let tenant_id = &user.0.tenant_id;
     let user_id = &user.0.user_id;
@@ -443,6 +456,7 @@ async fn acknowledge_anomaly(
             acknowledged = TRUE,
             acknowledged_at = NOW(),
             acknowledged_by = $1,
+            false_positive = $4,
             updated_at = NOW()
         WHERE id = $2 AND tenant_id = $3
         "#,
@@ -450,6 +464,7 @@ async fn acknowledge_anomaly(
     .bind(user_id.0)
     .bind(anomaly_id)
     .bind(tenant_id.0)
+    .bind(payload.false_positive)
     .execute(&*pool)
     .await
     .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
@@ -476,8 +491,12 @@ async fn detect_anomalies(
     // Fetch recent invoices for anomaly detection
     let invoices = fetch_recent_invoices(&state.db, tenant_id.0).await?;
 
-    // Run duplicate detection
-    let duplicate_detector = DuplicateDetector::new(tenant_id.0);
+    // Run duplicate detection with per-tenant thresholds (recalibrated by the
+    // acknowledgement-driven learning loop). The service builder handles
+    // fallback to defaults when no rule row exists.
+    let pool_for_rules = state.db.tenant(&tenant_id).await?;
+    let service = PredictiveService::new((*pool_for_rules).clone());
+    let duplicate_detector = service.build_duplicate_detector(tenant_id.0).await;
     let duplicate_anomalies = duplicate_detector
         .detect_duplicates(&invoices)
         .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
@@ -784,6 +803,62 @@ async fn update_anomaly_rule(
     }
 
     Ok(Json(()))
+}
+
+/// Recalibrate per-tenant anomaly/duplicate thresholds based on the
+/// acknowledged-false-positive rate observed over the last 30 days. Returns a
+/// summary of the new effective thresholds and which detectors moved.
+#[utoipa::path(
+    post,
+    path = "/api/v1/analytics/predictive/anomaly_rules/recalibrate",
+    tag = "Predictive Analytics",
+    responses((status = 200, description = "Thresholds recalibrated"))
+)]
+async fn recalibrate_anomaly_rules(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = &user.0.tenant_id;
+    let user_id = &user.0.user_id;
+    let pool = state.db.tenant(&tenant_id).await?;
+    let service = PredictiveService::new((*pool).clone());
+
+    let outcome = service
+        .recalibrate_tenant_thresholds(tenant_id.0, user_id.0)
+        .await
+        .map_err(|e| billforge_core::Error::Internal(e.to_string()))?;
+
+    let movements: Vec<serde_json::Value> = outcome
+        .adjustments
+        .iter()
+        .flat_map(|adj| {
+            adj.movements()
+                .into_iter()
+                .map(|(label, old, new)| {
+                    serde_json::json!({
+                        "detector": adj.detector_type,
+                        "threshold": label,
+                        "old_value": old,
+                        "new_value": new,
+                        "fp_rate": adj.stats.fp_rate,
+                        "sample_size": adj.stats.sample_size,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "tenant_id": outcome.tenant_id,
+        "persisted": outcome.persisted,
+        "thresholds": {
+            "zscore_threshold": outcome.zscore_threshold,
+            "iqr_multiplier": outcome.iqr_multiplier,
+            "amount_tolerance": outcome.amount_tolerance,
+            "date_tolerance_days": outcome.date_tolerance_days,
+        },
+        "movements": movements,
+    })))
 }
 
 // Helper functions

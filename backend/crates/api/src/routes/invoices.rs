@@ -452,8 +452,25 @@ async fn detect_duplicates_for_invoice(
         },
     };
 
-    let detector =
-        billforge_analytics::anomaly_detection::DuplicateDetector::new(*tenant_id.as_uuid());
+    // Load per-tenant duplicate thresholds from anomaly_rules (recalibrated by
+    // the acknowledgement-driven learning loop). Falls back to detector
+    // defaults when no rule row exists or the lookup fails.
+    let detector = {
+        let repo = billforge_analytics::predictive_repository::PredictiveRepository::new(
+            (**pool).clone(),
+        );
+        let cfg = match repo.load_anomaly_rule(*tenant_id.as_uuid()).await {
+            Ok(Some(c)) => c,
+            _ => billforge_analytics::predictive_repository::AnomalyRuleConfig::defaults(
+                *tenant_id.as_uuid(),
+            ),
+        };
+        billforge_analytics::anomaly_detection::DuplicateDetector::with_thresholds(
+            *tenant_id.as_uuid(),
+            cfg.effective_amount_tolerance(),
+            cfg.effective_date_tolerance_days(),
+        )
+    };
 
     let mut matches = Vec::new();
     for (id, inv_num, amount_cents, inv_date, line_items_json, vendor_name) in rows {

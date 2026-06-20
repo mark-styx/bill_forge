@@ -7,9 +7,19 @@ use chrono::Utc;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+/// Default z-score threshold used when no per-tenant override is configured.
+/// Acts purely as a fallback - the constants are not self-tuning by themselves;
+/// see `PredictiveRepository::recalibrate_anomaly_thresholds` for the
+/// acknowledgement-driven learning loop that adjusts the per-tenant values.
+pub const DEFAULT_ZSCORE_THRESHOLD: f64 = 3.0;
+pub const DEFAULT_IQR_MULTIPLIER: f64 = 1.5;
+
 /// Statistical Anomaly Detector
 ///
 /// Uses z-score and IQR methods to detect outliers in time-series data.
+/// Thresholds are loaded per-tenant by `PredictiveService::build_anomaly_detector`;
+/// the defaults exposed via [`StatisticalAnomalyDetector::new`] are a fallback
+/// only and are not themselves self-optimizing.
 pub struct StatisticalAnomalyDetector {
     tenant_id: Uuid,
     zscore_threshold: f64,
@@ -17,12 +27,32 @@ pub struct StatisticalAnomalyDetector {
 }
 
 impl StatisticalAnomalyDetector {
+    /// Construct a detector with the fallback default thresholds. Callers that
+    /// can reach the database should prefer
+    /// `PredictiveService::build_anomaly_detector(tenant_id)`, which loads the
+    /// per-tenant configured thresholds and recalibrated overrides.
     pub fn new(tenant_id: Uuid) -> Self {
+        Self::with_thresholds(tenant_id, DEFAULT_ZSCORE_THRESHOLD, DEFAULT_IQR_MULTIPLIER)
+    }
+
+    /// Construct a detector with explicit per-tenant thresholds. Used by the
+    /// service builder after loading from `anomaly_rules` and by tests.
+    pub fn with_thresholds(tenant_id: Uuid, zscore_threshold: f64, iqr_multiplier: f64) -> Self {
         Self {
             tenant_id,
-            zscore_threshold: 3.0, // 3 standard deviations
-            iqr_multiplier: 1.5,   // Standard IQR outlier threshold
+            zscore_threshold,
+            iqr_multiplier,
         }
+    }
+
+    /// Expose the effective z-score threshold (used by tests).
+    pub fn zscore_threshold(&self) -> f64 {
+        self.zscore_threshold
+    }
+
+    /// Expose the effective IQR multiplier (used by tests).
+    pub fn iqr_multiplier(&self) -> f64 {
+        self.iqr_multiplier
     }
 
     /// Detect invoice amount outliers using z-score and IQR methods
@@ -322,10 +352,20 @@ fn ocr_levenshtein_similarity(s1: &str, s2: &str) -> f64 {
 /// Per-signal breakdown returned by `score_pair`.
 pub type SignalBreakdown = std::collections::BTreeMap<String, f64>;
 
+/// Default duplicate-detector amount tolerance (fraction, e.g. 0.02 = 2%).
+/// Fallback only - the per-tenant value is loaded from `anomaly_rules` and
+/// adjusted by the acknowledgement-driven recalibration loop.
+pub const DEFAULT_AMOUNT_TOLERANCE: f64 = 0.02;
+/// Default duplicate-detector date tolerance in days. Fallback only.
+pub const DEFAULT_DATE_TOLERANCE_DAYS: i64 = 14;
+
 /// Duplicate Invoice Detector
 ///
 /// Detects potential duplicate invoices using fuzzy matching
 /// with 5 weighted signals: vendor, invoice number, amount, date, and line-item fingerprint.
+/// Thresholds are loaded per-tenant by `PredictiveService::build_duplicate_detector`;
+/// the defaults exposed via [`DuplicateDetector::new`] are a fallback only and
+/// are not themselves self-optimizing.
 pub struct DuplicateDetector {
     tenant_id: Uuid,
     amount_tolerance: f64,    // Percentage tolerance for amount matching
@@ -333,12 +373,40 @@ pub struct DuplicateDetector {
 }
 
 impl DuplicateDetector {
+    /// Construct a detector with the fallback default thresholds. Callers that
+    /// can reach the database should prefer
+    /// `PredictiveService::build_duplicate_detector(tenant_id)`, which loads
+    /// the per-tenant configured thresholds and recalibrated overrides.
     pub fn new(tenant_id: Uuid) -> Self {
+        Self::with_thresholds(
+            tenant_id,
+            DEFAULT_AMOUNT_TOLERANCE,
+            DEFAULT_DATE_TOLERANCE_DAYS,
+        )
+    }
+
+    /// Construct a detector with explicit per-tenant thresholds. Used by the
+    /// service builder after loading from `anomaly_rules` and by tests.
+    pub fn with_thresholds(
+        tenant_id: Uuid,
+        amount_tolerance: f64,
+        date_tolerance_days: i64,
+    ) -> Self {
         Self {
             tenant_id,
-            amount_tolerance: 0.02,  // 2% tolerance
-            date_tolerance_days: 14, // Within 14 days
+            amount_tolerance,
+            date_tolerance_days,
         }
+    }
+
+    /// Expose the effective amount tolerance (used by tests).
+    pub fn amount_tolerance(&self) -> f64 {
+        self.amount_tolerance
+    }
+
+    /// Expose the effective date tolerance in days (used by tests).
+    pub fn date_tolerance_days(&self) -> i64 {
+        self.date_tolerance_days
     }
 
     /// Score a pair of invoices, returning the composite score and per-signal breakdown.
@@ -769,6 +837,124 @@ mod tests {
             score < 1.0,
             "Score should be < 1.0 with different items, got {}",
             score
+        );
+    }
+
+    // ---- Per-tenant threshold overrides (issue #397) ----
+
+    #[test]
+    fn statistical_with_thresholds_overrides_defaults() {
+        let tenant_id = Uuid::new_v4();
+        let strict = StatisticalAnomalyDetector::with_thresholds(tenant_id, 2.0, 1.0);
+        let lax = StatisticalAnomalyDetector::with_thresholds(tenant_id, 5.0, 3.0);
+        assert_eq!(strict.zscore_threshold(), 2.0);
+        assert_eq!(strict.iqr_multiplier(), 1.0);
+        assert_eq!(lax.zscore_threshold(), 5.0);
+        assert_eq!(lax.iqr_multiplier(), 3.0);
+    }
+
+    #[test]
+    fn duplicate_with_thresholds_overrides_defaults() {
+        let tenant_id = Uuid::new_v4();
+        let strict = DuplicateDetector::with_thresholds(tenant_id, 0.005, 3);
+        let lax = DuplicateDetector::with_thresholds(tenant_id, 0.10, 30);
+        assert_eq!(strict.amount_tolerance(), 0.005);
+        assert_eq!(strict.date_tolerance_days(), 3);
+        assert_eq!(lax.amount_tolerance(), 0.10);
+        assert_eq!(lax.date_tolerance_days(), 30);
+    }
+
+    #[test]
+    fn statistical_with_thresholds_flags_differently_than_default() {
+        // Build a series with a single point that is ~2.5 sigma from the mean.
+        // Default zscore threshold (3.0) should not flag; lowered (2.0) should.
+        let now = Utc::now();
+        let mut points: Vec<TimeSeriesPoint> = (0..30)
+            .map(|i| TimeSeriesPoint {
+                timestamp: now - Duration::days(30 - i),
+                // 0..29 has mean ~14.5, std_dev ~8.66
+                value: i as f64,
+            })
+            .collect();
+        // Push a point at z ~ 2.5: 14.5 + 2.5 * 8.66 ≈ 36.15. Use 36 to land
+        // squarely between the two thresholds.
+        points.push(TimeSeriesPoint {
+            timestamp: now,
+            value: 36.0,
+        });
+
+        let data = TimeSeries {
+            entity_id: "tenant-threshold-cmp".to_string(),
+            entity_type: EntityType::Vendor,
+            metric_name: "amount".to_string(),
+            points,
+        };
+
+        let tenant_id = Uuid::new_v4();
+        let default = StatisticalAnomalyDetector::new(tenant_id);
+        let strict = StatisticalAnomalyDetector::with_thresholds(tenant_id, 2.0, 5.0); // big IQR mult so only z fires
+
+        let default_hits = default
+            .detect_amount_outliers(&data)
+            .unwrap()
+            .into_iter()
+            .filter(|a| (a.detected_value - 36.0).abs() < 1e-6)
+            .count();
+        let strict_hits = strict
+            .detect_amount_outliers(&data)
+            .unwrap()
+            .into_iter()
+            .filter(|a| (a.detected_value - 36.0).abs() < 1e-6)
+            .count();
+
+        assert_eq!(
+            default_hits, 0,
+            "Default zscore 3.0 should not flag a ~2.5σ point"
+        );
+        assert_eq!(
+            strict_hits, 1,
+            "Tightened zscore 2.0 should flag the same ~2.5σ point"
+        );
+    }
+
+    #[test]
+    fn duplicate_with_thresholds_flags_differently_than_default() {
+        // A pair of invoices 20 days apart with the same vendor/amount/number.
+        // Default 14-day window should give date_sim = 0; lax 30-day window
+        // should give a positive date_sim and a higher composite score.
+        let tenant_id = Uuid::new_v4();
+        let now = Utc::now();
+        let inv1 = InvoiceRecord {
+            invoice_id: "A".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1000.0,
+            invoice_date: now,
+            invoice_number: Some("INV-1".to_string()),
+            line_item_fingerprint: None,
+        };
+        let inv2 = InvoiceRecord {
+            invoice_id: "B".to_string(),
+            vendor_name: "Acme Corp".to_string(),
+            amount: 1000.0,
+            invoice_date: now - Duration::days(20),
+            invoice_number: Some("INV-1".to_string()),
+            line_item_fingerprint: None,
+        };
+
+        let default = DuplicateDetector::new(tenant_id);
+        let lax = DuplicateDetector::with_thresholds(tenant_id, 0.02, 30);
+
+        let (_, default_breakdown) = default.score_pair(&inv1, &inv2);
+        let (_, lax_breakdown) = lax.score_pair(&inv1, &inv2);
+
+        assert_eq!(
+            default_breakdown.get("date").copied().unwrap_or(0.0),
+            0.0,
+            "20 days outside default 14-day window should give date_sim = 0"
+        );
+        assert!(
+            lax_breakdown.get("date").copied().unwrap_or(0.0) > 0.0,
+            "20 days inside lax 30-day window should give a positive date_sim"
         );
     }
 

@@ -26,7 +26,10 @@ pub use forecasting::*;
 pub use handlers::*;
 pub use models::*;
 pub use predictive_models::*;
-pub use predictive_repository::{ForecastAccuracySummary, PredictiveRepository};
+pub use predictive_repository::{
+    AnomalyRuleConfig, DetectorAdjustment, DetectorFpStats, ForecastAccuracySummary,
+    PredictiveRepository, RecalibrationOutcome,
+};
 pub use predictive_service::PredictiveService;
 pub use repository::AnalyticsRepository;
 pub use service::AnalyticsService;

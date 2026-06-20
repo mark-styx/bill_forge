@@ -11,7 +11,9 @@ use uuid::Uuid;
 use crate::anomaly_detection::{DuplicateDetector, InvoiceRecord, StatisticalAnomalyDetector};
 use crate::forecasting::{ArimaForecaster, ForecasterTuning};
 use crate::predictive_models::*;
-use crate::predictive_repository::{ForecastTuningRow, PredictiveRepository};
+use crate::predictive_repository::{
+    AnomalyRuleConfig, ForecastTuningRow, PredictiveRepository, RecalibrationOutcome,
+};
 
 /// Convert a persisted [`ForecastTuningRow`] into the [`ForecasterTuning`]
 /// struct consumed by [`ArimaForecaster::with_tuning`]. Kept as a free, pub
@@ -56,6 +58,60 @@ impl PredictiveService {
                 ArimaForecaster::new()
             }
         }
+    }
+
+    /// Build a [`StatisticalAnomalyDetector`] using the per-tenant thresholds
+    /// from `anomaly_rules` (which the recalibration loop adjusts from
+    /// acknowledged-false-positive feedback). Falls back to the detector's
+    /// default thresholds when no rule row exists or the lookup fails.
+    pub async fn build_anomaly_detector(&self, tenant_id: Uuid) -> StatisticalAnomalyDetector {
+        let cfg = self.load_rule_or_default(tenant_id).await;
+        StatisticalAnomalyDetector::with_thresholds(
+            tenant_id,
+            cfg.effective_zscore(),
+            cfg.effective_iqr(),
+        )
+    }
+
+    /// Build a [`DuplicateDetector`] using the per-tenant thresholds from
+    /// `anomaly_rules`. Falls back to defaults when no row exists.
+    pub async fn build_duplicate_detector(&self, tenant_id: Uuid) -> DuplicateDetector {
+        let cfg = self.load_rule_or_default(tenant_id).await;
+        DuplicateDetector::with_thresholds(
+            tenant_id,
+            cfg.effective_amount_tolerance(),
+            cfg.effective_date_tolerance_days(),
+        )
+    }
+
+    async fn load_rule_or_default(&self, tenant_id: Uuid) -> AnomalyRuleConfig {
+        match self.repo.load_anomaly_rule(tenant_id).await {
+            Ok(Some(cfg)) => cfg,
+            Ok(None) => AnomalyRuleConfig::defaults(tenant_id),
+            Err(e) => {
+                warn!(
+                    "Failed to load anomaly_rules for tenant {}: {}; using defaults",
+                    tenant_id, e
+                );
+                AnomalyRuleConfig::defaults(tenant_id)
+            }
+        }
+    }
+
+    /// Drive an acknowledgement-feedback-based recalibration pass for the
+    /// tenant. Computes the false-positive rate per detector over the last
+    /// `RECALIBRATION_WINDOW_DAYS` days and adjusts the per-tenant thresholds
+    /// in `anomaly_rules` accordingly, writing one audit row to
+    /// `threshold_calibration_history` per moved threshold.
+    pub async fn recalibrate_tenant_thresholds(
+        &self,
+        tenant_id: Uuid,
+        recalibrated_by: Uuid,
+    ) -> Result<RecalibrationOutcome> {
+        self.repo
+            .recalibrate_anomaly_thresholds(tenant_id, recalibrated_by)
+            .await
+            .context("Failed to recalibrate per-tenant anomaly thresholds")
     }
 
     /// Generate forecasts for a list of vendors
@@ -214,8 +270,8 @@ impl PredictiveService {
 
         let mut all_anomalies = Vec::new();
 
-        // 1. Detect duplicate invoices
-        let duplicate_detector = DuplicateDetector::new(tenant_id);
+        // 1. Detect duplicate invoices (per-tenant thresholds)
+        let duplicate_detector = self.build_duplicate_detector(tenant_id).await;
         match duplicate_detector.detect_duplicates(&invoices) {
             Ok(duplicates) => {
                 info!("Detected {} duplicate invoice anomalies", duplicates.len());
@@ -231,8 +287,8 @@ impl PredictiveService {
             }
         }
 
-        // 2. Detect amount outliers (statistical)
-        let stat_detector = StatisticalAnomalyDetector::new(tenant_id);
+        // 2. Detect amount outliers (per-tenant thresholds)
+        let stat_detector = self.build_anomaly_detector(tenant_id).await;
 
         // Group invoices by vendor for outlier detection
         let mut vendor_invoices: std::collections::HashMap<String, Vec<&InvoiceRecord>> =
