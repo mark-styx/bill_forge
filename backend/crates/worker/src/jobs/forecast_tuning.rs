@@ -299,14 +299,14 @@ async fn write_tuning_audit(
     Ok(())
 }
 
+const TENANT_DISCOVERY_SQL: &str = "SELECT id FROM tenants WHERE is_active = true";
+
 /// Fetch all active tenants from the shared metadata pool.
 async fn get_active_tenants(pool: &PgPool) -> Result<Vec<TenantId>> {
-    let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT tenant_id FROM users WHERE is_active = true",
-    )
-    .fetch_all(pool)
-    .await
-    .context("Failed to fetch active tenants")?;
+    let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(TENANT_DISCOVERY_SQL)
+        .fetch_all(pool)
+        .await
+        .context("Failed to fetch active tenants")?;
 
     Ok(rows.into_iter().map(|(id,)| TenantId::from_uuid(id)).collect())
 }
@@ -398,5 +398,24 @@ mod tests {
                 c
             );
         }
+    }
+
+    #[test]
+    fn tenant_discovery_uses_tenants_table_not_users() {
+        // Regression guard: per-tenant learning jobs must discover tenants via
+        // the canonical tenants.is_active query so coverage stays symmetric
+        // with the other per-tenant learning jobs. See issue #399.
+        assert!(
+            TENANT_DISCOVERY_SQL.contains("FROM tenants"),
+            "tenant discovery must select from tenants table"
+        );
+        assert!(
+            TENANT_DISCOVERY_SQL.contains("is_active = true"),
+            "tenant discovery must filter on tenants.is_active"
+        );
+        assert!(
+            !TENANT_DISCOVERY_SQL.contains("FROM users"),
+            "tenant discovery must not key off users table"
+        );
     }
 }

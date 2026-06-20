@@ -18,7 +18,7 @@ pub async fn refresh_forecasts(pg_manager: Arc<PgManager>) -> Result<()> {
     // Get all active tenants
     let metadata_pool = pg_manager.metadata();
     let tenants: Vec<(String,)> =
-        sqlx::query_as("SELECT id::text FROM tenants WHERE active = true")
+        sqlx::query_as("SELECT id::text FROM tenants WHERE is_active = true")
             .fetch_all(metadata_pool)
             .await
             .context("Failed to fetch active tenants")?;

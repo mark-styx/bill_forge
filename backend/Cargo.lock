@@ -1418,6 +1418,7 @@ dependencies = [
  "billforge-bill-com",
  "billforge-core",
  "billforge-db",
+ "billforge-edi",
  "billforge-email",
  "billforge-invoice-capture",
  "billforge-invoice-processing",

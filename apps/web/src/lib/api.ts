@@ -1505,10 +1505,22 @@ export const billComApi = {
 };
 
 // EDI API
+export interface EdiStatusResponse {
+  connected: boolean;
+  provider: string | null;
+  document_count: number;
+  partner_count: number;
+  entitled: boolean;
+  pending_acks: number;
+  last_inbound_at: string | null;
+  last_outbound_at: string | null;
+  ack_timeouts_last_24h: number;
+}
+
 export const ediApi = {
   connect: () => api.get<OAuthConnectResponse>('/api/v1/edi/connect'),
   disconnect: () => api.post('/api/v1/edi/disconnect'),
-  status: () => api.get<IntegrationStatusResponse>('/api/v1/edi/status'),
+  status: () => api.get<EdiStatusResponse>('/api/v1/edi/status'),
   webhookInbound: () => api.post('/api/v1/edi/webhook/inbound'),
   listDocuments: () => api.get<unknown[]>('/api/v1/edi/documents'),
   getDocument: (id: string) => api.get<unknown>('/api/v1/edi/documents/' + id),

@@ -700,22 +700,18 @@ async fn apply_workload_rebalance(
     Ok(())
 }
 
-/// Get all active tenants
+const TENANT_DISCOVERY_SQL: &str = "SELECT id FROM tenants WHERE is_active = true";
+
+/// Get all active tenants from the tenants table.
 async fn get_active_tenants(pool: &PgPool) -> Result<Vec<TenantId>> {
-    let rows = sqlx::query!(
-        r#"
-        SELECT DISTINCT tenant_id
-        FROM users
-        WHERE is_active = true
-        "#
-    )
-    .fetch_all(pool)
-    .await
-    .context("Failed to fetch active tenants")?;
+    let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(TENANT_DISCOVERY_SQL)
+        .fetch_all(pool)
+        .await
+        .context("Failed to fetch active tenants")?;
 
     Ok(rows
         .into_iter()
-        .map(|row| TenantId::from_uuid(row.tenant_id))
+        .map(|(id,)| TenantId::from_uuid(id))
         .collect())
 }
 
@@ -984,6 +980,25 @@ mod tests {
             (w_back - 0.45).abs() < 1e-3,
             "workload should round-trip close to 0.45, got {}",
             w_back
+        );
+    }
+
+    #[test]
+    fn tenant_discovery_uses_tenants_table_not_users() {
+        // Regression guard: per-tenant learning jobs must discover tenants via
+        // the canonical tenants.is_active query so coverage stays symmetric
+        // with the other per-tenant learning jobs. See issue #399.
+        assert!(
+            TENANT_DISCOVERY_SQL.contains("FROM tenants"),
+            "tenant discovery must select from tenants table"
+        );
+        assert!(
+            TENANT_DISCOVERY_SQL.contains("is_active = true"),
+            "tenant discovery must filter on tenants.is_active"
+        );
+        assert!(
+            !TENANT_DISCOVERY_SQL.contains("FROM users"),
+            "tenant discovery must not key off users table"
         );
     }
 }

@@ -13,6 +13,7 @@ pub mod anomaly_detection;
 pub mod approval_expiry;
 pub mod autopilot_sweep;
 pub mod categorization_training;
+pub mod edi;
 pub mod email_batch;
 pub mod embedding_refresh;
 pub mod erp_sync;
@@ -322,31 +323,10 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         JobType::AnomalyDetection => {
             anomaly_detection::detect_tenant_anomalies(config.pg_manager.clone(), &tenant_id).await
         }
-        JobType::EdiProcessInbound => {
-            // EDI inbound processing is handled inline in the webhook handler for now.
-            // This job type is reserved for async/retry processing of EDI documents.
-            info!("EDI inbound processing job - payload: {}", job.payload);
-            Ok(())
-        }
-        JobType::EdiSendRemittance => {
-            // Sends 820 payment remittance advice to trading partner.
-            // Payload: { "invoice_id": "...", "tenant_id": "..." }
-            // Requires EDI connection config to build the client.
-            info!("EDI send remittance job - payload: {}", job.payload);
-            Ok(())
-        }
-        JobType::EdiSendAck => {
-            // Sends 997 functional acknowledgment for a received document.
-            // Payload: { "document_id": "...", "tenant_id": "..." }
-            info!("EDI send ack job - payload: {}", job.payload);
-            Ok(())
-        }
-        JobType::EdiCheckAckStatus => {
-            // Scheduled job to check for ack timeouts on outbound documents.
-            // Payload: { "tenant_id": "..." }
-            info!("EDI check ack status job - payload: {}", job.payload);
-            Ok(())
-        }
+        JobType::EdiProcessInbound => edi::process_inbound(&tenant_id, &job.payload, config).await,
+        JobType::EdiSendRemittance => edi::send_remittance(&tenant_id, &job.payload, config).await,
+        JobType::EdiSendAck => edi::send_ack(&tenant_id, &job.payload, config).await,
+        JobType::EdiCheckAckStatus => edi::check_ack_status(&tenant_id, config).await,
         JobType::OcrProcess => {
             ocr_processing::process_ocr(&tenant_id_str, &job.payload, config, job.retry_count).await
         }
