@@ -27,3 +27,7 @@ async-openai = { version = "0.20", default-features = false, features = ["native
 [[test]]
 name = "line_categorization_test"
 path = "tests/line_categorization_test.rs"
+
+[[test]]
+name = "continuous_learning_test"
+path = "tests/continuous_learning_test.rs"

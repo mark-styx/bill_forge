@@ -529,11 +529,90 @@ async fn resolve(
     .await
     .map_err(|e| Error::Database(format!("Failed to record autopilot decision: {}", e)))?;
 
+    // Issue #404: every override fans out into the unified learning stream so
+    // the continuous learning engine can recalibrate confidence next pass.
+    ingest_override_into_learning(
+        &*pool,
+        &tenant,
+        &user,
+        invoice_uuid,
+        &decision,
+        exception_type,
+        &matched.resolution.action,
+        &applied_action,
+        confidence,
+        body.override_action.as_ref(),
+    )
+    .await;
+
     Ok(Json(ResolveResponse {
         exception_id: body.exception_id,
         decision,
         applied_action,
     }))
+}
+
+/// Best-effort fan-out of an autopilot override into the unified
+/// `learning_corrections` stream. Compiled out when the `processing`
+/// feature is disabled so single-pillar deployments still build.
+#[cfg(feature = "processing")]
+#[allow(clippy::too_many_arguments)]
+async fn ingest_override_into_learning(
+    pool: &PgPool,
+    tenant: &TenantContext,
+    user: &billforge_core::UserContext,
+    invoice_uuid: Uuid,
+    decision: &str,
+    exception_type: &str,
+    proposed_action: &str,
+    applied_action: &str,
+    confidence: f32,
+    override_action: Option<&OverrideAction>,
+) {
+    if decision != "override" {
+        return;
+    }
+    let original = serde_json::json!({
+        "exception_type": exception_type,
+        "proposed_action": proposed_action,
+        "confidence": confidence,
+    });
+    let corrected = serde_json::json!({
+        "applied_action": applied_action,
+        "override": override_action,
+    });
+    if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(
+        *tenant.tenant_id.as_uuid(),
+        pool.clone(),
+    )
+    .ingest_correction(
+        billforge_invoice_processing::CorrectionType::AutopilotOverride,
+        original,
+        corrected,
+        Some(*user.user_id.as_uuid()),
+        Some(invoice_uuid),
+        "invoice",
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "Failed to ingest autopilot override into learning stream");
+    }
+}
+
+#[cfg(not(feature = "processing"))]
+#[allow(clippy::too_many_arguments)]
+async fn ingest_override_into_learning(
+    _pool: &PgPool,
+    _tenant: &TenantContext,
+    _user: &billforge_core::UserContext,
+    _invoice_uuid: Uuid,
+    _decision: &str,
+    _exception_type: &str,
+    _proposed_action: &str,
+    _applied_action: &str,
+    _confidence: f32,
+    _override_action: Option<&OverrideAction>,
+) {
 }
 
 fn validate_exception_type(t: &str) -> ApiResult<()> {

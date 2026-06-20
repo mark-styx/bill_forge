@@ -1938,6 +1938,20 @@ async fn move_to_queue(
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::WorkQueueRepositoryImpl::new(pool.clone());
+
+    // Capture the prior assignment so we can detect an approver reroute. We
+    // read it before move_item rather than from the move result, since
+    // move_item creates a new queue row when none exists yet.
+    let prior_item = billforge_core::traits::WorkQueueRepository::get_current_item_for_invoice(
+        &repo,
+        &tenant.tenant_id,
+        &invoice_id,
+    )
+    .await
+    .ok()
+    .flatten();
+    let prior_assignee = prior_item.as_ref().and_then(|i| i.assigned_to.clone());
+
     let item = repo
         .move_item(
             &tenant.tenant_id,
@@ -1960,6 +1974,45 @@ async fn move_to_queue(
     let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    // Issue #404: a real approver change (one user -> a different user) is an
+    // approver_reroute correction. The unified learning stream uses this to
+    // bidirectionally adjust workload weights — see ContinuousLearningEngine.
+    if let (Some(prev), Some(new)) = (prior_assignee.as_ref(), item.assigned_to.as_ref()) {
+        if prev.as_uuid() != new.as_uuid() {
+            let original = serde_json::json!({
+                "approver_id": prev.as_uuid().to_string(),
+                "queue_id": prior_item
+                    .as_ref()
+                    .map(|i| i.queue_id.0.to_string())
+                    .unwrap_or_default(),
+            });
+            let corrected = serde_json::json!({
+                "approver_id": new.as_uuid().to_string(),
+                "queue_id": item.queue_id.0.to_string(),
+            });
+            if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(
+                *tenant.tenant_id.as_uuid(),
+                (*pool).clone(),
+            )
+            .ingest_correction(
+                billforge_invoice_processing::CorrectionType::ApproverReroute,
+                original,
+                corrected,
+                Some(*user.user_id.as_uuid()),
+                Some(*invoice_id.as_uuid()),
+                "invoice",
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    invoice_id = %invoice_id,
+                    "Failed to ingest approver reroute into learning stream"
+                );
+            }
+        }
     }
 
     Ok(Json(item))

@@ -70,6 +70,7 @@ const navigation: NavItem[] = [
       { name: 'Workflows', href: '/processing/workflows', icon: Sparkles, module: 'invoice_processing' },
       { name: 'Policy Composer', href: '/processing/policies/compose', icon: Sparkles, module: 'invoice_processing' },
       { name: 'Assignment Rules', href: '/processing/assignment-rules', icon: Workflow, module: 'invoice_processing' },
+      { name: 'Learning Insights', href: '/learning', icon: Sparkles, module: 'invoice_processing' },
     ]
   },
   { name: 'Vendors', href: '/vendors', icon: Users, module: 'vendor_management' },

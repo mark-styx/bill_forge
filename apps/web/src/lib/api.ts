@@ -3573,6 +3573,77 @@ export interface AutopilotSettings {
   autopilot_enabled_types: AutopilotExceptionType[];
 }
 
+// ---------------------------------------------------------------------------
+// Continuous Learning Engine (refs #404) - "What I Learned This Week" panel
+// ---------------------------------------------------------------------------
+
+export type LearningCorrectionType =
+  | 'gl_recode'
+  | 'approver_reroute'
+  | 'autopilot_override'
+  | 'duplicate_dismissal';
+
+export interface LearningCorrectionsByKind {
+  gl_recode: number;
+  approver_reroute: number;
+  autopilot_override: number;
+  duplicate_dismissal: number;
+}
+
+export interface LearningModelChange {
+  model_kind: string;
+  version: number;
+  corrections_applied: number;
+  baseline_metric: number | null;
+  new_metric: number | null;
+  note: string | null;
+}
+
+export interface LearningTopRecategorization {
+  from_value: string;
+  to_value: string;
+  count: number;
+}
+
+export interface LearningRoutingShift {
+  from_approver: string | null;
+  to_approver: string | null;
+  count: number;
+}
+
+export interface LearningWeeklyInsights {
+  week_start: string;
+  corrections_ingested: LearningCorrectionsByKind;
+  model_changes: LearningModelChange[];
+  top_recategorizations: LearningTopRecategorization[];
+  routing_shifts: LearningRoutingShift[];
+  autopilot_overrides_resolved: number;
+}
+
+export interface LearningWeeklyInsightsResponse {
+  week_start: string;
+  insights: LearningWeeklyInsights;
+}
+
+export interface LearningRecordCorrectionInput {
+  correction_type: LearningCorrectionType;
+  entity_id?: string;
+  entity_type: string;
+  original_value: Record<string, unknown>;
+  corrected_value: Record<string, unknown>;
+}
+
+export const learningApi = {
+  getWeeklyInsights: (week_start?: string) =>
+    api.get<LearningWeeklyInsightsResponse>(
+      '/api/v1/learning/weekly_insights',
+      week_start ? { week_start } : undefined,
+    ),
+
+  recordCorrection: (input: LearningRecordCorrectionInput) =>
+    api.post<{ recorded: boolean }>('/api/v1/learning/corrections', input),
+};
+
 export const autopilotApi = {
   getQueue: () => api.get<AutopilotQueueResponse>('/api/v1/autopilot/queue'),
 

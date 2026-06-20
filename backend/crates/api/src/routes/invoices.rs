@@ -598,7 +598,7 @@ async fn update_invoice(
                 accepted_cost_center: invoice.cost_center.clone(),
                 line_items_summary: summary,
                 total_amount_cents: invoice.total_amount.amount,
-                feedback_type,
+                feedback_type: feedback_type.clone(),
             };
             if let Err(e) = FeedbackLearning::new((*pool).clone())
                 .record_feedback(feedback)
@@ -609,6 +609,41 @@ async fn update_invoice(
                     invoice_id = %invoice.id,
                     "Failed to record categorization feedback"
                 );
+            }
+
+            // Issue #404: fan out GL recodes into the unified learning
+            // stream so the weekly continuous learning pass can count them.
+            if matches!(feedback_type, FeedbackType::Correction) {
+                let original = serde_json::json!({
+                    "gl_code": old.gl_code,
+                    "department": old.department,
+                    "cost_center": old.cost_center,
+                });
+                let corrected = serde_json::json!({
+                    "gl_code": invoice.gl_code,
+                    "department": invoice.department,
+                    "cost_center": invoice.cost_center,
+                });
+                if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(
+                    *tenant.tenant_id.as_uuid(),
+                    (*pool).clone(),
+                )
+                .ingest_correction(
+                    billforge_invoice_processing::CorrectionType::GlRecode,
+                    original,
+                    corrected,
+                    Some(*user.user_id.as_uuid()),
+                    Some(*invoice.id.as_uuid()),
+                    "invoice",
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        invoice_id = %invoice.id,
+                        "Failed to ingest GL recode into learning stream"
+                    );
+                }
             }
         }
     }
@@ -2387,9 +2422,41 @@ async fn reject_duplicate(
         "action": "reject_duplicate",
         "resolution": "not_duplicate",
     }));
-    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
     if let Err(e) = audit_repo.log(audit_entry).await {
         tracing::warn!(error = %e, "Failed to log reject-duplicate audit entry");
+    }
+
+    // Issue #404: fan out duplicate dismissals into the unified learning
+    // stream so the continuous learning engine can fold the human's "not a
+    // duplicate" signal back into the vendor-matching model.
+    let original = serde_json::json!({
+        "flagged_as_duplicate": true,
+        "invoice_number": invoice.invoice_number,
+        "vendor_name": invoice.vendor_name,
+    });
+    let corrected = serde_json::json!({
+        "resolution": "not_duplicate",
+    });
+    if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(
+        *tenant.tenant_id.as_uuid(),
+        (*pool).clone(),
+    )
+    .ingest_correction(
+        billforge_invoice_processing::CorrectionType::DuplicateDismissal,
+        original,
+        corrected,
+        Some(*user.user_id.as_uuid()),
+        Some(*invoice_id.as_uuid()),
+        "invoice",
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            invoice_id = %invoice_id,
+            "Failed to ingest duplicate dismissal into learning stream"
+        );
     }
 
     Ok(Json(serde_json::json!({

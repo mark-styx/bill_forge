@@ -5,6 +5,7 @@
 
 pub mod categorization;
 pub mod categorization_ml;
+pub mod continuous_learning;
 pub mod contract_matching;
 pub mod embedding_cache;
 pub mod engine;
@@ -20,6 +21,10 @@ pub use categorization::{
     PerLineInvoiceCategorization, PriorLineCoding, VendorHistory,
 };
 pub use categorization_ml::MLCategorizer;
+pub use continuous_learning::{
+    ContinuousLearningEngine, CorrectionType, CorrectionsByKind, ModelChange, RoutingShift,
+    TopRecategorization, WeeklyInsights, WeeklyLearningSummary,
+};
 pub use contract_matching::{match_invoice_to_contract, ContractMatchInput, ContractMatchOutcome};
 pub use embedding_cache::{CacheStats, EmbeddingCache};
 pub use engine::WorkflowEngine;

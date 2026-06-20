@@ -49,6 +49,8 @@ pub mod inbound_email;
     feature = "billing"
 ))]
 pub mod invoices;
+#[cfg(feature = "processing")]
+pub mod learning;
 pub mod mobile;
 #[cfg(feature = "netsuite")]
 pub mod netsuite;
@@ -379,6 +381,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/policies", policies::routes())
         // Exception-Only Autopilot Cockpit (gated on InvoiceCapture module via extractors)
         .nest("/autopilot", autopilot::routes());
+    // Continuous learning panel + correction ingestion (#404).
+    #[cfg(feature = "processing")]
+    let router = router.nest("/learning", learning::routes());
     // Pillar-gated mounts for the remainder of the API surface.
     let router = {
         // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module

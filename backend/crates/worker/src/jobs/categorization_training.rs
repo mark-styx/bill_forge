@@ -10,6 +10,7 @@ use billforge_db::PgManager;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use billforge_invoice_processing::continuous_learning::ContinuousLearningEngine;
 use billforge_invoice_processing::feedback_loop::{AccuracyMetrics, FeedbackLearning};
 
 /// Learn from recent feedback for all tenants
@@ -132,6 +133,32 @@ pub async fn learn_from_tenant_feedback(
         .update_daily_metrics(&tenant_id_str)
         .await
         .context("Failed to update daily metrics")?;
+
+    // Issue #404: run the continuous learning engine so the weekly pass
+    // produces versioned model snapshots and writes the materialized
+    // tenant_weekly_insights row that backs the "What I Learned This Week"
+    // panel. The legacy FeedbackLearning calls above stay in place so the
+    // categorization-only side effects (correction rules, embedding usage,
+    // confidence calibration) keep working for tenants on the old path.
+    let engine = ContinuousLearningEngine::new(*tenant_id.as_uuid(), (*pool).clone());
+    match engine.apply_weekly_learning(&tenant_id_str).await {
+        Ok(summary) => {
+            info!(
+                tenant_id = %tenant_id,
+                corrections = summary.corrections_ingested.total(),
+                versions = summary.versions_written,
+                week_start = %summary.week_start,
+                "Continuous learning weekly pass completed"
+            );
+        }
+        Err(e) => {
+            warn!(
+                tenant_id = %tenant_id,
+                error = %e,
+                "Continuous learning weekly pass failed"
+            );
+        }
+    }
 
     // Get overall accuracy metrics for last 30 days
     let metrics = learning
