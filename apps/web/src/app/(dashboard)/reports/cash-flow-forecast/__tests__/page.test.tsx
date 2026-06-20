@@ -40,6 +40,9 @@ vi.mock('lucide-react', () => ({
   TrendingUp: () => <span>TrendingUp</span>,
   ArrowLeft: () => <span>ArrowLeft</span>,
   FlaskConical: () => <span>FlaskConical</span>,
+  Target: () => <span>Target</span>,
+  CheckCircle2: () => <span>CheckCircle2</span>,
+  XCircle: () => <span>XCircle</span>,
 }));
 
 import { reportsApi } from '@/lib/api';
@@ -196,8 +199,8 @@ describe('CashFlowForecastPage', () => {
     const delayInput = screen.getByLabelText('Delay pending approvals by (days)');
     fireEvent.change(delayInput, { target: { value: '7' } });
 
-    // Check the EPD checkbox
-    const epdCheckbox = screen.getByRole('checkbox');
+    // Check the simulator's EPD checkbox (the Find Cash panel also has one)
+    const epdCheckbox = screen.getByLabelText('Capture every early-payment discount');
     fireEvent.click(epdCheckbox);
 
     // Click Run simulation

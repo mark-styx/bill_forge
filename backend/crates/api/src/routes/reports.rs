@@ -43,6 +43,10 @@ pub fn routes() -> Router<AppState> {
             "/cash-flow/forecast/simulate",
             post(ap_cash_flow_forecast_simulate),
         )
+        .route(
+            "/cash-flow/forecast/solve",
+            post(ap_cash_flow_forecast_solve),
+        )
         // Email digest management
         .route("/digests", get(list_digests).post(create_digest))
         .route("/digests/:id", delete(delete_digest))
@@ -1387,6 +1391,347 @@ async fn ap_cash_flow_forecast_simulate(
         baseline,
         scenario: scenario_forecast,
         scenario_inputs: body.scenario,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// AP cash flow solver: "find me $X by date Y" recommender
+// ---------------------------------------------------------------------------
+
+/// Inputs for the cash-target solver.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverInputs {
+    /// Cash balance the user wants on or after `target_date` (cents).
+    pub target_balance_cents: i64,
+    /// Date by which the target balance must be met.
+    pub target_date: chrono::NaiveDate,
+    /// Current cash position (cents). Defaults to 0 if omitted.
+    pub starting_balance_cents: Option<i64>,
+    /// Maximum number of days a payable can be delayed. Clamped to [0,90]. Defaults to 14.
+    pub max_delay_days: Option<i32>,
+    /// Whether to consider early-payment-discount captures as a lever. Defaults to true.
+    pub allow_epd_capture: Option<bool>,
+    /// If true, the solver will not push payments beyond vendor net terms (model: never exceed `max_delay_days`). Defaults to true.
+    pub respect_vendor_terms: Option<bool>,
+    /// Forecast horizon (weeks). Defaults to 13.
+    pub horizon_weeks: Option<i32>,
+    /// Forecast as-of date. Defaults to today.
+    pub as_of_date: Option<chrono::NaiveDate>,
+}
+
+/// A single recommended action emitted by the solver.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverAction {
+    pub invoice_id: Uuid,
+    pub vendor_name: String,
+    pub original_due_date: chrono::NaiveDate,
+    pub recommended_pay_date: chrono::NaiveDate,
+    pub amount_cents: i64,
+    /// One of: "delay", "accelerate_epd", "hold".
+    pub action_kind: String,
+}
+
+/// Solver output: feasibility, a projected day series, and recommended actions.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverResult {
+    pub feasible: bool,
+    /// ScenarioInputs that the UI can drop straight into the existing simulator.
+    pub recommended_inputs: ScenarioInputs,
+    /// Day-by-day projected outflows after applying the recommended actions.
+    pub projected: Vec<ForecastDay>,
+    pub recommended_actions: Vec<SolverAction>,
+    pub target_balance_cents: i64,
+    pub target_date: chrono::NaiveDate,
+    /// Projected cash balance on `target_date` after applying the recommended actions.
+    pub achieved_balance_cents: i64,
+}
+
+#[derive(Debug, Clone)]
+struct SolverCandidate {
+    invoice_id: Uuid,
+    vendor_name: String,
+    due_date: chrono::NaiveDate,
+    effective_pay_date: chrono::NaiveDate,
+    effective_amount: i64,
+    discount_percent: Option<f64>,
+    discount_deadline: Option<chrono::NaiveDate>,
+    epd_eligible: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/reports/cash-flow/forecast/solve",
+    tag = "Reports",
+    request_body = SolverInputs,
+    responses((status = 200, description = "Cash-target solver result"))
+)]
+async fn ap_cash_flow_forecast_solve(
+    State(state): State<AppState>,
+    ReportingAccess(_user, tenant): ReportingAccess,
+    Json(body): Json<SolverInputs>,
+) -> ApiResult<Json<SolverResult>> {
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+    let horizon_weeks = body.horizon_weeks.unwrap_or(13).clamp(1, 52);
+    let as_of_date = body
+        .as_of_date
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let max_delay_days = body.max_delay_days.unwrap_or(14).clamp(0, 90);
+    let allow_epd_capture = body.allow_epd_capture.unwrap_or(true);
+    let _respect_vendor_terms = body.respect_vendor_terms.unwrap_or(true);
+    let starting_balance = body.starting_balance_cents.unwrap_or(0);
+
+    // Baseline forecast (reuses simulate's underlying computation).
+    let baseline = compute_ap_forecast(
+        &pool,
+        tenant.tenant_id.as_uuid(),
+        horizon_weeks,
+        as_of_date,
+        None,
+        None,
+    )
+    .await?;
+
+    let cumulative_through = |daily: &[ForecastDay], date: chrono::NaiveDate| -> i64 {
+        daily
+            .iter()
+            .filter(|d| d.date <= date)
+            .map(|d| d.expected_amount)
+            .sum()
+    };
+
+    let baseline_cumulative = cumulative_through(&baseline.daily, body.target_date);
+    let baseline_balance = starting_balance - baseline_cumulative;
+    let empty_inputs = ScenarioInputs {
+        pending_approval_delay_days: None,
+        capture_all_epd: None,
+        vendor_term_shift_days: None,
+        override_funding_threshold_cents: None,
+    };
+
+    // Already meeting the target with the baseline plan.
+    if baseline_balance >= body.target_balance_cents {
+        return Ok(Json(SolverResult {
+            feasible: true,
+            recommended_inputs: empty_inputs,
+            projected: baseline.daily.clone(),
+            recommended_actions: vec![],
+            target_balance_cents: body.target_balance_cents,
+            target_date: body.target_date,
+            achieved_balance_cents: baseline_balance,
+        }));
+    }
+
+    let gap = body.target_balance_cents - baseline_balance;
+
+    // Pull invoices for solver consideration (same shape as compute_ap_forecast).
+    let rows = sqlx::query_as::<_, (
+        Uuid,
+        String,
+        i64,
+        String,
+        Option<chrono::NaiveDate>,
+        Option<chrono::NaiveDate>,
+        Option<f64>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )>(
+        r#"
+        SELECT
+            i.id,
+            i.vendor_name,
+            i.total_amount_cents,
+            i.processing_status,
+            i.due_date,
+            i.discount_deadline,
+            CAST(i.discount_percent AS DOUBLE PRECISION),
+            i.discount_captured_at,
+            i.discount_missed_at
+        FROM invoices i
+        WHERE i.tenant_id = $1
+          AND i.processing_status IN ('submitted', 'pending_approval', 'approved', 'ready_for_payment')
+          AND i.due_date IS NOT NULL
+        ORDER BY i.due_date ASC
+        LIMIT 1000
+        "#,
+    )
+    .bind(tenant.tenant_id.as_uuid())
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to query solver data: {}", e)))?;
+
+    let today = chrono::Utc::now().date_naive();
+
+    // Build candidates with baseline effective pay dates (mirrors compute_ap_forecast logic).
+    let mut candidates: Vec<SolverCandidate> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let due = r.4?;
+            let mut effective_date = due;
+            let mut effective_amount = r.2 as f64;
+            match r.3.as_str() {
+                "pending_approval" => {
+                    effective_date = due.max(today + chrono::Duration::days(1));
+                }
+                _ => {}
+            }
+            let epd_eligible = r.7.is_none()
+                && r.8.is_none()
+                && r.5.is_some()
+                && r.6.map_or(false, |p| p > 0.0);
+            if epd_eligible {
+                if let (Some(dd), Some(pct)) = (r.5, r.6) {
+                    if dd >= today && dd <= effective_date {
+                        effective_date = dd;
+                        effective_amount = r.2 as f64 * (1.0 - pct / 100.0);
+                    }
+                }
+            }
+            // Only consider invoices currently scheduled on/before target_date.
+            if effective_date > body.target_date || effective_date < as_of_date {
+                return None;
+            }
+            Some(SolverCandidate {
+                invoice_id: r.0,
+                vendor_name: r.1,
+                due_date: due,
+                effective_pay_date: effective_date,
+                effective_amount: effective_amount as i64,
+                discount_percent: r.6,
+                discount_deadline: r.5,
+                epd_eligible,
+            })
+        })
+        .collect();
+
+    // Sort: EPD-capture wins first (when allowed and still pre-target), then largest amount, then closest to target.
+    let target_date = body.target_date;
+    candidates.sort_by(|a, b| {
+        let a_epd = allow_epd_capture
+            && a.epd_eligible
+            && a.discount_deadline.map_or(false, |dd| dd <= target_date);
+        let b_epd = allow_epd_capture
+            && b.epd_eligible
+            && b.discount_deadline.map_or(false, |dd| dd <= target_date);
+        b_epd
+            .cmp(&a_epd)
+            .then(b.effective_amount.cmp(&a.effective_amount))
+            .then(
+                (target_date - a.effective_pay_date)
+                    .num_days()
+                    .cmp(&(target_date - b.effective_pay_date).num_days()),
+            )
+    });
+
+    let mut actions: Vec<SolverAction> = Vec::new();
+    let mut freed_cash: i64 = 0;
+    let mut max_delay_used: i32 = 0;
+    let mut epd_used = false;
+
+    for c in &candidates {
+        if freed_cash >= gap {
+            break;
+        }
+        // Cap delay so we never exceed max_delay_days regardless of respect_vendor_terms.
+        let new_pay = c.effective_pay_date + chrono::Duration::days(max_delay_days as i64);
+        if new_pay > body.target_date {
+            // Delaying moves this payment past the window: full amount freed before the target date.
+            let delay_days = (new_pay - c.effective_pay_date).num_days() as i32;
+            max_delay_used = max_delay_used.max(delay_days);
+            actions.push(SolverAction {
+                invoice_id: c.invoice_id,
+                vendor_name: c.vendor_name.clone(),
+                original_due_date: c.due_date,
+                recommended_pay_date: new_pay,
+                amount_cents: c.effective_amount,
+                action_kind: "delay".to_string(),
+            });
+            freed_cash += c.effective_amount;
+        } else if allow_epd_capture
+            && c.epd_eligible
+            && c.discount_deadline.map_or(false, |dd| dd <= body.target_date)
+            && c.discount_percent.map_or(false, |p| p > 0.0)
+        {
+            // EPD capture: discount savings count as freed cash before the target.
+            if let (Some(dd), Some(pct)) = (c.discount_deadline, c.discount_percent) {
+                let discount_cents = ((c.effective_amount as f64) * (pct / 100.0)) as i64;
+                if discount_cents > 0 {
+                    epd_used = true;
+                    actions.push(SolverAction {
+                        invoice_id: c.invoice_id,
+                        vendor_name: c.vendor_name.clone(),
+                        original_due_date: c.due_date,
+                        recommended_pay_date: dd,
+                        amount_cents: discount_cents,
+                        action_kind: "accelerate_epd".to_string(),
+                    });
+                    freed_cash += discount_cents;
+                }
+            }
+        }
+    }
+
+    let feasible = freed_cash >= gap;
+    let achieved_balance = baseline_balance + freed_cash;
+
+    // Rebuild projected daily series by applying the chosen shifts to the baseline.
+    let mut projected: Vec<ForecastDay> = baseline.daily.clone();
+    let mut by_date: std::collections::HashMap<chrono::NaiveDate, usize> = std::collections::HashMap::new();
+    for (i, d) in projected.iter().enumerate() {
+        by_date.insert(d.date, i);
+    }
+    for action in &actions {
+        if action.action_kind == "delay" {
+            // Find original effective pay date by matching invoice via the candidate list.
+            if let Some(c) = candidates.iter().find(|c| c.invoice_id == action.invoice_id) {
+                if let Some(&idx) = by_date.get(&c.effective_pay_date) {
+                    let d = &mut projected[idx];
+                    d.expected_amount = (d.expected_amount - action.amount_cents).max(0);
+                    d.low_band = (d.low_band - action.amount_cents).max(0);
+                    d.high_band = (d.high_band - action.amount_cents).max(0);
+                }
+                if let Some(&idx) = by_date.get(&action.recommended_pay_date) {
+                    let d = &mut projected[idx];
+                    d.expected_amount += action.amount_cents;
+                    d.low_band += action.amount_cents;
+                    d.high_band += action.amount_cents;
+                }
+            }
+        } else if action.action_kind == "accelerate_epd" {
+            // Discount reduces outflow on the original effective pay date.
+            if let Some(c) = candidates.iter().find(|c| c.invoice_id == action.invoice_id) {
+                if let Some(&idx) = by_date.get(&c.effective_pay_date) {
+                    let d = &mut projected[idx];
+                    d.expected_amount = (d.expected_amount - action.amount_cents).max(0);
+                    d.low_band = (d.low_band - action.amount_cents).max(0);
+                    d.high_band = (d.high_band - action.amount_cents).max(0);
+                }
+            }
+        }
+    }
+
+    // Map solver decisions onto the simulator's ScenarioInputs so the UI can apply with one click.
+    // Using vendor_term_shift_days (covers all non-approved invoices) avoids double-counting against
+    // pending_approval_delay_days; approved invoices in the actions list cannot be expressed via
+    // ScenarioInputs but the UI still surfaces them in the action table.
+    let recommended_inputs = ScenarioInputs {
+        pending_approval_delay_days: None,
+        capture_all_epd: if epd_used { Some(true) } else { None },
+        vendor_term_shift_days: if max_delay_used > 0 {
+            Some(max_delay_used)
+        } else {
+            None
+        },
+        override_funding_threshold_cents: None,
+    };
+
+    Ok(Json(SolverResult {
+        feasible,
+        recommended_inputs,
+        projected,
+        recommended_actions: actions,
+        target_balance_cents: body.target_balance_cents,
+        target_date: body.target_date,
+        achieved_balance_cents: achieved_balance,
     }))
 }
 

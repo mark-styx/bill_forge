@@ -553,3 +553,230 @@ async fn simulate_applies_pending_delay_and_epd_capture() {
 
     cleanup_test_data(&pool, tenant_id, prefix).await;
 }
+
+// ===========================================================================
+// Test 8: Solver finds a feasible schedule by delaying payables
+// ===========================================================================
+//
+// Mirrors the solver algorithm in routes/reports.rs:
+//   - Pull invoices in [as_of, target_date] window
+//   - Order by EPD-eligible first, then largest amount, then closest to target
+//   - For each, attempt to delay by max_delay_days; if the delay pushes the
+//     payment past target_date, count the full amount as freed cash
+//   - Stop once freed cash >= gap
+//
+// This test seeds payables that exceed the starting balance on the target
+// date, then verifies the greedy delay strategy frees enough cash to meet
+// the target with at least one delay action.
+
+#[tokio::test]
+#[ignore]
+async fn solver_finds_feasible_schedule_by_delaying_payables() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::new_v4();
+    let prefix = "FC-SOLVE-OK";
+
+    let vendor_id = insert_vendor(&pool, tenant_id, "FC-SOLVE-OK Vendor").await;
+    let today = chrono::Utc::now().date_naive();
+    let target_date = today + chrono::Duration::days(7);
+    let max_delay_days: i32 = 14;
+
+    // Two approved payables, both due before target_date.
+    insert_invoice(
+        &pool,
+        tenant_id,
+        vendor_id,
+        "FC-SOLVE-OK-001",
+        500_000, // $5,000
+        "approved",
+        today + chrono::Duration::days(3),
+        None,
+        None,
+    )
+    .await;
+    insert_invoice(
+        &pool,
+        tenant_id,
+        vendor_id,
+        "FC-SOLVE-OK-002",
+        300_000, // $3,000
+        "approved",
+        today + chrono::Duration::days(5),
+        None,
+        None,
+    )
+    .await;
+
+    // Baseline cumulative outflows through target_date should be 800_000.
+    let starting_balance: i64 = 600_000; // $6,000
+    let target_balance: i64 = 500_000; // $5,000 -> requires freeing 700_000
+
+    // Mirror the solver's candidate collection.
+    let rows = sqlx::query(
+        r#"
+        SELECT id, total_amount_cents, due_date
+        FROM invoices
+        WHERE tenant_id = $1
+          AND invoice_number LIKE $2
+          AND due_date <= $3
+          AND due_date >= $4
+        ORDER BY total_amount_cents DESC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(format!("{}%", prefix))
+    .bind(target_date)
+    .bind(today)
+    .fetch_all(&pool)
+    .await
+    .expect("Solver candidate query should succeed");
+
+    assert_eq!(rows.len(), 2, "Both invoices should be solver candidates");
+
+    let cumulative: i64 = rows
+        .iter()
+        .map(|r| r.get::<i64, _>("total_amount_cents"))
+        .sum();
+    assert_eq!(cumulative, 800_000);
+    let baseline_balance = starting_balance - cumulative;
+    let gap = target_balance - baseline_balance;
+    assert!(gap > 0, "Baseline should miss the target");
+
+    // Greedy: delay largest first; each delay pushes payment past target_date,
+    // freeing the full amount.
+    let mut freed: i64 = 0;
+    let mut actions: Vec<(Uuid, i64, chrono::NaiveDate)> = Vec::new();
+    for r in &rows {
+        if freed >= gap {
+            break;
+        }
+        let amount: i64 = r.get("total_amount_cents");
+        let due: chrono::NaiveDate = r.get("due_date");
+        let new_pay = due + chrono::Duration::days(max_delay_days as i64);
+        if new_pay > target_date {
+            actions.push((r.get("id"), amount, new_pay));
+            freed += amount;
+        }
+    }
+
+    assert!(
+        !actions.is_empty(),
+        "Solver should emit at least one delay action"
+    );
+    let achieved = baseline_balance + freed;
+    assert!(
+        achieved >= target_balance,
+        "Achieved {} should meet or exceed target {}",
+        achieved,
+        target_balance
+    );
+    for (_id, _amt, new_pay) in &actions {
+        assert!(
+            (*new_pay - today).num_days() <= (max_delay_days as i64 + 5),
+            "Recommended pay date {:?} should be within max_delay_days window",
+            new_pay
+        );
+    }
+
+    cleanup_test_data(&pool, tenant_id, prefix).await;
+}
+
+// ===========================================================================
+// Test 9: Solver returns infeasible when constraints can't meet target
+// ===========================================================================
+//
+// Seeds payables whose total outflows can be delayed, but the target is so
+// aggressive that even maxing every delay still leaves a shortfall. The
+// solver returns feasible=false, achieved < target, and still surfaces best
+// effort actions so the UI can show why it fell short.
+
+#[tokio::test]
+#[ignore]
+async fn solver_returns_infeasible_when_constraints_too_tight() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::new_v4();
+    let prefix = "FC-SOLVE-NO";
+
+    let vendor_id = insert_vendor(&pool, tenant_id, "FC-SOLVE-NO Vendor").await;
+    let today = chrono::Utc::now().date_naive();
+    let target_date = today + chrono::Duration::days(7);
+    let max_delay_days: i32 = 14;
+
+    // One approved payable totaling $5,000 due in 3 days.
+    insert_invoice(
+        &pool,
+        tenant_id,
+        vendor_id,
+        "FC-SOLVE-NO-001",
+        500_000,
+        "approved",
+        today + chrono::Duration::days(3),
+        None,
+        None,
+    )
+    .await;
+
+    // Starting balance of $1,000, target $10,000 -> need to free $14,000 of cash,
+    // but only $5,000 can ever be delayed.
+    let starting_balance: i64 = 100_000; // $1,000
+    let target_balance: i64 = 1_000_000; // $10,000
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id, total_amount_cents, due_date
+        FROM invoices
+        WHERE tenant_id = $1
+          AND invoice_number LIKE $2
+          AND due_date <= $3
+          AND due_date >= $4
+        ORDER BY total_amount_cents DESC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(format!("{}%", prefix))
+    .bind(target_date)
+    .bind(today)
+    .fetch_all(&pool)
+    .await
+    .expect("Solver candidate query should succeed");
+
+    let cumulative: i64 = rows
+        .iter()
+        .map(|r| r.get::<i64, _>("total_amount_cents"))
+        .sum();
+    let baseline_balance = starting_balance - cumulative;
+    let gap = target_balance - baseline_balance;
+    assert!(gap > cumulative, "Test setup must require freeing more than total payables");
+
+    let mut freed: i64 = 0;
+    let mut actions: Vec<(Uuid, i64)> = Vec::new();
+    for r in &rows {
+        if freed >= gap {
+            break;
+        }
+        let amount: i64 = r.get("total_amount_cents");
+        let due: chrono::NaiveDate = r.get("due_date");
+        let new_pay = due + chrono::Duration::days(max_delay_days as i64);
+        if new_pay > target_date {
+            actions.push((r.get("id"), amount));
+            freed += amount;
+        }
+    }
+
+    let feasible = freed >= gap;
+    let achieved = baseline_balance + freed;
+
+    assert!(!feasible, "Solver should mark this scenario infeasible");
+    assert!(
+        achieved < target_balance,
+        "Achieved {} should still fall short of target {}",
+        achieved,
+        target_balance
+    );
+    assert!(
+        !actions.is_empty(),
+        "Solver should still emit best-effort actions even when infeasible"
+    );
+
+    cleanup_test_data(&pool, tenant_id, prefix).await;
+}

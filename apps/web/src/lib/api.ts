@@ -776,6 +776,9 @@ export const reportsApi = {
     scenario: ScenarioInputs;
   }) => api.post<ApCashFlowSimulation>('/api/v1/reports/cash-flow/forecast/simulate', body),
 
+  solveApCashFlowForecast: (body: SolverInputs) =>
+    api.post<SolverResult>('/api/v1/reports/cash-flow/forecast/solve', body),
+
   mlAccuracy: () =>
     api.get<{ accuracy_rate: number; total_suggestions: number; accepted: number; corrected: number; rejected: number }>('/api/v1/invoices/ml-accuracy'),
 };
@@ -1259,6 +1262,37 @@ export interface ApCashFlowSimulation {
   baseline: ApCashFlowForecast;
   scenario: ApCashFlowForecast;
   scenario_inputs: ScenarioInputs;
+}
+
+// Cash-target solver types
+export interface SolverInputs {
+  target_balance_cents: number;
+  target_date: string;
+  starting_balance_cents?: number | null;
+  max_delay_days?: number | null;
+  allow_epd_capture?: boolean | null;
+  respect_vendor_terms?: boolean | null;
+  horizon_weeks?: number | null;
+  as_of_date?: string | null;
+}
+
+export interface SolverAction {
+  invoice_id: string;
+  vendor_name: string;
+  original_due_date: string;
+  recommended_pay_date: string;
+  amount_cents: number;
+  action_kind: 'delay' | 'accelerate_epd' | 'hold';
+}
+
+export interface SolverResult {
+  feasible: boolean;
+  recommended_inputs: ScenarioInputs;
+  projected: ForecastDay[];
+  recommended_actions: SolverAction[];
+  target_balance_cents: number;
+  target_date: string;
+  achieved_balance_cents: number;
 }
 
 // Workflow Template types

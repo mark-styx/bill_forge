@@ -6,6 +6,7 @@ import Link from 'next/link';
 import {
   reportsApi,
   type ApCashFlowSimulation,
+  type SolverResult,
 } from '@/lib/api';
 import {
   ChartContainer,
@@ -18,6 +19,9 @@ import {
   TrendingUp,
   ArrowLeft,
   FlaskConical,
+  Target,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 
 const formatCents = (value: number, currency = 'USD') =>
@@ -43,6 +47,20 @@ export default function CashFlowForecastPage() {
   const [simVendorShift, setSimVendorShift] = useState(0);
   const [simResult, setSimResult] = useState<ApCashFlowSimulation | null>(null);
   const [simError, setSimError] = useState<string | null>(null);
+
+  // Find Cash solver state
+  const defaultTargetDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const [solveTargetDollars, setSolveTargetDollars] = useState<number>(0);
+  const [solveStartingDollars, setSolveStartingDollars] = useState<number>(0);
+  const [solveTargetDate, setSolveTargetDate] = useState<string>(defaultTargetDate);
+  const [solveMaxDelayDays, setSolveMaxDelayDays] = useState<number>(14);
+  const [solveAllowEpd, setSolveAllowEpd] = useState<boolean>(true);
+  const [solveResult, setSolveResult] = useState<SolverResult | null>(null);
+  const [solveError, setSolveError] = useState<string | null>(null);
 
   const forecastQuery = useQuery({
     queryKey: ['ap-cash-flow-forecast', 13],
@@ -78,6 +96,56 @@ export default function CashFlowForecastPage() {
     setSimResult(null);
     setSimError(null);
   }, []);
+
+  // Find Cash solver mutation
+  const solveMutation = useMutation({
+    mutationFn: () =>
+      reportsApi.solveApCashFlowForecast({
+        target_balance_cents: Math.round(solveTargetDollars * 100),
+        target_date: solveTargetDate,
+        starting_balance_cents: Math.round(solveStartingDollars * 100),
+        max_delay_days: solveMaxDelayDays,
+        allow_epd_capture: solveAllowEpd,
+        respect_vendor_terms: true,
+        horizon_weeks: 13,
+      }),
+    onSuccess: (data) => {
+      setSolveResult(data);
+      setSolveError(null);
+    },
+    onError: (err: Error) => {
+      setSolveError(err.message || 'Solver failed');
+    },
+  });
+
+  const handleApplySolution = useCallback(() => {
+    if (!solveResult) return;
+    const inputs = solveResult.recommended_inputs;
+    const delay = inputs.pending_approval_delay_days ?? 0;
+    const capture = Boolean(inputs.capture_all_epd);
+    const shift = inputs.vendor_term_shift_days ?? 0;
+    setSimDelayDays(delay);
+    setSimCaptureEpd(capture);
+    setSimVendorShift(shift);
+    // Trigger the existing simulator with the recommended scenario inline
+    // (state updates are async, so build the body from the solver result).
+    reportsApi
+      .simulateApCashFlowForecast({
+        horizon_weeks: 13,
+        scenario: {
+          pending_approval_delay_days: delay || null,
+          capture_all_epd: capture || null,
+          vendor_term_shift_days: shift || null,
+        },
+      })
+      .then((data) => {
+        setSimResult(data);
+        setSimError(null);
+      })
+      .catch((err: Error) => {
+        setSimError(err.message || 'Simulation failed');
+      });
+  }, [solveResult]);
 
   // Top KPIs
   const totalExpected = useMemo(
@@ -284,6 +352,204 @@ export default function CashFlowForecastPage() {
           <p className="text-xs text-muted-foreground mt-1">
             Days exceeding funding threshold
           </p>
+        </div>
+      </div>
+
+      {/* Find Cash solver */}
+      <div className="card overflow-hidden">
+        <div className="h-1.5 bg-gradient-to-r from-success via-success/70 to-transparent" />
+        <div className="p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-xl bg-success/10">
+              <Target className="w-5 h-5 text-success" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Find Cash</h2>
+              <p className="text-sm text-muted-foreground">
+                Recommend a payment schedule that meets a cash target by a date
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="solve-target-balance">
+                Target balance ($)
+              </label>
+              <input
+                id="solve-target-balance"
+                type="number"
+                min={0}
+                step={100}
+                value={solveTargetDollars}
+                onChange={(e) => setSolveTargetDollars(Math.max(0, Number(e.target.value) || 0))}
+                className="input input-bordered w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="solve-starting-balance">
+                Starting balance ($)
+              </label>
+              <input
+                id="solve-starting-balance"
+                type="number"
+                min={0}
+                step={100}
+                value={solveStartingDollars}
+                onChange={(e) => setSolveStartingDollars(Math.max(0, Number(e.target.value) || 0))}
+                className="input input-bordered w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="solve-target-date">
+                Target date
+              </label>
+              <input
+                id="solve-target-date"
+                type="date"
+                value={solveTargetDate}
+                onChange={(e) => setSolveTargetDate(e.target.value)}
+                className="input input-bordered w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1" htmlFor="solve-max-delay">
+                Max delay (days): {solveMaxDelayDays}
+              </label>
+              <input
+                id="solve-max-delay"
+                type="range"
+                min={0}
+                max={30}
+                step={1}
+                value={solveMaxDelayDays}
+                onChange={(e) => setSolveMaxDelayDays(Number(e.target.value))}
+                className="range range-sm w-full"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-4 mb-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={solveAllowEpd}
+                onChange={(e) => setSolveAllowEpd(e.target.checked)}
+                className="checkbox checkbox-sm"
+              />
+              <span className="text-sm text-foreground">Allow early-payment discount capture</span>
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => solveMutation.mutate()}
+              disabled={solveMutation.isPending || solveTargetDollars <= 0}
+            >
+              {solveMutation.isPending ? 'Solving...' : 'Find cash'}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                setSolveResult(null);
+                setSolveError(null);
+              }}
+            >
+              Reset
+            </button>
+          </div>
+          {solveError && <p className="text-sm text-error mt-2">{solveError}</p>}
+
+          {solveResult && (
+            <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                {solveResult.feasible ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 text-success px-3 py-1 text-sm font-medium">
+                    <CheckCircle2 className="w-4 h-4" /> Feasible
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-error/10 text-error px-3 py-1 text-sm font-medium">
+                    <XCircle className="w-4 h-4" /> Infeasible under current constraints
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground">
+                  Target: {formatCents(solveResult.target_balance_cents)} by {solveResult.target_date}
+                </span>
+                <span className="text-sm text-muted-foreground">
+                  Achieved: {formatCents(solveResult.achieved_balance_cents)} (
+                  {solveResult.achieved_balance_cents >= solveResult.target_balance_cents ? '+' : ''}
+                  {formatCents(
+                    solveResult.achieved_balance_cents - solveResult.target_balance_cents,
+                  )}{' '}
+                  vs target)
+                </span>
+              </div>
+
+              {solveResult.recommended_actions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No actions needed - the baseline forecast already meets the target.
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/40 text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium">Vendor</th>
+                        <th className="text-right px-3 py-2 font-medium">Amount</th>
+                        <th className="text-left px-3 py-2 font-medium">Original due</th>
+                        <th className="text-left px-3 py-2 font-medium">Recommended pay</th>
+                        <th className="text-left px-3 py-2 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {solveResult.recommended_actions.slice(0, 25).map((a) => (
+                        <tr key={a.invoice_id} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground truncate max-w-[180px]">
+                            {a.vendor_name}
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium text-foreground">
+                            {formatCents(a.amount_cents)}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{a.original_due_date}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{a.recommended_pay_date}</td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                a.action_kind === 'delay'
+                                  ? 'bg-warning/10 text-warning'
+                                  : a.action_kind === 'accelerate_epd'
+                                    ? 'bg-success/10 text-success'
+                                    : 'bg-secondary/40 text-muted-foreground'
+                              }`}
+                            >
+                              {a.action_kind === 'delay'
+                                ? 'Delay'
+                                : a.action_kind === 'accelerate_epd'
+                                  ? 'Capture EPD'
+                                  : 'Hold'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {solveResult.recommended_actions.length > 25 && (
+                    <p className="text-xs text-muted-foreground px-3 py-2">
+                      Showing 25 of {solveResult.recommended_actions.length} actions.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleApplySolution}
+                  disabled={solveResult.recommended_actions.length === 0}
+                >
+                  Apply to scenario
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
