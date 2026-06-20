@@ -5,6 +5,7 @@ pub mod ai;
 #[cfg(feature = "analytics")]
 pub mod analytics;
 pub mod ap_command_center;
+pub mod ap_migration;
 pub mod approval_links;
 pub(crate) mod audit;
 pub mod audit_bundle;
@@ -235,6 +236,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/dashboard", dashboard::routes())
         // AP Command Center (standup view)
         .nest("/dashboard/ap-command-center", ap_command_center::routes())
+        // AP-to-AP migration importer (BILL.com / Coupa bundle ingest)
+        .nest("/migrate/ap", ap_migration::routes())
         // Data export
         .nest("/export", export::routes())
         // Audit logs + evidence bundle export

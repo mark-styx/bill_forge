@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Upload, Link2, CheckCircle2, FileSpreadsheet } from 'lucide-react';
+import Link from 'next/link';
+import { Upload, Link2, CheckCircle2, FileSpreadsheet, Package } from 'lucide-react';
 import { vendorsApi, quickbooksApi } from '@/lib/api';
 import type { ImportVendorsResult } from '@/lib/api';
 import { StepperWithContent, StepContent, Step } from '@/components/ui/stepper';
@@ -100,6 +101,22 @@ export default function MigratePage() {
             {error}
           </div>
         )}
+
+        <Link
+          href="/migrate/bundle"
+          className="mb-6 flex items-center gap-4 p-4 rounded-lg border-2 border-dashed border-border hover:border-primary/30 transition-colors"
+        >
+          <div className="text-muted-foreground">
+            <Package className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <div className="font-medium text-foreground">Import from BILL.com or Coupa</div>
+            <div className="text-sm text-muted-foreground mt-0.5">
+              One-click migration: vendors, open invoices, approval workflows, GL mappings,
+              approvers, and documents with side-by-side preview.
+            </div>
+          </div>
+        </Link>
 
         <StepperWithContent
           steps={STEPS}
