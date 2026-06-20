@@ -499,6 +499,19 @@ impl MetadataDatabase {
         let roles_json = serde_json::to_value(roles)
             .map_err(|e| Error::Database(format!("Failed to serialize roles: {}", e)))?;
 
+        // Bind app.current_tenant_id on the metadata pool so the api_keys
+        // RLS policy (migration 146) permits the INSERT.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to bind tenant context: {}", e)))?;
+
         sqlx::query(
             r#"INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, roles, is_active, expires_at, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
@@ -512,58 +525,136 @@ impl MetadataDatabase {
         .bind(true)
         .bind(expires_at)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to create API key: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit api_key create: {}", e)))?;
 
         Ok(())
     }
 
-    /// Get API key by prefix
+    /// Get API key by prefix.
+    ///
+    /// Auth bootstrap path: the tenant_id is unknown until the row is found,
+    /// so this transaction sets `app.public_api_auth_bootstrap = '1'` to
+    /// satisfy the api_keys RLS policy (migration 146). This is the sole
+    /// RLS bypass entry point for the metadata pool; all other callers bind
+    /// `app.current_tenant_id` and are constrained to their own tenant.
     pub async fn get_api_key_by_prefix(&self, key_prefix: &str) -> Result<Option<ApiKeyRecord>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+        sqlx::query("SELECT set_config('app.public_api_auth_bootstrap', '1', true)")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to set auth bootstrap GUC: {}", e)))?;
+
         let result = sqlx::query_as::<_, ApiKeyRecord>(
             "SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL",
         )
         .bind(key_prefix)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to get API key: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit api_key lookup: {}", e)))?;
 
         Ok(result)
     }
 
-    /// Update API key last used timestamp
-    pub async fn update_api_key_last_used(&self, key_id: uuid::Uuid) -> Result<()> {
-        sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
+    /// Update API key last used timestamp.
+    ///
+    /// `tenant_id` is required so the metadata pool transaction can bind
+    /// `app.current_tenant_id` for the RLS policy (migration 146); the
+    /// `AND tenant_id = $2` predicate is retained as defense in depth.
+    pub async fn update_api_key_last_used(
+        &self,
+        tenant_id: &TenantId,
+        key_id: uuid::Uuid,
+    ) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to bind tenant context: {}", e)))?;
+
+        sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1 AND tenant_id = $2")
             .bind(key_id)
-            .execute(&self.pool)
+            .bind(tenant_id.as_uuid())
+            .execute(&mut *tx)
             .await
             .map_err(|e| Error::Database(format!("Failed to update API key: {}", e)))?;
+
+        tx.commit().await.map_err(|e| {
+            Error::Database(format!("Failed to commit api_key last_used update: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// List API keys for a tenant
     pub async fn list_api_keys(&self, tenant_id: &TenantId) -> Result<Vec<ApiKeyRecord>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to bind tenant context: {}", e)))?;
+
         let results = sqlx::query_as::<_, ApiKeyRecord>(
             "SELECT * FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC"
         )
         .bind(tenant_id.as_uuid())
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| Error::Database(format!("Failed to list API keys: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit api_key list: {}", e)))?;
 
         Ok(results)
     }
 
     /// Revoke an API key
     pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: uuid::Uuid) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to begin transaction: {}", e)))?;
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to bind tenant context: {}", e)))?;
+
         sqlx::query("UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND tenant_id = $2")
             .bind(key_id)
             .bind(tenant_id.as_uuid())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| Error::Database(format!("Failed to revoke API key: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Error::Database(format!("Failed to commit api_key revoke: {}", e)))?;
 
         Ok(())
     }

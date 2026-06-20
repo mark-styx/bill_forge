@@ -323,6 +323,30 @@ async fn create_webhook_subscription(
     let signing_secret = public_api::generate_signing_secret();
     let sub_id = Uuid::new_v4();
 
+    // Bind app.current_tenant_id on the metadata pool connection so the
+    // webhook_subscriptions RLS policy (migration 146) permits the INSERT.
+    // The WHERE/value tenant_id is retained as defense in depth.
+    let mut tx = state.db.metadata().begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to begin metadata transaction");
+        public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to create subscription",
+        )
+    })?;
+    sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+        .bind(token.tenant_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to bind tenant context");
+            public_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Failed to create subscription",
+            )
+        })?;
+
     sqlx::query(
         r#"INSERT INTO webhook_subscriptions (id, tenant_id, api_key_id, target_url, event_types, signing_secret, is_active, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, true, NOW())"#,
@@ -333,10 +357,19 @@ async fn create_webhook_subscription(
     .bind(&body.target_url)
     .bind(&body.event_types)
     .bind(&signing_secret)
-    .execute(&*state.db.metadata())
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         tracing::warn!(error = %e, "Failed to create webhook subscription");
+        public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to create subscription",
+        )
+    })?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to commit webhook subscription create");
         public_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -401,6 +434,30 @@ async fn list_webhook_subscriptions(
     public_api::require_scope(&token, "webhooks:read")
         .map_err(|msg| public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg))?;
 
+    // Bind app.current_tenant_id on the metadata pool connection so the
+    // webhook_subscriptions RLS policy (migration 146) permits the read.
+    // The WHERE tenant_id predicate is retained as defense in depth.
+    let mut tx = state.db.metadata().begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to begin metadata transaction");
+        public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to list subscriptions",
+        )
+    })?;
+    sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+        .bind(token.tenant_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to bind tenant context");
+            public_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Failed to list subscriptions",
+            )
+        })?;
+
     let rows = sqlx::query_as::<
         _,
         (
@@ -417,7 +474,7 @@ async fn list_webhook_subscriptions(
            ORDER BY created_at DESC"#,
     )
     .bind(token.tenant_id)
-    .fetch_all(&*state.db.metadata())
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| {
         tracing::warn!(error = %e, "Failed to list webhook subscriptions");
@@ -427,6 +484,8 @@ async fn list_webhook_subscriptions(
             "Failed to list subscriptions",
         )
     })?;
+
+    let _ = tx.commit().await;
 
     let subscriptions = rows
         .into_iter()
@@ -471,11 +530,35 @@ async fn delete_webhook_subscription(
     public_api::require_scope(&token, "webhooks:write")
         .map_err(|msg| public_error(StatusCode::FORBIDDEN, "insufficient_scope", &msg))?;
 
+    // Bind app.current_tenant_id on the metadata pool connection so the
+    // webhook_subscriptions RLS policy (migration 146) permits the DELETE.
+    // The WHERE tenant_id predicate is retained as defense in depth.
+    let mut tx = state.db.metadata().begin().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to begin metadata transaction");
+        public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to delete subscription",
+        )
+    })?;
+    sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+        .bind(token.tenant_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to bind tenant context");
+            public_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Failed to delete subscription",
+            )
+        })?;
+
     let result =
         sqlx::query(r#"DELETE FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2"#)
             .bind(id)
             .bind(token.tenant_id)
-            .execute(&*state.db.metadata())
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 tracing::warn!(error = %e, "Failed to delete webhook subscription");
@@ -485,6 +568,15 @@ async fn delete_webhook_subscription(
                     "Failed to delete subscription",
                 )
             })?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to commit webhook subscription delete");
+        public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to delete subscription",
+        )
+    })?;
 
     if result.rows_affected() == 0 {
         return Err(public_error(

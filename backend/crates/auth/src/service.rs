@@ -899,9 +899,11 @@ impl AuthService {
             return Err(Error::InvalidToken("Invalid API key".to_string()));
         }
 
-        // Update last used timestamp
+        // Update last used timestamp (bind tenant context discovered above
+        // for the api_keys RLS policy added in migration 146).
+        let stored_tenant = TenantId::from_uuid(stored_key.tenant_id);
         self.metadata_db
-            .update_api_key_last_used(stored_key.id)
+            .update_api_key_last_used(&stored_tenant, stored_key.id)
             .await?;
 
         // Return a synthetic user context for API key access

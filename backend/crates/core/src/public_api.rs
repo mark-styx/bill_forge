@@ -66,9 +66,26 @@ impl RateLimiter {
 
 /// Verify a PAT bearer token against the api_keys table.
 /// Returns the token's identity on success.
+///
+/// This is the public-API auth bootstrap path: the tenant_id is discovered
+/// from the token row, so the lookup cannot bind `app.current_tenant_id`
+/// up-front. The transaction sets `app.public_api_auth_bootstrap = '1'` to
+/// satisfy the api_keys RLS policy added in migration 146; once the row is
+/// resolved we bind the discovered tenant before the UPDATE so the
+/// last_used_at write is constrained to the correct tenant.
 pub async fn verify_pat(pool: &PgPool, bearer_token: &str) -> Result<PublicApiToken, String> {
     // SHA-256 hash the bearer token
     let token_hash = hex::encode(Sha256::digest(bearer_token.as_bytes()));
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Database error verifying PAT: {}", e))?;
+
+    sqlx::query("SELECT set_config('app.public_api_auth_bootstrap', '1', true)")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Database error verifying PAT: {}", e))?;
 
     let row = sqlx::query_as::<_, (Uuid, Uuid, Vec<String>, i32)>(
         r#"SELECT id, tenant_id, scopes, rate_limit_per_minute
@@ -76,18 +93,31 @@ pub async fn verify_pat(pool: &PgPool, bearer_token: &str) -> Result<PublicApiTo
            WHERE token_hash = $1 AND revoked_at IS NULL"#,
     )
     .bind(&token_hash)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| format!("Database error verifying PAT: {}", e))?;
 
     let (api_key_id, tenant_id, scopes, rate_limit_per_minute) =
         row.ok_or_else(|| "Invalid or revoked API key".to_string())?;
 
+    // Bind the resolved tenant so the UPDATE is constrained by the
+    // standard RLS policy (defense in depth: revokes the bootstrap carve-out
+    // for the rest of this transaction).
+    sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+        .bind(tenant_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Database error verifying PAT: {}", e))?;
+
     // Update last_used_at (best-effort, don't fail the request)
     let _ = sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
         .bind(api_key_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await;
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Database error verifying PAT: {}", e))?;
 
     Ok(PublicApiToken {
         tenant_id,
@@ -123,7 +153,26 @@ pub async fn dispatch_webhook(
     event_type: &str,
     payload: serde_json::Value,
 ) {
-    // Find active subscriptions matching this event type for this tenant
+    // Find active subscriptions matching this event type for this tenant.
+    // Wrap in a tx that binds app.current_tenant_id so the webhook_subscriptions
+    // and webhook_deliveries RLS policies (migration 146) permit the read/write.
+    let mut tx = match metadata_pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to begin webhook dispatch transaction");
+            return;
+        }
+    };
+
+    if let Err(e) = sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+        .bind(tenant_id.to_string())
+        .execute(&mut *tx)
+        .await
+    {
+        tracing::warn!(error = %e, "Failed to bind tenant context for webhook dispatch");
+        return;
+    }
+
     let subscriptions = match sqlx::query_as::<_, (Uuid, Uuid, String, String, bool)>(
         r#"SELECT id, tenant_id, target_url, signing_secret, is_active
            FROM webhook_subscriptions
@@ -131,7 +180,7 @@ pub async fn dispatch_webhook(
     )
     .bind(tenant_id)
     .bind(event_type)
-    .fetch_all(metadata_pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(subs) => subs,
@@ -140,6 +189,12 @@ pub async fn dispatch_webhook(
             return;
         }
     };
+
+    // Release the connection before the (potentially multi-second) HTTP fan-out.
+    if let Err(e) = tx.commit().await {
+        tracing::warn!(error = %e, "Failed to commit webhook fetch transaction");
+        return;
+    }
 
     let delivery_id = Uuid::new_v4();
     let body_bytes = match serde_json::to_vec(&payload) {
@@ -195,7 +250,33 @@ pub async fn dispatch_webhook(
             }
         };
 
-        // Record delivery audit row
+        // Persist delivery audit + subscription stats inside a tenant-bound
+        // transaction so the RLS policies on webhook_deliveries /
+        // webhook_subscriptions permit the writes.
+        let mut write_tx = match metadata_pool.begin().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::warn!(
+                    subscription_id = %sub_id,
+                    error = %e,
+                    "Failed to begin webhook delivery write transaction"
+                );
+                continue;
+            }
+        };
+        if let Err(e) = sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id.to_string())
+            .execute(&mut *write_tx)
+            .await
+        {
+            tracing::warn!(
+                subscription_id = %sub_id,
+                error = %e,
+                "Failed to bind tenant context for webhook delivery write"
+            );
+            continue;
+        }
+
         let _ = sqlx::query(
             r#"INSERT INTO webhook_deliveries (id, subscription_id, event_type, payload, response_status, response_body, attempted_at, success)
                VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)"#,
@@ -207,10 +288,9 @@ pub async fn dispatch_webhook(
         .bind(response_status)
         .bind(response_body.as_deref().unwrap_or("").chars().take(10000).collect::<String>())
         .bind(success)
-        .execute(metadata_pool)
+        .execute(&mut *write_tx)
         .await;
 
-        // Update subscription last delivery stats
         let _ = sqlx::query(
             r#"UPDATE webhook_subscriptions
                SET last_delivery_at = NOW(),
@@ -219,8 +299,10 @@ pub async fn dispatch_webhook(
         )
         .bind(if success { "success" } else { "failed" })
         .bind(sub_id)
-        .execute(metadata_pool)
+        .execute(&mut *write_tx)
         .await;
+
+        let _ = write_tx.commit().await;
     }
 }
 
