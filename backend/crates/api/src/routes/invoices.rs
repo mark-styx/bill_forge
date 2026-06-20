@@ -92,13 +92,6 @@ async fn invoice_stream(
     };
 
     let tenant_context = state.auth.get_tenant_context(&user.tenant_id).await?;
-
-    if !tenant_context.has_module(billforge_core::Module::InvoiceCapture) {
-        return Err(ApiError(Error::ModuleNotAvailable(
-            "Invoice Capture".to_string(),
-        )));
-    }
-
     let tenant_id = *tenant_context.tenant_id.as_uuid();
     let mut rx = state.invoice_events.subscribe();
 

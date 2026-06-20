@@ -13,7 +13,10 @@ use axum::{
     routing::get,
     Extension, Router,
 };
-use billforge_api::middleware::require_edi;
+use billforge_api::middleware::{
+    require_ai_assistant, require_capture, require_edi, require_processing,
+    require_vendor_management,
+};
 use billforge_core::{Error, Module, TenantContext, TenantId, TenantSettings};
 use tower::util::ServiceExt;
 use uuid::Uuid;
@@ -276,4 +279,165 @@ fn test_routes_mod_mounts_netsuite() {
         source.contains("require_netsuite"),
         "routes/mod.rs must apply require_netsuite middleware to the netsuite route"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Core pillar runtime gates: Capture, Processing, VendorManagement, AiAssistant
+// ---------------------------------------------------------------------------
+
+fn tenant_with(modules: Vec<Module>, name: &str) -> TenantContext {
+    TenantContext {
+        tenant_id: TenantId::from_uuid(Uuid::nil()),
+        tenant_name: name.to_string(),
+        enabled_modules: modules,
+        settings: TenantSettings::default(),
+    }
+}
+
+async fn status_for(app: Router, uri: &str) -> StatusCode {
+    app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .expect("router responds")
+        .status()
+}
+
+#[tokio::test]
+async fn test_capture_module_gated() {
+    let ctx = tenant_with(vec![Module::Reporting], "No Capture Tenant");
+    let app = Router::new()
+        .route("/api/v1/invoice-captures", get(gate_test_handler))
+        .layer(middleware::from_fn(require_capture))
+        .layer(Extension(ctx));
+    assert_eq!(
+        status_for(app, "/api/v1/invoice-captures").await,
+        StatusCode::PAYMENT_REQUIRED,
+        "Capture must be gated when tenant lacks InvoiceCapture module"
+    );
+}
+
+#[tokio::test]
+async fn test_processing_module_gated() {
+    let ctx = tenant_with(vec![Module::InvoiceCapture], "No Processing Tenant");
+    let app = Router::new()
+        .route("/api/v1/invoices", get(gate_test_handler))
+        .layer(middleware::from_fn(require_processing))
+        .layer(Extension(ctx));
+    assert_eq!(
+        status_for(app, "/api/v1/invoices").await,
+        StatusCode::PAYMENT_REQUIRED,
+        "Processing must be gated when tenant lacks InvoiceProcessing module"
+    );
+}
+
+#[tokio::test]
+async fn test_vendor_module_gated() {
+    let ctx = tenant_with(vec![Module::InvoiceCapture], "No Vendor Tenant");
+    let app = Router::new()
+        .route("/api/v1/vendors", get(gate_test_handler))
+        .layer(middleware::from_fn(require_vendor_management))
+        .layer(Extension(ctx));
+    assert_eq!(
+        status_for(app, "/api/v1/vendors").await,
+        StatusCode::PAYMENT_REQUIRED,
+        "Vendors must be gated when tenant lacks VendorManagement module"
+    );
+}
+
+#[tokio::test]
+async fn test_ai_assistant_module_gated() {
+    let ctx = tenant_with(vec![Module::InvoiceCapture], "No AI Tenant");
+    let app = Router::new()
+        .route("/api/v1/ai/chat", get(gate_test_handler))
+        .layer(middleware::from_fn(require_ai_assistant))
+        .layer(Extension(ctx));
+    assert_eq!(
+        status_for(app, "/api/v1/ai/chat").await,
+        StatusCode::PAYMENT_REQUIRED,
+        "AI Assistant must be gated when tenant lacks AiAssistant module"
+    );
+}
+
+#[tokio::test]
+async fn test_core_modules_pass_when_entitled() {
+    let ctx = tenant_with(
+        vec![
+            Module::InvoiceCapture,
+            Module::InvoiceProcessing,
+            Module::VendorManagement,
+            Module::AiAssistant,
+        ],
+        "All Core Tenant",
+    );
+    let app = Router::new()
+        .route("/api/v1/invoice-captures", get(gate_test_handler))
+        .layer(middleware::from_fn(require_capture))
+        .merge(
+            Router::new()
+                .route("/api/v1/invoices", get(gate_test_handler))
+                .layer(middleware::from_fn(require_processing)),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/vendors", get(gate_test_handler))
+                .layer(middleware::from_fn(require_vendor_management)),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/ai/chat", get(gate_test_handler))
+                .layer(middleware::from_fn(require_ai_assistant)),
+        )
+        .layer(Extension(ctx));
+
+    for path in [
+        "/api/v1/invoice-captures",
+        "/api/v1/invoices",
+        "/api/v1/vendors",
+        "/api/v1/ai/chat",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .expect("router responds");
+        assert_ne!(
+            response.status(),
+            StatusCode::PAYMENT_REQUIRED,
+            "gate must pass for {} when tenant has the matching module",
+            path
+        );
+    }
+}
+
+#[test]
+fn test_middleware_defines_core_pillar_gates() {
+    let source = include_str!("../src/middleware.rs");
+    for name in [
+        "pub async fn require_capture",
+        "pub async fn require_processing",
+        "pub async fn require_vendor_management",
+        "pub async fn require_ai_assistant",
+    ] {
+        assert!(
+            source.contains(name),
+            "middleware.rs must define {}",
+            name
+        );
+    }
+}
+
+#[test]
+fn test_routes_mod_applies_core_pillar_gates() {
+    let source = include_str!("../src/routes/mod.rs");
+    for name in [
+        "require_capture",
+        "require_processing",
+        "require_vendor_management",
+        "require_ai_assistant",
+    ] {
+        assert!(
+            source.contains(name),
+            "routes/mod.rs must reference {} on a core pillar route mount",
+            name
+        );
+    }
 }

@@ -96,9 +96,10 @@ pub mod xero;
 
 use crate::metrics;
 use crate::middleware::{
-    rate_limit_auth, require_auth, require_bill_com, require_edi, require_netsuite,
-    require_quickbooks, require_reporting, require_sage_intacct, require_salesforce,
-    require_tenant, require_workday, require_xero, RateLimiterState,
+    rate_limit_auth, require_ai_assistant, require_auth, require_bill_com, require_capture,
+    require_edi, require_netsuite, require_processing, require_quickbooks, require_reporting,
+    require_sage_intacct, require_salesforce, require_tenant, require_vendor_management,
+    require_workday, require_xero, RateLimiterState,
 };
 use crate::routes::public_api::PublicApiRateLimiter;
 use crate::state::AppState;
@@ -228,7 +229,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
             vendors::routes()
                 .merge(vendor_portal_onboarding::review_routes())
                 .merge(vendor_risk_alerts::routes())
-                .merge(federated_vendor_risk::vendor_routes()),
+                .merge(federated_vendor_risk::vendor_routes())
+                .layer(middleware::from_fn(require_vendor_management)),
         )
         // Federated Vendor Risk Network (#408): tenant consent toggles
         .merge(federated_vendor_risk::tenant_routes())
@@ -256,11 +258,16 @@ fn api_routes(state: AppState) -> Router<AppState> {
         ))]
         let router = router.nest(
             "/invoices",
-            invoices::routes().merge(crate::state_machine::routes()),
+            invoices::routes()
+                .merge(crate::state_machine::routes())
+                .layer(middleware::from_fn(require_processing)),
         );
         // Invoice Processing module (approval workflows); billing meter events
         // are emitted only when the billing pillar is compiled in.
-        let router = router.nest("/workflows", workflows::routes());
+        let router = router.nest(
+            "/workflows",
+            workflows::routes().layer(middleware::from_fn(require_processing)),
+        );
         // Reporting module
         #[cfg(feature = "reporting")]
         let router = router.nest("/reports", reports::routes());
@@ -417,7 +424,10 @@ fn api_routes(state: AppState) -> Router<AppState> {
         let router = router.nest("/analytics/benchmark", analytics::benchmark_routes());
         // AI Assistant (Winston)
         #[cfg(feature = "ai-agent")]
-        let router = router.nest("/ai", ai::routes());
+        let router = router.nest(
+            "/ai",
+            ai::routes().layer(middleware::from_fn(require_ai_assistant)),
+        );
         // Billing & Subscription
         #[cfg(feature = "billing")]
         let router = router.nest("/billing", billing::routes());
@@ -426,10 +436,16 @@ fn api_routes(state: AppState) -> Router<AppState> {
         let router = router.nest("/public", public_signup::promote_route());
         // Contracts (non-PO recurring spend matching)
         #[cfg(feature = "processing")]
-        let router = router.nest("/contracts", contracts::routes());
+        let router = router.nest(
+            "/contracts",
+            contracts::routes().layer(middleware::from_fn(require_vendor_management)),
+        );
         // Invoice Capture (standalone OCR upload)
         #[cfg(feature = "capture")]
-        let router = router.nest("/invoice-captures", crate::invoice_capture::routes());
+        let router = router.nest(
+            "/invoice-captures",
+            crate::invoice_capture::routes().layer(middleware::from_fn(require_capture)),
+        );
         router
     };
     router

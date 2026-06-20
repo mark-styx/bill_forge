@@ -407,3 +407,19 @@ pub async fn require_edi(req: Request<Body>, next: Next) -> Response<Body> {
 pub async fn require_reporting(req: Request<Body>, next: Next) -> Response<Body> {
     gate_module(req, next, Module::Reporting).await
 }
+
+pub async fn require_capture(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::InvoiceCapture).await
+}
+
+pub async fn require_processing(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::InvoiceProcessing).await
+}
+
+pub async fn require_vendor_management(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::VendorManagement).await
+}
+
+pub async fn require_ai_assistant(req: Request<Body>, next: Next) -> Response<Body> {
+    gate_module(req, next, Module::AiAssistant).await
+}
