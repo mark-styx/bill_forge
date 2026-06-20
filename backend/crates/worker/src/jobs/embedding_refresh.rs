@@ -25,7 +25,7 @@ pub async fn refresh_all_embeddings(pg_manager: Arc<PgManager>) -> Result<()> {
     // Get all active tenants from metadata database
     let metadata_pool = pg_manager.metadata();
     let tenants =
-        sqlx::query_as::<_, (String,)>("SELECT id::text FROM tenants WHERE active = true")
+        sqlx::query_as::<_, (String,)>("SELECT id::text FROM tenants WHERE is_active = true")
             .fetch_all(metadata_pool)
             .await
             .context("Failed to fetch tenants")?;

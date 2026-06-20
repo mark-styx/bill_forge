@@ -103,7 +103,7 @@ pub async fn rescan_all_vendors(pg_manager: Arc<PgManager>) -> Result<()> {
     info!("Starting vendor risk rescan job");
     let metadata_pool = pg_manager.metadata();
     let tenants: Vec<(String,)> =
-        sqlx::query_as("SELECT id::text FROM tenants WHERE active = true")
+        sqlx::query_as("SELECT id::text FROM tenants WHERE is_active = true")
             .fetch_all(metadata_pool)
             .await
             .context("Failed to fetch active tenants")?;

@@ -453,7 +453,7 @@ async fn enqueue_jobs_for_active_tenants(
 }
 
 async fn fetch_active_tenant_ids(pg_manager: Arc<billforge_db::PgManager>) -> Result<Vec<String>> {
-    sqlx::query_scalar("SELECT id::text FROM tenants WHERE active = true")
+    sqlx::query_scalar("SELECT id::text FROM tenants WHERE is_active = true")
         .fetch_all(pg_manager.metadata())
         .await
         .context("Failed to fetch active tenants")
