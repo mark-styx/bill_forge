@@ -172,8 +172,11 @@ async fn create_vendor(
     // Upsert domain so future checks can compare age
     fraud_guard::upsert_domain_first_seen(&tenant.tenant_id, &domain, &pool).await;
 
-    // Run OFAC/sanctions screening against bundled SDN seed list
-    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    // Run OFAC/sanctions screening against the latest persisted SDN list
+    // (falls back to embedded seed when the refresh table is empty).
+    let screener = crate::ofac_screening::OfacScreener::load_latest(&pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to load OFAC list: {}", e)))?;
     let ofac_outcome = screener.screen(&input.name, None);
 
     let needs_hold =
@@ -261,8 +264,11 @@ async fn update_vendor(
     let old_vendor = repo.get_by_id(&tenant.tenant_id, &vendor_id).await?;
     let vendor = repo.update(&tenant.tenant_id, &vendor_id, input).await?;
 
-    // Run OFAC/sanctions screening on the updated vendor name
-    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    // Run OFAC/sanctions screening on the updated vendor name against the
+    // latest persisted SDN list.
+    let screener = crate::ofac_screening::OfacScreener::load_latest(&pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to load OFAC list: {}", e)))?;
     let ofac_outcome = screener.screen(&vendor.name, None);
     let mut vendor = vendor;
 
@@ -1512,7 +1518,9 @@ async fn run_screening_with_fraud_guard(
         pool,
     )
     .await;
-    let screener = crate::ofac_screening::OfacScreener::load_from_embedded();
+    let screener = crate::ofac_screening::OfacScreener::load_latest(pool)
+        .await
+        .unwrap_or_else(|_| crate::ofac_screening::OfacScreener::load_from_embedded());
     fraud_guard::build_screening_results(&signals, &screener, vendor_name, None)
 }
 

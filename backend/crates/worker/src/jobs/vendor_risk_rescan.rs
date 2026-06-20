@@ -144,7 +144,12 @@ pub async fn rescan_tenant_with_provider(
     let tenant_id_str = tenant_id.to_string();
     info!(tenant_id = %tenant_id_str, "Rescanning vendor risk");
 
-    let screener = OfacScreener::load_from_embedded();
+    // Load the latest persisted SDN list (falls back to embedded seed when the
+    // refresh table is empty) so rescans pick up entries added since the seed
+    // was bundled instead of re-screening against the same stale snapshot.
+    let screener = OfacScreener::load_latest(pool)
+        .await
+        .unwrap_or_else(|_| OfacScreener::load_from_embedded());
 
     // Iterate vendors in pages. Each row carries its dba (nullable).
     let mut offset: i64 = 0;

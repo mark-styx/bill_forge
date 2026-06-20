@@ -679,5 +679,12 @@ pub async fn run_banking_verification_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    apply_migration(
+        pool,
+        "140_ofac_list_versions.sql",
+        include_str!("../../../migrations/140_ofac_list_versions.sql"),
+    )
+    .await?;
+
     Ok(())
 }

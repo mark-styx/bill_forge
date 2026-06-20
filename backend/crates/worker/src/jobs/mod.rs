@@ -20,6 +20,10 @@ pub mod forecast_refresh;
 pub mod forecast_tuning;
 pub mod metrics_aggregation;
 pub mod ocr_processing;
+// OFAC/SDN list refresh runs directly off the scheduler tick (no JobType
+// enqueue) because the SDN list is a single global resource. See the module
+// doc-comment in ofac_refresh.rs.
+pub mod ofac_refresh;
 pub mod quickbooks_sync;
 pub mod report_digest;
 pub mod routing_optimization;

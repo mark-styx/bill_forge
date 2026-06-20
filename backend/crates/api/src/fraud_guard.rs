@@ -391,7 +391,11 @@ pub fn build_screening_results(
     let now = Utc::now().to_rfc3339();
     let mut map = serde_json::Map::new();
 
-    // Real OFAC screening against bundled SDN seed list
+    // Real OFAC screening against the loaded SDN list. `list_version` is the
+    // identifier of the list the screener was instantiated from (e.g.
+    // `"seed-v1"` on cold start or `"sdn-<hash>"` after a refresh) and
+    // `loaded_at` is when that list was persisted - both surface staleness so
+    // a screen against a months-old snapshot is visible per-result.
     let ofac_outcome = screener.screen(vendor_name, dba);
     map.insert(
         "ofac".to_string(),
@@ -400,7 +404,8 @@ pub fn build_screening_results(
             "checked_at": now,
             "details": {
                 "matches": ofac_outcome.matches,
-                "list_version": "seed-v1",
+                "list_version": screener.list_version(),
+                "loaded_at": screener.loaded_at().to_rfc3339(),
             }
         }),
     );

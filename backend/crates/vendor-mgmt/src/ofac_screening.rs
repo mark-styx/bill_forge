@@ -2,14 +2,18 @@
 //!
 //! Screens vendor names and DBA names against a bundled seed list of SDN entries
 //! using exact normalized matching (fail), token Jaccard similarity >= 0.8 or
-//! SDN-token-subset match (review), or clean pass. No network IO - the seed list
-//! is compiled into the binary via `include_str!`.
+//! SDN-token-subset match (review), or clean pass. The screener now tracks the
+//! list version it loaded and when, so callers can surface staleness instead of
+//! silently screening against a months-old snapshot. `load_latest` reads the most
+//! recent row from `ofac_list_versions`; the daily worker refresh writes new
+//! rows from the configured source (or the embedded list when no URL is set).
 //!
 //! This module is the shared home used by both the API crate (one-time screening
 //! at vendor create/update) and the worker crate (continuous VendorRiskRescan).
 //! The API crate re-exports it as `crate::ofac_screening` to keep its existing
 //! callsites unchanged.
 
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -18,8 +22,9 @@ use std::sync::Arc;
 // Data structures
 // ---------------------------------------------------------------------------
 
-/// A single entry from the bundled OFAC SDN seed list.
-#[derive(Debug, Clone, Deserialize)]
+/// A single entry from the OFAC SDN list. Used for both the embedded seed and
+/// rows loaded from `ofac_list_versions.entries_json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SanctionsEntry {
     pub primary_name: String,
     pub aliases: Vec<String>,
@@ -46,22 +51,111 @@ pub struct OfacScreenOutcome {
 // Screener
 // ---------------------------------------------------------------------------
 
-/// OFAC screener that holds a shared, parsed SDN seed list in memory.
+/// OFAC screener that holds a shared, parsed SDN list in memory along with the
+/// version identifier and load timestamp of the list it is screening against.
 #[derive(Debug, Clone)]
 pub struct OfacScreener {
     entries: Arc<Vec<SanctionsEntry>>,
+    list_version: String,
+    loaded_at: DateTime<Utc>,
 }
+
+/// Default list version used when falling back to the compiled-in seed.
+pub const EMBEDDED_LIST_VERSION: &str = "seed-v1";
 
 impl OfacScreener {
     /// Load the bundled seed JSON at compile time and parse it once.
     /// Panics if the seed file is malformed (a build-time invariant).
     pub fn load_from_embedded() -> Self {
-        let json_str = include_str!("../../../data/ofac_sdn_seed.json");
-        let entries: Vec<SanctionsEntry> =
-            serde_json::from_str(json_str).expect("ofac_sdn_seed.json must be valid JSON");
+        let entries = parse_embedded_entries();
         Self {
             entries: Arc::new(entries),
+            list_version: EMBEDDED_LIST_VERSION.to_string(),
+            loaded_at: Utc::now(),
         }
+    }
+
+    /// Load the most recent OFAC list version persisted in `ofac_list_versions`.
+    /// Falls back to the embedded seed when the table is empty, missing, or the
+    /// stored row cannot be parsed - this keeps the screener available on cold
+    /// start and never blocks vendor creation on a refresh outage.
+    pub async fn load_latest(pool: &sqlx::PgPool) -> sqlx::Result<Self> {
+        let row: Option<(String, DateTime<Utc>, serde_json::Value)> = sqlx::query_as(
+            r#"
+            SELECT list_version, loaded_at, entries_json
+            FROM ofac_list_versions
+            ORDER BY loaded_at DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        let Some((version, loaded_at, entries_json)) = row else {
+            return Ok(Self::load_from_embedded());
+        };
+
+        let entries: Vec<SanctionsEntry> =
+            serde_json::from_value(entries_json).unwrap_or_default();
+        if entries.is_empty() {
+            return Ok(Self::load_from_embedded());
+        }
+
+        Ok(Self {
+            entries: Arc::new(entries),
+            list_version: version,
+            loaded_at,
+        })
+    }
+
+    /// Construct a screener from an explicit set of entries + version metadata.
+    /// Used by the refresh job after it parses a remote list, and by tests that
+    /// need to assert staleness without touching a database.
+    pub fn from_entries(
+        entries: Vec<SanctionsEntry>,
+        list_version: impl Into<String>,
+        loaded_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            entries: Arc::new(entries),
+            list_version: list_version.into(),
+            loaded_at,
+        }
+    }
+
+    /// Version identifier of the currently loaded list (e.g. `"seed-v1"` or
+    /// `"sdn-<hash>"`). Surfaced in screening_results so callers can audit which
+    /// list version a given screen was performed against.
+    pub fn list_version(&self) -> &str {
+        &self.list_version
+    }
+
+    /// Timestamp the loaded list was persisted/embedded. Combined with
+    /// `is_stale()` this is the per-result staleness surface.
+    pub fn loaded_at(&self) -> DateTime<Utc> {
+        self.loaded_at
+    }
+
+    /// Returns true when the list is older than `max_age`. Used by the refresh
+    /// job to emit a staleness warning when nothing has refreshed in time.
+    pub fn is_stale(&self, max_age: Duration) -> bool {
+        Utc::now() - self.loaded_at > max_age
+    }
+
+    /// Re-parse the compiled-in seed JSON into a fresh `Vec<SanctionsEntry>`.
+    /// Used by the worker's refresh job when no remote source URL is configured
+    /// so the closed loop (refresh -> persist -> reload) still runs locally and
+    /// exercises the staleness pipeline.
+    pub fn embedded_entries() -> Vec<SanctionsEntry> {
+        parse_embedded_entries()
+    }
+
+    /// Parse a Vec<SanctionsEntry> from a JSON body, e.g. the response of a
+    /// remote SDN source fetch. Kept here so the parsing contract lives next to
+    /// the embedded seed it must stay compatible with.
+    pub fn parse_entries_json(json: &str) -> Result<Vec<SanctionsEntry>, serde_json::Error> {
+        serde_json::from_str(json)
     }
 
     /// Screen a vendor name (and optional DBA) against the SDN seed list.
@@ -188,6 +282,13 @@ impl OfacScreener {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Parse the compiled-in seed JSON into a Vec<SanctionsEntry>. Panics if the
+/// seed file is malformed (a build-time invariant).
+fn parse_embedded_entries() -> Vec<SanctionsEntry> {
+    let json_str = include_str!("../../../data/ofac_sdn_seed.json");
+    serde_json::from_str(json_str).expect("ofac_sdn_seed.json must be valid JSON")
+}
+
 /// Normalize a name: lowercase, strip punctuation, collapse whitespace.
 fn normalize(s: &str) -> String {
     let lower = s.to_lowercase();
@@ -280,5 +381,35 @@ mod tests {
         // The seed file must parse and contain at least one entry.
         let screener = OfacScreener::load_from_embedded();
         assert!(!screener.entries.is_empty(), "OFAC seed list is empty");
+    }
+
+    #[test]
+    fn embedded_load_carries_seed_version() {
+        let screener = OfacScreener::load_from_embedded();
+        assert_eq!(screener.list_version(), EMBEDDED_LIST_VERSION);
+        // loaded_at is bounded by the test's wall clock.
+        assert!(screener.loaded_at() <= Utc::now());
+    }
+
+    #[test]
+    fn is_stale_returns_true_after_max_age() {
+        let stale_loaded_at = Utc::now() - Duration::days(8);
+        let screener =
+            OfacScreener::from_entries(parse_embedded_entries(), "sdn-test", stale_loaded_at);
+        assert!(
+            screener.is_stale(Duration::days(7)),
+            "list 8 days old must be stale vs 7-day budget"
+        );
+    }
+
+    #[test]
+    fn is_stale_returns_false_within_max_age() {
+        let fresh_loaded_at = Utc::now() - Duration::hours(1);
+        let screener =
+            OfacScreener::from_entries(parse_embedded_entries(), "sdn-test", fresh_loaded_at);
+        assert!(
+            !screener.is_stale(Duration::days(7)),
+            "list 1 hour old must not be stale vs 7-day budget"
+        );
     }
 }

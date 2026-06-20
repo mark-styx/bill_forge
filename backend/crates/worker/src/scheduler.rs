@@ -82,6 +82,16 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    // OFAC/SDN list refresh: daily. Calls run_ofac_refresh directly per tenant
+    // (no JobType enqueue) because the SDN list is a single global resource and
+    // the refresh is the same content for every tenant. See jobs/ofac_refresh.rs.
+    let pg_manager8 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_ofac_refresh_task(pg_manager8).await {
+            error!("OFAC refresh scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -341,6 +351,85 @@ async fn schedule_autopilot_sweep_task(
             Err(e) => error!("Failed to enqueue autopilot sweep jobs: {}", e),
         }
     }
+}
+
+/// Schedule a daily OFAC/SDN list refresh.
+///
+/// The SDN list is a single global resource, but it is persisted per-tenant DB
+/// (the same place the screening callers read from) so existing callsites
+/// continue to read via the tenant pool without a cross-pool fetch. The
+/// scheduler iterates active tenants every 24h and runs `run_ofac_refresh`
+/// against each tenant pool; the content-hash check keeps unchanged refreshes
+/// from cluttering the table.
+///
+/// Override the cadence with `OFAC_REFRESH_CRON_SECS` for ops drills.
+async fn schedule_ofac_refresh_task(pg_manager: Arc<billforge_db::PgManager>) -> Result<()> {
+    let interval_secs = std::env::var("OFAC_REFRESH_CRON_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(24 * 60 * 60);
+
+    let mut interval = interval(Duration::from_secs(interval_secs));
+
+    info!(
+        interval_secs,
+        "OFAC refresh scheduler started (default daily, override via OFAC_REFRESH_CRON_SECS)"
+    );
+
+    loop {
+        interval.tick().await;
+
+        match run_ofac_refresh_for_all_tenants(pg_manager.clone()).await {
+            Ok(count) => info!(tenant_count = count, "OFAC refresh tick complete"),
+            Err(e) => error!("OFAC refresh tick failed: {}", e),
+        }
+    }
+}
+
+/// Iterate active tenants and run the OFAC refresh against each tenant pool.
+/// Per-tenant failures are logged but do not stop the iteration so one bad
+/// tenant DB cannot prevent the rest of the platform from refreshing.
+async fn run_ofac_refresh_for_all_tenants(
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<usize> {
+    let tenant_ids = fetch_active_tenant_ids(pg_manager.clone()).await?;
+
+    let mut refreshed = 0usize;
+    for tenant_id_str in &tenant_ids {
+        let tenant_id = match tenant_id_str.parse::<billforge_core::TenantId>() {
+            Ok(t) => t,
+            Err(e) => {
+                error!(tenant_id = %tenant_id_str, error = %e, "Skipping invalid tenant id during OFAC refresh");
+                continue;
+            }
+        };
+
+        let pool = match pg_manager.tenant(&tenant_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                error!(tenant_id = %tenant_id_str, error = %e, "Failed to open tenant pool for OFAC refresh");
+                continue;
+            }
+        };
+
+        match crate::jobs::ofac_refresh::run_ofac_refresh(&pool).await {
+            Ok(outcome) => {
+                info!(
+                    tenant_id = %tenant_id_str,
+                    version = %outcome.version,
+                    inserted = outcome.inserted,
+                    entry_count = outcome.entry_count,
+                    "OFAC refresh succeeded for tenant"
+                );
+                refreshed += 1;
+            }
+            Err(e) => {
+                error!(tenant_id = %tenant_id_str, error = %e, "OFAC refresh failed for tenant");
+            }
+        }
+    }
+
+    Ok(refreshed)
 }
 
 async fn enqueue_jobs_for_active_tenants(
