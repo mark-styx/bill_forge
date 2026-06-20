@@ -9,7 +9,7 @@
 //! of fabricating a synthetic journal id. Follow-up tracked in issue #339.
 
 use crate::error::ApiResult;
-use crate::extractors::TenantCtx;
+use crate::extractors::{AuthUser, TenantCtx};
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
@@ -18,7 +18,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use billforge_core::TenantId;
+use billforge_core::{AuditService, TenantId};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -529,6 +529,7 @@ async fn list_periods(
 async fn create_period(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
+    AuthUser(user): AuthUser,
     Json(body): Json<CreatePeriodRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -571,6 +572,29 @@ async fn create_period(
         updated_at: row.10,
     };
 
+    // ResourceType has no ClosePeriod variant; reuse Settings for close-period
+    // mutations (treated as tenant-level accounting configuration).
+    let audit_entry = billforge_core::domain::AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        billforge_core::domain::AuditAction::Create,
+        billforge_core::domain::ResourceType::Settings,
+        resp.id.to_string(),
+        format!(
+            "Close period {} created (cutoff {})",
+            resp.period_label, resp.cutoff_date
+        ),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "close_period_create",
+        "period_label": resp.period_label,
+        "period_start": resp.period_start,
+        "period_end": resp.period_end,
+        "cutoff_date": resp.cutoff_date,
+    }));
+    log_close_audit(&state, &tenant.tenant_id, audit_entry).await;
+
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
@@ -591,6 +615,7 @@ async fn create_period(
 async fn update_period(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
+    AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdatePeriodRequest>,
 ) -> ApiResult<Json<ClosePeriodResponse>> {
@@ -617,6 +642,21 @@ async fn update_period(
             )
             .into());
         }
+
+        let audit_entry = billforge_core::domain::AuditEntry::new(
+            tenant.tenant_id.clone(),
+            Some(user.user_id.clone()),
+            billforge_core::domain::AuditAction::Update,
+            billforge_core::domain::ResourceType::Settings,
+            id.to_string(),
+            format!("Close period cutoff updated to {}", cutoff),
+        )
+        .with_user_email(&user.email)
+        .with_metadata(serde_json::json!({
+            "action": "close_period_update_cutoff",
+            "new_cutoff_date": cutoff,
+        }));
+        log_close_audit(&state, &tenant.tenant_id, audit_entry).await;
     }
 
     // Fetch updated row
@@ -679,6 +719,7 @@ async fn update_period(
 async fn run_close(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
+    AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<RunCloseResponse>> {
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -883,7 +924,7 @@ async fn run_close(
              WHERE id = $3 AND tenant_id = $4",
         )
         .bind(now)
-        .bind(tenant.tenant_id.as_uuid()) // use tenant_id as user_id placeholder; real impl passes user
+        .bind(user.user_id.as_uuid())
         .bind(id)
         .bind(tenant.tenant_id.as_uuid())
         .execute(&mut *tx)
@@ -908,12 +949,88 @@ async fn run_close(
         .await
         .map_err(|e| billforge_core::Error::Database(format!("Failed to commit close: {}", e)))?;
 
+    // 8. Emit audit entries only after a successful commit so failed runs
+    //    leave no audit residue. One entry per logical mutation group:
+    //    accruals_generated, invoices_posted, period_run.
+    let total_cents: i64 = entry_stubs.iter().map(|s| s.amount_cents).sum();
+    let invoice_ids: Vec<String> = entry_stubs
+        .iter()
+        .filter_map(|s| s.invoice_id.map(|i| i.to_string()))
+        .collect();
+
+    let accruals_entry = billforge_core::domain::AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        billforge_core::domain::AuditAction::Create,
+        billforge_core::domain::ResourceType::Settings,
+        id.to_string(),
+        format!("{} accrual entries written for close period", entry_count),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "close_accruals_generated",
+        "entry_count": entry_count,
+        "total_cents": total_cents,
+        "period_id": id.to_string(),
+    }));
+    log_close_audit(&state, &tenant.tenant_id, accruals_entry).await;
+
+    let invoices_entry = billforge_core::domain::AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        billforge_core::domain::AuditAction::Update,
+        billforge_core::domain::ResourceType::Invoice,
+        id.to_string(),
+        format!("{} invoices posted to close period", invoice_ids.len()),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "invoices_posted_to_period",
+        "period_id": id.to_string(),
+        "invoice_ids": invoice_ids,
+    }));
+    log_close_audit(&state, &tenant.tenant_id, invoices_entry).await;
+
+    let period_entry = billforge_core::domain::AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        billforge_core::domain::AuditAction::Update,
+        billforge_core::domain::ResourceType::Settings,
+        id.to_string(),
+        format!("Close period status updated to {}", period_status),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "action": "close_period_run",
+        "erp_post_status": erp_post_status,
+        "period_status": period_status,
+        "erp_post_error": erp_post_error,
+    }));
+    log_close_audit(&state, &tenant.tenant_id, period_entry).await;
+
     Ok(Json(RunCloseResponse {
         period_id: id,
         accrual_entries_created: entry_count,
         erp_post_status,
         erp_post_error,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Audit helper
+// ---------------------------------------------------------------------------
+
+async fn log_close_audit(
+    state: &AppState,
+    tenant_id: &billforge_core::TenantId,
+    entry: billforge_core::domain::AuditEntry,
+) {
+    if let Ok(pool) = state.db.tenant(tenant_id).await {
+        let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool);
+        if let Err(e) = audit_repo.log(entry).await {
+            tracing::warn!(error = %e, "Failed to log close-period audit entry");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

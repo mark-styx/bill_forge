@@ -243,4 +243,117 @@ mod tests {
         assert_eq!(exc[0]["id"], "unaccrued_invoices");
         assert_eq!(exc[0]["count"], 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Audit entry shape tests (confirm the payload schema does not drift)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_close_period_audit_entry_create_shape() {
+        use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+        use billforge_core::{TenantId, UserId};
+
+        let tenant_id = TenantId::new();
+        let user_id = UserId::new();
+        let period_id = uuid::Uuid::new_v4();
+        let entry = AuditEntry::new(
+            tenant_id,
+            Some(user_id),
+            AuditAction::Create,
+            ResourceType::Settings,
+            period_id.to_string(),
+            "Close period 2026-05 created (cutoff 2026-05-25)",
+        )
+        .with_user_email("controller@example.com")
+        .with_metadata(json!({
+            "action": "close_period_create",
+            "period_label": "2026-05",
+            "period_start": "2026-05-01",
+            "period_end": "2026-05-31",
+            "cutoff_date": "2026-05-25",
+        }));
+
+        assert_eq!(entry.action, AuditAction::Create);
+        assert_eq!(entry.resource_type, ResourceType::Settings);
+        let meta = entry.metadata.as_ref().unwrap();
+        assert_eq!(meta["action"], "close_period_create");
+        assert_eq!(meta["period_label"], "2026-05");
+        assert_eq!(meta["cutoff_date"], "2026-05-25");
+    }
+
+    #[test]
+    fn test_close_period_audit_entry_run_close_shape() {
+        use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+        use billforge_core::{TenantId, UserId};
+
+        let tenant_id = TenantId::new();
+        let user_id = UserId::new();
+        let period_id = uuid::Uuid::new_v4();
+        let invoice_id = uuid::Uuid::new_v4();
+
+        let accruals_entry = AuditEntry::new(
+            tenant_id.clone(),
+            Some(user_id.clone()),
+            AuditAction::Create,
+            ResourceType::Settings,
+            period_id.to_string(),
+            "3 accrual entries written for close period",
+        )
+        .with_metadata(json!({
+            "action": "close_accruals_generated",
+            "entry_count": 3,
+            "total_cents": 123_450,
+            "period_id": period_id.to_string(),
+        }));
+
+        let invoices_entry = AuditEntry::new(
+            tenant_id.clone(),
+            Some(user_id.clone()),
+            AuditAction::Update,
+            ResourceType::Invoice,
+            period_id.to_string(),
+            "3 invoices posted to close period",
+        )
+        .with_metadata(json!({
+            "action": "invoices_posted_to_period",
+            "period_id": period_id.to_string(),
+            "invoice_ids": [invoice_id.to_string()],
+        }));
+
+        let period_entry = AuditEntry::new(
+            tenant_id,
+            Some(user_id),
+            AuditAction::Update,
+            ResourceType::Settings,
+            period_id.to_string(),
+            "Close period status updated to locked",
+        )
+        .with_metadata(json!({
+            "action": "close_period_run",
+            "erp_post_status": "pending",
+            "period_status": "locked",
+            "erp_post_error": null,
+        }));
+
+        assert_eq!(accruals_entry.action, AuditAction::Create);
+        assert_eq!(accruals_entry.resource_type, ResourceType::Settings);
+        assert_eq!(
+            accruals_entry.metadata.as_ref().unwrap()["action"],
+            "close_accruals_generated"
+        );
+
+        assert_eq!(invoices_entry.action, AuditAction::Update);
+        assert_eq!(invoices_entry.resource_type, ResourceType::Invoice);
+        assert_eq!(
+            invoices_entry.metadata.as_ref().unwrap()["action"],
+            "invoices_posted_to_period"
+        );
+
+        assert_eq!(period_entry.action, AuditAction::Update);
+        assert_eq!(period_entry.resource_type, ResourceType::Settings);
+        assert_eq!(
+            period_entry.metadata.as_ref().unwrap()["action"],
+            "close_period_run"
+        );
+    }
 }
