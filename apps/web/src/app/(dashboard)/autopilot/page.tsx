@@ -9,6 +9,7 @@ import {
   type AutopilotQueueItem,
 } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
+import { ExplainPanel } from '@/components/ExplainPanel';
 import { FileText, Sliders, BarChart3, ListChecks } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -378,6 +379,26 @@ function QueueTab() {
                       <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
                         {item.proposed_resolution.rationale}
                       </p>
+                      {item.exception_type === 'gl_ambiguity' && (
+                        <details
+                          className="mt-1"
+                          onClick={(e) => e.stopPropagation()}
+                          data-testid={`autopilot-explain-${i}`}
+                        >
+                          <summary className="text-xs text-primary cursor-pointer select-none">
+                            Show your work
+                          </summary>
+                          <ExplainPanel
+                            decisionKind="categorization"
+                            invoiceId={item.invoice_id}
+                            onOverride={() => {
+                              queryClient.invalidateQueries({
+                                queryKey: ['autopilot', 'queue'],
+                              });
+                            }}
+                          />
+                        </details>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-3">

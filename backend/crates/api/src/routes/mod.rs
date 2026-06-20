@@ -29,6 +29,8 @@ pub(crate) mod documents;
 pub mod edi;
 pub mod email_actions;
 pub(crate) mod erp_jobs;
+#[cfg(feature = "processing")]
+pub mod explain;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub mod health;
@@ -386,6 +388,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
     // Continuous learning panel + correction ingestion (#404).
     #[cfg(feature = "processing")]
     let router = router.nest("/learning", learning::routes());
+    // AI Decision Explainability ("Show Your Work") panel (#409).
+    #[cfg(feature = "processing")]
+    let router = router.nest("/explain", explain::routes());
     // Inbox-Native AP (#406) — Outlook / Gmail add-in JSON surface.
     #[cfg(all(feature = "capture", feature = "processing"))]
     let router = router.nest("/addin", inbox_addin::routes());
