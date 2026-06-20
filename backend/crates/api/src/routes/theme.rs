@@ -11,12 +11,17 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use billforge_core::TenantId;
+use billforge_core::{
+    domain::{AuditAction, AuditEntry, ResourceType},
+    traits::AuditService,
+    TenantId,
+};
 use billforge_db::repositories::{
-    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
+    AuditRepositoryImpl, GradientConfig, OrganizationBranding, OrganizationThemeColors,
     OrganizationThemeRow, ThemeRepository, UpsertOrgThemeParams, UserThemePreferenceRow,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -142,6 +147,20 @@ async fn theme_repo(
     Ok(ThemeRepository::new(pool))
 }
 
+/// Acquire the raw tenant pool so mutation handlers can build both a
+/// ThemeRepository and an AuditRepositoryImpl from the same connection.
+async fn tenant_pool(
+    state: &AppState,
+    tenant_id: &Uuid,
+) -> Result<Arc<sqlx::PgPool>, (axum::http::StatusCode, String)> {
+    let tid = TenantId::from_uuid(*tenant_id);
+    state
+        .db
+        .tenant(&tid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 /// Resolve effective colors: user overrides > org theme > defaults.
 fn effective_colors(
     org: Option<&OrganizationThemeRow>,
@@ -217,12 +236,13 @@ async fn get_org_theme(
 #[utoipa::path(post, path = "/api/v1/organization/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme created")))]
 async fn create_org_theme(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Json(input): Json<CreateOrganizationThemeInput>,
 ) -> Result<Json<OrganizationTheme>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let repo = theme_repo(&state, &tenant_uuid).await?;
+    let pool = tenant_pool(&state, &tenant_uuid).await?;
+    let repo = ThemeRepository::new(pool.clone());
     let row = repo
         .upsert_org_theme(&UpsertOrgThemeParams {
             tenant_id: tenant_uuid,
@@ -235,24 +255,47 @@ async fn create_org_theme(
         })
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(OrganizationTheme::from(row)))
+    let resource_id = row.id.to_string();
+    let api_theme = OrganizationTheme::from(row);
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Settings,
+        resource_id,
+        "Created organization theme",
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&api_theme).unwrap_or_default());
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    Ok(Json(api_theme))
 }
 
 #[utoipa::path(put, path = "/api/v1/organization/theme", tag = "Theme", request_body = serde_json::Value, responses((status = 200, description = "Theme updated")))]
 async fn update_org_theme(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Json(input): Json<UpdateOrganizationThemeInput>,
 ) -> Result<Json<OrganizationTheme>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let repo = theme_repo(&state, &tenant_uuid).await?;
+    let pool = tenant_pool(&state, &tenant_uuid).await?;
+    let repo = ThemeRepository::new(pool.clone());
 
     // Merge with existing theme so partial updates preserve prior values.
     let existing = repo
         .get_org_theme(tenant_uuid)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let old_value = existing.clone().map(|e| {
+        serde_json::to_value(OrganizationTheme::from(e)).unwrap_or(serde_json::Value::Null)
+    });
 
     let (preset, colors, branding, enabled, allow_override, gradient) = match &existing {
         Some(e) => (
@@ -287,21 +330,71 @@ async fn update_org_theme(
         })
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(OrganizationTheme::from(row)))
+    let resource_id = row.id.to_string();
+    let api_theme = OrganizationTheme::from(row);
+
+    let mut audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Update,
+        ResourceType::Settings,
+        resource_id,
+        "Updated organization theme",
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::to_value(&api_theme).unwrap_or_default());
+    if let Some(ov) = old_value {
+        audit_entry = audit_entry.with_old_value(ov);
+    }
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
+    Ok(Json(api_theme))
 }
 
 #[utoipa::path(delete, path = "/api/v1/organization/theme", tag = "Theme", responses((status = 200, description = "Theme deleted")))]
 async fn delete_org_theme(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let repo = theme_repo(&state, &tenant_uuid).await?;
+    let pool = tenant_pool(&state, &tenant_uuid).await?;
+    let repo = ThemeRepository::new(pool.clone());
+
+    // Capture pre-delete state for the audit trail so an impersonation attempt
+    // is reconstructible even after the row is gone.
+    let existing = repo
+        .get_org_theme(tenant_uuid)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     let deleted = repo
         .delete_org_theme(tenant_uuid)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Delete,
+        ResourceType::Settings,
+        tenant_uuid.to_string(),
+        "Deleted organization theme",
+    )
+    .with_user_email(&user.email);
+    if let Some(prev) = existing {
+        audit_entry = audit_entry.with_old_value(
+            serde_json::to_value(OrganizationTheme::from(prev)).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
     Ok(Json(
         serde_json::json!({ "success": true, "deleted": deleted }),
     ))
@@ -313,22 +406,42 @@ async fn upload_logo(
     AuthUser(_user): AuthUser,
     TenantCtx(_tenant): TenantCtx,
 ) -> axum::http::StatusCode {
+    // TODO(audit): emit AuditAction::SettingsChanged on ResourceType::Settings
+    // when the storage layer lands - branding asset changes are
+    // identity-relevant and MUST be traceable per tenant.
     axum::http::StatusCode::NOT_IMPLEMENTED
 }
 
 #[utoipa::path(delete, path = "/api/v1/organization/theme/logo/{logo_type}", tag = "Theme", params(("logo_type" = String, Path,)), responses((status = 200, description = "Logo deleted")))]
 async fn delete_logo(
     State(state): State<AppState>,
-    AuthUser(_user): AuthUser,
+    AuthUser(user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(logo_type): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
-    let repo = theme_repo(&state, &tenant_uuid).await?;
+    let pool = tenant_pool(&state, &tenant_uuid).await?;
+    let repo = ThemeRepository::new(pool.clone());
     let removed = repo
         .delete_logo(tenant_uuid, &logo_type)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::SettingsChanged,
+        ResourceType::Settings,
+        tenant_uuid.to_string(),
+        format!("Deleted logo: {}", logo_type),
+    )
+    .with_user_email(&user.email)
+    .with_new_value(serde_json::json!({ "logo_type": logo_type, "removed": removed }));
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log audit entry");
+    }
+
     Ok(Json(
         serde_json::json!({ "success": true, "removed": removed }),
     ))
@@ -396,6 +509,9 @@ async fn import_theme(
     AuthUser(_user): AuthUser,
     TenantCtx(_tenant): TenantCtx,
 ) -> axum::http::StatusCode {
+    // TODO(audit): emit AuditAction::Create/Update on ResourceType::Settings
+    // once import actually persists a theme - bulk theme imports are a brand
+    // impersonation vector and MUST leave an audit record.
     axum::http::StatusCode::NOT_IMPLEMENTED
 }
 

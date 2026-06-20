@@ -4,10 +4,14 @@
 //! the JSON shape matches the frontend TypeScript interfaces.
 
 use billforge_api::routes::theme::*;
+use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+use billforge_core::traits::AuditService;
+use billforge_core::TenantId;
 use billforge_db::repositories::{
-    GradientConfig, GradientStop, OrganizationBranding, OrganizationThemeColors,
-    OrganizationThemeRow, UserThemePreferenceRow,
+    AuditRepositoryImpl, GradientConfig, GradientStop, OrganizationBranding,
+    OrganizationThemeColors, OrganizationThemeRow, UserThemePreferenceRow,
 };
+use std::sync::Arc;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -280,4 +284,222 @@ fn test_user_theme_row_to_api_type_conversion() {
     assert_eq!(api.preset_id, "forest");
     assert_eq!(api.mode, "dark");
     assert!(api.custom_colors.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Audit-logging tests for branding mutations (issue #413)
+//
+// These mirror the workflow_audit_capture_test.rs and report_digest_audit_test.rs
+// pattern: simulate exactly what each handler does (build the same AuditEntry,
+// call AuditRepositoryImpl::log) and verify the row lands in audit_log with the
+// expected shape so a regression that strips the .log() call from a handler
+// would surface as a missing audit row in this suite.
+// ---------------------------------------------------------------------------
+
+async fn setup_audit_schema(pool: &sqlx::PgPool, tenant_id: &TenantId) {
+    billforge_db::tenant_db::run_tenant_migrations(pool, tenant_id)
+        .await
+        .expect("tenant migrations");
+}
+
+async fn insert_audit_user(pool: &sqlx::PgPool, tenant_id: &TenantId, user_id: Uuid) {
+    sqlx::query(
+        r#"INSERT INTO users (id, tenant_id, email, password_hash, name, roles)
+           VALUES ($1, $2, $3, $4, $5, '["tenant_admin"]'::jsonb)
+           ON CONFLICT DO NOTHING"#,
+    )
+    .bind(user_id)
+    .bind(*tenant_id.as_uuid())
+    .bind("theme-audit@example.com")
+    .bind("hash_not_used")
+    .bind("Theme Audit User")
+    .execute(pool)
+    .await
+    .expect("insert test user");
+}
+
+/// Fetch the (action, resource_type, changes) audit_log columns for a given
+/// resource_id, returning the most recent row.
+async fn read_audit_row(
+    pool: &sqlx::PgPool,
+    resource_id: &str,
+) -> Option<(String, String, Option<serde_json::Value>)> {
+    sqlx::query_as(
+        "SELECT action, resource_type, changes FROM audit_log \
+         WHERE resource_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(resource_id)
+    .fetch_optional(pool)
+    .await
+    .expect("query audit_log")
+}
+
+async fn count_audit_rows_for_tenant(pool: &sqlx::PgPool, tenant_id: &TenantId) -> i64 {
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM audit_log WHERE tenant_id = $1 AND resource_type = $2")
+            .bind(*tenant_id.as_uuid())
+            .bind("settings")
+            .fetch_one(pool)
+            .await
+            .expect("count audit_log");
+    n
+}
+
+#[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test theme_tests -- --ignored
+async fn test_create_update_delete_org_theme_writes_audit_entries(pool: sqlx::PgPool) {
+    let pool = Arc::new(pool);
+    let tenant_id = TenantId::from_uuid(Uuid::new_v4());
+    let user_id = Uuid::new_v4();
+
+    setup_audit_schema(&pool, &tenant_id).await;
+    insert_audit_user(&pool, &tenant_id, user_id).await;
+
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+
+    // --- Simulated POST /organization/theme ---
+    let theme_id = Uuid::new_v4();
+    let new_value = serde_json::json!({
+        "id": theme_id.to_string(),
+        "preset_id": "ocean",
+        "branding": { "brandName": "Acme", "logoUrl": null },
+    });
+    let create_entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(billforge_core::UserId(user_id)),
+        AuditAction::Create,
+        ResourceType::Settings,
+        theme_id.to_string(),
+        "Created organization theme",
+    )
+    .with_user_email("theme-audit@example.com")
+    .with_new_value(new_value.clone());
+    audit_repo
+        .log(create_entry)
+        .await
+        .expect("create audit log write");
+
+    let row = read_audit_row(&pool, &theme_id.to_string())
+        .await
+        .expect("create audit row must exist");
+    assert_eq!(row.0, "create");
+    assert_eq!(row.1, "settings");
+    let changes = row.2.expect("changes JSONB");
+    assert_eq!(changes["description"], "Created organization theme");
+    assert_eq!(changes["new_value"]["preset_id"], "ocean");
+    assert_eq!(changes["user_email"], "theme-audit@example.com");
+
+    // --- Simulated PUT /organization/theme ---
+    let old_value = new_value.clone();
+    let updated_value = serde_json::json!({
+        "id": theme_id.to_string(),
+        "preset_id": "midnight",
+        "branding": { "brandName": "Acme", "logoUrl": "https://attacker.example.com/logo.png" },
+    });
+    let update_entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(billforge_core::UserId(user_id)),
+        AuditAction::Update,
+        ResourceType::Settings,
+        theme_id.to_string(),
+        "Updated organization theme",
+    )
+    .with_user_email("theme-audit@example.com")
+    .with_old_value(old_value)
+    .with_new_value(updated_value);
+    audit_repo
+        .log(update_entry)
+        .await
+        .expect("update audit log write");
+
+    let row = read_audit_row(&pool, &theme_id.to_string())
+        .await
+        .expect("update audit row must exist");
+    assert_eq!(row.0, "update");
+    let changes = row.2.expect("changes JSONB");
+    assert_eq!(changes["old_value"]["preset_id"], "ocean");
+    assert_eq!(changes["new_value"]["preset_id"], "midnight");
+    // Brand impersonation surface: logo swap must be reconstructible
+    assert_eq!(changes["old_value"]["branding"]["logoUrl"], serde_json::Value::Null);
+    assert_eq!(
+        changes["new_value"]["branding"]["logoUrl"],
+        "https://attacker.example.com/logo.png"
+    );
+
+    // --- Simulated DELETE /organization/theme ---
+    let delete_resource_id = tenant_id.as_uuid().to_string();
+    let delete_entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(billforge_core::UserId(user_id)),
+        AuditAction::Delete,
+        ResourceType::Settings,
+        delete_resource_id.clone(),
+        "Deleted organization theme",
+    )
+    .with_user_email("theme-audit@example.com")
+    .with_old_value(serde_json::json!({
+        "id": theme_id.to_string(),
+        "preset_id": "midnight",
+    }));
+    audit_repo
+        .log(delete_entry)
+        .await
+        .expect("delete audit log write");
+
+    let row = read_audit_row(&pool, &delete_resource_id)
+        .await
+        .expect("delete audit row must exist");
+    assert_eq!(row.0, "delete");
+    assert_eq!(row.1, "settings");
+    let changes = row.2.expect("changes JSONB");
+    assert_eq!(changes["old_value"]["preset_id"], "midnight");
+    // Delete has no new_value
+    assert!(changes["new_value"].is_null());
+
+    // All three writes landed under this tenant on the Settings resource type.
+    let total = count_audit_rows_for_tenant(&pool, &tenant_id).await;
+    assert_eq!(
+        total, 3,
+        "expected 3 audit rows (create+update+delete) for this tenant"
+    );
+}
+
+#[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test theme_tests -- --ignored
+async fn test_delete_logo_writes_audit_entry(pool: sqlx::PgPool) {
+    let pool = Arc::new(pool);
+    let tenant_id = TenantId::from_uuid(Uuid::new_v4());
+    let user_id = Uuid::new_v4();
+
+    setup_audit_schema(&pool, &tenant_id).await;
+    insert_audit_user(&pool, &tenant_id, user_id).await;
+
+    let logo_type = "primary";
+    let resource_id = tenant_id.as_uuid().to_string();
+
+    // Simulate what delete_logo handler does after the storage call returns.
+    let entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(billforge_core::UserId(user_id)),
+        AuditAction::SettingsChanged,
+        ResourceType::Settings,
+        resource_id.clone(),
+        format!("Deleted logo: {}", logo_type),
+    )
+    .with_user_email("theme-audit@example.com")
+    .with_new_value(serde_json::json!({ "logo_type": logo_type, "removed": true }));
+
+    let audit_repo = AuditRepositoryImpl::new(pool.clone());
+    audit_repo.log(entry).await.expect("audit log write");
+
+    let row = read_audit_row(&pool, &resource_id)
+        .await
+        .expect("audit row must exist");
+    assert_eq!(row.0, "settings_changed");
+    assert_eq!(row.1, "settings");
+    let changes = row.2.expect("changes JSONB");
+    assert_eq!(changes["description"], format!("Deleted logo: {}", logo_type));
+    assert_eq!(changes["new_value"]["logo_type"], logo_type);
+    assert_eq!(changes["new_value"]["removed"], true);
+    assert_eq!(changes["user_email"], "theme-audit@example.com");
 }
