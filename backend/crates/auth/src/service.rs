@@ -2,11 +2,15 @@
 
 use crate::jwt::{JwtConfig, JwtService};
 use crate::password::PasswordService;
+use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+use billforge_core::traits::AuditService;
 use billforge_core::{Error, Result, Role, TenantContext, TenantId, UserContext, UserId};
 use billforge_db::metadata_db::{CreateUserInput, MetadataDatabase, UserRecord};
+use billforge_db::repositories::AuditRepositoryImpl;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::sync::Arc;
 
 /// Authentication service
@@ -793,11 +797,14 @@ pub struct CreateApiKeyResponse {
 }
 
 impl AuthService {
-    /// Create a new API key for a tenant
+    /// Create a new API key for a tenant.
+    ///
+    /// `tenant_pool` is the per-tenant DB pool used to record the audit entry.
     pub async fn create_api_key(
         &self,
         tenant_id: &TenantId,
         input: CreateApiKeyInput,
+        tenant_pool: Arc<PgPool>,
     ) -> Result<CreateApiKeyResponse> {
         use rand::Rng;
 
@@ -827,6 +834,24 @@ impl AuthService {
                 expires_at,
             )
             .await?;
+
+        let entry = AuditEntry::new(
+            tenant_id.clone(),
+            None,
+            AuditAction::Create,
+            ResourceType::ApiKey,
+            id.to_string(),
+            format!("Created API key '{}'", input.name),
+        )
+        .with_user_email(format!("api-key:{}", key_prefix))
+        .with_metadata(serde_json::json!({
+            "key_prefix": key_prefix,
+            "roles": input.roles,
+            "expires_at": expires_at,
+        }));
+        if let Err(e) = AuditRepositoryImpl::new(tenant_pool).log(entry).await {
+            tracing::warn!(error = %e, "Failed to log api_key create audit");
+        }
 
         Ok(CreateApiKeyResponse {
             id,
@@ -915,9 +940,34 @@ impl AuthService {
             .collect())
     }
 
-    /// Revoke an API key
-    pub async fn revoke_api_key(&self, tenant_id: &TenantId, key_id: uuid::Uuid) -> Result<()> {
-        self.metadata_db.revoke_api_key(tenant_id, key_id).await
+    /// Revoke an API key.
+    ///
+    /// `tenant_pool` is the per-tenant DB pool used to record the audit entry.
+    pub async fn revoke_api_key(
+        &self,
+        tenant_id: &TenantId,
+        key_id: uuid::Uuid,
+        tenant_pool: Arc<PgPool>,
+    ) -> Result<()> {
+        self.metadata_db.revoke_api_key(tenant_id, key_id).await?;
+
+        let entry = AuditEntry::new(
+            tenant_id.clone(),
+            None,
+            AuditAction::Delete,
+            ResourceType::ApiKey,
+            key_id.to_string(),
+            "Revoked API key",
+        )
+        .with_user_email(format!("api-key:{}", key_id))
+        .with_metadata(serde_json::json!({
+            "key_id": key_id,
+        }));
+        if let Err(e) = AuditRepositoryImpl::new(tenant_pool).log(entry).await {
+            tracing::warn!(error = %e, "Failed to log api_key revoke audit");
+        }
+
+        Ok(())
     }
 }
 

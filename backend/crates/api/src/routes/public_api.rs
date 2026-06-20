@@ -14,11 +14,12 @@ use axum::{
 };
 use billforge_core::public_api::{self, verify_pat, RateLimiter, ALLOWED_EVENT_TYPES};
 use billforge_core::{
-    domain::{InvoiceFilters, InvoiceId},
-    traits::InvoiceRepository,
+    domain::{AuditAction, AuditEntry, InvoiceFilters, InvoiceId, ResourceType},
+    traits::{AuditService, InvoiceRepository},
     types::{Pagination, TenantId},
     Error,
 };
+use billforge_db::repositories::AuditRepositoryImpl;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -343,6 +344,32 @@ async fn create_webhook_subscription(
         )
     })?;
 
+    let tenant_id = TenantId::from_uuid(token.tenant_id);
+    match state.db.tenant(&tenant_id).await {
+        Ok(tenant_pool) => {
+            let entry = AuditEntry::new(
+                tenant_id,
+                None,
+                AuditAction::Create,
+                ResourceType::WebhookSubscription,
+                sub_id.to_string(),
+                format!("Created webhook subscription for {}", body.target_url),
+            )
+            .with_user_email(format!("api-key:{}", token.api_key_id))
+            .with_metadata(serde_json::json!({
+                "api_key_id": token.api_key_id,
+                "target_url": body.target_url,
+                "event_types": body.event_types,
+            }));
+            if let Err(e) = AuditRepositoryImpl::new(tenant_pool).log(entry).await {
+                tracing::warn!(error = %e, "Failed to log webhook subscription create audit");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to resolve tenant pool for audit log");
+        }
+    }
+
     Ok(Json(WebhookSubscriptionResponse {
         id: sub_id.to_string(),
         target_url: body.target_url,
@@ -465,6 +492,30 @@ async fn delete_webhook_subscription(
             "not_found",
             "Webhook subscription not found",
         ));
+    }
+
+    let tenant_id = TenantId::from_uuid(token.tenant_id);
+    match state.db.tenant(&tenant_id).await {
+        Ok(tenant_pool) => {
+            let entry = AuditEntry::new(
+                tenant_id,
+                None,
+                AuditAction::Delete,
+                ResourceType::WebhookSubscription,
+                id.to_string(),
+                "Deleted webhook subscription",
+            )
+            .with_user_email(format!("api-key:{}", token.api_key_id))
+            .with_metadata(serde_json::json!({
+                "api_key_id": token.api_key_id,
+            }));
+            if let Err(e) = AuditRepositoryImpl::new(tenant_pool).log(entry).await {
+                tracing::warn!(error = %e, "Failed to log webhook subscription delete audit");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to resolve tenant pool for audit log");
+        }
     }
 
     Ok(Json(PublicSuccessResponse { success: true }))

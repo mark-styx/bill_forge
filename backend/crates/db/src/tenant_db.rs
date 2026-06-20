@@ -104,11 +104,13 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
-        -- Generic audit log
+        -- Generic audit log. user_id is nullable so PAT-authenticated mutations
+        -- (no user context) can still record an audit row; the API key identity
+        -- lives in changes->>'user_email' (see migration 145).
         CREATE TABLE IF NOT EXISTS audit_log (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             tenant_id UUID NOT NULL,
-            user_id UUID NOT NULL REFERENCES users(id),
+            user_id UUID REFERENCES users(id),
             action TEXT NOT NULL,
             resource_type TEXT NOT NULL,
             resource_id TEXT,
@@ -230,6 +232,16 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_edi_nonces_received_at ON edi_webhook_nonces(received_at);
         "#,
+    )
+    .await?;
+
+    // Allow audit_log.user_id to be NULL for PAT-authenticated mutations
+    // (webhook subscription create/delete, API key create/revoke) which have
+    // no user context. Must run after the inline DDL above that creates audit_log.
+    apply_migration(
+        pool,
+        "145_audit_log_nullable_user_id.sql",
+        include_str!("../../../migrations/145_audit_log_nullable_user_id.sql"),
     )
     .await?;
 

@@ -256,6 +256,8 @@ pub enum ResourceType {
     ApprovalLimit,
     AiActionProposal,
     VendorBankingVerification,
+    WebhookSubscription,
+    ApiKey,
 }
 
 impl ResourceType {
@@ -279,6 +281,8 @@ impl ResourceType {
             ResourceType::ApprovalLimit => "Approval Limit",
             ResourceType::AiActionProposal => "AI Action Proposal",
             ResourceType::VendorBankingVerification => "Vendor Banking Verification",
+            ResourceType::WebhookSubscription => "Webhook Subscription",
+            ResourceType::ApiKey => "API Key",
         }
     }
 }

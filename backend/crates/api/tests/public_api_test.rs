@@ -184,6 +184,15 @@ async fn get_pool() -> Option<sqlx::PgPool> {
     Some(pool)
 }
 
+/// Provision tenant-DB tables (audit_log, users, etc.) so audit-emission paths
+/// can land rows on the same pool used by the metadata tables. Idempotent.
+async fn ensure_tenant_schema(pool: &sqlx::PgPool, tenant_id: Uuid) {
+    let tid = billforge_core::TenantId::from_uuid(tenant_id);
+    billforge_db::tenant_db::run_tenant_migrations(pool, &tid)
+        .await
+        .expect("tenant migrations");
+}
+
 /// Seed a tenant in the metadata database (idempotent).
 async fn seed_tenant(pool: &sqlx::PgPool, tenant_id: Uuid, name: &str) {
     // `slug` is NOT NULL, derive a unique value from the tenant id so concurrent
@@ -403,4 +412,160 @@ async fn test_tenant_isolation_webhook_subscriptions() {
             .unwrap();
     assert_eq!(b_subs.len(), 1);
     assert_eq!(b_subs[0].0, "https://b.example.com/hook");
+}
+
+// ---------------------------------------------------------------------------
+// #410: Webhook subscription mutations must persist audit_log entries
+// ---------------------------------------------------------------------------
+
+/// Mirror the audit entry the public_api route builds on create, log it via the
+/// same AuditRepositoryImpl path, and assert the row landed.
+#[tokio::test]
+async fn webhook_subscription_create_writes_audit_row() {
+    use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+    use billforge_core::traits::AuditService;
+    use billforge_core::TenantId;
+    use billforge_db::repositories::AuditRepositoryImpl;
+
+    let Some(pool) = get_pool().await else {
+        eprintln!("Skipping: DATABASE_URL not set");
+        return;
+    };
+
+    let tenant_id = Uuid::new_v4();
+    seed_tenant(&pool, tenant_id, "Tenant Audit Create").await;
+    ensure_tenant_schema(&pool, tenant_id).await;
+    let (key_id, _bearer) = seed_api_key(&pool, tenant_id, &["webhooks:write"], false).await;
+
+    let sub_id = Uuid::new_v4();
+    let target_url = "https://example.com/audit-create-hook";
+    let event_types = vec!["invoice.created".to_string()];
+
+    sqlx::query(
+        r#"INSERT INTO webhook_subscriptions (id, tenant_id, api_key_id, target_url, event_types, signing_secret, is_active, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'secret', true, NOW())"#,
+    )
+    .bind(sub_id)
+    .bind(tenant_id)
+    .bind(key_id)
+    .bind(target_url)
+    .bind(&event_types)
+    .execute(&pool)
+    .await
+    .expect("insert subscription");
+
+    let tenant = TenantId::from_uuid(tenant_id);
+    let entry = AuditEntry::new(
+        tenant.clone(),
+        None,
+        AuditAction::Create,
+        ResourceType::WebhookSubscription,
+        sub_id.to_string(),
+        format!("Created webhook subscription for {}", target_url),
+    )
+    .with_user_email(format!("api-key:{}", key_id))
+    .with_metadata(serde_json::json!({
+        "api_key_id": key_id,
+        "target_url": target_url,
+        "event_types": event_types,
+    }));
+
+    let pool_arc = std::sync::Arc::new(pool.clone());
+    AuditRepositoryImpl::new(pool_arc)
+        .log(entry)
+        .await
+        .expect("audit log write must succeed with user_id=NULL after migration 145");
+
+    let row: (String, String, String, Option<String>) = sqlx::query_as(
+        r#"SELECT action, resource_type, resource_id, changes->'metadata'->>'target_url'
+           FROM audit_log WHERE resource_id = $1"#,
+    )
+    .bind(sub_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("audit row must exist");
+
+    assert_eq!(row.0, "create");
+    assert_eq!(row.1, "webhook_subscription");
+    assert_eq!(row.2, sub_id.to_string());
+    assert_eq!(row.3.as_deref(), Some(target_url));
+
+    let user_id_is_null: bool =
+        sqlx::query_scalar("SELECT user_id IS NULL FROM audit_log WHERE resource_id = $1")
+            .bind(sub_id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        user_id_is_null,
+        "PAT-originated audit row must have NULL user_id"
+    );
+}
+
+#[tokio::test]
+async fn webhook_subscription_delete_writes_audit_row() {
+    use billforge_core::domain::{AuditAction, AuditEntry, ResourceType};
+    use billforge_core::traits::AuditService;
+    use billforge_core::TenantId;
+    use billforge_db::repositories::AuditRepositoryImpl;
+
+    let Some(pool) = get_pool().await else {
+        eprintln!("Skipping: DATABASE_URL not set");
+        return;
+    };
+
+    let tenant_id = Uuid::new_v4();
+    seed_tenant(&pool, tenant_id, "Tenant Audit Delete").await;
+    ensure_tenant_schema(&pool, tenant_id).await;
+    let (key_id, _bearer) = seed_api_key(&pool, tenant_id, &["webhooks:write"], false).await;
+
+    let sub_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO webhook_subscriptions (id, tenant_id, api_key_id, target_url, event_types, signing_secret, is_active, created_at)
+           VALUES ($1, $2, $3, 'https://example.com/d', $4, 'secret', true, NOW())"#,
+    )
+    .bind(sub_id)
+    .bind(tenant_id)
+    .bind(key_id)
+    .bind(&vec!["invoice.created".to_string()])
+    .execute(&pool)
+    .await
+    .expect("insert subscription");
+
+    // Simulate the DELETE handler: remove the row, then emit audit.
+    sqlx::query("DELETE FROM webhook_subscriptions WHERE id = $1 AND tenant_id = $2")
+        .bind(sub_id)
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .expect("delete subscription");
+
+    let tenant = TenantId::from_uuid(tenant_id);
+    let entry = AuditEntry::new(
+        tenant.clone(),
+        None,
+        AuditAction::Delete,
+        ResourceType::WebhookSubscription,
+        sub_id.to_string(),
+        "Deleted webhook subscription",
+    )
+    .with_user_email(format!("api-key:{}", key_id))
+    .with_metadata(serde_json::json!({ "api_key_id": key_id }));
+
+    let pool_arc = std::sync::Arc::new(pool.clone());
+    AuditRepositoryImpl::new(pool_arc)
+        .log(entry)
+        .await
+        .expect("audit log write");
+
+    let row: (String, String) = sqlx::query_as(
+        "SELECT action, resource_type FROM audit_log WHERE resource_id = $1",
+    )
+    .bind(sub_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("audit row must exist");
+
+    assert_eq!(row.0, "delete");
+    assert_eq!(row.1, "webhook_subscription");
 }

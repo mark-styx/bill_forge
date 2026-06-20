@@ -17,6 +17,9 @@ rand = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 
+# Database (for accepting tenant pools when emitting audit entries)
+sqlx = { workspace = true }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
