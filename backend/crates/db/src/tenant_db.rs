@@ -686,5 +686,12 @@ pub async fn run_banking_verification_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    apply_migration(
+        pool,
+        "143_vendor_bank_country.sql",
+        include_str!("../../../migrations/143_vendor_bank_country.sql"),
+    )
+    .await?;
+
     Ok(())
 }

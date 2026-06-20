@@ -346,6 +346,8 @@ struct VendorRow {
     bank_account_encrypted: Option<String>,
     bank_routing_encrypted: Option<String>,
     bank_account_type: Option<String>,
+    // Bank country for fraud-guard country_mismatch (migration 143, refs #394)
+    bank_country: Option<String>,
     payment_hold: Option<bool>,
     payment_hold_reason: Option<String>,
 }
@@ -395,6 +397,7 @@ impl VendorRow {
                     account_last_four: lf.clone(),
                     account_number_encrypted: ae.clone(),
                     routing_number_encrypted: re.clone(),
+                    country: self.bank_country.clone(),
                 }),
                 _ => None,
             },

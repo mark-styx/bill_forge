@@ -174,6 +174,10 @@ pub struct BankAccount {
     pub account_number_encrypted: String,
     /// Encrypted routing number
     pub routing_number_encrypted: String,
+    /// ISO-3166 alpha-2 country code for the bank account. Optional for
+    /// backward compatibility with rows persisted before #394.
+    #[serde(default)]
+    pub country: Option<String>,
 }
 
 /// Callback method used for out-of-band banking verification

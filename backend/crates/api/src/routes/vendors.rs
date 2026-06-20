@@ -1226,6 +1226,21 @@ async fn update_banking(
         )
         .await?;
 
+    // Persist bank_country alongside the encrypted banking columns so that
+    // verify_banking can read it back and the country_mismatch fraud signal
+    // can actually elevate risk on the dual-approval flow (refs #394).
+    if let Some(bc) = req.bank_country.as_deref() {
+        sqlx::query(
+            "UPDATE vendors SET bank_country = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(vendor_id.0)
+        .bind(*tenant.tenant_id.as_uuid())
+        .bind(bc)
+        .execute(&*pool)
+        .await
+        .map_err(|e| billforge_core::Error::Database(format!("Failed to persist bank country: {}", e)))?;
+    }
+
     // Run fraud-guard checks for this banking change
     let domain = fraud_guard::extract_domain(vendor.email.as_deref(), vendor.website.as_deref());
     let vendor_country = vendor.address.as_ref().map(|a| a.country.as_str());
@@ -1388,6 +1403,14 @@ async fn verify_banking(
 
     if verification.first_approver_id.is_none() {
         // ---- FIRST APPROVAL ----
+        // Read the bank_country that update_banking persisted so the
+        // country_mismatch fraud signal can actually evaluate on this
+        // dual-approval flow (refs #394).
+        let bank_country = vendor
+            .bank_account
+            .as_ref()
+            .and_then(|b| b.country.clone());
+
         // Run screening checks (fraud guard + legacy stubs)
         let screening = run_screening_with_fraud_guard(
             &tenant.tenant_id,
@@ -1396,7 +1419,7 @@ async fn verify_banking(
             vendor.email.as_deref(),
             vendor.website.as_deref(),
             vendor.address.as_ref().map(|a| a.country.as_str()),
-            None, // bank country not available at verification time
+            bank_country.as_deref(),
             &pool,
         )
         .await;
