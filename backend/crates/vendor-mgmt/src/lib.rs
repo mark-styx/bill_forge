@@ -2,6 +2,7 @@
 //!
 //! Vendor lifecycle management, tax documents, and communication.
 
+pub mod federated_risk;
 pub mod ofac_screening;
 pub mod service;
 

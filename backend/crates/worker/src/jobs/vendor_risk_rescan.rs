@@ -17,6 +17,7 @@
 use anyhow::{Context, Result};
 use billforge_core::TenantId;
 use billforge_db::PgManager;
+use billforge_vendor_mgmt::federated_risk::{self, FederatedSignalType};
 use billforge_vendor_mgmt::ofac_screening::{OfacScreenOutcome, OfacScreener};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -131,15 +132,39 @@ pub async fn rescan_all_vendors(pg_manager: Arc<PgManager>) -> Result<()> {
 pub async fn rescan_tenant(pg_manager: Arc<PgManager>, tenant_id: &TenantId) -> Result<()> {
     let pool = pg_manager.tenant(tenant_id).await?;
     let provider = NullProvider;
-    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &provider).await
+    let metadata_pool = pg_manager.metadata().clone();
+    let salt = network_hash_salt();
+    rescan_tenant_with_provider(
+        &pool,
+        *tenant_id.as_uuid(),
+        &provider,
+        Some((&metadata_pool, salt.as_deref())),
+    )
+    .await
+}
+
+/// Read the `NETWORK_HASH_SALT` env var. Returns `None` when the salt is
+/// unset so the federated contribution path silently disables itself
+/// (the rest of the rescan still runs end-to-end). The API path treats
+/// the same condition as a fail-fast error since it would otherwise
+/// compute a wrong hash bucket on user-visible reads.
+fn network_hash_salt() -> Option<String> {
+    std::env::var("NETWORK_HASH_SALT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
 }
 
 /// Rescan a single tenant using an explicit provider. Exposed so tests can drive
 /// the loop with a real PgPool and a deterministic provider.
+///
+/// `federation` is `Some((metadata_pool, salt))` when the tenant should also
+/// contribute hashed signals to the Federated Vendor Risk Network (#408).
+/// The contribution is a no-op for tenants without an active opt-in row.
 pub async fn rescan_tenant_with_provider(
     pool: &sqlx::PgPool,
     tenant_id: Uuid,
     provider: &dyn RiskProvider,
+    federation: Option<(&sqlx::PgPool, Option<&str>)>,
 ) -> Result<()> {
     let tenant_id_str = tenant_id.to_string();
     info!(tenant_id = %tenant_id_str, "Rescanning vendor risk");
@@ -151,35 +176,52 @@ pub async fn rescan_tenant_with_provider(
         .await
         .unwrap_or_else(|_| OfacScreener::load_from_embedded());
 
-    // Iterate vendors in pages. Each row carries its dba (nullable).
+    // Iterate vendors in pages. Each row carries its dba + tax_id + bank
+    // fingerprint so we can hash the vendor identity for the federated
+    // contribution path (#408) without exposing raw values.
     let mut offset: i64 = 0;
     loop {
-        let page: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
-            r#"
-            SELECT id, name, dba
-            FROM vendors
-            WHERE tenant_id = $1
-              AND status = 'active'
-            ORDER BY id
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(VENDOR_PAGE_SIZE)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
-        .context("Failed to page active vendors")?;
+        let page: Vec<(Uuid, String, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                r#"
+                SELECT id, name, dba, tax_id, bank_account_last_four
+                FROM vendors
+                WHERE tenant_id = $1
+                  AND status = 'active'
+                ORDER BY id
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(VENDOR_PAGE_SIZE)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+            .context("Failed to page active vendors")?;
 
         if page.is_empty() {
             break;
         }
 
-        for (vendor_id, name, dba) in &page {
+        for (vendor_id, name, dba, tax_id, bank_last_four) in &page {
             // 1. OFAC / sanctions re-screen.
             let outcome = screener.screen(name, dba.as_deref());
             if outcome.status != "pass" {
                 record_sanctions_alert(pool, tenant_id, *vendor_id, &outcome).await?;
+                // Contribute an OFAC near-match signal to the federated
+                // network (no-op when the tenant has not opted in).
+                if let Some((metadata_pool, Some(salt))) = federation {
+                    contribute_federated_signal(
+                        metadata_pool,
+                        tenant_id,
+                        name,
+                        tax_id.as_deref(),
+                        bank_last_four.as_deref(),
+                        FederatedSignalType::OfacNearMatch,
+                        salt,
+                    )
+                    .await;
+                }
             }
 
             // 2. External risk providers (PEP / UBO / address / tax-ID).
@@ -200,6 +242,24 @@ pub async fn rescan_tenant_with_provider(
                                 &payload,
                             )
                             .await?;
+                            // Map provider alert types into federated signal
+                            // categories. Other variants are intentionally
+                            // skipped: only the four supported network signals
+                            // are contributed.
+                            if let Some(signal) = map_alert_to_federated(&alert_type) {
+                                if let Some((metadata_pool, Some(salt))) = federation {
+                                    contribute_federated_signal(
+                                        metadata_pool,
+                                        tenant_id,
+                                        name,
+                                        tax_id.as_deref(),
+                                        bank_last_four.as_deref(),
+                                        signal,
+                                        salt,
+                                    )
+                                    .await;
+                                }
+                            }
                         }
                     }
                 }
@@ -353,6 +413,54 @@ async fn record_alert_row(
     }
 
     Ok(())
+}
+
+/// Map a local `vendor_risk_alerts.alert_type` to the federated network
+/// signal taxonomy, if any. Variants without a network analogue return
+/// `None` so the federated contribution short-circuits.
+fn map_alert_to_federated(alert_type: &str) -> Option<FederatedSignalType> {
+    match alert_type {
+        "sanctions_hit" => Some(FederatedSignalType::OfacNearMatch),
+        "banking_change" => Some(FederatedSignalType::BankAccountChange),
+        _ => None,
+    }
+}
+
+/// Contribute a hashed signal to the federated network. Logs and swallows
+/// errors so a network outage never blocks the per-tenant rescan loop.
+async fn contribute_federated_signal(
+    metadata_pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    vendor_name: &str,
+    tax_id: Option<&str>,
+    bank_fingerprint: Option<&str>,
+    signal_type: FederatedSignalType,
+    network_salt: &str,
+) {
+    let normalized = federated_risk::normalize_vendor_name(vendor_name);
+    let vendor_hash = federated_risk::vendor_hash(
+        &normalized,
+        tax_id,
+        bank_fingerprint,
+        network_salt,
+    );
+    if let Err(e) = federated_risk::contribute_signal(
+        metadata_pool,
+        tenant_id,
+        &vendor_hash,
+        signal_type,
+        1.0,
+        network_salt,
+    )
+    .await
+    {
+        warn!(
+            tenant_id = %tenant_id,
+            signal = %signal_type.as_db_str(),
+            error = %e,
+            "Failed to contribute federated vendor risk signal"
+        );
+    }
 }
 
 /// Deterministic hash of the canonical JSON payload so repeated scans of the

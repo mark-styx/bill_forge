@@ -135,7 +135,7 @@ async fn rescan_flags_sanctioned_vendor_and_is_idempotent_on_rerun() {
 
     // First pass: sanctioned vendor gets a critical sanctions_hit alert,
     // payment_hold flips true, and last_risk_rescan_at is set on both vendors.
-    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider)
+    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider, None)
         .await
         .expect("rescan pass 1");
 
@@ -171,7 +171,7 @@ async fn rescan_flags_sanctioned_vendor_and_is_idempotent_on_rerun() {
     assert_eq!(severity, "critical");
 
     // Second pass: payload_hash dedupe must NOT create a duplicate alert.
-    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider)
+    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider, None)
         .await
         .expect("rescan pass 2");
 
@@ -202,7 +202,7 @@ async fn rescan_skips_inactive_vendors() {
         .await
         .expect("set inactive");
 
-    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider)
+    rescan_tenant_with_provider(&pool, *tenant_id.as_uuid(), &NullProvider, None)
         .await
         .expect("rescan");
 

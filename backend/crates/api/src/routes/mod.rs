@@ -32,6 +32,7 @@ pub(crate) mod erp_jobs;
 #[cfg(feature = "processing")]
 pub mod explain;
 pub(crate) mod export;
+pub mod federated_vendor_risk;
 pub(crate) mod feedback;
 pub mod health;
 #[cfg(all(
@@ -225,8 +226,11 @@ fn api_routes(state: AppState) -> Router<AppState> {
             "/vendors",
             vendors::routes()
                 .merge(vendor_portal_onboarding::review_routes())
-                .merge(vendor_risk_alerts::routes()),
+                .merge(vendor_risk_alerts::routes())
+                .merge(federated_vendor_risk::vendor_routes()),
         )
+        // Federated Vendor Risk Network (#408): tenant consent toggles
+        .merge(federated_vendor_risk::tenant_routes())
         // Dashboard metrics
         .nest("/dashboard", dashboard::routes())
         // AP Command Center (standup view)

@@ -19,3 +19,9 @@ tracing = { workspace = true }
 
 # OFAC screener reads vendor rows directly from the tenant pool.
 sqlx = { workspace = true }
+
+# Federated Vendor Risk Network (#408): salted SHA-256 vendor hash + HMAC tenant hash.
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+anyhow = { workspace = true }

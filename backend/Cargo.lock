@@ -1373,12 +1373,16 @@ dependencies = [
 name = "billforge-vendor-mgmt"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "billforge-core",
  "billforge-db",
  "chrono",
+ "hex",
+ "hmac 0.12.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
