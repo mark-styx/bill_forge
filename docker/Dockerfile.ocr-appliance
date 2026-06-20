@@ -1,0 +1,45 @@
+# BillForge tenant-side OCR appliance (refs #421)
+#
+# Single-tenant container that runs Tesseract OCR INSIDE the tenant boundary.
+# Invoice bytes never leave the tenant; only the extracted OcrExtractionResult
+# JSON crosses back to the BillForge SaaS plane.
+#
+# Build:  docker build -f docker/Dockerfile.ocr-appliance -t billforge-ocr-appliance:dev .
+# Run:    docker run --rm -p 8088:8088 billforge-ocr-appliance:dev
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    OCR_APPLIANCE_PORT=8088
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        poppler-utils \
+        libgl1 \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1001 ocr && \
+    useradd --uid 1001 --gid ocr --shell /bin/false --create-home ocr
+
+WORKDIR /app
+
+COPY docker/ocr-appliance/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY docker/ocr-appliance/server.py /app/server.py
+COPY docker/ocr-appliance/README.md /app/README.md
+
+USER ocr
+
+EXPOSE 8088
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${OCR_APPLIANCE_PORT}/healthz" || exit 1
+
+CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${OCR_APPLIANCE_PORT}"]
