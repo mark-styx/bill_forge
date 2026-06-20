@@ -48,6 +48,10 @@ pub struct AppState {
     /// callback. When `TEAMS_ACTIONS_ENABLED!=true` this is a disabled stub
     /// (the route is not registered in that case).
     pub teams_jwt_validator: Arc<TeamsJwtValidator>,
+    /// Background scorer combining duplicate + fraud + amount-spike signals
+    /// per ingested invoice (refs #420). Spawned from the invoice ingest hook.
+    #[cfg(feature = "analytics")]
+    pub invoice_risk_scorer: Arc<crate::services::invoice_risk_scoring::InvoiceRiskScorer>,
 }
 
 impl FromRef<AppState> for Arc<AuthService> {
@@ -146,7 +150,7 @@ impl AppState {
         let teams_jwt_validator = Arc::new(Self::build_teams_jwt_validator()?);
 
         Ok(Self {
-            db,
+            db: db.clone(),
             auth,
             storage,
             audit,
@@ -155,6 +159,14 @@ impl AppState {
             redis,
             invoice_events,
             teams_jwt_validator,
+            #[cfg(feature = "analytics")]
+            invoice_risk_scorer: Arc::new(
+                crate::services::invoice_risk_scoring::InvoiceRiskScorer::new()
+                    .with_federated_network(
+                        db.metadata(),
+                        std::env::var("NETWORK_HASH_SALT").ok(),
+                    ),
+            ),
         })
     }
 

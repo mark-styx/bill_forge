@@ -368,6 +368,28 @@ async fn create_invoice(
         tracing::warn!(error = %e, "Webhook dispatch task panicked");
     }
 
+    // Background risk scoring (refs #420). Spawn so ingest latency is not
+    // affected; the scorer combines duplicate + fraud + amount-spike signals
+    // and routes block-tier verdicts to the exception queue with evidence.
+    {
+        let scorer = state.invoice_risk_scorer.clone();
+        let scoring_pool = pool.clone();
+        let scoring_tenant = tenant.tenant_id.clone();
+        let scoring_invoice_id = invoice.id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = scorer
+                .score_and_route(&scoring_tenant, &scoring_invoice_id, scoring_pool)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    invoice_id = %scoring_invoice_id,
+                    "Background invoice risk scoring failed"
+                );
+            }
+        });
+    }
+
     Ok(Json(CreateInvoiceResponse {
         invoice,
         potential_duplicates,
