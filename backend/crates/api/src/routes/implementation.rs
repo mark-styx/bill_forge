@@ -1308,7 +1308,7 @@ async fn sync_xero_implementation(
     Ok(stats)
 }
 
-async fn quickbooks_client(
+pub(crate) async fn quickbooks_client(
     state: &AppState,
     pool: &sqlx::PgPool,
     tenant_id: &TenantId,

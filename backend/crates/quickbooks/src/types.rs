@@ -38,6 +38,24 @@ pub struct QBPhone {
     pub FreeFormNumber: String,
 }
 
+/// QuickBooks employee (used as the role-bearing user surface for the QBO
+/// REST API, which does not expose a `User` entity with permissions to apps).
+/// `JobTitle` is treated as the role string the approval-chain suggester maps
+/// to BillForge approver tiers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QBEmployee {
+    /// QuickBooks employee ID.
+    pub Id: String,
+    /// Display name.
+    pub DisplayName: Option<String>,
+    /// Primary email address.
+    pub PrimaryEmailAddr: Option<QBEmailAddress>,
+    /// Job title (free-text in QBO; mapped to approver tier when present).
+    pub JobTitle: Option<String>,
+    /// Active flag.
+    pub Active: Option<bool>,
+}
+
 /// QuickBooks account
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QBAccount {

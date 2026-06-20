@@ -45,6 +45,15 @@ pub mod health;
     feature = "xero"
 ))]
 pub mod implementation;
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing",
+    feature = "quickbooks",
+    feature = "xero"
+))]
+pub mod implementation_speedrun;
 pub mod inbound_email;
 #[cfg(all(feature = "capture", feature = "processing"))]
 pub mod inbox_addin;
@@ -288,7 +297,10 @@ fn api_routes(state: AppState) -> Router<AppState> {
             feature = "quickbooks",
             feature = "xero"
         ))]
-        let router = router.nest("/implementation", implementation::routes());
+        let router = router.nest(
+            "/implementation",
+            implementation::routes().merge(implementation_speedrun::routes()),
+        );
         router
     };
     // Conditionally include ERP/integration routes, gated by tenant subscription.

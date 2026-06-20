@@ -447,6 +447,14 @@ pub async fn run_implementation_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    // 2-hour implementation speedrun progress state (issue #415).
+    apply_migration(
+        pool,
+        "147_create_implementation_speedrun.sql",
+        include_str!("../../../migrations/147_create_implementation_speedrun.sql"),
+    )
+    .await?;
+
     Ok(())
 }
 

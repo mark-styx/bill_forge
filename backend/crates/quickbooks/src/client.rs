@@ -311,6 +311,40 @@ impl QuickBooksClient {
         self.get(&format!("vendor/{}", vendor_id)).await
     }
 
+    /// Query employees. Used by the implementation speedrun to suggest
+    /// approval chains from QBO; the `JobTitle` field on each employee
+    /// stands in for a "role" string since the QBO REST API does not
+    /// expose the platform-level `User` entity to third-party apps.
+    pub async fn query_employees(
+        &self,
+        start_position: i32,
+        max_results: i32,
+    ) -> Result<Vec<QBEmployee>> {
+        #[derive(Deserialize)]
+        struct EmployeeQueryResponse {
+            QueryResponse: Option<EmployeeQueryData>,
+        }
+
+        #[derive(Deserialize)]
+        struct EmployeeQueryData {
+            Employee: Option<Vec<QBEmployee>>,
+        }
+
+        let query = format!(
+            "SELECT * FROM Employee STARTPOSITION {} MAXRESULTS {}",
+            start_position, max_results
+        );
+
+        let response: EmployeeQueryResponse = self
+            .get(&format!("query?query={}", urlencoding::encode(&query)))
+            .await?;
+
+        Ok(response
+            .QueryResponse
+            .and_then(|qr| qr.Employee)
+            .unwrap_or_default())
+    }
+
     /// Query accounts
     pub async fn query_accounts(
         &self,
