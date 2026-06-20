@@ -30,6 +30,15 @@ pub struct InboundEmailPayload {
     /// Provider-assigned message identifier (idempotency key).
     #[serde(default)]
     pub message_id: Option<String>,
+    /// Plain-text body of the email (used for reply-by-email approval commands).
+    #[serde(default)]
+    pub text_body: Option<String>,
+    /// HTML body of the email (used to recover hidden token markers from quoted replies).
+    #[serde(default)]
+    pub html_body: Option<String>,
+    /// Raw "Reply-To" header, used for plus-addressed approval tokens.
+    #[serde(default)]
+    pub reply_to: Option<String>,
     /// Attachments included in the email.
     #[serde(default)]
     pub attachments: Vec<InboundAttachment>,
@@ -104,6 +113,80 @@ impl<'a> InboundEmailHandler<'a> {
         .fetch_one(self.metadata_pool)
         .await
         .map_err(|e| format!("Failed to persist inbound email message: {}", e))?;
+
+        // 3b. Reply-by-email approval ingest. A reply to an approval-notification
+        // email carries a signed action token (Reply-To plus-address, subject
+        // marker, or hidden HTML span). When present we treat the message as a
+        // first-class approval action and short-circuit; never let an approval
+        // reply fall through to invoice ingest, even if it has no command we
+        // can parse.
+        if let Some(token) = crate::approval_reply::extract_action_token(payload) {
+            let cmd = payload
+                .text_body
+                .as_deref()
+                .and_then(crate::approval_reply::parse_reply_command);
+
+            match cmd {
+                Some(cmd) => {
+                    let outcome = crate::approval_reply::handle_approval_reply(
+                        self.metadata_pool,
+                        self.tenant_pool,
+                        email_id,
+                        payload,
+                        &token,
+                        &cmd,
+                    )
+                    .await?;
+
+                    match outcome {
+                        crate::approval_reply::ApprovalReplyOutcome::Applied { .. } => {
+                            let _ = sqlx::query(
+                                "UPDATE inbound_email_messages SET status = 'approval_reply' WHERE id = $1",
+                            )
+                            .bind(email_id)
+                            .execute(self.metadata_pool)
+                            .await;
+                            return Ok(InboundEmailResult {
+                                capture_ids: Vec::new(),
+                                triaged: false,
+                                triage_reason: None,
+                            });
+                        }
+                        crate::approval_reply::ApprovalReplyOutcome::Triaged { reason } => {
+                            self.create_triage_entry(email_id, &reason).await?;
+                            let _ = sqlx::query(
+                                "UPDATE inbound_email_messages SET status = 'triage', triage_reason = $2 WHERE id = $1",
+                            )
+                            .bind(email_id)
+                            .bind(&reason)
+                            .execute(self.metadata_pool)
+                            .await;
+                            return Ok(InboundEmailResult {
+                                capture_ids: Vec::new(),
+                                triaged: true,
+                                triage_reason: Some(reason),
+                            });
+                        }
+                    }
+                }
+                None => {
+                    let reason = "approval_reply_unparseable".to_string();
+                    self.create_triage_entry(email_id, &reason).await?;
+                    let _ = sqlx::query(
+                        "UPDATE inbound_email_messages SET status = 'triage', triage_reason = $2 WHERE id = $1",
+                    )
+                    .bind(email_id)
+                    .bind(&reason)
+                    .execute(self.metadata_pool)
+                    .await;
+                    return Ok(InboundEmailResult {
+                        capture_ids: Vec::new(),
+                        triaged: true,
+                        triage_reason: Some(reason),
+                    });
+                }
+            }
+        }
 
         // 4. Filter usable attachments (PDF or image)
         let usable: Vec<&InboundAttachment> = payload
@@ -591,6 +674,9 @@ mod tests {
             to: "ap@meridian.billforge.com".to_string(),
             subject: Some("Invoice".to_string()),
             message_id: Some("msg-123".to_string()),
+            text_body: None,
+            html_body: None,
+            reply_to: None,
             attachments: vec![],
         };
         assert!(payload.attachments.is_empty());

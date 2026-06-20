@@ -252,11 +252,6 @@ impl<
             None => "Vendor Portal".to_string(),
         };
 
-        let subject = format!(
-            "Approval Required: Invoice {} from {}",
-            invoice_number, vendor_name
-        );
-
         // Generate per-approver tokens and send individual emails
         for (uid, email) in &approver_list {
             let approve_token = self
@@ -295,7 +290,7 @@ impl<
                 "reject",
             );
 
-            let (html, text) = ET::invoice_pending_approval_with_actions(
+            let (mut html, text) = ET::invoice_pending_approval_with_actions(
                 invoice_number,
                 vendor_name,
                 &amount,
@@ -303,6 +298,21 @@ impl<
                 &view_url,
                 Some(&approve_url),
                 Some(&reject_url),
+            );
+
+            // Embed the approve token as a hidden HTML span so it survives
+            // quoted replies; the inbound reply pipeline recovers it via
+            // [bf-token:<token>].
+            html.push_str(&format!(
+                "<span style=\"display:none\">[bf-token:{}]</span>",
+                approve_token
+            ));
+
+            // Prefix the subject with a [BF-APR-<token>] marker that survives
+            // `Re:` chains, giving the inbound pipeline a second token carrier.
+            let subject = format!(
+                "[BF-APR-{}] Approval Required: Invoice {} from {}",
+                approve_token, invoice_number, vendor_name
             );
 
             if let Err(e) = self.email_service.send(email, &subject, &html, &text).await {

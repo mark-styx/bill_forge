@@ -41,3 +41,5 @@ inbound-redis = ["dep:redis"]
 
 [dev-dependencies]
 wiremock = "0.6"
+dotenvy = "0.15"
+billforge-db = { path = "../db" }

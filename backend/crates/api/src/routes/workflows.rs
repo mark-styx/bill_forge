@@ -2660,7 +2660,7 @@ async fn resend_approval_email(
 
     let amount_formatted = format!("${:.2}", total_amount_cents as f64 / 100.0);
 
-    let (html, text) = EmailTemplates::invoice_pending_approval_with_actions(
+    let (mut html, text) = EmailTemplates::invoice_pending_approval_with_actions(
         &invoice_number,
         &vendor_name,
         &amount_formatted,
@@ -2670,9 +2670,18 @@ async fn resend_approval_email(
         Some(&reject_url),
     );
 
+    // Embed the approve token as a hidden HTML span so it survives quoted
+    // replies; the inbound reply pipeline recovers it via [bf-token:<token>].
+    html.push_str(&format!(
+        "<span style=\"display:none\">[bf-token:{}]</span>",
+        approve_token
+    ));
+
+    // Prefix the subject with a [BF-APR-<token>] marker that survives `Re:`
+    // chains, giving the inbound pipeline a second token carrier.
     let subject = format!(
-        "Approval Required: Invoice {} from {}",
-        invoice_number, vendor_name
+        "[BF-APR-{}] Approval Required: Invoice {} from {}",
+        approve_token, invoice_number, vendor_name
     );
 
     state

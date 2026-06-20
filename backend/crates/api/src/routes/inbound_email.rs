@@ -122,6 +122,82 @@ async fn handle_inbound_email(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    // 3b. Reply-by-email approval ingest: a reply carrying a signed action
+    // token (Reply-To plus-address, subject marker, or hidden HTML span) is a
+    // first-class approval action and must short-circuit before invoice ingest.
+    if let Some(token) = billforge_email::extract_action_token(&payload) {
+        let cmd = payload
+            .text_body
+            .as_deref()
+            .and_then(billforge_email::parse_reply_command);
+        let (final_status, triage_reason): (&str, Option<String>) = match cmd {
+            Some(cmd) => {
+                match billforge_email::handle_approval_reply(
+                    &metadata_pool,
+                    &tenant_pool,
+                    email_id,
+                    &payload,
+                    &token,
+                    &cmd,
+                )
+                .await
+                {
+                    Ok(billforge_email::ApprovalReplyOutcome::Applied { .. }) => {
+                        ("approval_reply", None)
+                    }
+                    Ok(billforge_email::ApprovalReplyOutcome::Triaged { reason }) => {
+                        ("triage", Some(reason))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Approval reply ingest failed");
+                        ("triage", Some(format!("approval_reply_failed: {}", e)))
+                    }
+                }
+            }
+            None => ("triage", Some("approval_reply_unparseable".to_string())),
+        };
+
+        if let Some(reason) = triage_reason.as_deref() {
+            let _ = sqlx::query(
+                r#"INSERT INTO email_triage_queue (id, inbound_email_id, reason)
+                   VALUES (gen_random_uuid(), $1, $2)"#,
+            )
+            .bind(email_id)
+            .bind(reason)
+            .execute(&*metadata_pool)
+            .await;
+            let _ = sqlx::query(
+                "UPDATE inbound_email_messages SET status = 'triage', triage_reason = $2 WHERE id = $1",
+            )
+            .bind(email_id)
+            .bind(reason)
+            .execute(&*metadata_pool)
+            .await;
+            return Ok((
+                StatusCode::OK,
+                Json(InboundEmailResponse {
+                    status: "triage".to_string(),
+                    reason: Some(reason.to_string()),
+                    capture_ids: Vec::new(),
+                }),
+            ));
+        }
+
+        let _ = sqlx::query("UPDATE inbound_email_messages SET status = $2 WHERE id = $1")
+            .bind(email_id)
+            .bind(final_status)
+            .execute(&*metadata_pool)
+            .await;
+        return Ok((
+            StatusCode::OK,
+            Json(InboundEmailResponse {
+                status: final_status.to_string(),
+                reason: None,
+                capture_ids: Vec::new(),
+            }),
+        ));
+    }
+
     // 4. Filter usable attachments (PDF or image)
     let usable: Vec<&billforge_email::InboundAttachment> = payload
         .attachments
