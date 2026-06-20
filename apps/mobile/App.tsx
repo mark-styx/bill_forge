@@ -42,6 +42,12 @@ import {
   registerForPushNotifications,
   NotificationPlatform,
 } from './src/lib/notifications';
+import {
+  BiometricPlatform,
+  ONE_TAP_CONFIDENCE_THRESHOLD,
+  authenticateBiometric,
+  isBiometricAvailable,
+} from './src/lib/biometric';
 
 // AsyncStorage-backed KVStore
 const store: KVStore = {
@@ -65,6 +71,43 @@ const API_BASE =
  */
 function configFromAuth(auth: AuthState): api.ApiConfig {
   return { baseUrl: API_BASE, jwt: auth.jwt, tenantId: auth.tenantId };
+}
+
+/**
+ * Production implementation of BiometricPlatform.
+ * Lazily requires expo-local-authentication so jest (which runs in node)
+ * does not crash on the missing native module.
+ */
+function getBiometricPlatform(): BiometricPlatform {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const LocalAuth = require('expo-local-authentication');
+  return {
+    async hasHardware() {
+      try {
+        return await LocalAuth.hasHardwareAsync();
+      } catch {
+        return false;
+      }
+    },
+    async isEnrolled() {
+      try {
+        return await LocalAuth.isEnrolledAsync();
+      } catch {
+        return false;
+      }
+    },
+    async authenticate(promptMessage: string) {
+      try {
+        const res = await LocalAuth.authenticateAsync({
+          promptMessage,
+          disableDeviceFallback: false,
+        });
+        return Boolean(res?.success);
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -253,9 +296,12 @@ export default function App() {
   const [modalItem, setModalItem] = useState<ApprovalItem | null>(null);
   const [modalText, setModalText] = useState('');
   const [conflicts, setConflicts] = useState<OfflineConflict[]>([]);
+  const [undoItem, setUndoItem] = useState<ApprovalItem | null>(null);
 
   // Track whether push registration was attempted this session
   const pushRegistered = useRef(false);
+  // Timer for the 3s one-tap undo window
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Restore persisted auth on mount
   useEffect(() => {
@@ -425,6 +471,49 @@ export default function App() {
     [auth, refreshApprovals],
   );
 
+  const handleOneTapApprove = useCallback(
+    async (item: ApprovalItem) => {
+      if (!auth) return;
+
+      // Step-up auth: require biometric confirmation when the device has it
+      // enrolled, so a found/stolen unlocked phone cannot approve invoices.
+      const biometricPlatform = getBiometricPlatform();
+      const available = await isBiometricAvailable(biometricPlatform);
+      if (available) {
+        const res = await authenticateBiometric(
+          biometricPlatform,
+          'Confirm approval',
+        );
+        if (!res.success) return;
+      }
+
+      // Optimistically pull from the list; keep a handle for undo.
+      setApprovals((prev) => prev.filter((a) => a.id !== item.id));
+      setUndoItem(item);
+
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+      undoTimer.current = setTimeout(() => {
+        undoTimer.current = null;
+        setUndoItem(null);
+        handleAction(item.id, 'approve', '');
+      }, 3000);
+    },
+    [auth, handleAction],
+  );
+
+  const handleUndoOneTap = useCallback(() => {
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+    if (undoItem) {
+      setApprovals((prev) =>
+        prev.some((a) => a.id === undoItem.id) ? prev : [undoItem, ...prev],
+      );
+    }
+    setUndoItem(null);
+  }, [undoItem]);
+
   const promptAction = (item: ApprovalItem, kind: 'approve' | 'reject') => {
     setModalItem(item);
     setModalKind(kind);
@@ -540,33 +629,51 @@ export default function App() {
         </View>
       ) : (
         <ScrollView style={styles.list}>
-          {approvals.map((item) => (
-            <View key={item.id} style={styles.card}>
-              <Text style={styles.vendorName}>{item.invoice.vendor_name}</Text>
-              <Text style={styles.invoiceNumber}>{item.invoice.invoice_number}</Text>
-              <Text style={styles.amount}>
-                {formatCents(item.invoice.total_amount_cents, item.invoice.currency)}
-              </Text>
-              {item.invoice.due_date && (
-                <Text style={styles.dueDate}>Due: {item.invoice.due_date}</Text>
-              )}
+          {approvals.map((item) => {
+            const confidence = item.invoice.confidence_score;
+            const eligibleForOneTap =
+              confidence != null && confidence >= ONE_TAP_CONFIDENCE_THRESHOLD;
+            return (
+              <View key={item.id} style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View style={styles.cardHeaderText}>
+                    <Text style={styles.vendorName}>{item.invoice.vendor_name}</Text>
+                    <Text style={styles.invoiceNumber}>{item.invoice.invoice_number}</Text>
+                  </View>
+                  {eligibleForOneTap && (
+                    <TouchableOpacity
+                      accessibilityLabel="One-tap approve"
+                      style={styles.oneTapButton}
+                      onPress={() => handleOneTapApprove(item)}
+                    >
+                      <Text style={styles.oneTapCheck}>✓</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Text style={styles.amount}>
+                  {formatCents(item.invoice.total_amount_cents, item.invoice.currency)}
+                </Text>
+                {item.invoice.due_date && (
+                  <Text style={styles.dueDate}>Due: {item.invoice.due_date}</Text>
+                )}
 
-              <View style={styles.actions}>
-                <TouchableOpacity
-                  style={[styles.button, styles.approveButton]}
-                  onPress={() => promptAction(item, 'approve')}
-                >
-                  <Text style={styles.buttonText}>Approve</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.button, styles.rejectButton]}
-                  onPress={() => promptAction(item, 'reject')}
-                >
-                  <Text style={styles.buttonText}>Reject</Text>
-                </TouchableOpacity>
+                <View style={styles.actions}>
+                  <TouchableOpacity
+                    style={[styles.button, styles.approveButton]}
+                    onPress={() => promptAction(item, 'approve')}
+                  >
+                    <Text style={styles.buttonText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.button, styles.rejectButton]}
+                    onPress={() => promptAction(item, 'reject')}
+                  >
+                    <Text style={styles.buttonText}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
       )}
       {/* Approve / Reject Modal */}
@@ -617,6 +724,17 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      {undoItem && (
+        <View style={styles.snackbar}>
+          <Text style={styles.snackbarText}>
+            Approving {undoItem.invoice.invoice_number}
+          </Text>
+          <TouchableOpacity onPress={handleUndoOneTap}>
+            <Text style={styles.snackbarAction}>UNDO</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -834,5 +952,51 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     marginLeft: 12,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  cardHeaderText: {
+    flex: 1,
+  },
+  oneTapButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+  },
+  oneTapCheck: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  snackbar: {
+    position: 'absolute',
+    bottom: 24,
+    left: 16,
+    right: 16,
+    backgroundColor: '#111',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  snackbarText: {
+    color: '#fff',
+    fontSize: 14,
+    flex: 1,
+  },
+  snackbarAction: {
+    color: '#22c55e',
+    fontSize: 14,
+    fontWeight: '700',
+    marginLeft: 16,
   },
 });

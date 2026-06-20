@@ -7,7 +7,7 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "lint": "eslint src/lib/api.ts src/lib/auth.ts src/lib/notifications.ts src/lib/offline-queue.ts",
+    "lint": "eslint src/lib/api.ts src/lib/auth.ts src/lib/biometric.ts src/lib/notifications.ts src/lib/offline-queue.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:coverage": "jest --coverage"
@@ -16,6 +16,7 @@
     "@react-native-async-storage/async-storage": "1.23.1",
     "@react-native-community/netinfo": "11.3.1",
     "expo": "~51.0.0",
+    "expo-local-authentication": "~14.0.1",
     "expo-status-bar": "~1.12.1",
     "react": "18.2.0",
     "react-native": "0.74.5"

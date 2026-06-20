@@ -7,6 +7,12 @@
  */
 
 import { KVStore } from './offline-queue';
+import {
+  BiometricPlatform,
+  authenticateBiometric,
+  isBiometricAvailable,
+  isBiometricEnabled,
+} from './biometric';
 
 // ---- Storage keys ----
 const AUTH_KEY = 'auth_state';
@@ -127,4 +133,36 @@ export async function saveAuth(store: KVStore, state: AuthState): Promise<void> 
 
 export async function clearAuth(store: KVStore): Promise<void> {
   await store.setItem(AUTH_KEY, '');
+}
+
+// ---- Biometric unlock ----
+
+/**
+ * Unlock a previously-saved session, optionally gated by biometrics.
+ *
+ * Behavior:
+ *   - If no session is saved, returns null (caller falls back to login).
+ *   - If the user has opted into biometrics AND biometrics are available
+ *     on the device, prompt for biometric verification first. On cancel
+ *     or failure, returns null so the caller falls back to password
+ *     login - we never silently let a stolen unlocked phone through.
+ *   - If biometrics are not opted-in or not available, returns the saved
+ *     session as-is (backwards compatible with the original cold-start flow).
+ */
+export async function unlockWithBiometric(
+  store: KVStore,
+  platform: BiometricPlatform,
+  reason = 'Unlock BillForge',
+): Promise<AuthState | null> {
+  const saved = await loadAuth(store);
+  if (!saved || !saved.jwt) return null;
+
+  const optedIn = await isBiometricEnabled(store);
+  if (!optedIn) return saved;
+
+  const available = await isBiometricAvailable(platform);
+  if (!available) return saved;
+
+  const result = await authenticateBiometric(platform, reason);
+  return result.success ? saved : null;
 }

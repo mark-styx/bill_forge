@@ -20,6 +20,12 @@ export interface ApprovalItem {
     days_until_due: number | null;
     requires_action: boolean;
     created_at: string;
+    /**
+     * Processing-confidence score in [0, 1]. Optional - older backend
+     * versions omit it. Used by the one-tap approve gesture to decide
+     * whether to offer the single-tap affordance.
+     */
+    confidence_score?: number | null;
   };
   requested_at: string;
   expires_at: string | null;
