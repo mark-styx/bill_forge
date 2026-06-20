@@ -9,7 +9,7 @@ use crate::ofac_screening::OfacScreener;
 use crate::state::AppState;
 use crate::{fraud_guard, fraud_guard::RiskLevel};
 use axum::{
-    extract::{Multipart, State},
+    extract::{Multipart, Path, State},
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
@@ -32,6 +32,14 @@ pub fn routes() -> Router<AppState> {
         .route("/invoices", get(list_invoices))
         .route("/invoices", post(submit_invoice))
         .route("/invoices/upload", post(upload_invoice_pdf))
+        .route(
+            "/invoices/:invoice_id/messages",
+            get(list_invoice_messages),
+        )
+        .route(
+            "/invoices/:invoice_id/messages",
+            post(post_invoice_message),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -562,4 +570,137 @@ async fn upload_invoice_pdf(
         id: invoice.id.to_string(),
         invoice_number: invoice_number_val,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// In-thread AP <-> vendor messaging (#418)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct VendorPortalMessageRow {
+    pub id: Uuid,
+    pub invoice_id: Uuid,
+    pub sender_kind: String,
+    pub sender_user_id: Option<Uuid>,
+    pub sender_vendor_contact_id: Option<Uuid>,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PostMessageBody {
+    pub body: String,
+}
+
+const MAX_MESSAGE_LEN: usize = 4000;
+
+/// Verify the invoice exists, belongs to the tenant, and is owned by the
+/// vendor encoded in the portal JWT. Returns the invoice UUID on success.
+async fn assert_invoice_owned_by_vendor(
+    pool: &sqlx::PgPool,
+    tenant_id: &TenantId,
+    invoice_id: Uuid,
+    vendor_id: &VendorId,
+) -> ApiResult<()> {
+    let row: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT vendor_id FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| Error::Database(format!("Failed to load invoice: {}", e)))?;
+
+    match row {
+        Some((Some(v),)) if v == vendor_id.0 => Ok(()),
+        Some(_) => Err(ApiError(Error::Forbidden(
+            "Invoice does not belong to the authenticated vendor".to_string(),
+        ))),
+        None => Err(ApiError(Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: invoice_id.to_string(),
+        })),
+    }
+}
+
+async fn list_invoice_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(invoice_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<VendorPortalMessageRow>>> {
+    let (tenant_id, vendor_id) = vendor_ctx(&headers, &state.auth)?;
+    let pool = state.db.tenant(&tenant_id).await?;
+
+    assert_invoice_owned_by_vendor(&*pool, &tenant_id, invoice_id, &vendor_id).await?;
+
+    let rows: Vec<VendorPortalMessageRow> = sqlx::query_as(
+        "SELECT id, invoice_id, sender_kind, sender_user_id, sender_vendor_contact_id, body, created_at \
+         FROM vendor_portal_messages \
+         WHERE tenant_id = $1 AND invoice_id = $2 \
+         ORDER BY created_at ASC",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| Error::Database(format!("Failed to load messages: {}", e)))?;
+
+    Ok(Json(rows))
+}
+
+async fn post_invoice_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(invoice_id): Path<Uuid>,
+    Json(body): Json<PostMessageBody>,
+) -> ApiResult<Json<VendorPortalMessageRow>> {
+    let (tenant_id, vendor_id) = vendor_ctx(&headers, &state.auth)?;
+
+    let body_trim = body.body.trim();
+    if body_trim.is_empty() {
+        return Err(Error::Validation("Message body must not be empty".to_string()).into());
+    }
+    if body_trim.len() > MAX_MESSAGE_LEN {
+        return Err(Error::Validation(format!(
+            "Message body exceeds maximum length ({} chars)",
+            MAX_MESSAGE_LEN
+        ))
+        .into());
+    }
+
+    let pool = state.db.tenant(&tenant_id).await?;
+    assert_invoice_owned_by_vendor(&*pool, &tenant_id, invoice_id, &vendor_id).await?;
+
+    let row: VendorPortalMessageRow = sqlx::query_as(
+        "INSERT INTO vendor_portal_messages \
+         (tenant_id, invoice_id, sender_kind, sender_vendor_contact_id, body) \
+         VALUES ($1, $2, 'vendor', $3, $4) \
+         RETURNING id, invoice_id, sender_kind, sender_user_id, sender_vendor_contact_id, body, created_at",
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .bind(vendor_id.0)
+    .bind(body_trim)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| Error::Database(format!("Failed to insert message: {}", e)))?;
+
+    let audit_entry = AuditEntry::new(
+        tenant_id.clone(),
+        None,
+        AuditAction::Create,
+        ResourceType::Invoice,
+        invoice_id.to_string(),
+        format!("Vendor portal message posted by vendor {}", vendor_id),
+    )
+    .with_metadata(serde_json::json!({
+        "source": "vendor_portal.message.created",
+        "vendor_id": vendor_id.to_string(),
+        "message_id": row.id.to_string(),
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log vendor portal message audit entry");
+    }
+
+    Ok(Json(row))
 }

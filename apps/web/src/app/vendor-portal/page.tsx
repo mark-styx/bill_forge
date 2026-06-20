@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { FileText } from 'lucide-react';
 import { vendorPortalApi } from '@/lib/api';
@@ -16,6 +16,29 @@ interface InvoiceRow {
   total_amount: number;
   currency: string;
   processing_status: string;
+}
+
+interface ThreadMessage {
+  id: string;
+  invoice_id: string;
+  sender_kind: 'vendor' | 'ap_user';
+  sender_user_id: string | null;
+  sender_vendor_contact_id: string | null;
+  body: string;
+  created_at: string;
+}
+
+function formatRelative(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  if (diffMs < 0) return 'just now';
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -71,6 +94,88 @@ export default function VendorPortalPage() {
   const [uploadAmount, setUploadAmount] = useState('');
   const [uploadNotes, setUploadNotes] = useState('');
   const [uploading, setUploading] = useState(false);
+
+  // Per-invoice message thread state
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [threadsById, setThreadsById] = useState<Record<string, ThreadMessage[]>>({});
+  const [threadLoadingId, setThreadLoadingId] = useState<string | null>(null);
+  const [threadErrorById, setThreadErrorById] = useState<Record<string, string | null>>({});
+  const [draftById, setDraftById] = useState<Record<string, string>>({});
+  const [sendingThreadId, setSendingThreadId] = useState<string | null>(null);
+
+  const loadThread = useCallback(
+    async (invoiceId: string) => {
+      if (!token) return;
+      setThreadLoadingId(invoiceId);
+      setThreadErrorById((prev) => ({ ...prev, [invoiceId]: null }));
+      try {
+        const data = await vendorPortalApi.listInvoiceMessages(token, invoiceId);
+        setThreadsById((prev) => ({ ...prev, [invoiceId]: data }));
+      } catch (err: any) {
+        setThreadErrorById((prev) => ({
+          ...prev,
+          [invoiceId]: err?.message || 'Failed to load messages',
+        }));
+      } finally {
+        setThreadLoadingId(null);
+      }
+    },
+    [token],
+  );
+
+  const handleToggleThread = (invoiceId: string) => {
+    if (openThreadId === invoiceId) {
+      setOpenThreadId(null);
+      return;
+    }
+    setOpenThreadId(invoiceId);
+    if (!threadsById[invoiceId]) {
+      void loadThread(invoiceId);
+    }
+  };
+
+  const handleSendMessage = async (invoiceId: string) => {
+    if (!token) return;
+    const draft = (draftById[invoiceId] ?? '').trim();
+    if (!draft) return;
+    setSendingThreadId(invoiceId);
+    setThreadErrorById((prev) => ({ ...prev, [invoiceId]: null }));
+
+    const optimistic: ThreadMessage = {
+      id: `pending-${Date.now()}`,
+      invoice_id: invoiceId,
+      sender_kind: 'vendor',
+      sender_user_id: null,
+      sender_vendor_contact_id: null,
+      body: draft,
+      created_at: new Date().toISOString(),
+    };
+    setThreadsById((prev) => ({
+      ...prev,
+      [invoiceId]: [...(prev[invoiceId] ?? []), optimistic],
+    }));
+    setDraftById((prev) => ({ ...prev, [invoiceId]: '' }));
+
+    try {
+      const saved = await vendorPortalApi.postInvoiceMessage(token, invoiceId, draft);
+      setThreadsById((prev) => ({
+        ...prev,
+        [invoiceId]: (prev[invoiceId] ?? []).map((m) => (m.id === optimistic.id ? saved : m)),
+      }));
+    } catch (err: any) {
+      setThreadsById((prev) => ({
+        ...prev,
+        [invoiceId]: (prev[invoiceId] ?? []).filter((m) => m.id !== optimistic.id),
+      }));
+      setDraftById((prev) => ({ ...prev, [invoiceId]: draft }));
+      setThreadErrorById((prev) => ({
+        ...prev,
+        [invoiceId]: err?.message || 'Failed to send message',
+      }));
+    } finally {
+      setSendingThreadId(null);
+    }
+  };
 
   // Extract and store token
   useEffect(() => {
@@ -340,18 +445,93 @@ export default function VendorPortalPage() {
                     <th className="text-left py-2 px-3 text-muted-foreground font-medium">Due</th>
                     <th className="text-right py-2 px-3 text-muted-foreground font-medium">Amount</th>
                     <th className="text-center py-2 px-3 text-muted-foreground font-medium">Status</th>
+                    <th className="text-right py-2 px-3 text-muted-foreground font-medium">Thread</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map((inv) => (
-                    <tr key={inv.id} className="border-b border-border/50 hover:bg-muted/30">
-                      <td className="py-2 px-3 font-medium">{inv.invoice_number}</td>
-                      <td className="py-2 px-3 text-muted-foreground">{inv.invoice_date || '-'}</td>
-                      <td className="py-2 px-3 text-muted-foreground">{inv.due_date || '-'}</td>
-                      <td className="py-2 px-3 text-right font-medium">{formatCents(inv.total_amount, inv.currency)}</td>
-                      <td className="py-2 px-3 text-center"><StatusBadge status={inv.processing_status} /></td>
-                    </tr>
-                  ))}
+                  {invoices.map((inv) => {
+                    const isOpen = openThreadId === inv.id;
+                    const thread = threadsById[inv.id] ?? [];
+                    const threadError = threadErrorById[inv.id];
+                    return (
+                      <Fragment key={inv.id}>
+                        <tr className="border-b border-border/50 hover:bg-muted/30">
+                          <td className="py-2 px-3 font-medium">{inv.invoice_number}</td>
+                          <td className="py-2 px-3 text-muted-foreground">{inv.invoice_date || '-'}</td>
+                          <td className="py-2 px-3 text-muted-foreground">{inv.due_date || '-'}</td>
+                          <td className="py-2 px-3 text-right font-medium">{formatCents(inv.total_amount, inv.currency)}</td>
+                          <td className="py-2 px-3 text-center"><StatusBadge status={inv.processing_status} /></td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              type="button"
+                              aria-label={`Toggle messages for ${inv.invoice_number}`}
+                              onClick={() => handleToggleThread(inv.id)}
+                              className="text-xs font-medium text-primary hover:underline"
+                            >
+                              {isOpen ? 'Hide messages' : 'Messages'}
+                            </button>
+                          </td>
+                        </tr>
+                        {isOpen && (
+                          <tr className="bg-muted/10">
+                            <td colSpan={6} className="px-3 py-3">
+                              <div data-testid={`thread-${inv.id}`} className="space-y-3">
+                                {threadLoadingId === inv.id && (
+                                  <p className="text-xs text-muted-foreground">Loading messages...</p>
+                                )}
+                                {threadError && (
+                                  <p className="text-xs text-red-400">{threadError}</p>
+                                )}
+                                {thread.length === 0 && threadLoadingId !== inv.id && !threadError && (
+                                  <p className="text-xs text-muted-foreground">No messages yet.</p>
+                                )}
+                                {thread.length > 0 && (
+                                  <ul className="space-y-2">
+                                    {thread.map((m) => (
+                                      <li
+                                        key={m.id}
+                                        className="rounded border border-border/60 bg-card/60 p-2 text-sm"
+                                      >
+                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                          <span className="font-medium">
+                                            {m.sender_kind === 'vendor' ? 'Vendor' : 'AP team'}
+                                          </span>
+                                          <span>{formatRelative(m.created_at)}</span>
+                                        </div>
+                                        <p className="mt-1 whitespace-pre-wrap text-foreground">{m.body}</p>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                                  <textarea
+                                    aria-label={`Message body for ${inv.invoice_number}`}
+                                    value={draftById[inv.id] ?? ''}
+                                    onChange={(e) =>
+                                      setDraftById((prev) => ({ ...prev, [inv.id]: e.target.value }))
+                                    }
+                                    placeholder="Reply to the AP team..."
+                                    rows={2}
+                                    className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
+                                  />
+                                  <Button
+                                    type="button"
+                                    disabled={
+                                      sendingThreadId === inv.id ||
+                                      !((draftById[inv.id] ?? '').trim())
+                                    }
+                                    onClick={() => handleSendMessage(inv.id)}
+                                  >
+                                    {sendingThreadId === inv.id ? 'Sending...' : 'Send'}
+                                  </Button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

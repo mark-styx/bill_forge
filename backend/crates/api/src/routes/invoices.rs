@@ -1,7 +1,7 @@
 //! Invoice routes (Invoice Capture module)
 
 use crate::error::{ApiError, ApiResult};
-use crate::extractors::InvoiceCaptureAccess;
+use crate::extractors::{InvoiceCaptureAccess, InvoiceProcessingAccess};
 use crate::metrics;
 use crate::state::{AppState, InvoiceEvent};
 use axum::{
@@ -54,6 +54,8 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/unwind-approval", post(unwind_auto_approval))
         .route("/:id/ocr-exception/resolve", post(resolve_ocr_exception))
         .route("/ml-accuracy", get(get_ml_accuracy_metrics))
+        .route("/:id/vendor-messages", get(list_vendor_messages))
+        .route("/:id/vendor-messages", post(post_vendor_message))
 }
 
 // ---------------------------------------------------------------------------
@@ -3092,6 +3094,149 @@ async fn unwind_auto_approval(
         invoice_id: updated_invoice.id.to_string(),
         reverted_to: reverted_status,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// AP-side in-thread messaging (#418)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct VendorMessageRow {
+    pub id: Uuid,
+    pub invoice_id: Uuid,
+    pub sender_kind: String,
+    pub sender_user_id: Option<Uuid>,
+    pub sender_vendor_contact_id: Option<Uuid>,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PostVendorMessageBody {
+    pub body: String,
+}
+
+const MAX_VENDOR_MESSAGE_LEN: usize = 4000;
+
+async fn list_vendor_messages(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(_user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<VendorMessageRow>>> {
+    let invoice_uuid = Uuid::parse_str(&id)
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    // Confirm the invoice exists in this tenant before exposing thread contents.
+    let exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_uuid)
+            .bind(*tenant.tenant_id.as_uuid())
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to load invoice: {}", e))
+            })?;
+    if exists.is_none() {
+        return Err(billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        }
+        .into());
+    }
+
+    let rows: Vec<VendorMessageRow> = sqlx::query_as(
+        "SELECT id, invoice_id, sender_kind, sender_user_id, sender_vendor_contact_id, body, created_at \
+         FROM vendor_portal_messages \
+         WHERE tenant_id = $1 AND invoice_id = $2 \
+         ORDER BY created_at ASC",
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(invoice_uuid)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to load messages: {}", e)))?;
+
+    Ok(Json(rows))
+}
+
+async fn post_vendor_message(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, tenant): InvoiceProcessingAccess,
+    Path(id): Path<String>,
+    Json(body): Json<PostVendorMessageBody>,
+) -> ApiResult<Json<VendorMessageRow>> {
+    let invoice_uuid = Uuid::parse_str(&id)
+        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
+
+    let body_trim = body.body.trim();
+    if body_trim.is_empty() {
+        return Err(
+            billforge_core::Error::Validation("Message body must not be empty".to_string()).into(),
+        );
+    }
+    if body_trim.len() > MAX_VENDOR_MESSAGE_LEN {
+        return Err(billforge_core::Error::Validation(format!(
+            "Message body exceeds maximum length ({} chars)",
+            MAX_VENDOR_MESSAGE_LEN
+        ))
+        .into());
+    }
+
+    let pool = state.db.tenant(&tenant.tenant_id).await?;
+
+    let exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM invoices WHERE id = $1 AND tenant_id = $2")
+            .bind(invoice_uuid)
+            .bind(*tenant.tenant_id.as_uuid())
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to load invoice: {}", e))
+            })?;
+    if exists.is_none() {
+        return Err(billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: id.clone(),
+        }
+        .into());
+    }
+
+    let row: VendorMessageRow = sqlx::query_as(
+        "INSERT INTO vendor_portal_messages \
+         (tenant_id, invoice_id, sender_kind, sender_user_id, body) \
+         VALUES ($1, $2, 'ap_user', $3, $4) \
+         RETURNING id, invoice_id, sender_kind, sender_user_id, sender_vendor_contact_id, body, created_at",
+    )
+    .bind(*tenant.tenant_id.as_uuid())
+    .bind(invoice_uuid)
+    .bind(user.user_id.as_uuid())
+    .bind(body_trim)
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to insert message: {}", e)))?;
+
+    let audit_entry = AuditEntry::new(
+        tenant.tenant_id.clone(),
+        Some(user.user_id.clone()),
+        AuditAction::Create,
+        ResourceType::Invoice,
+        invoice_uuid.to_string(),
+        format!("AP user posted vendor portal message on invoice {}", id),
+    )
+    .with_user_email(&user.email)
+    .with_metadata(serde_json::json!({
+        "source": "vendor_portal.message.created",
+        "sender_kind": "ap_user",
+        "message_id": row.id.to_string(),
+    }));
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+    if let Err(e) = audit_repo.log(audit_entry).await {
+        tracing::warn!(error = %e, "Failed to log vendor portal message audit entry");
+    }
+
+    Ok(Json(row))
 }
 
 #[cfg(test)]

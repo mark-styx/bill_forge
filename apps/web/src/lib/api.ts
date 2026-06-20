@@ -3065,6 +3065,50 @@ export const vendorPortalApi = {
       return res.json() as Promise<{ submission_id: string; status: string }>;
     });
   },
+
+  listInvoiceMessages: (token: string, invoiceId: string) =>
+    fetch(`${API_BASE_URL}/api/v1/vendor-portal/invoices/${invoiceId}/messages`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<Array<{
+        id: string;
+        invoice_id: string;
+        sender_kind: 'vendor' | 'ap_user';
+        sender_user_id: string | null;
+        sender_vendor_contact_id: string | null;
+        body: string;
+        created_at: string;
+      }>>;
+    }),
+
+  postInvoiceMessage: (token: string, invoiceId: string, body: string) =>
+    fetch(`${API_BASE_URL}/api/v1/vendor-portal/invoices/${invoiceId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ body }),
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new ApiClientError(res.status, err);
+      }
+      return res.json() as Promise<{
+        id: string;
+        invoice_id: string;
+        sender_kind: 'vendor' | 'ap_user';
+        sender_user_id: string | null;
+        sender_vendor_contact_id: string | null;
+        body: string;
+        created_at: string;
+      }>;
+    }),
 };
 
 // ---------------------------------------------------------------------------

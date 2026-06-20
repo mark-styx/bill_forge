@@ -49,12 +49,16 @@ const mockInvoices = [
 let submitInvoiceMock: ReturnType<typeof vi.fn>;
 let listInvoicesMock: ReturnType<typeof vi.fn>;
 let uploadInvoicePdfMock: ReturnType<typeof vi.fn>;
+let listInvoiceMessagesMock: ReturnType<typeof vi.fn>;
+let postInvoiceMessageMock: ReturnType<typeof vi.fn>;
 
 vi.mock('@/lib/api', () => ({
   vendorPortalApi: {
     get submitInvoice() { return submitInvoiceMock; },
     get listInvoices() { return listInvoicesMock; },
     get uploadInvoicePdf() { return uploadInvoicePdfMock; },
+    get listInvoiceMessages() { return listInvoiceMessagesMock; },
+    get postInvoiceMessage() { return postInvoiceMessageMock; },
   },
 }));
 
@@ -66,6 +70,8 @@ describe('Vendor Portal', () => {
     submitInvoiceMock = vi.fn().mockResolvedValue({ id: 'inv-new', invoice_number: 'NEW-001' });
     listInvoicesMock = vi.fn().mockResolvedValue(mockInvoices);
     uploadInvoicePdfMock = vi.fn().mockResolvedValue({ id: 'inv-pdf-1', invoice_number: 'PDF-001' });
+    listInvoiceMessagesMock = vi.fn().mockResolvedValue([]);
+    postInvoiceMessageMock = vi.fn();
   });
 
   it('vendorPortalApi.submitInvoice is callable with token and body', async () => {
@@ -115,5 +121,46 @@ describe('Vendor Portal', () => {
 
     expect(uploadInvoicePdfMock).toHaveBeenCalledWith('test-token', formData);
     expect(result).toEqual({ id: 'inv-pdf-1', invoice_number: 'PDF-001' });
+  });
+
+  it('vendorPortalApi.listInvoiceMessages is callable with token and invoice id', async () => {
+    const { vendorPortalApi } = await import('@/lib/api');
+    const thread = [
+      {
+        id: 'msg-1',
+        invoice_id: 'inv-1',
+        sender_kind: 'ap_user' as const,
+        sender_user_id: 'user-1',
+        sender_vendor_contact_id: null,
+        body: 'Can you confirm the PO number?',
+        created_at: '2024-01-16T10:00:00Z',
+      },
+    ];
+    listInvoiceMessagesMock.mockResolvedValue(thread);
+
+    const result = await vendorPortalApi.listInvoiceMessages('test-token', 'inv-1');
+
+    expect(listInvoiceMessagesMock).toHaveBeenCalledWith('test-token', 'inv-1');
+    expect(result).toHaveLength(1);
+    expect(result[0].sender_kind).toBe('ap_user');
+  });
+
+  it('vendorPortalApi.postInvoiceMessage posts body and returns saved message', async () => {
+    const { vendorPortalApi } = await import('@/lib/api');
+    postInvoiceMessageMock.mockResolvedValue({
+      id: 'msg-2',
+      invoice_id: 'inv-1',
+      sender_kind: 'vendor' as const,
+      sender_user_id: null,
+      sender_vendor_contact_id: 'vendor-1',
+      body: 'PO is 12345',
+      created_at: '2024-01-16T11:00:00Z',
+    });
+
+    const result = await vendorPortalApi.postInvoiceMessage('test-token', 'inv-1', 'PO is 12345');
+
+    expect(postInvoiceMessageMock).toHaveBeenCalledWith('test-token', 'inv-1', 'PO is 12345');
+    expect(result.sender_kind).toBe('vendor');
+    expect(result.body).toBe('PO is 12345');
   });
 });
