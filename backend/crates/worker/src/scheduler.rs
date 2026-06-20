@@ -92,6 +92,17 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    // EDI ack-timeout sweep: every 15 minutes for tenants entitled to the EDI
+    // module. Issue #402 — without this producer, the four EDI JobTypes have
+    // no scheduled work and ack-timeout detection never runs.
+    let redis_client9 = redis_client.clone();
+    let pg_manager9 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_edi_ack_check_task(redis_client9, pg_manager9).await {
+            error!("EDI ack-check scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -450,6 +461,68 @@ async fn enqueue_jobs_for_active_tenants(
     }
 
     Ok(())
+}
+
+/// EDI ack-timeout sweep: every 15 minutes (configurable via
+/// `EDI_ACK_CHECK_CRON_SECS`). Enqueues one `EdiCheckAckStatus` job per
+/// EDI-entitled tenant so the existing `check_ack_timeouts` library function
+/// runs against each tenant pool.
+async fn schedule_edi_ack_check_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    let interval_secs = std::env::var("EDI_ACK_CHECK_CRON_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(15 * 60);
+
+    let mut interval = interval(Duration::from_secs(interval_secs));
+
+    info!(
+        interval_secs,
+        "EDI ack-check scheduler started (default 15min, override via EDI_ACK_CHECK_CRON_SECS)"
+    );
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_edi_ack_check_jobs(&mut conn, pg_manager.clone()).await {
+            Ok(count) => info!(tenant_count = count, "Enqueued EDI ack-check jobs"),
+            Err(e) => error!("Failed to enqueue EDI ack-check jobs: {}", e),
+        }
+    }
+}
+
+async fn enqueue_edi_ack_check_jobs(
+    conn: &mut redis::aio::Connection,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<usize> {
+    let tenants = fetch_edi_entitled_tenant_ids(pg_manager).await?;
+
+    let count = tenants.len();
+    for job in build_tenant_jobs(&tenants, JobType::EdiCheckAckStatus) {
+        let tenant_id = job.tenant_id.clone();
+        let job_json = serde_json::to_string(&job)?;
+        conn.lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+            .await
+            .context("Failed to enqueue EDI ack-check job")?;
+        info!(tenant_id = %tenant_id, job_type = %job.job_type, "Enqueued tenant-scoped job");
+    }
+
+    Ok(count)
+}
+
+/// Filter active tenants down to those entitled to the EDI module. Shares the
+/// `enabled_modules @> '["edi"]'::jsonb` predicate with the worker handlers so
+/// the scheduler and the runtime entitlement check stay consistent.
+async fn fetch_edi_entitled_tenant_ids(
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<Vec<String>> {
+    sqlx::query_scalar(crate::jobs::edi::EDI_TENANT_DISCOVERY_SQL)
+        .fetch_all(pg_manager.metadata())
+        .await
+        .context("Failed to fetch EDI-entitled tenants")
 }
 
 async fn fetch_active_tenant_ids(pg_manager: Arc<billforge_db::PgManager>) -> Result<Vec<String>> {

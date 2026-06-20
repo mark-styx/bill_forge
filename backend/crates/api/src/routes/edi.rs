@@ -78,6 +78,17 @@ pub struct EdiStatusResponse {
     pub provider: Option<String>,
     pub document_count: i64,
     pub partner_count: i64,
+    /// True when the tenant has the EDI module in its enabled_modules. The
+    /// frontend renders an upgrade prompt when false instead of the stat grid.
+    pub entitled: bool,
+    /// Outbound documents waiting on a 997 acknowledgment.
+    pub pending_acks: i64,
+    /// Most recent inbound document creation time, or null if none yet.
+    pub last_inbound_at: Option<chrono::DateTime<Utc>>,
+    /// Most recent outbound document creation time, or null if none yet.
+    pub last_outbound_at: Option<chrono::DateTime<Utc>>,
+    /// Outbound documents whose ack window has expired in the last 24 hours.
+    pub ack_timeouts_last_24h: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1182,17 +1193,20 @@ async fn edi_status(
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let tenant_uuid = *tenant.tenant_id.as_uuid();
+    let entitled = tenant.has_module(billforge_core::Module::Edi);
+
     let connected: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM edi_connections WHERE tenant_id = $1 AND is_active = true)",
     )
-    .bind(*tenant.tenant_id.as_uuid())
+    .bind(tenant_uuid)
     .fetch_one(&*pool)
     .await
     .unwrap_or(false);
 
     let doc_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM edi_documents WHERE tenant_id = $1")
-            .bind(*tenant.tenant_id.as_uuid())
+            .bind(tenant_uuid)
             .fetch_one(&*pool)
             .await
             .unwrap_or(0);
@@ -1200,7 +1214,7 @@ async fn edi_status(
     let partner_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM edi_trading_partners WHERE tenant_id = $1 AND is_active = true",
     )
-    .bind(*tenant.tenant_id.as_uuid())
+    .bind(tenant_uuid)
     .fetch_one(&*pool)
     .await
     .unwrap_or(0);
@@ -1209,7 +1223,7 @@ async fn edi_status(
         sqlx::query_scalar(
             "SELECT provider FROM edi_connections WHERE tenant_id = $1 AND is_active = true",
         )
-        .bind(*tenant.tenant_id.as_uuid())
+        .bind(tenant_uuid)
         .fetch_optional(&*pool)
         .await
         .ok()
@@ -1218,11 +1232,57 @@ async fn edi_status(
         None
     };
 
+    let pending_acks: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM edi_documents \
+         WHERE tenant_id = $1 AND direction = 'outbound' AND ack_status = 'pending'",
+    )
+    .bind(tenant_uuid)
+    .fetch_one(&*pool)
+    .await
+    .unwrap_or(0);
+
+    let last_inbound_at: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM edi_documents \
+         WHERE tenant_id = $1 AND direction = 'inbound'",
+    )
+    .bind(tenant_uuid)
+    .fetch_one(&*pool)
+    .await
+    .ok()
+    .flatten();
+
+    let last_outbound_at: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM edi_documents \
+         WHERE tenant_id = $1 AND direction = 'outbound'",
+    )
+    .bind(tenant_uuid)
+    .fetch_one(&*pool)
+    .await
+    .ok()
+    .flatten();
+
+    let ack_timeouts_last_24h: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM edi_documents \
+         WHERE tenant_id = $1 AND direction = 'outbound' \
+         AND ack_timeout_at IS NOT NULL \
+         AND ack_timeout_at < NOW() \
+         AND ack_timeout_at > NOW() - INTERVAL '24 hours'",
+    )
+    .bind(tenant_uuid)
+    .fetch_one(&*pool)
+    .await
+    .unwrap_or(0);
+
     Ok(Json(EdiStatusResponse {
         connected,
         provider,
         document_count: doc_count,
         partner_count,
+        entitled,
+        pending_acks,
+        last_inbound_at,
+        last_outbound_at,
+        ack_timeouts_last_24h,
     }))
 }
 

@@ -57,6 +57,7 @@ billforge-invoice-processing = { path = "../invoice-processing" }
 billforge-analytics = { path = "../analytics" }
 billforge-invoice-capture = { path = "../invoice-capture" }
 billforge-vendor-mgmt = { path = "../vendor-mgmt" }
+billforge-edi = { path = "../edi" }
 
 # Vendor risk rescan: deterministic payload hashing for alert idempotency
 sha2 = "0.10"
