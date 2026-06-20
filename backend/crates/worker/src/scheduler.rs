@@ -103,6 +103,18 @@ pub async fn start_scheduler(config: WorkerConfig) -> Result<()> {
         }
     });
 
+    // ERP sync producer: hourly (default) per-tenant fan-out across every
+    // connector activated in `erp_sync_state`. Issue #403 — without this
+    // producer the QuickBooks/Xero/Sage/Salesforce/Workday/Bill.com/NetSuite
+    // sync and export JobTypes only fire on manual API trigger.
+    let redis_client10 = redis_client.clone();
+    let pg_manager10 = config.pg_manager.clone();
+    tokio::spawn(async move {
+        if let Err(e) = schedule_erp_sync_task(redis_client10, pg_manager10).await {
+            error!("ERP sync scheduler failed: {}", e);
+        }
+    });
+
     info!("Scheduler started");
 
     // Keep the scheduler running
@@ -546,6 +558,172 @@ fn build_tenant_jobs(tenant_ids: &[String], job_type: JobType) -> Vec<Job> {
         .collect()
 }
 
+/// Recurring ERP sync producer. Iterates active tenants, reads each tenant's
+/// `erp_sync_state` for the connectors that have ever been activated, and
+/// enqueues one job per `(connector, JobType)` pair so vendor/account refresh,
+/// token-refresh re-syncs, and outbound invoice export all run automatically.
+///
+/// Default cadence is hourly; override with `ERP_SYNC_CRON_SECS`.
+async fn schedule_erp_sync_task(
+    redis_client: redis::Client,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<()> {
+    let interval_secs = std::env::var("ERP_SYNC_CRON_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60 * 60);
+
+    let mut interval = interval(Duration::from_secs(interval_secs));
+
+    info!(
+        interval_secs,
+        "ERP sync scheduler started (default hourly, override via ERP_SYNC_CRON_SECS)"
+    );
+
+    loop {
+        interval.tick().await;
+
+        let mut conn = redis_client.get_async_connection().await?;
+        match enqueue_erp_sync_jobs(&mut conn, pg_manager.clone()).await {
+            Ok(count) => info!(enqueued = count, "ERP sync tick complete"),
+            Err(e) => error!("Failed to enqueue ERP sync jobs: {}", e),
+        }
+    }
+}
+
+/// Map a connector string (as stored in `erp_sync_state.connector`) to the
+/// JobTypes that should be enqueued for it on every scheduler tick. Unknown
+/// strings return an empty Vec so a stray connector row cannot crash the loop.
+fn job_types_for_connector(connector: &str) -> Vec<JobType> {
+    match connector {
+        "quickbooks" | "qbo" => vec![
+            JobType::QuickBooksVendorSync,
+            JobType::QuickBooksAccountSync,
+            JobType::QuickBooksInvoiceExport,
+        ],
+        "xero" => vec![
+            JobType::XeroContactSync,
+            JobType::XeroAccountSync,
+            JobType::XeroInvoiceExport,
+        ],
+        "sage_intacct" => vec![
+            JobType::SageIntacctVendorSync,
+            JobType::SageIntacctAccountSync,
+            JobType::SageIntacctInvoiceExport,
+        ],
+        "salesforce" => vec![
+            JobType::SalesforceAccountSync,
+            JobType::SalesforceContactSync,
+        ],
+        "workday" => vec![
+            JobType::WorkdaySupplierSync,
+            JobType::WorkdayAccountSync,
+            JobType::WorkdayInvoiceExport,
+        ],
+        "bill_com" => vec![JobType::BillComVendorSync],
+        "netsuite" => vec![JobType::NetSuiteVendorSync],
+        _ => Vec::new(),
+    }
+}
+
+/// Iterate active tenants, discover their configured connectors from the
+/// per-tenant `erp_sync_state` cursor table, and enqueue every matching
+/// JobType onto the shared worker queue. Per-tenant failures are logged but
+/// do not abort the tick.
+async fn enqueue_erp_sync_jobs(
+    conn: &mut redis::aio::Connection,
+    pg_manager: Arc<billforge_db::PgManager>,
+) -> Result<usize> {
+    let tenant_ids = fetch_active_tenant_ids(pg_manager.clone()).await?;
+
+    let mut enqueued = 0usize;
+    for tenant_id_str in &tenant_ids {
+        let tenant_id = match tenant_id_str.parse::<billforge_core::TenantId>() {
+            Ok(t) => t,
+            Err(e) => {
+                error!(tenant_id = %tenant_id_str, error = %e, "Skipping invalid tenant id during ERP sync");
+                continue;
+            }
+        };
+
+        let pool = match pg_manager.tenant(&tenant_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                error!(tenant_id = %tenant_id_str, error = %e, "Failed to open tenant pool for ERP sync");
+                continue;
+            }
+        };
+
+        let connectors: Vec<String> =
+            match sqlx::query_scalar("SELECT DISTINCT connector FROM erp_sync_state")
+                .fetch_all(&*pool)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(tenant_id = %tenant_id_str, error = %e, "Failed to read erp_sync_state");
+                    continue;
+                }
+            };
+
+        for connector in &connectors {
+            let job_types = job_types_for_connector(connector);
+            if job_types.is_empty() {
+                tracing::warn!(
+                    tenant_id = %tenant_id_str,
+                    connector = %connector,
+                    "Unknown connector in erp_sync_state — no JobTypes enqueued"
+                );
+                continue;
+            }
+
+            for job_type in job_types {
+                let job = Job {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    job_type: job_type.clone(),
+                    tenant_id: tenant_id_str.clone(),
+                    payload: serde_json::json!({}),
+                    created_at: chrono::Utc::now(),
+                    retry_count: 0,
+                };
+                let job_json = match serde_json::to_string(&job) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(tenant_id = %tenant_id_str, error = %e, "Failed to serialize ERP sync job");
+                        continue;
+                    }
+                };
+
+                match conn
+                    .lpush::<_, _, ()>("billforge:jobs:queue", job_json)
+                    .await
+                {
+                    Ok(_) => {
+                        enqueued += 1;
+                        info!(
+                            tenant_id = %tenant_id_str,
+                            connector = %connector,
+                            job_type = %job.job_type,
+                            "Enqueued ERP sync job"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            tenant_id = %tenant_id_str,
+                            connector = %connector,
+                            job_type = %job.job_type,
+                            error = %e,
+                            "Failed to enqueue ERP sync job"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(enqueued)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +742,62 @@ mod tests {
         assert!(jobs
             .iter()
             .all(|job| matches!(job.job_type, JobType::ForecastRefresh)));
+    }
+
+    #[test]
+    fn job_types_for_connector_covers_every_supported_connector() {
+        assert!(matches!(
+            job_types_for_connector("quickbooks").as_slice(),
+            [
+                JobType::QuickBooksVendorSync,
+                JobType::QuickBooksAccountSync,
+                JobType::QuickBooksInvoiceExport,
+            ]
+        ));
+        assert!(matches!(
+            job_types_for_connector("qbo").as_slice(),
+            [
+                JobType::QuickBooksVendorSync,
+                JobType::QuickBooksAccountSync,
+                JobType::QuickBooksInvoiceExport,
+            ]
+        ));
+        assert!(matches!(
+            job_types_for_connector("xero").as_slice(),
+            [
+                JobType::XeroContactSync,
+                JobType::XeroAccountSync,
+                JobType::XeroInvoiceExport,
+            ]
+        ));
+        assert!(matches!(
+            job_types_for_connector("sage_intacct").as_slice(),
+            [
+                JobType::SageIntacctVendorSync,
+                JobType::SageIntacctAccountSync,
+                JobType::SageIntacctInvoiceExport,
+            ]
+        ));
+        assert!(matches!(
+            job_types_for_connector("salesforce").as_slice(),
+            [JobType::SalesforceAccountSync, JobType::SalesforceContactSync,]
+        ));
+        assert!(matches!(
+            job_types_for_connector("workday").as_slice(),
+            [
+                JobType::WorkdaySupplierSync,
+                JobType::WorkdayAccountSync,
+                JobType::WorkdayInvoiceExport,
+            ]
+        ));
+        assert!(matches!(
+            job_types_for_connector("bill_com").as_slice(),
+            [JobType::BillComVendorSync]
+        ));
+        assert!(matches!(
+            job_types_for_connector("netsuite").as_slice(),
+            [JobType::NetSuiteVendorSync]
+        ));
+        assert!(job_types_for_connector("not_a_real_connector").is_empty());
     }
 }
