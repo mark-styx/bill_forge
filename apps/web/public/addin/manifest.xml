@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  BillForge Inbox-Native AP add-in (#406) — Outlook MailRead extension.
+
+  This manifest registers the BillForge taskpane against the active inbox
+  message so an approver can triage and act on a BillForge invoice without
+  leaving Outlook. Source URLs are absolute against ${WEB_BASE_URL} so the
+  manifest can be sideloaded directly into Outlook Web / Desktop.
+
+  The domain allowlist must include both ${WEB_BASE_URL} (the taskpane host)
+  and ${NEXT_PUBLIC_API_BASE_URL} (the BillForge API the taskpane talks to).
+  Replace https://app.billforge.com / https://api.billforge.com with the
+  per-environment values when packaging.
+-->
+<OfficeApp
+    xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+    xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+    xsi:type="MailApp">
+  <Id>2f3aab6f-9ff0-4b8c-9c2d-bf72f7fa9c1a</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>BillForge</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="BillForge AP"/>
+  <Description DefaultValue="Triage BillForge invoices and push invoice attachments to the BillForge queue without leaving Outlook."/>
+  <IconUrl DefaultValue="https://app.billforge.com/icons/addin-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://app.billforge.com/icons/addin-128.png"/>
+  <SupportUrl DefaultValue="https://billforge.com/support"/>
+
+  <AppDomains>
+    <AppDomain>https://app.billforge.com</AppDomain>
+    <AppDomain>https://api.billforge.com</AppDomain>
+  </AppDomains>
+
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.5"/>
+    </Sets>
+  </Requirements>
+
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://app.billforge.com/addin/taskpane"/>
+        <RequestedHeight>450</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+
+  <!--
+    ReadWriteMailbox is required so the taskpane can call
+    getAttachmentContentAsync on the currently open message and POST the
+    bytes to /api/v1/addin/ingest-attachment.
+  -->
+  <Permissions>ReadWriteMailbox</Permissions>
+
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+</OfficeApp>

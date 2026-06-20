@@ -42,6 +42,8 @@ pub mod health;
 ))]
 pub mod implementation;
 pub mod inbound_email;
+#[cfg(all(feature = "capture", feature = "processing"))]
+pub mod inbox_addin;
 #[cfg(all(
     feature = "capture",
     feature = "processing",
@@ -384,6 +386,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
     // Continuous learning panel + correction ingestion (#404).
     #[cfg(feature = "processing")]
     let router = router.nest("/learning", learning::routes());
+    // Inbox-Native AP (#406) — Outlook / Gmail add-in JSON surface.
+    #[cfg(all(feature = "capture", feature = "processing"))]
+    let router = router.nest("/addin", inbox_addin::routes());
     // Pillar-gated mounts for the remainder of the API surface.
     let router = {
         // Predictive Analytics (Forecasting & Anomaly Detection) — gated on Reporting module
