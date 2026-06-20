@@ -86,7 +86,7 @@ fn build_test_router() -> Router {
     let auth = test_auth_service();
     Router::new()
         .route("/api/v1/tenants-check", get(tenant_echo_handler))
-        .layer(middleware::from_fn(require_tenant))
+        .layer(middleware::from_fn_with_state(auth.clone(), require_tenant))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -225,6 +225,11 @@ async fn missing_tenant_id_returns_401() {
 
 #[tokio::test]
 async fn valid_tenant_id_passes_middleware() {
+    // require_tenant now loads TenantContext from the metadata database to populate
+    // module entitlements for downstream gates. With the connect_lazy stub pool used
+    // here, the lookup will fail with `tenant_context_load_failed` — proving that the
+    // middleware accepted the valid token (didn't 401) and reached the DB-load step
+    // (didn't fall through silently like the pre-fix gate_module).
     let app = build_test_router();
     let user_id = UserId::from_uuid(Uuid::new_v4());
     let tenant_id = TenantId::new();
@@ -243,18 +248,18 @@ async fn valid_tenant_id_passes_middleware() {
 
     assert_eq!(
         response.status(),
-        StatusCode::OK,
-        "Request with valid tenant_id should pass through both middlewares"
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Valid token must pass auth + nil-tenant check and reach the TenantContext load step (stub pool returns 500)"
     );
 
     let body = axum::body::to_bytes(response.into_body(), 1024)
         .await
         .unwrap();
-    let tenant_echo = String::from_utf8(body.to_vec()).unwrap();
-    assert_eq!(
-        tenant_echo,
-        tenant_id.as_uuid().to_string(),
-        "TenantGuard should echo the correct tenant_id"
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        body_str.contains("tenant_context_load_failed"),
+        "Response should be tenant_context_load_failed when the stub pool cannot reach metadata DB, got: {}",
+        body_str
     );
 }
 

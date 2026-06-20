@@ -79,7 +79,7 @@ fn build_analytics_router() -> Router {
     // module registers, then apply the same middleware stack.
     Router::new()
         .nest("/api/v1/analytics", analytics_router_stub())
-        .layer(middleware::from_fn(require_tenant))
+        .layer(middleware::from_fn_with_state(auth.clone(), require_tenant))
         .layer(middleware::from_fn_with_state(auth, require_auth))
 }
 
@@ -192,12 +192,19 @@ async fn test_analytics_usage_accepts_valid_token() {
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
-    // The stub handler returns 200; the real handler would query the DB.
-    // If we get 200, auth + tenant middleware both passed.
+    // The valid token passes require_auth and the nil-tenant check inside
+    // require_tenant, then reaches the TenantContext metadata-DB load. With the
+    // connect_lazy stub pool the load fails with `tenant_context_load_failed`,
+    // which proves the middleware chain accepted the token (it did NOT 401).
+    assert_ne!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "analytics/usage with valid JWT must NOT be rejected by auth middleware"
+    );
     assert_eq!(
         resp.status(),
-        StatusCode::OK,
-        "analytics/usage should accept a valid JWT"
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "analytics/usage with valid JWT should reach require_tenant's DB load (which fails on the stub pool)"
     );
 }
 
@@ -220,9 +227,14 @@ async fn test_analytics_events_accepts_valid_token() {
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "analytics/events POST with valid JWT must NOT be rejected by auth middleware"
+    );
     assert_eq!(
         resp.status(),
-        StatusCode::OK,
-        "analytics/events POST should accept a valid JWT"
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "analytics/events POST with valid JWT should reach require_tenant's DB load (which fails on the stub pool)"
     );
 }

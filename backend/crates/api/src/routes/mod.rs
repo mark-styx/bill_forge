@@ -431,7 +431,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
     };
     router
         // Validate JWT on all API routes (public paths are exempted inside the middleware)
-        .layer(middleware::from_fn(require_tenant))
+        .layer(middleware::from_fn_with_state(state.clone(), require_tenant))
         .layer(middleware::from_fn_with_state(state, require_auth))
         // SLO telemetry: duration + sub-200ms compliance for every API request
         .layer(middleware::from_fn(track_http_slo))

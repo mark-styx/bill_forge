@@ -6,7 +6,16 @@
 //! - Error::ModuleNotAvailable maps to HTTP 402.
 //! - Route wiring includes the middleware layer (source-level check).
 
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+    middleware,
+    routing::get,
+    Extension, Router,
+};
+use billforge_api::middleware::require_edi;
 use billforge_core::{Error, Module, TenantContext, TenantId, TenantSettings};
+use tower::util::ServiceExt;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -153,6 +162,104 @@ fn test_integration_module_from_str_round_trips() {
 // ---------------------------------------------------------------------------
 // NetSuite route mount guard
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Runtime gate enforcement: exercise gate_module through a real router and
+// confirm 402 is actually returned when the tenant lacks the module.
+// ---------------------------------------------------------------------------
+
+async fn gate_test_handler() -> &'static str {
+    "ok"
+}
+
+fn build_gate_test_router(ctx: TenantContext) -> Router {
+    Router::new()
+        .route("/api/v1/edi/test", get(gate_test_handler))
+        .layer(middleware::from_fn(require_edi))
+        .layer(Extension(ctx))
+}
+
+#[tokio::test]
+async fn gate_returns_402_when_module_disabled() {
+    let ctx = TenantContext {
+        tenant_id: TenantId::from_uuid(Uuid::nil()),
+        tenant_name: "No EDI Tenant".to_string(),
+        enabled_modules: vec![Module::InvoiceCapture],
+        settings: TenantSettings::default(),
+    };
+    let app = build_gate_test_router(ctx);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/edi/test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::PAYMENT_REQUIRED,
+        "gate_module must return 402 when tenant lacks the Edi module"
+    );
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .expect("collect response body");
+    let body: serde_json::Value =
+        serde_json::from_slice(&body_bytes).expect("response is valid JSON");
+    assert_eq!(
+        body["error"]["code"], "module_not_entitled",
+        "402 body must include the module_not_entitled error code, got: {}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn gate_passes_when_module_enabled() {
+    let ctx = TenantContext {
+        tenant_id: TenantId::from_uuid(Uuid::nil()),
+        tenant_name: "EDI Tenant".to_string(),
+        enabled_modules: vec![Module::Edi],
+        settings: TenantSettings::default(),
+    };
+    let app = build_gate_test_router(ctx);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/edi/test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router responds");
+
+    assert_ne!(
+        response.status(),
+        StatusCode::PAYMENT_REQUIRED,
+        "gate_module must let the request through when Edi is enabled"
+    );
+}
+
+#[test]
+fn require_tenant_loads_and_inserts_tenant_context() {
+    let source = include_str!("../src/middleware.rs");
+    assert!(
+        source.contains("auth.get_tenant_context"),
+        "require_tenant must call auth.get_tenant_context to load module entitlements"
+    );
+    assert!(
+        source.contains("State(auth): State<Arc<AuthService>>"),
+        "require_tenant must accept the AuthService state so it can load TenantContext"
+    );
+    assert!(
+        source.contains("tenant_context_load_failed"),
+        "require_tenant must surface a tenant_context_load_failed error code on lookup failure"
+    );
+}
 
 #[test]
 fn test_routes_mod_mounts_netsuite() {

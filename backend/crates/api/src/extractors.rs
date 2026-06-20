@@ -59,6 +59,11 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Fast path: TenantContext cached in extensions by require_tenant middleware.
+        if let Some(tenant_context) = parts.extensions.get::<TenantContext>().cloned() {
+            return Ok(Self(tenant_context));
+        }
+
         let app_state = AppState::from_ref(state);
 
         // First get authenticated user

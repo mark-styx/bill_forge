@@ -7,7 +7,7 @@ use axum::{
     middleware::Next,
 };
 use billforge_auth::AuthService;
-use billforge_core::{Module, UserContext};
+use billforge_core::{Module, TenantContext, UserContext};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -129,10 +129,14 @@ pub async fn require_auth(
 /// to the authenticated tenant's UUID (via `PgManager::tenant`'s `after_connect` hook).
 /// RLS policies on core tables (invoices, users, vendors) evaluate correctly without
 /// per-query `SET` statements.
-pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body> {
-    let path = request.uri().path();
+pub async fn require_tenant(
+    State(auth): State<Arc<AuthService>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    let path = request.uri().path().to_string();
 
-    if is_public_path(path) {
+    if is_public_path(&path) {
         return next.run(request).await;
     }
 
@@ -171,6 +175,27 @@ pub async fn require_tenant(request: Request<Body>, next: Next) -> Response<Body
 
     let mut request = request;
     request.extensions_mut().insert(TenantGuard(tenant_uuid));
+
+    // Load TenantContext (module entitlements) so downstream gate_module layers
+    // and TenantCtx extractors can read it without redoing the metadata lookup.
+    match auth.get_tenant_context(&user_context.tenant_id).await {
+        Ok(tc) => {
+            request.extensions_mut().insert(tc);
+        }
+        Err(e) => {
+            warn!(
+                path = %path,
+                tenant_id = %tenant_uuid,
+                error = %e,
+                "Failed to load tenant context for module entitlements"
+            );
+            return json_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tenant_context_load_failed",
+                "Could not load tenant module entitlements.",
+            );
+        }
+    }
 
     next.run(request).await
 }
@@ -295,16 +320,35 @@ pub async fn rate_limit_auth(
 }
 
 /// Gates access by checking that the tenant has the specified module in their subscription.
+///
+/// By contract, [`require_tenant`] runs upstream on every non-public path and inserts
+/// a `TenantContext` into request extensions. A missing context on a non-public path
+/// therefore indicates a misconfigured middleware stack rather than a tenant that
+/// happens to lack the module, so we refuse to serve instead of silently allowing.
 async fn gate_module(request: Request<Body>, next: Next, module: Module) -> Response<Body> {
-    if let Some(tenant_ctx) = request.extensions().get::<billforge_core::TenantContext>() {
+    if let Some(tenant_ctx) = request.extensions().get::<TenantContext>() {
         if tenant_ctx.has_module(module) {
             return next.run(request).await;
         } else {
             return module_not_entitled_response(module);
         }
     }
-    // TenantContext not yet in extensions — fall through to handler's own checks.
-    next.run(request).await
+    // Public paths (e.g. webhooks under /api/v1/edi/webhook/) bypass require_tenant
+    // and legitimately have no TenantContext — let them through.
+    let path = request.uri().path();
+    if is_public_path(path) {
+        return next.run(request).await;
+    }
+    warn!(
+        path = %path,
+        module = ?module,
+        "TenantContext missing in gate_module — require_tenant did not run upstream"
+    );
+    json_error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "tenant_context_missing",
+        "Tenant entitlement context was not loaded for this request.",
+    )
 }
 
 fn module_not_entitled_response(module: Module) -> Response<Body> {
