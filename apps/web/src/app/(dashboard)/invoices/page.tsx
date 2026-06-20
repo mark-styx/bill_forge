@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { invoicesApi, workflowsApi } from '@/lib/api';
+import { invoicesApi, workflowsApi, exportApi, type ExportQueryParams } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 import { useStatusConfig } from '@/hooks/useStatusConfig';
 import InvoicePanel from '@/components/InvoicePanel';
@@ -33,6 +33,7 @@ export default function InvoicesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
   const { hasModule } = useAuthStore();
   const { getStatusDisplay, getProcessingStatuses } = useStatusConfig();
   const processingStatuses = getProcessingStatuses();
@@ -71,6 +72,30 @@ export default function InvoicesPage() {
       toast.error(error.message || 'Bulk approve failed');
     },
   });
+
+  const handleExportAll = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      const params: ExportQueryParams = {
+        ...(statusFilter && { status: statusFilter }),
+      };
+      const blob = await exportApi.exportInvoicesCsv(params);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      const today = new Date().toISOString().slice(0, 10);
+      anchor.download = `invoices-export-${today}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Export failed');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleBulkExport = () => {
     if (selectedIds.length === 0) return;
@@ -235,9 +260,13 @@ export default function InvoicesPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-secondary btn-sm">
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleExportAll}
+            disabled={isExporting}
+          >
             <Download className="w-4 h-4 mr-1.5" />
-            Export
+            {isExporting ? 'Exporting…' : 'Export'}
           </button>
           {canUpload && (
             <Link href="/invoices/upload" className="btn btn-primary btn-sm">

@@ -11,6 +11,7 @@ vi.mock('next/link', () => ({
 // Mock the API
 const mockListInvoices = vi.fn();
 const mockBulkOperation = vi.fn();
+const mockExportInvoicesCsv = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   invoicesApi: {
@@ -18,6 +19,9 @@ vi.mock('@/lib/api', () => ({
   },
   workflowsApi: {
     bulkOperation: (...args: unknown[]) => mockBulkOperation(...args),
+  },
+  exportApi: {
+    exportInvoicesCsv: (...args: unknown[]) => mockExportInvoicesCsv(...args),
   },
 }));
 
@@ -403,5 +407,85 @@ describe('InvoicesPage', () => {
     globalThis.URL.createObjectURL = originalCreateObjectURL;
     globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
     vi.restoreAllMocks();
+  });
+
+  it('top-level Export button downloads filtered invoices CSV', async () => {
+    const blob = new Blob(['id,vendor\n'], { type: 'text/csv' });
+    mockExportInvoicesCsv.mockResolvedValue(blob);
+
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    // Apply a status filter so we can verify it is forwarded to the export call
+    const statusSelect = screen.getByRole('combobox');
+    fireEvent.change(statusSelect, { target: { value: 'approved' } });
+
+    const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
+    const mockRevokeObjectURL = vi.fn();
+    const originalCreateObjectURL = globalThis.URL.createObjectURL;
+    const originalRevokeObjectURL = globalThis.URL.revokeObjectURL;
+    globalThis.URL.createObjectURL = mockCreateObjectURL;
+    globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
+
+    const mockAnchorClick = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = originalCreateElement(tag);
+      if (tag === 'a') {
+        el.click = mockAnchorClick;
+      }
+      return el;
+    });
+
+    const exportBtn = screen.getByRole('button', { name: /^export$/i });
+    fireEvent.click(exportBtn);
+
+    await waitFor(() => {
+      expect(mockExportInvoicesCsv).toHaveBeenCalledTimes(1);
+    });
+    expect(mockExportInvoicesCsv).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved' }),
+    );
+
+    await waitFor(() => {
+      expect(mockCreateObjectURL).toHaveBeenCalledWith(blob);
+    });
+    expect(mockAnchorClick).toHaveBeenCalled();
+    expect(mockRevokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+    globalThis.URL.createObjectURL = originalCreateObjectURL;
+    globalThis.URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.restoreAllMocks();
+  });
+
+  it('top-level Export button surfaces error toast on failure and re-enables', async () => {
+    mockExportInvoicesCsv.mockRejectedValue(new Error('Export failed'));
+    const { toast } = await import('sonner');
+
+    renderInvoicesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const exportBtn = screen.getByRole('button', { name: /^export$/i });
+    fireEvent.click(exportBtn);
+
+    await waitFor(() => {
+      expect(mockExportInvoicesCsv).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Export failed');
+    });
+
+    // Button re-enables after failure
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /^export$/i });
+      expect(btn).not.toBeDisabled();
+    });
   });
 });
