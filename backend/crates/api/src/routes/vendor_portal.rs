@@ -5,7 +5,9 @@
 //! vendor_id so all queries stay properly scoped.
 
 use crate::error::{ApiError, ApiResult};
+use crate::ofac_screening::OfacScreener;
 use crate::state::AppState;
+use crate::{fraud_guard, fraud_guard::RiskLevel};
 use axum::{
     extract::{Multipart, State},
     http::HeaderMap,
@@ -13,7 +15,7 @@ use axum::{
     Json, Router,
 };
 use billforge_core::{
-    domain::{AuditAction, AuditEntry, CreateInvoiceInput, ResourceType, VendorId},
+    domain::{AuditAction, AuditEntry, CreateInvoiceInput, ResourceType, Vendor, VendorId},
     traits::{AuditService, InvoiceRepository, StorageService, VendorRepository},
     types::{Money, TenantId},
     Error,
@@ -62,6 +64,125 @@ fn vendor_ctx(
     let vendor_id = VendorId(vendor_uuid);
 
     Ok((tenant_id, vendor_id))
+}
+
+/// Enforce vendor `payment_hold` and run OFAC + fraud_guard screening before
+/// accepting a vendor-portal invoice submission. Mirrors the canonical pattern
+/// used in `routes/vendors.rs` for vendor create/update flows: if the vendor is
+/// flagged, payment_hold is set, an audit row is written, and the submission is
+/// rejected with a 403.
+async fn screen_vendor_for_submission(
+    state: &AppState,
+    tenant_id: &TenantId,
+    vendor: &Vendor,
+) -> ApiResult<()> {
+    let pool = state.db.tenant(tenant_id).await?;
+    let audit_repo = billforge_db::repositories::AuditRepositoryImpl::new(pool.clone());
+
+    // 1. Existing payment_hold short-circuits cheapest before any external lookups.
+    if vendor.payment_hold {
+        let reason = vendor
+            .payment_hold_reason
+            .as_deref()
+            .unwrap_or("no reason recorded")
+            .to_string();
+        let audit_entry = AuditEntry::new(
+            tenant_id.clone(),
+            None,
+            AuditAction::Update,
+            ResourceType::Vendor,
+            vendor.id.to_string(),
+            format!("Vendor portal submission blocked: payment_hold ({})", reason),
+        )
+        .with_metadata(serde_json::json!({
+            "source": "vendor_portal_screening",
+            "payment_hold_reason": reason,
+        }));
+        if let Err(e) = audit_repo.log(audit_entry).await {
+            tracing::warn!(error = %e, "Failed to log vendor portal screening audit entry");
+        }
+        return Err(ApiError(Error::Forbidden(format!(
+            "Vendor is on payment hold: {}",
+            reason
+        ))));
+    }
+
+    // 2. OFAC screen against the latest persisted SDN list (falls back to embedded seed).
+    let screener = OfacScreener::load_latest(&pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to load OFAC list: {}", e)))?;
+    let ofac_outcome = screener.screen(&vendor.name, None);
+
+    // 3. fraud_guard signals (domain age, lookalike, bank_change, country mismatch).
+    let domain = fraud_guard::extract_domain(vendor.email.as_deref(), vendor.website.as_deref());
+    let vendor_country = vendor.address.as_ref().map(|a| a.country.as_str());
+    let signals = fraud_guard::run_fraud_guard(
+        tenant_id,
+        Some(&vendor.id),
+        &vendor.name,
+        &domain,
+        vendor_country,
+        None,
+        &pool,
+    )
+    .await;
+
+    let needs_hold =
+        signals.overall_risk == RiskLevel::High || ofac_outcome.status != "pass";
+
+    if needs_hold {
+        let reason = if ofac_outcome.status != "pass" {
+            format!(
+                "OFAC screening: {} ({} match{})",
+                ofac_outcome.status,
+                ofac_outcome.matches.len(),
+                if ofac_outcome.matches.len() != 1 {
+                    "es"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            "Fraud guard: high-risk signals detected".to_string()
+        };
+
+        sqlx::query(
+            "UPDATE vendors SET payment_hold = true, payment_hold_reason = $3, updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(vendor.id.0)
+        .bind(*tenant_id.as_uuid())
+        .bind(&reason)
+        .execute(&*pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to set payment_hold: {}", e)))?;
+
+        let audit_entry = AuditEntry::new(
+            tenant_id.clone(),
+            None,
+            AuditAction::Update,
+            ResourceType::Vendor,
+            vendor.id.to_string(),
+            format!("Vendor portal submission blocked: {}", reason),
+        )
+        .with_metadata(serde_json::json!({
+            "source": "vendor_portal_screening",
+            "ofac": {
+                "status": ofac_outcome.status,
+                "matches": ofac_outcome.matches,
+            },
+            "fraud_signals": fraud_guard::fraud_signals_to_json(&signals),
+        }));
+        if let Err(e) = audit_repo.log(audit_entry).await {
+            tracing::warn!(error = %e, "Failed to log vendor portal screening audit entry");
+        }
+
+        return Err(ApiError(Error::Forbidden(format!(
+            "Vendor flagged by screening: {}",
+            reason
+        ))));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +278,8 @@ async fn submit_invoice(
             resource_type: "Vendor".to_string(),
             id: vendor_id.to_string(),
         })?;
+
+    screen_vendor_for_submission(&state, &tenant_id, &vendor).await?;
 
     let invoice_date = body
         .invoice_date
@@ -341,14 +464,8 @@ async fn upload_invoice_pdf(
     let invoice_number_val = invoice_number
         .ok_or_else(|| Error::Validation("Missing required field: invoice_number".to_string()))?;
 
-    // Persist PDF via storage service (upload generates and returns the document_id)
-    let document_id = state
-        .storage
-        .upload(&tenant_id, "invoice.pdf", &file_data, "application/pdf")
-        .await
-        .map_err(|e| Error::Database(format!("Failed to store PDF: {}", e)))?;
-
-    // Look up vendor name
+    // Look up vendor and screen BEFORE writing the PDF to storage. Screening
+    // failures must not leave an orphaned blob in object storage.
     let pool = state.db.tenant(&tenant_id).await?;
     let vendor_repo = billforge_db::repositories::VendorRepositoryImpl::new(pool.clone());
     let vendor = vendor_repo
@@ -358,6 +475,15 @@ async fn upload_invoice_pdf(
             resource_type: "Vendor".to_string(),
             id: vendor_id.to_string(),
         })?;
+
+    screen_vendor_for_submission(&state, &tenant_id, &vendor).await?;
+
+    // Persist PDF via storage service (upload generates and returns the document_id)
+    let document_id = state
+        .storage
+        .upload(&tenant_id, "invoice.pdf", &file_data, "application/pdf")
+        .await
+        .map_err(|e| Error::Database(format!("Failed to store PDF: {}", e)))?;
 
     let parsed_invoice_date =
         invoice_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
