@@ -497,141 +497,14 @@ async fn sync_suppliers(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<SyncRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let client = get_workday_client(&state, &pool, &tenant.tenant_id).await?;
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO workday_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'suppliers', 'running', NOW())",
+    let payload = serde_json::json!({ "full_sync": request.full_sync });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::WORKDAY_SUPPLIER_SYNC,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
     .await
-    .ok();
-
-    // Fetch suppliers (paginate through all)
-    let mut all_suppliers = Vec::new();
-    let mut page = 0;
-    let page_size = 100;
-
-    loop {
-        let result = client
-            .query_suppliers(page, page_size)
-            .await
-            .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
-
-        let fetched = result.data.len();
-        all_suppliers.extend(result.data);
-
-        if fetched < page_size as usize {
-            break;
-        }
-        page += 1;
-    }
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-
-    // Sync each supplier
-    for supplier in &all_suppliers {
-        // Check if supplier mapping exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vendors v
-             INNER JOIN workday_supplier_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.workday_supplier_id = $2",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&supplier.supplier_id)
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-        let email = supplier.primary_email.as_deref().unwrap_or("");
-        let phone = supplier.primary_phone.as_deref().unwrap_or("");
-
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
-            sqlx::query(
-                "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
-                 WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(&supplier.supplier_name)
-            .bind(email)
-            .bind(phone)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            updated += 1;
-        } else {
-            // Create new vendor
-            let vendor_id = Uuid::new_v4();
-            let vendor_type = supplier.supplier_category.as_deref().unwrap_or("business");
-
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())"
-            )
-            .bind(vendor_id)
-            .bind(&supplier.supplier_name)
-            .bind(vendor_type)
-            .bind(email)
-            .bind(phone)
-            .bind(if supplier.status == "Active" { "active" } else { "inactive" })
-            .execute(&*pool)
-            .await
-            .ok();
-
-            // Create mapping
-            sqlx::query(
-                "INSERT INTO workday_supplier_mappings
-                 (tenant_id, workday_supplier_id, billforge_vendor_id, workday_supplier_name, last_synced_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, NOW(), NOW(), NOW())"
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(&supplier.supplier_id)
-            .bind(vendor_id)
-            .bind(&supplier.supplier_name)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            imported += 1;
-        }
-    }
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE workday_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind((imported + updated + skipped) as i32)
-    .bind(imported as i32)
-    .bind(updated as i32)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Update last sync time
-    sqlx::query("UPDATE workday_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
-
-    Ok(Json(SyncResponse {
-        imported,
-        updated,
-        skipped,
-    }))
 }
 
 /// Sync ledger accounts from Workday
@@ -649,56 +522,13 @@ async fn sync_accounts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let client = get_workday_client(&state, &pool, &tenant.tenant_id).await?;
-
-    // Fetch ledger accounts (paginate through all)
-    let mut all_accounts = Vec::new();
-    let mut page = 0;
-    let page_size = 100;
-
-    loop {
-        let result = client
-            .query_ledger_accounts(page, page_size)
-            .await
-            .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
-
-        let fetched = result.data.len();
-        all_accounts.extend(result.data);
-
-        if fetched < page_size as usize {
-            break;
-        }
-        page += 1;
-    }
-
-    let mut created = 0u64;
-
-    // Upsert account mappings
-    for account in &all_accounts {
-        sqlx::query(
-            "INSERT INTO workday_account_mappings
-             (tenant_id, workday_account_id, workday_account_name, workday_account_type, billforge_gl_code, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $2, NOW(), NOW())
-             ON CONFLICT (tenant_id, workday_account_id) DO UPDATE SET
-                workday_account_name = $3,
-                workday_account_type = $4,
-                updated_at = NOW()"
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&account.ledger_account_id)
-        .bind(&account.name)
-        .bind(&account.account_type)
-        .execute(&*pool)
-        .await
-        .ok();
-
-        created += 1;
-    }
-
-    Ok(Json(
-        serde_json::json!({ "status": "synced", "count": created }),
-    ))
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::WORKDAY_ACCOUNT_SYNC,
+        &tenant.tenant_id,
+        serde_json::json!({}),
+    )
+    .await
 }
 
 /// Export invoice to Workday as supplier invoice
@@ -719,108 +549,20 @@ async fn export_invoice_to_workday(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<ExportInvoiceRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let client = get_workday_client(&state, &pool, &tenant.tenant_id).await?;
-
-    // Get invoice from database
-    let invoice_id: billforge_core::domain::InvoiceId = request
-        .invoice_id
-        .parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-
-    let invoice: Option<(String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT vendor_name, invoice_number, total_amount_cents, due_date, po_number
-         FROM invoices WHERE id = $1",
+    let payload = serde_json::json!({
+        "invoice_id": request.invoice_id,
+        "ledger_account_id": request.ledger_account_id,
+        "spend_category": request.spend_category,
+        "cost_center": request.cost_center,
+        "company_reference": request.company_reference,
+    });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::WORKDAY_INVOICE_EXPORT,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(invoice_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (vendor_name, invoice_number, total_cents, due_date, po_number) =
-        invoice.ok_or_else(|| billforge_core::Error::NotFound {
-            resource_type: "Invoice".to_string(),
-            id: request.invoice_id.clone(),
-        })?;
-
-    // Get supplier mapping
-    let supplier_mapping: Option<(String,)> = sqlx::query_as(
-        "SELECT workday_supplier_id FROM workday_supplier_mappings
-         WHERE tenant_id = $1 AND billforge_vendor_id IN
-         (SELECT vendor_id FROM invoices WHERE id = $2)",
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let workday_supplier_id = supplier_mapping.map(|(id,)| id).ok_or_else(|| {
-        billforge_core::Error::Validation(
-            "Vendor not found in Workday. Please sync suppliers first.".to_string(),
-        )
-    })?;
-
-    // Build Workday supplier invoice
-    use billforge_workday::{WorkdayInvoiceLine, WorkdaySupplierInvoice};
-
-    let amount = total_cents as f64 / 100.0;
-    let today = chrono::Utc::now().date_naive();
-
-    let wd_invoice = WorkdaySupplierInvoice {
-        id: None,
-        invoice_number: invoice_number.clone(),
-        supplier_id: workday_supplier_id,
-        invoice_date: today,
-        due_date: due_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
-        total_amount: amount,
-        currency: Some("USD".to_string()),
-        memo: Some(format!("BillForge export: Invoice {}", invoice_number)),
-        lines: vec![WorkdayInvoiceLine {
-            line_number: 1,
-            amount,
-            memo: Some(format!("Invoice {}", invoice_number)),
-            spend_category: request.spend_category.clone(),
-            ledger_account: request.ledger_account_id.clone(),
-            cost_center: request.cost_center.clone(),
-            project: None,
-        }],
-        status: None,
-        company_reference: request.company_reference.clone(),
-    };
-
-    // Create supplier invoice in Workday
-    let result = client
-        .create_supplier_invoice(&wd_invoice)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Workday API error: {}", e)))?;
-
-    let workday_invoice_id = result.id.unwrap_or_default();
-
-    // Store export record
-    let export_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO workday_invoice_exports (id, tenant_id, invoice_id, workday_invoice_id, exported_at, export_status)
-         VALUES ($1, $2, $3, $4, NOW(), 'synced')
-         ON CONFLICT (tenant_id, invoice_id) DO UPDATE SET
-            workday_invoice_id = $4,
-            exported_at = NOW(),
-            export_status = 'synced'"
-    )
-    .bind(export_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .bind(&workday_invoice_id)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    Ok(Json(ExportInvoiceResponse {
-        workday_invoice_id,
-        status: "synced".to_string(),
-    }))
 }
 
 /// Get ledger account mappings

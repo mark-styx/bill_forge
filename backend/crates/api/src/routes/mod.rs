@@ -28,6 +28,7 @@ pub(crate) mod documents;
 #[cfg(feature = "edi")]
 pub mod edi;
 pub mod email_actions;
+pub(crate) mod erp_jobs;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub mod health;

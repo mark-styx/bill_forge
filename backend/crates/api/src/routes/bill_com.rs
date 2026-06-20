@@ -414,143 +414,14 @@ async fn sync_vendors(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<SyncRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let (client, _env) = get_bill_com_client(&pool, &tenant.tenant_id).await?;
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO bill_com_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'vendors', 'running', NOW())",
+    let payload = serde_json::json!({ "full_sync": request.full_sync });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::BILL_COM_VENDOR_SYNC,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
     .await
-    .ok();
-
-    // Fetch vendors (paginate through all)
-    let mut all_vendors = Vec::new();
-    let mut page = 0;
-    let page_size = 100;
-
-    loop {
-        let result = client
-            .list_vendors(page, page_size)
-            .await
-            .map_err(|e| billforge_core::Error::Validation(format!("Bill.com API error: {}", e)))?;
-
-        all_vendors.extend(result.data);
-
-        if !result.has_more {
-            break;
-        }
-        page += 1;
-    }
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-
-    // Sync each vendor
-    for bc_vendor in &all_vendors {
-        let bc_vendor_id = bc_vendor.id.as_deref().unwrap_or_default();
-        if bc_vendor_id.is_empty() {
-            continue;
-        }
-
-        // Check if vendor mapping exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vendors v
-             INNER JOIN bill_com_vendor_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.bill_com_vendor_id = $2",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(bc_vendor_id)
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-        let email = bc_vendor.email.as_deref().unwrap_or("");
-        let phone = bc_vendor.phone.as_deref().unwrap_or("");
-
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
-            sqlx::query(
-                "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
-                 WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(&bc_vendor.name)
-            .bind(email)
-            .bind(phone)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            updated += 1;
-        } else {
-            // Create new vendor
-            let vendor_id = Uuid::new_v4();
-
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, 'business', $3, $4, $5, NOW(), NOW())"
-            )
-            .bind(vendor_id)
-            .bind(&bc_vendor.name)
-            .bind(email)
-            .bind(phone)
-            .bind(bc_vendor.status.as_deref().unwrap_or("active"))
-            .execute(&*pool)
-            .await
-            .ok();
-
-            // Create mapping
-            sqlx::query(
-                "INSERT INTO bill_com_vendor_mappings
-                 (tenant_id, bill_com_vendor_id, billforge_vendor_id, bill_com_vendor_name, last_synced_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, NOW(), NOW(), NOW())"
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(bc_vendor_id)
-            .bind(vendor_id)
-            .bind(&bc_vendor.name)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            imported += 1;
-        }
-    }
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE bill_com_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind((imported + updated + skipped) as i32)
-    .bind(imported as i32)
-    .bind(updated as i32)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Update last sync time
-    sqlx::query("UPDATE bill_com_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
-
-    Ok(Json(SyncResponse {
-        imported,
-        updated,
-        skipped,
-    }))
 }
 
 /// Push approved BillForge invoice to Bill.com as a bill

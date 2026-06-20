@@ -409,329 +409,74 @@ async fn xero_status(
     Ok(Json(status))
 }
 
-/// Sync contacts from Xero
+/// Sync contacts from Xero (asynchronous)
+///
+/// The sync is performed by the background worker. The response returns 202
+/// Accepted with the enqueued job id; clients should poll xero_sync_log for
+/// status. This replaces the previous inline pagination loop that violated
+/// the sub-200ms API SLO and offered no retry on transient Xero failures.
 #[utoipa::path(
     post,
     path = "/api/v1/xero/sync/contacts",
     tag = "Xero",
     request_body = SyncContactsRequest,
     responses(
-        (status = 200, description = "Contacts synced", body = SyncContactsResponse),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_contacts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
-    Json(_request): Json<SyncContactsRequest>,
+    Json(request): Json<SyncContactsRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    let (client, _xero_tenant_id) =
-        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO xero_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'contacts', 'running', NOW())",
+    // Hand the work to the worker so the API request returns inside the
+    // sub-200ms SLO and the sync gets the same retry/backoff as QuickBooks.
+    let payload = serde_json::json!({ "full_sync": request.full_sync });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::XERO_CONTACT_SYNC,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
     .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to create sync log: {}", e)))?;
-
-    // Fetch contacts from Xero (paginate through all results)
-    let mut all_contacts = Vec::new();
-    let mut page = 1;
-    let page_size = 100;
-
-    loop {
-        let contacts = client
-            .query_contacts(page, page_size)
-            .await
-            .map_err(|e| billforge_core::Error::Validation(format!("Xero API error: {}", e)))?;
-
-        if contacts.is_empty() {
-            break;
-        }
-
-        all_contacts.extend(contacts);
-        page += 1;
-    }
-
-    // Filter to suppliers only
-    let suppliers: Vec<_> = all_contacts
-        .into_iter()
-        .filter(|c| c.IsSupplier.unwrap_or(false))
-        .collect();
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-    let mut failed = 0u64;
-    let mut last_error: Option<String> = None;
-
-    // Sync each contact
-    for xero_contact in &suppliers {
-        // Check if contact already exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vendors v
-             INNER JOIN xero_contact_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.xero_contact_id = $2",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&xero_contact.ContactID)
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|e| {
-            billforge_core::Error::Database(format!("Failed to look up existing vendor: {}", e))
-        })?;
-
-        let db_err = |e: sqlx::Error| billforge_core::Error::Database(e.to_string());
-        let result: Result<(), billforge_core::Error> = if let Some((vendor_id,)) = existing {
-            // Update existing vendor + mapping in a transaction
-            let mut tx = pool.begin().await.map_err(&db_err)?;
-
-            sqlx::query(
-                "UPDATE vendors SET name = $2, email = $3, updated_at = NOW()
-                 WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(&xero_contact.Name)
-            .bind(&xero_contact.EmailAddress)
-            .execute(&mut *tx)
-            .await
-            .map_err(&db_err)?;
-
-            sqlx::query(
-                "UPDATE xero_contact_mappings
-                 SET xero_contact_name = $3, last_synced_at = NOW(), updated_at = NOW()
-                 WHERE tenant_id = $1 AND xero_contact_id = $2",
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(&xero_contact.ContactID)
-            .bind(&xero_contact.Name)
-            .execute(&mut *tx)
-            .await
-            .map_err(&db_err)?;
-
-            tx.commit().await.map_err(&db_err)?;
-            Ok(())
-        } else {
-            // Create new vendor + mapping in a transaction
-            let vendor_id = Uuid::new_v4();
-            let mut tx = pool.begin().await.map_err(&db_err)?;
-
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, status, created_at, updated_at)
-                 VALUES ($1, $2, 'business', $3, $4, NOW(), NOW())",
-            )
-            .bind(vendor_id)
-            .bind(&xero_contact.Name)
-            .bind(&xero_contact.EmailAddress)
-            .bind(if xero_contact.ContactStatus == "ACTIVE" {
-                "active"
-            } else {
-                "inactive"
-            })
-            .execute(&mut *tx)
-            .await
-            .map_err(&db_err)?;
-
-            sqlx::query(
-                "INSERT INTO xero_contact_mappings
-                 (tenant_id, xero_contact_id, billforge_vendor_id, xero_contact_name, last_synced_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, NOW(), NOW(), NOW())"
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(&xero_contact.ContactID)
-            .bind(vendor_id)
-            .bind(&xero_contact.Name)
-            .execute(&mut *tx)
-            .await
-            .map_err(&db_err)?;
-
-            tx.commit().await.map_err(&db_err)?;
-            Ok(())
-        };
-
-        match result {
-            Ok(()) => {
-                if existing.is_some() {
-                    updated += 1;
-                } else {
-                    imported += 1;
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    contact_id = %xero_contact.ContactID,
-                    error = %e,
-                    "Failed to sync Xero contact"
-                );
-                last_error = Some(e.to_string());
-                failed += 1;
-            }
-        }
-    }
-
-    // Compute final sync status from failure count
-    let status = if failed == 0 { "completed" } else { "failed" };
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE xero_sync_log
-         SET status = $5, completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4, error_message = $6
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind((imported + updated + skipped + failed) as i32)
-    .bind(imported as i32)
-    .bind(updated as i32)
-    .bind(status)
-    .bind(last_error.as_deref().unwrap_or(""))
-    .execute(&*pool)
-    .await
-    .map_err(|e| billforge_core::Error::Database(format!("Failed to update sync log: {}", e)))?;
-
-    // Only advance last_sync_at watermark when all contacts succeeded
-    if failed == 0 {
-        sqlx::query("UPDATE xero_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-            .bind(tenant.tenant_id.as_uuid())
-            .execute(&*pool)
-            .await
-            .map_err(|e| {
-                billforge_core::Error::Database(format!(
-                    "Failed to update connection last_sync_at: {}",
-                    e
-                ))
-            })?;
-    }
-
-    let response = SyncContactsResponse {
-        imported,
-        updated,
-        skipped,
-        failed,
-    };
-
-    Ok(Json(response))
 }
 
-/// Sync accounts from Xero
+/// Sync accounts from Xero (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/xero/sync/accounts",
     tag = "Xero",
     responses(
-        (status = 200, description = "Accounts synced"),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_accounts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    let (client, _xero_tenant_id) =
-        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO xero_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'accounts', 'running', NOW())",
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::XERO_ACCOUNT_SYNC,
+        &tenant.tenant_id,
+        serde_json::json!({}),
     )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
     .await
-    .ok();
-
-    // Fetch accounts from Xero
-    let mut all_accounts = Vec::new();
-    let mut page = 1;
-    let page_size = 100;
-
-    loop {
-        let accounts = client
-            .query_accounts(page, page_size)
-            .await
-            .map_err(|e| billforge_core::Error::Validation(format!("Xero API error: {}", e)))?;
-
-        if accounts.is_empty() {
-            break;
-        }
-
-        all_accounts.extend(accounts);
-        page += 1;
-    }
-
-    // Filter to expense accounts only
-    let expense_accounts: Vec<_> = all_accounts
-        .into_iter()
-        .filter(|a| a.Class == "EXPENSE" && a.Status == "ACTIVE")
-        .collect();
-
-    let mut created = 0u64;
-
-    // Upsert account mappings
-    for xero_account in expense_accounts {
-        sqlx::query(
-            "INSERT INTO xero_account_mappings
-             (tenant_id, xero_account_id, xero_account_code, xero_account_name, xero_account_type, billforge_gl_code, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $3, NOW(), NOW())
-             ON CONFLICT (tenant_id, xero_account_id) DO UPDATE SET
-                xero_account_code = $3,
-                xero_account_name = $4,
-                xero_account_type = $5,
-                updated_at = NOW()"
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&xero_account.AccountID)
-        .bind(&xero_account.Code)
-        .bind(&xero_account.Name)
-        .bind(&xero_account.AccountType)
-        .execute(&*pool)
-        .await
-        .ok();
-
-        created += 1;
-    }
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE xero_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $2
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind(created as i32)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    Ok(Json(
-        serde_json::json!({ "status": "synced", "count": created }),
-    ))
 }
 
-/// Export invoice to Xero
+/// Export invoice to Xero (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/xero/export/invoice/{id}",
     tag = "Xero",
     request_body = ExportInvoiceRequest,
     responses(
-        (status = 200, description = "Invoice exported", body = ExportInvoiceResponse),
+        (status = 202, description = "Export enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "Invoice not found"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn export_invoice_to_xero(
@@ -739,139 +484,17 @@ async fn export_invoice_to_xero(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<ExportInvoiceRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    let (client, _xero_tenant_id) =
-        get_authenticated_xero_client(&state, &tenant.tenant_id).await?;
-
-    // Get invoice from database
-    let invoice_id: billforge_core::domain::InvoiceId = request
-        .invoice_id
-        .parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-
-    let invoice: Option<(String, String, i64, Option<String>, Option<String>, String)> =
-        sqlx::query_as(
-            "SELECT vendor_name, invoice_number, total_amount_cents, due_date, po_number, currency
-         FROM invoices WHERE id = $1",
-        )
-        .bind(invoice_id.as_uuid())
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-    let (_vendor_name, invoice_number, total_cents, due_date, po_number, currency) = invoice
-        .ok_or_else(|| billforge_core::Error::NotFound {
-            resource_type: "Invoice".to_string(),
-            id: request.invoice_id.clone(),
-        })?;
-
-    // Get vendor mapping
-    let vendor_mapping: Option<(String, String)> = sqlx::query_as(
-        "SELECT xero_contact_id, xero_contact_name FROM xero_contact_mappings
-         WHERE tenant_id = $1 AND billforge_vendor_id IN
-         (SELECT vendor_id FROM invoices WHERE id = $2)",
+    let payload = serde_json::json!({
+        "invoice_id": request.invoice_id,
+        "xero_account_code": request.xero_account_code,
+    });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::XERO_INVOICE_EXPORT,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (xero_contact_id, xero_contact_name) = vendor_mapping.ok_or_else(|| {
-        billforge_core::Error::Validation(
-            "Vendor not found in Xero. Please sync contacts first.".to_string(),
-        )
-    })?;
-
-    // Build Xero invoice (bill)
-    use billforge_xero::{XeroContact, XeroInvoice, XeroLineItem};
-
-    let total_amount = total_cents as f64 / 100.0;
-
-    let invoice = XeroInvoice {
-        InvoiceID: None,
-        InvoiceNumber: Some(invoice_number.clone()),
-        Reference: po_number.clone(),
-        Contact: XeroContact {
-            ContactID: xero_contact_id.clone(),
-            Name: xero_contact_name,
-            ContactStatus: "ACTIVE".to_string(),
-            EmailAddress: None,
-            Phones: None,
-            Addresses: None,
-            IsSupplier: Some(true),
-            IsCustomer: None,
-            DefaultCurrency: None,
-            UpdatedDateUTC: None,
-        },
-        InvoiceType: "ACCPAY".to_string(), // Accounts payable (bill)
-        Status: Some("DRAFT".to_string()),
-        LineItems: vec![XeroLineItem {
-            LineItemID: None,
-            Description: Some(format!("Invoice {}", invoice_number)),
-            Quantity: Some(1.0),
-            UnitAmount: Some(total_amount),
-            AccountCode: Some(request.xero_account_code.clone()),
-            TaxType: None,
-            TaxAmount: Some(0.0),
-            LineAmount: Some(total_amount),
-            Tracking: None,
-        }],
-        Date: chrono::Utc::now()
-            .date_naive()
-            .format("%Y-%m-%d")
-            .to_string(),
-        DueDate: due_date.unwrap_or_else(|| {
-            chrono::Utc::now()
-                .date_naive()
-                .format("%Y-%m-%d")
-                .to_string()
-        }),
-        CurrencyCode: currency,
-        SubTotal: total_amount,
-        TotalTax: 0.0,
-        Total: total_amount,
-        AmountDue: Some(total_amount),
-        AmountPaid: Some(0.0),
-        UpdatedDateUTC: None,
-    };
-
-    // Create invoice in Xero
-    let created_invoice = client
-        .create_invoice(&invoice)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Xero API error: {}", e)))?;
-
-    let xero_invoice_id = created_invoice.InvoiceID.clone().unwrap_or_default();
-
-    // Store export record
-    let export_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO xero_invoice_exports (id, tenant_id, invoice_id, xero_invoice_id, exported_at, export_status)
-         VALUES ($1, $2, $3, $4, NOW(), 'synced')
-         ON CONFLICT (tenant_id, invoice_id) DO UPDATE SET
-            xero_invoice_id = $4,
-            exported_at = NOW(),
-            export_status = 'synced',
-            sync_error = NULL"
-    )
-    .bind(export_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .bind(&xero_invoice_id)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    let response = ExportInvoiceResponse {
-        xero_invoice_id,
-        status: "synced".to_string(),
-    };
-
-    Ok(Json(response))
 }
 
 /// Get account mappings

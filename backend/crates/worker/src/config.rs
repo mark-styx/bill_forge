@@ -32,6 +32,22 @@ pub struct WorkerConfig {
     pub qb_client_secret: Option<String>,
     /// QuickBooks environment: "production" or "sandbox"
     pub qb_environment: String,
+    /// Xero OAuth client ID (required for token refresh during sync jobs)
+    pub xero_client_id: Option<String>,
+    /// Xero OAuth client secret
+    pub xero_client_secret: Option<String>,
+    /// Xero environment: "production" or "sandbox"
+    pub xero_environment: String,
+    /// Salesforce OAuth client ID (required for token refresh)
+    pub salesforce_client_id: Option<String>,
+    /// Salesforce OAuth client secret
+    pub salesforce_client_secret: Option<String>,
+    /// Salesforce environment: "production" or "sandbox"
+    pub salesforce_environment: String,
+    /// Workday OAuth client ID (required for token refresh)
+    pub workday_client_id: Option<String>,
+    /// Workday OAuth client secret
+    pub workday_client_secret: Option<String>,
 }
 
 impl WorkerConfig {
@@ -82,6 +98,16 @@ impl WorkerConfig {
             qb_client_secret: std::env::var("QUICKBOOKS_CLIENT_SECRET").ok(),
             qb_environment: std::env::var("QUICKBOOKS_ENVIRONMENT")
                 .unwrap_or_else(|_| "production".to_string()),
+            xero_client_id: std::env::var("XERO_CLIENT_ID").ok(),
+            xero_client_secret: std::env::var("XERO_CLIENT_SECRET").ok(),
+            xero_environment: std::env::var("XERO_ENVIRONMENT")
+                .unwrap_or_else(|_| "production".to_string()),
+            salesforce_client_id: std::env::var("SALESFORCE_CLIENT_ID").ok(),
+            salesforce_client_secret: std::env::var("SALESFORCE_CLIENT_SECRET").ok(),
+            salesforce_environment: std::env::var("SALESFORCE_ENVIRONMENT")
+                .unwrap_or_else(|_| "production".to_string()),
+            workday_client_id: std::env::var("WORKDAY_CLIENT_ID").ok(),
+            workday_client_secret: std::env::var("WORKDAY_CLIENT_SECRET").ok(),
         })
     }
 }

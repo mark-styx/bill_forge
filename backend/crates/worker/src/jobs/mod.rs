@@ -15,6 +15,7 @@ pub mod autopilot_sweep;
 pub mod categorization_training;
 pub mod email_batch;
 pub mod embedding_refresh;
+pub mod erp_sync;
 pub mod forecast_refresh;
 pub mod forecast_tuning;
 pub mod metrics_aggregation;
@@ -57,6 +58,20 @@ pub enum JobType {
     ApprovalExpiry,
     VendorRiskRescan,
     AutopilotSweep,
+    XeroContactSync,
+    XeroAccountSync,
+    XeroInvoiceExport,
+    SageIntacctVendorSync,
+    SageIntacctAccountSync,
+    SageIntacctInvoiceExport,
+    SalesforceAccountSync,
+    SalesforceContactSync,
+    WorkdaySupplierSync,
+    WorkdayAccountSync,
+    WorkdayInvoiceExport,
+    BillComVendorSync,
+    #[serde(rename = "netsuite_vendor_sync")]
+    NetSuiteVendorSync,
 }
 
 impl std::fmt::Display for JobType {
@@ -82,6 +97,19 @@ impl std::fmt::Display for JobType {
             JobType::ApprovalExpiry => write!(f, "ApprovalExpiry"),
             JobType::VendorRiskRescan => write!(f, "VendorRiskRescan"),
             JobType::AutopilotSweep => write!(f, "AutopilotSweep"),
+            JobType::XeroContactSync => write!(f, "XeroContactSync"),
+            JobType::XeroAccountSync => write!(f, "XeroAccountSync"),
+            JobType::XeroInvoiceExport => write!(f, "XeroInvoiceExport"),
+            JobType::SageIntacctVendorSync => write!(f, "SageIntacctVendorSync"),
+            JobType::SageIntacctAccountSync => write!(f, "SageIntacctAccountSync"),
+            JobType::SageIntacctInvoiceExport => write!(f, "SageIntacctInvoiceExport"),
+            JobType::SalesforceAccountSync => write!(f, "SalesforceAccountSync"),
+            JobType::SalesforceContactSync => write!(f, "SalesforceContactSync"),
+            JobType::WorkdaySupplierSync => write!(f, "WorkdaySupplierSync"),
+            JobType::WorkdayAccountSync => write!(f, "WorkdayAccountSync"),
+            JobType::WorkdayInvoiceExport => write!(f, "WorkdayInvoiceExport"),
+            JobType::BillComVendorSync => write!(f, "BillComVendorSync"),
+            JobType::NetSuiteVendorSync => write!(f, "NetSuiteVendorSync"),
         }
     }
 }
@@ -329,6 +357,45 @@ async fn process_job(job: &Job, config: &WorkerConfig) -> Result<()> {
         JobType::AutopilotSweep => {
             autopilot_sweep::run_tenant_autopilot_sweep(config.pg_manager.clone(), &tenant_id)
                 .await
+        }
+        JobType::XeroContactSync => {
+            erp_sync::xero_contact_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::XeroAccountSync => {
+            erp_sync::xero_account_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::XeroInvoiceExport => {
+            erp_sync::xero_invoice_export(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::SageIntacctVendorSync => {
+            erp_sync::sage_intacct_vendor_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::SageIntacctAccountSync => {
+            erp_sync::sage_intacct_account_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::SageIntacctInvoiceExport => {
+            erp_sync::sage_intacct_invoice_export(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::SalesforceAccountSync => {
+            erp_sync::salesforce_account_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::SalesforceContactSync => {
+            erp_sync::salesforce_contact_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::WorkdaySupplierSync => {
+            erp_sync::workday_supplier_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::WorkdayAccountSync => {
+            erp_sync::workday_account_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::WorkdayInvoiceExport => {
+            erp_sync::workday_invoice_export(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::BillComVendorSync => {
+            erp_sync::bill_com_vendor_sync(&tenant_id_str, &job.payload, config).await
+        }
+        JobType::NetSuiteVendorSync => {
+            erp_sync::netsuite_vendor_sync(&tenant_id_str, &job.payload, config).await
         }
     }
 }

@@ -250,99 +250,11 @@ async fn sync_vendors(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Load stored credentials
-    let connection: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT account_id, client_id, client_secret
-         FROM netsuite_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::NETSUITE_VENDOR_SYNC,
+        &tenant.tenant_id,
+        serde_json::json!({}),
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (account_id, client_id, client_secret) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("NetSuite not connected or sync disabled".to_string())
-    })?;
-
-    let config = NetSuiteConfig {
-        account_id,
-        client_id,
-        client_secret,
-        base_url: None,
-    };
-    let mut client = NetSuiteClient::new(config);
-
-    client
-        .authenticate()
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("NetSuite auth failed: {}", e)))?;
-
-    let vendors = client
-        .list_vendors()
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("NetSuite API error: {}", e)))?;
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-
-    for ns_vendor in &vendors {
-        let vendor_name = ns_vendor.company_name.as_deref().unwrap_or_default();
-        if vendor_name.is_empty() {
-            continue;
-        }
-
-        let email = ns_vendor.email.as_deref().unwrap_or("");
-
-        // Check if vendor already exists by name
-        let existing: Option<(uuid::Uuid,)> =
-            sqlx::query_as("SELECT id FROM vendors WHERE name = $1 LIMIT 1")
-                .bind(vendor_name)
-                .fetch_optional(&*pool)
-                .await
-                .ok()
-                .flatten();
-
-        if let Some((vendor_id,)) = existing {
-            sqlx::query("UPDATE vendors SET email = $2, updated_at = NOW() WHERE id = $1")
-                .bind(vendor_id)
-                .bind(email)
-                .execute(&*pool)
-                .await
-                .ok();
-
-            updated += 1;
-        } else {
-            let vendor_id = uuid::Uuid::new_v4();
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, status, created_at, updated_at)
-                 VALUES ($1, $2, 'business', $3, 'active', NOW(), NOW())",
-            )
-            .bind(vendor_id)
-            .bind(vendor_name)
-            .bind(email)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            imported += 1;
-        }
-    }
-
-    // Update last sync time
-    sqlx::query("UPDATE netsuite_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
-
-    Ok(Json(SyncResponse {
-        imported,
-        updated,
-        skipped,
-    }))
 }

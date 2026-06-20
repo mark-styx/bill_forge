@@ -433,16 +433,16 @@ async fn salesforce_status(
     Ok(Json(status))
 }
 
-/// Sync Salesforce Accounts as BillForge vendors
+/// Sync Salesforce Accounts as BillForge vendors (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/salesforce/sync/accounts",
     tag = "Salesforce",
     request_body = SyncAccountsRequest,
     responses(
-        (status = 200, description = "Accounts synced", body = SyncAccountsResponse),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_accounts(
@@ -450,285 +450,41 @@ async fn sync_accounts(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<SyncAccountsRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get Salesforce connection
-    let connection: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT instance_url, access_token, access_token_expires_at
-         FROM salesforce_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
+    let payload = serde_json::json!({
+        "full_sync": request.full_sync,
+        "custom_filter": request.custom_filter,
+    });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::SALESFORCE_ACCOUNT_SYNC,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (instance_url, access_token, token_expires_at) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string())
-    })?;
-
-    // Check if token needs refresh
-    if token_expires_at <= Utc::now() {
-        // Attempt token refresh
-        let refresh_result: Option<(String,)> =
-            sqlx::query_as("SELECT refresh_token FROM salesforce_connections WHERE tenant_id = $1")
-                .bind(tenant.tenant_id.as_uuid())
-                .fetch_optional(&*pool)
-                .await
-                .ok()
-                .flatten();
-
-        if let Some((refresh_token,)) = refresh_result {
-            if let Some(sf_config) = &state.config.salesforce {
-                let oauth = SalesforceOAuth::new(SalesforceOAuthConfig {
-                    client_id: sf_config.client_id.clone(),
-                    client_secret: sf_config.client_secret.clone(),
-                    redirect_uri: sf_config.redirect_uri.clone(),
-                    environment: match sf_config.environment {
-                        crate::config::SalesforceEnvironment::Sandbox => {
-                            SalesforceEnvironment::Sandbox
-                        }
-                        crate::config::SalesforceEnvironment::Production => {
-                            SalesforceEnvironment::Production
-                        }
-                    },
-                });
-
-                match oauth.refresh_token(&refresh_token).await {
-                    Ok(new_tokens) => {
-                        let new_expires = Utc::now() + Duration::hours(2);
-                        sqlx::query(
-                            "UPDATE salesforce_connections SET access_token = $2, access_token_expires_at = $3, updated_at = NOW() WHERE tenant_id = $1"
-                        )
-                        .bind(tenant.tenant_id.as_uuid())
-                        .bind(&new_tokens.access_token)
-                        .bind(new_expires)
-                        .execute(&*pool)
-                        .await
-                        .ok();
-                    }
-                    Err(_) => {
-                        return Err(billforge_core::Error::Validation(
-                            "Salesforce token expired. Please reconnect.".to_string(),
-                        )
-                        .into());
-                    }
-                }
-            }
-        } else {
-            return Err(billforge_core::Error::Validation(
-                "Salesforce token expired. Please reconnect.".to_string(),
-            )
-            .into());
-        }
-    }
-
-    let client = SalesforceClient::new(access_token, instance_url);
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO salesforce_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'accounts', 'running', NOW())",
-    )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Fetch accounts from Salesforce
-    let accounts = client
-        .query_vendor_accounts(request.custom_filter.as_deref())
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Salesforce API error: {}", e)))?;
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-
-    // Sync each account as a vendor
-    for sf_account in &accounts {
-        // Check if mapping exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vendors v
-             INNER JOIN salesforce_account_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.salesforce_account_id = $2",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&sf_account.id)
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-        let phone = sf_account.phone.as_deref().unwrap_or("");
-
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
-            sqlx::query(
-                "UPDATE vendors SET name = $2, phone = $3, updated_at = NOW() WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(&sf_account.name)
-            .bind(phone)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            updated += 1;
-        } else {
-            // Create new vendor
-            let vendor_id = Uuid::new_v4();
-            let vendor_type = sf_account.account_type.as_deref().unwrap_or("business");
-
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())",
-            )
-            .bind(vendor_id)
-            .bind(&sf_account.name)
-            .bind(vendor_type)
-            .bind(phone)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            // Create mapping
-            sqlx::query(
-                "INSERT INTO salesforce_account_mappings
-                 (tenant_id, salesforce_account_id, billforge_vendor_id, salesforce_account_name, salesforce_account_type, last_synced_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())"
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(&sf_account.id)
-            .bind(vendor_id)
-            .bind(&sf_account.name)
-            .bind(&sf_account.account_type)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            imported += 1;
-        }
-    }
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE salesforce_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind((imported + updated + skipped) as i32)
-    .bind(imported as i32)
-    .bind(updated as i32)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Update last sync time
-    sqlx::query("UPDATE salesforce_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
-
-    Ok(Json(SyncAccountsResponse {
-        imported,
-        updated,
-        skipped,
-    }))
 }
 
-/// Sync vendor contacts from Salesforce
+/// Sync vendor contacts from Salesforce (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/salesforce/sync/contacts",
     tag = "Salesforce",
     responses(
-        (status = 200, description = "Contacts synced"),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_contacts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get Salesforce connection
-    let connection: Option<(String, String)> = sqlx::query_as(
-        "SELECT instance_url, access_token
-         FROM salesforce_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::SALESFORCE_CONTACT_SYNC,
+        &tenant.tenant_id,
+        serde_json::json!({}),
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (instance_url, access_token) = connection.ok_or_else(|| {
-        billforge_core::Error::Validation("Salesforce not connected or sync disabled".to_string())
-    })?;
-
-    let client = SalesforceClient::new(access_token, instance_url);
-
-    // Fetch vendor contacts
-    let contacts = client
-        .query_vendor_contacts()
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Salesforce API error: {}", e)))?;
-
-    let mut synced = 0u64;
-
-    for contact in &contacts {
-        if let Some(account_id) = &contact.account_id {
-            // Find vendor mapping
-            let vendor_mapping: Option<(Uuid,)> = sqlx::query_as(
-                "SELECT billforge_vendor_id FROM salesforce_account_mappings
-                 WHERE tenant_id = $1 AND salesforce_account_id = $2",
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(account_id)
-            .fetch_optional(&*pool)
-            .await
-            .ok()
-            .flatten();
-
-            if let Some((vendor_id,)) = vendor_mapping {
-                let full_name = format!(
-                    "{} {}",
-                    contact.first_name.as_deref().unwrap_or(""),
-                    contact.last_name
-                )
-                .trim()
-                .to_string();
-
-                // Upsert contact info on vendor
-                if let Some(email) = &contact.email {
-                    sqlx::query(
-                        "UPDATE vendors SET email = $2, contact_name = $3, updated_at = NOW() WHERE id = $1 AND (email IS NULL OR email = '')"
-                    )
-                    .bind(vendor_id)
-                    .bind(email)
-                    .bind(&full_name)
-                    .execute(&*pool)
-                    .await
-                    .ok();
-                }
-
-                synced += 1;
-            }
-        }
-    }
-
-    Ok(Json(
-        serde_json::json!({ "status": "synced", "contacts_processed": synced }),
-    ))
 }
 
 /// Get account-to-vendor mappings

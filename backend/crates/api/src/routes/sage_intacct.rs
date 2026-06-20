@@ -294,16 +294,16 @@ async fn sage_intacct_status(
     Ok(Json(status))
 }
 
-/// Sync vendors from Sage Intacct
+/// Sync vendors from Sage Intacct (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/sage-intacct/sync/vendors",
     tag = "Sage Intacct",
     request_body = SyncRequest,
     responses(
-        (status = 200, description = "Vendors synced", body = SyncResponse),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_vendors(
@@ -311,307 +311,50 @@ async fn sync_vendors(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<SyncRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get stored credentials
-    let connection: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT sender_id, sender_password, user_id, user_password, entity_id
-         FROM sage_intacct_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
+    let payload = serde_json::json!({ "full_sync": request.full_sync });
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::SAGE_INTACCT_VENDOR_SYNC,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(tenant.tenant_id.as_uuid())
-    .fetch_optional(&*pool)
     .await
-    .ok()
-    .flatten();
-
-    let (sender_id, sender_password, user_id, user_password, entity_id) =
-        connection.ok_or_else(|| {
-            billforge_core::Error::Validation(
-                "Sage Intacct not connected or sync disabled".to_string(),
-            )
-        })?;
-
-    // Get company_id separately
-    let company_id_row: Option<(String,)> =
-        sqlx::query_as("SELECT company_id FROM sage_intacct_connections WHERE tenant_id = $1")
-            .bind(tenant.tenant_id.as_uuid())
-            .fetch_optional(&*pool)
-            .await
-            .ok()
-            .flatten();
-
-    let company_id = company_id_row.map(|(id,)| id).ok_or_else(|| {
-        billforge_core::Error::Validation("Sage Intacct company_id not found".to_string())
-    })?;
-
-    // Establish session
-    let auth = SageIntacctAuth::new(SageIntacctAuthConfig {
-        sender_id,
-        sender_password,
-        company_id,
-        entity_id,
-        user_id,
-        user_password,
-    });
-
-    let session = auth.get_session().await.map_err(|e| {
-        billforge_core::Error::Validation(format!("Sage Intacct session failed: {}", e))
-    })?;
-
-    let client = SageIntacctClient::new(session);
-
-    // Create sync log entry
-    let sync_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO sage_intacct_sync_log (id, tenant_id, sync_type, status, started_at)
-         VALUES ($1, $2, 'vendors', 'running', NOW())",
-    )
-    .bind(sync_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Fetch vendors (paginate through all)
-    let mut all_vendors = Vec::new();
-    let result = client
-        .query_vendors(100, None)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Sage Intacct API error: {}", e)))?;
-
-    all_vendors.extend(result.records);
-
-    // Handle pagination
-    if result.num_remaining > 0 {
-        if let Some(result_id) = &result.result_id {
-            let mut remaining = result.num_remaining;
-            let mut rid = result_id.clone();
-            while remaining > 0 {
-                match client.read_more_vendors(&rid).await {
-                    Ok(more) => {
-                        remaining = more.num_remaining;
-                        if let Some(new_rid) = &more.result_id {
-                            rid = new_rid.clone();
-                        }
-                        all_vendors.extend(more.records);
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    }
-
-    let mut imported = 0u64;
-    let mut updated = 0u64;
-    let skipped = 0u64;
-
-    // Sync each vendor
-    for sage_vendor in &all_vendors {
-        // Check if vendor mapping exists
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vendors v
-             INNER JOIN sage_intacct_vendor_mappings m ON m.billforge_vendor_id = v.id
-             WHERE m.tenant_id = $1 AND m.sage_vendor_id = $2",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&sage_vendor.vendor_id)
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-        let email = sage_vendor
-            .display_contact
-            .as_ref()
-            .and_then(|c| c.email.as_deref())
-            .unwrap_or("");
-        let phone = sage_vendor
-            .display_contact
-            .as_ref()
-            .and_then(|c| c.phone.as_deref())
-            .unwrap_or("");
-
-        if let Some((vendor_id,)) = existing {
-            // Update existing vendor
-            sqlx::query(
-                "UPDATE vendors SET name = $2, email = $3, phone = $4, updated_at = NOW()
-                 WHERE id = $1",
-            )
-            .bind(vendor_id)
-            .bind(&sage_vendor.name)
-            .bind(email)
-            .bind(phone)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            updated += 1;
-        } else {
-            // Create new vendor
-            let vendor_id = Uuid::new_v4();
-            let vendor_type = sage_vendor.vendor_type_id.as_deref().unwrap_or("business");
-
-            sqlx::query(
-                "INSERT INTO vendors (id, name, vendor_type, email, phone, status, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())"
-            )
-            .bind(vendor_id)
-            .bind(&sage_vendor.name)
-            .bind(vendor_type)
-            .bind(email)
-            .bind(phone)
-            .bind(if sage_vendor.status == "active" { "active" } else { "inactive" })
-            .execute(&*pool)
-            .await
-            .ok();
-
-            // Create mapping
-            sqlx::query(
-                "INSERT INTO sage_intacct_vendor_mappings
-                 (tenant_id, sage_vendor_id, sage_record_no, billforge_vendor_id, sage_vendor_name, last_synced_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NOW())"
-            )
-            .bind(tenant.tenant_id.as_uuid())
-            .bind(&sage_vendor.vendor_id)
-            .bind(&sage_vendor.record_no)
-            .bind(vendor_id)
-            .bind(&sage_vendor.name)
-            .execute(&*pool)
-            .await
-            .ok();
-
-            imported += 1;
-        }
-    }
-
-    // Update sync log
-    sqlx::query(
-        "UPDATE sage_intacct_sync_log
-         SET status = 'completed', completed_at = NOW(), records_processed = $2, records_created = $3, records_updated = $4
-         WHERE id = $1"
-    )
-    .bind(sync_id)
-    .bind((imported + updated + skipped) as i32)
-    .bind(imported as i32)
-    .bind(updated as i32)
-    .execute(&*pool)
-    .await
-    .ok();
-
-    // Update last sync time
-    sqlx::query("UPDATE sage_intacct_connections SET last_sync_at = NOW() WHERE tenant_id = $1")
-        .bind(tenant.tenant_id.as_uuid())
-        .execute(&*pool)
-        .await
-        .ok();
-
-    Ok(Json(SyncResponse {
-        imported,
-        updated,
-        skipped,
-    }))
 }
 
-/// Sync GL accounts from Sage Intacct
+/// Sync GL accounts from Sage Intacct (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/sage-intacct/sync/accounts",
     tag = "Sage Intacct",
     responses(
-        (status = 200, description = "Accounts synced"),
+        (status = 202, description = "Sync enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn sync_accounts(
     State(state): State<AppState>,
     TenantCtx(tenant): TenantCtx,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get stored credentials
-    let connection: Option<(String, String, String, String, String, Option<String>)> =
-        sqlx::query_as(
-            "SELECT company_id, sender_id, sender_password, user_id, user_password, entity_id
-         FROM sage_intacct_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-    let (company_id, sender_id, sender_password, user_id, user_password, entity_id) = connection
-        .ok_or_else(|| {
-            billforge_core::Error::Validation(
-                "Sage Intacct not connected or sync disabled".to_string(),
-            )
-        })?;
-
-    // Establish session
-    let auth = SageIntacctAuth::new(SageIntacctAuthConfig {
-        sender_id,
-        sender_password,
-        company_id,
-        entity_id,
-        user_id,
-        user_password,
-    });
-
-    let session = auth.get_session().await.map_err(|e| {
-        billforge_core::Error::Validation(format!("Sage Intacct session failed: {}", e))
-    })?;
-
-    let client = SageIntacctClient::new(session);
-
-    // Fetch GL accounts
-    let result = client
-        .query_gl_accounts(100, None)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Sage Intacct API error: {}", e)))?;
-
-    let mut created = 0u64;
-
-    // Upsert account mappings
-    for account in result.records {
-        sqlx::query(
-            "INSERT INTO sage_intacct_account_mappings
-             (tenant_id, sage_account_no, sage_account_title, sage_account_type, billforge_gl_code, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $2, NOW(), NOW())
-             ON CONFLICT (tenant_id, sage_account_no) DO UPDATE SET
-                sage_account_title = $3,
-                sage_account_type = $4,
-                updated_at = NOW()"
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .bind(&account.account_no)
-        .bind(&account.title)
-        .bind(&account.account_type)
-        .execute(&*pool)
-        .await
-        .ok();
-
-        created += 1;
-    }
-
-    Ok(Json(
-        serde_json::json!({ "status": "synced", "count": created }),
-    ))
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::SAGE_INTACCT_ACCOUNT_SYNC,
+        &tenant.tenant_id,
+        serde_json::json!({}),
+    )
+    .await
 }
 
-/// Export invoice to Sage Intacct as AP bill
+/// Export invoice to Sage Intacct as AP bill (asynchronous)
 #[utoipa::path(
     post,
     path = "/api/v1/sage-intacct/export/invoice/{id}",
     tag = "Sage Intacct",
     request_body = ExportInvoiceRequest,
     responses(
-        (status = 200, description = "Invoice exported", body = ExportInvoiceResponse),
+        (status = 202, description = "Export enqueued"),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "Invoice not found"),
-        (status = 500, description = "Internal server error")
+        (status = 503, description = "Background queue unavailable")
     )
 )]
 async fn export_invoice_to_sage(
@@ -619,161 +362,19 @@ async fn export_invoice_to_sage(
     TenantCtx(tenant): TenantCtx,
     Json(request): Json<ExportInvoiceRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    // Get stored credentials
-    let connection: Option<(String, String, String, String, String, Option<String>)> =
-        sqlx::query_as(
-            "SELECT company_id, sender_id, sender_password, user_id, user_password, entity_id
-         FROM sage_intacct_connections
-         WHERE tenant_id = $1 AND sync_enabled = true",
-        )
-        .bind(tenant.tenant_id.as_uuid())
-        .fetch_optional(&*pool)
-        .await
-        .ok()
-        .flatten();
-
-    let (company_id, sender_id, sender_password, user_id, user_password, entity_id) = connection
-        .ok_or_else(|| {
-            billforge_core::Error::Validation(
-                "Sage Intacct not connected or sync disabled".to_string(),
-            )
-        })?;
-
-    // Get invoice from database
-    let invoice_id: billforge_core::domain::InvoiceId = request
-        .invoice_id
-        .parse()
-        .map_err(|_| billforge_core::Error::Validation("Invalid invoice ID".to_string()))?;
-
-    let invoice: Option<(String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT vendor_name, invoice_number, total_amount_cents, due_date, po_number
-         FROM invoices WHERE id = $1",
-    )
-    .bind(invoice_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (vendor_name, invoice_number, total_cents, due_date, po_number) =
-        invoice.ok_or_else(|| billforge_core::Error::NotFound {
-            resource_type: "Invoice".to_string(),
-            id: request.invoice_id.clone(),
-        })?;
-
-    // Get vendor mapping
-    let vendor_mapping: Option<(String,)> = sqlx::query_as(
-        "SELECT sage_vendor_id FROM sage_intacct_vendor_mappings
-         WHERE tenant_id = $1 AND billforge_vendor_id IN
-         (SELECT vendor_id FROM invoices WHERE id = $2)",
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .fetch_optional(&*pool)
-    .await
-    .ok()
-    .flatten();
-
-    let sage_vendor_id = vendor_mapping.map(|(id,)| id).ok_or_else(|| {
-        billforge_core::Error::Validation(
-            "Vendor not found in Sage Intacct. Please sync vendors first.".to_string(),
-        )
-    })?;
-
-    // Establish session
-    let auth = SageIntacctAuth::new(SageIntacctAuthConfig {
-        sender_id,
-        sender_password,
-        company_id,
-        entity_id,
-        user_id,
-        user_password,
+    let payload = serde_json::json!({
+        "invoice_id": request.invoice_id,
+        "sage_account_no": request.sage_account_no,
+        "department_id": request.department_id,
+        "location_id": request.location_id,
     });
-
-    let session = auth.get_session().await.map_err(|e| {
-        billforge_core::Error::Validation(format!("Sage Intacct session failed: {}", e))
-    })?;
-
-    let client = SageIntacctClient::new(session);
-
-    // Build AP bill
-    use billforge_sage_intacct::{SageAPBill, SageAPBillLine};
-
-    let amount = total_cents as f64 / 100.0;
-    let today = chrono::Utc::now().date_naive();
-
-    let bill = SageAPBill {
-        record_no: None,
-        transaction_type: "Vendor Invoice".to_string(),
-        vendor_id: sage_vendor_id,
-        date_created: today,
-        date_due: due_date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
-        document_number: Some(invoice_number.clone()),
-        reference_number: po_number,
-        description: Some(format!("BillForge export: Invoice {}", invoice_number)),
-        currency: Some("USD".to_string()),
-        exchange_rate_type: None,
-        lines: vec![SageAPBillLine {
-            gl_account_no: request.sage_account_no.clone(),
-            amount,
-            memo: Some(format!("Invoice {}", invoice_number)),
-            department_id: request.department_id.clone(),
-            location_id: request.location_id.clone(),
-            project_id: None,
-            class_id: None,
-        }],
-        state: None,
-        total_amount: Some(amount),
-        location_id: request.location_id.clone(),
-        department_id: request.department_id.clone(),
-    };
-
-    // Create AP bill in Sage Intacct
-    let result = client
-        .create_ap_bill(&bill)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("Sage Intacct API error: {}", e)))?;
-
-    if result.status != "success" {
-        let error_msg = result
-            .errors
-            .first()
-            .map(|e| e.description.clone())
-            .unwrap_or_else(|| "Unknown error".to_string());
-        return Err(billforge_core::Error::Validation(format!(
-            "Sage Intacct bill creation failed: {}",
-            error_msg
-        ))
-        .into());
-    }
-
-    let sage_record_no = result.key.unwrap_or_default();
-
-    // Store export record
-    let export_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO sage_intacct_invoice_exports (id, tenant_id, invoice_id, sage_record_no, exported_at, export_status)
-         VALUES ($1, $2, $3, $4, NOW(), 'synced')
-         ON CONFLICT (tenant_id, invoice_id) DO UPDATE SET
-            sage_record_no = $4,
-            exported_at = NOW(),
-            export_status = 'synced',
-            sync_error = NULL"
+    crate::routes::erp_jobs::enqueue_erp_job(
+        state.redis.as_ref(),
+        crate::routes::erp_jobs::job_type::SAGE_INTACCT_INVOICE_EXPORT,
+        &tenant.tenant_id,
+        payload,
     )
-    .bind(export_id)
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(invoice_id.as_uuid())
-    .bind(&sage_record_no)
-    .execute(&*pool)
     .await
-    .ok();
-
-    Ok(Json(ExportInvoiceResponse {
-        sage_record_no,
-        status: "synced".to_string(),
-    }))
 }
 
 /// Get GL account mappings
