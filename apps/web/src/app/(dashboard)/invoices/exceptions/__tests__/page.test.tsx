@@ -2,11 +2,21 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OcrExceptionsPage from '../page';
+import { toast } from 'sonner';
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => '/invoices/exceptions',
+}));
+
+// Mock sonner toast
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
 // Mock the API
@@ -216,6 +226,70 @@ describe('OcrExceptionsPage', () => {
       expect(mockResolveOcrException).toHaveBeenCalled();
       // After mutation success, list should be re-fetched
       expect(mockListInvoices.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('shows standardized error banner when the list query fails', async () => {
+    mockListInvoices.mockRejectedValue(new Error('Network down'));
+
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Network down')).toBeInTheDocument();
+    });
+
+    // Loading affordance must not still be visible after the failure.
+    expect(screen.queryByText(/Loading data/i)).not.toBeInTheDocument();
+  });
+
+  it('disables only the acting row while a mutation is pending', async () => {
+    let resolveFn: ((value: unknown) => void) | undefined;
+    mockResolveOcrException.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveFn = resolve;
+      }),
+    );
+
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: /approve invoice/i });
+    const rejectButtons = screen.getAllByRole('button', { name: /reject invoice/i });
+
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(approveButtons[0]).toBeDisabled();
+    });
+
+    // Other row stays interactive while row 1 is acting.
+    expect(approveButtons[1]).not.toBeDisabled();
+    expect(rejectButtons[1]).not.toBeDisabled();
+
+    // Cleanly resolve the deferred promise so React Query settles.
+    resolveFn?.({ id: 'inv-001-abcdefgh', ocr_exception_status: 'approved' });
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /approve invoice/i })[0]).not.toBeDisabled();
+    });
+  });
+
+  it('shows an error toast when the resolve mutation fails', async () => {
+    mockResolveOcrException.mockRejectedValueOnce(new Error('Conflict'));
+
+    renderExceptionsPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('INV-001')).toBeInTheDocument();
+    });
+
+    const approveButtons = screen.getAllByRole('button', { name: /approve invoice/i });
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Conflict');
     });
   });
 });
