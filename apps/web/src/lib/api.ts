@@ -1343,6 +1343,12 @@ export interface IntegrationStatusResponse {
   company_name?: string;
   last_sync_at?: string;
   sync_enabled?: boolean;
+  /**
+   * Machine-readable reason the integration is unavailable when `connected`
+   * is false. Currently emitted by the NetSuite status endpoint as
+   * `"jwt_not_implemented"` while JWT client_assertion signing is pending.
+   */
+  reason?: string;
 }
 
 export async function getIntegrationStatus(statusEndpoint: string): Promise<IntegrationStatusResponse> {

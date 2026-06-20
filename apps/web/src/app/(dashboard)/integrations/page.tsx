@@ -33,7 +33,14 @@ import {
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth';
 
-type IntegrationStatus = 'connected' | 'disconnected' | 'available' | 'loading' | 'error' | 'locked';
+type IntegrationStatus =
+  | 'connected'
+  | 'disconnected'
+  | 'available'
+  | 'loading'
+  | 'error'
+  | 'locked'
+  | 'unsupported';
 type IntegrationCategory = 'erp' | 'crm' | 'payments' | 'notifications' | 'all';
 
 interface IntegrationStatusState {
@@ -149,6 +156,28 @@ const integrations: Integration[] = [
     },
     docsUrl: 'https://developer.intacct.com/api/',
     requiredModule: 'sage_intacct',
+  },
+  {
+    id: 'netsuite',
+    name: 'NetSuite',
+    description: 'Oracle NetSuite vendor bill and payment automation.',
+    longDescription: 'NetSuite is included as a paid add-on. Connecting is currently disabled because real NetSuite OAuth 2.0 M2M requires signed JWT client_assertion authentication, which is still being implemented. The card is shown so the entitlement is visible; reach out to support for sandbox onboarding once JWT signing ships.',
+    category: 'erp',
+    status: 'disconnected',
+    logo: '/integrations/netsuite.svg',
+    authType: 'credentials',
+    capabilities: [
+      'Vendor master data sync',
+      'Vendor bill export',
+      'Sandbox + production environments',
+    ],
+    endpoints: {
+      connect: '/api/v1/netsuite/connect',
+      status: '/api/v1/netsuite/status',
+      disconnect: '/api/v1/netsuite/disconnect',
+    },
+    docsUrl: 'https://docs.oracle.com/en/cloud/saas/netsuite/index.html',
+    requiredModule: 'net_suite',
   },
   {
     id: 'salesforce',
@@ -280,6 +309,7 @@ function IntegrationLogo({ integration }: { integration: Integration }) {
     'quickbooks': { bg: 'bg-emerald-100 dark:bg-emerald-900/40', text: 'text-emerald-700 dark:text-emerald-300', label: 'QB' },
     'xero': { bg: 'bg-sky-100 dark:bg-sky-900/40', text: 'text-sky-700 dark:text-sky-300', label: 'XR' },
     'sage-intacct': { bg: 'bg-green-100 dark:bg-green-900/40', text: 'text-green-700 dark:text-green-300', label: 'SI' },
+    'netsuite': { bg: 'bg-red-100 dark:bg-red-900/40', text: 'text-red-700 dark:text-red-300', label: 'NS' },
     'salesforce': { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-300', label: 'SF' },
     'workday': { bg: 'bg-orange-100 dark:bg-orange-900/40', text: 'text-orange-700 dark:text-orange-300', label: 'WD' },
     'bill-com': { bg: 'bg-violet-100 dark:bg-violet-900/40', text: 'text-violet-700 dark:text-violet-300', label: 'BC' },
@@ -302,6 +332,14 @@ function StatusBadge({ status }: { status: IntegrationStatus }) {
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
         <Lock className="h-3.5 w-3.5" />
         Upgrade required
+      </span>
+    );
+  }
+  if (status === 'unsupported') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Auth setup pending
       </span>
     );
   }
@@ -372,6 +410,11 @@ function IntegrationCard({ integration, liveStatus, subscriptionLoading, onConne
                 Requires {integration.name} add-on
               </p>
             )}
+            {displayStatus === 'unsupported' && (
+              <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                NetSuite JWT authentication is not yet available. Contact support for sandbox onboarding.
+              </p>
+            )}
             {lastSync && (
               <p className="mt-0.5 text-xs text-zinc-400 dark:text-zinc-500">
                 Last synced: {new Date(lastSync).toLocaleString()}
@@ -426,7 +469,7 @@ function IntegrationCard({ integration, liveStatus, subscriptionLoading, onConne
                 ))}
               </ul>
             </div>
-            {integration.authType === 'credentials' && (
+            {integration.authType === 'credentials' && displayStatus !== 'unsupported' && (
               <div className="mt-3 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 rounded-lg">
                 <Shield className="h-3.5 w-3.5" />
                 This integration uses credential-based authentication. Your credentials are encrypted at rest.
@@ -470,6 +513,17 @@ function IntegrationCard({ integration, liveStatus, subscriptionLoading, onConne
             >
               <Lock className="h-3.5 w-3.5" />
               Upgrade required
+            </button>
+          ) : displayStatus === 'unsupported' ? (
+            <button
+              type="button"
+              disabled
+              aria-label={`${integration.name} connect unavailable`}
+              title="NetSuite JWT authentication is not yet available. Contact support for sandbox onboarding."
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-lg cursor-not-allowed"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              Connect unavailable
             </button>
           ) : displayStatus === 'connected' ? (
             <button
@@ -886,6 +940,12 @@ export default function IntegrationsPage() {
     }
 
     const result = await getIntegrationStatus(integration.endpoints.status);
+    if (!result.connected && result.reason === 'jwt_not_implemented') {
+      return {
+        status: 'unsupported',
+        liveStatus: result,
+      };
+    }
     return {
       status: result.connected ? 'connected' : 'disconnected',
       liveStatus: result,
@@ -986,6 +1046,11 @@ export default function IntegrationsPage() {
     // Block connect for locked integrations - redirect to billing upgrade
     if (isIntegrationLocked(integration)) {
       window.location.href = '/settings?tab=billing';
+      return;
+    }
+
+    // NetSuite connect is intentionally disabled until JWT signing ships.
+    if (statuses[integrationId]?.status === 'unsupported') {
       return;
     }
 
@@ -1175,7 +1240,7 @@ export default function IntegrationsPage() {
           Coming soon
         </h3>
         <div className="flex flex-wrap gap-3">
-          {['NetSuite', 'SAP', 'Microsoft Dynamics 365', 'FreshBooks'].map((name) => (
+          {['SAP', 'Microsoft Dynamics 365', 'FreshBooks'].map((name) => (
             <span
               key={name}
               className="inline-flex items-center px-3 py-1.5 text-sm text-zinc-400 dark:text-zinc-500 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg"

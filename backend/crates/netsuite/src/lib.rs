@@ -1,12 +1,12 @@
 //! NetSuite REST API integration service
 //!
-//! Provides OAuth 2.0 M2M authentication and API client for NetSuite:
-//! - OAuth 2.0 client_credentials token exchange
-//! - Vendor list (NetSuite REST record API)
-//!
-//! NOTE: Real NetSuite OAuth 2.0 M2M requires JWT client assertion; this scaffold
-//! models the simpler client_credentials shape to establish the crate skeleton.
-//! A follow-up ticket should add JWT signing against actual NetSuite sandbox credentials.
+//! The NetSuite connect path is intentionally disabled: `authenticate()` returns
+//! the typed `ClientError::JwtNotImplemented` variant instead of attempting any
+//! HTTP exchange. Real NetSuite OAuth 2.0 M2M requires JWT client_assertion
+//! signing (RS256 against a NetSuite-issued private key), which is tracked as
+//! separate work. The crate keeps `NetSuiteClient`, the credentials/vendor wire
+//! types, and the vendor-bill request shape so the API layer, connections table,
+//! and read paths can remain wired without pretending a real auth flow exists.
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,12 @@ pub enum ClientError {
 
     #[error("Validation failed: {0}")]
     Validation(String),
+
+    #[error(
+        "NetSuite OAuth 2.0 M2M requires JWT client_assertion signing, which is not yet implemented. \
+         Connect is disabled until JWT support ships."
+    )]
+    JwtNotImplemented,
 }
 
 // ---------------------------------------------------------------------------
@@ -84,47 +90,15 @@ impl NetSuiteClient {
         }
     }
 
-    /// Exchange client credentials for an access token via OAuth 2.0 M2M.
+    /// Authenticate against NetSuite, intentionally unimplemented.
     ///
-    /// POSTs to `{base}/services/rest/auth/oauth2/v1/token` with
-    /// `grant_type=client_credentials` and stores the resulting token.
+    /// Returns `ClientError::JwtNotImplemented` without making any network
+    /// request. Real NetSuite OAuth 2.0 M2M requires JWT `client_assertion`
+    /// signing (RS256 against a NetSuite-issued private key), which is tracked
+    /// as separate work. Callers should treat this as a hard failure surface
+    /// rather than a transient error.
     pub async fn authenticate(&mut self) -> Result<(), ClientError> {
-        let url = format!(
-            "{}/services/rest/auth/oauth2/v1/token",
-            self.config.base_url()
-        );
-
-        let body = format!(
-            "grant_type=client_credentials&client_id={}&client_secret={}",
-            urlencoding::encode(&self.config.client_id),
-            urlencoding::encode(&self.config.client_secret),
-        );
-
-        let resp = self
-            .http
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| ClientError::Http(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(ClientError::Auth(format!(
-                "token request returned {}: {}",
-                status, text
-            )));
-        }
-
-        let token_resp: TokenResponse = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Deserialization(e.to_string()))?;
-
-        self.access_token = Some(token_resp.access_token);
-        Ok(())
+        Err(ClientError::JwtNotImplemented)
     }
 
     /// List vendors from NetSuite.
@@ -267,11 +241,6 @@ pub struct NetSuiteVendor {
 #[derive(Debug, Deserialize)]
 struct VendorListResponse {
     items: Vec<NetSuiteVendor>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
 }
 
 // ---------------------------------------------------------------------------

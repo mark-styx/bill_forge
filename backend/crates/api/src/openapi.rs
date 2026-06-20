@@ -841,7 +841,7 @@ struct PublicApiDoc;
     ),
     components(schemas(
         crate::routes::netsuite::NetSuiteConnectRequest,
-        crate::routes::netsuite::NetSuiteConnectResponse,
+        crate::routes::netsuite::NetSuiteConnectUnsupportedResponse,
         crate::routes::netsuite::NetSuiteDisconnectResponse,
         crate::routes::netsuite::NetSuiteStatus,
         crate::routes::netsuite::SyncResponse,

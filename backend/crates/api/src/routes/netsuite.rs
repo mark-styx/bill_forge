@@ -1,31 +1,31 @@
 //! NetSuite ERP integration endpoints
 //!
-//! NetSuite uses OAuth 2.0 Machine-to-Machine authentication.
-//!
-//! NOTE: The underlying NetSuiteClient crate currently models a simplified
-//! client_credentials flow. Real NetSuite OAuth 2.0 M2M requires JWT client
-//! assertion (signed with a private key). Until that follow-up lands, the
-//! /connect endpoint will surface an honest auth error when called against a
-//! real NetSuite account. The route structure, middleware gating, and
-//! connections table are fully wired so the integration is reachable and
-//! subscription-gated like every other ERP module.
+//! NetSuite is gated as a paid add-on but the connect path is intentionally
+//! disabled: `POST /connect` returns HTTP 501 with a stable
+//! `netsuite_jwt_not_implemented` error code rather than attempting any auth
+//! exchange. Real NetSuite OAuth 2.0 M2M requires JWT `client_assertion`
+//! signing (RS256 against a NetSuite-issued private key), tracked as separate
+//! work. `/status` therefore reports `connected: false` with a `reason` of
+//! `jwt_not_implemented` for entitled tenants, and the integrations UI renders
+//! a visible "Auth setup pending" card so the entitled-but-unsupported state is
+//! disclosed instead of silent.
 //!
 //! Endpoints:
-//! - POST /connect — Save NetSuite credentials & test connection
-//! - POST /disconnect — Remove stored credentials
-//! - GET /status — Check connection status
-//! - POST /sync/vendors — Sync vendors from NetSuite
+//! - POST /connect: returns 501 (JWT signing not yet implemented)
+//! - POST /disconnect: removes any previously stored connection row
+//! - GET /status: reports connection state, including the unsupported reason
+//! - POST /sync/vendors: queued no-op until connect is real
 
 use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
     extract::State,
+    http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
-use billforge_netsuite::{NetSuiteClient, NetSuiteConfig};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -62,6 +62,11 @@ pub struct NetSuiteStatus {
     pub last_sync_at: Option<String>,
     /// Sync enabled
     pub sync_enabled: bool,
+    /// Machine-readable reason the integration is unavailable, when applicable.
+    /// Returns `"jwt_not_implemented"` for entitled tenants while JWT
+    /// `client_assertion` signing is pending.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Sync response
@@ -75,13 +80,15 @@ pub struct SyncResponse {
     pub skipped: u64,
 }
 
-/// Response body for a successful NetSuite connect.
+/// Response body returned by `/connect` while NetSuite JWT signing is pending.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct NetSuiteConnectResponse {
-    /// Always "connected".
-    pub status: String,
-    /// NetSuite account id that was registered.
-    pub account_id: String,
+pub struct NetSuiteConnectUnsupportedResponse {
+    /// Stable machine-readable error code. Always `"netsuite_jwt_not_implemented"`.
+    pub error: String,
+    /// Human-readable explanation of why the connect path is disabled.
+    pub message: String,
+    /// Pointer for support / engineering on what is missing.
+    pub docs_hint: String,
 }
 
 /// Response body for NetSuite disconnect.
@@ -91,72 +98,49 @@ pub struct NetSuiteDisconnectResponse {
     pub status: String,
 }
 
+/// Stable error code returned by `/connect` until JWT signing ships.
+pub const NETSUITE_JWT_NOT_IMPLEMENTED_CODE: &str = "netsuite_jwt_not_implemented";
+
+/// Build the body returned by `POST /api/v1/netsuite/connect` while JWT
+/// `client_assertion` signing is pending. Exposed for tests so they can verify
+/// the contract without spinning up the full AppState.
+pub fn netsuite_jwt_not_implemented_body() -> NetSuiteConnectUnsupportedResponse {
+    NetSuiteConnectUnsupportedResponse {
+        error: NETSUITE_JWT_NOT_IMPLEMENTED_CODE.to_string(),
+        message:
+            "NetSuite OAuth 2.0 M2M requires JWT client_assertion signing, which is not yet \
+             implemented. Connect is disabled until JWT support ships."
+                .to_string(),
+        docs_hint: "JWT client_assertion signing pending".to_string(),
+    }
+}
+
 // ──────────────────────────── Handlers ────────────────────────────
 
-/// Connect to NetSuite (save credentials & test connection)
+/// Connect to NetSuite (intentionally unsupported until JWT signing ships).
+///
+/// Returns HTTP 501 with a stable `netsuite_jwt_not_implemented` error code.
+/// No network call is attempted and no row is written to `netsuite_connections`.
 #[utoipa::path(
     post,
     path = "/api/v1/netsuite/connect",
     tag = "NetSuite",
     request_body = NetSuiteConnectRequest,
     responses(
-        (status = 200, description = "NetSuite connected", body = NetSuiteConnectResponse),
-        (status = 400, description = "Invalid credentials or auth not yet implemented"),
+        (status = 501, description = "NetSuite JWT signing not yet implemented", body = NetSuiteConnectUnsupportedResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 402, description = "NetSuite add-on not entitled"),
     )
 )]
 async fn netsuite_connect(
-    State(state): State<AppState>,
-    TenantCtx(tenant): TenantCtx,
-    Json(request): Json<NetSuiteConnectRequest>,
+    State(_state): State<AppState>,
+    TenantCtx(_tenant): TenantCtx,
+    Json(_request): Json<NetSuiteConnectRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    // Test connection by attempting authentication.
-    let config = NetSuiteConfig {
-        account_id: request.account_id.clone(),
-        client_id: request.client_id.clone(),
-        client_secret: request.client_secret.clone(),
-        base_url: None,
-    };
-    let mut client = NetSuiteClient::new(config);
-
-    client.authenticate().await.map_err(|e| {
-        billforge_core::Error::Validation(format!(
-            "NetSuite authentication failed: {}. \
-             The current integration uses a simplified client_credentials flow; \
-             real NetSuite OAuth 2.0 M2M requires JWT client assertion (follow-up work).",
-            e
-        ))
-    })?;
-
-    // Store credentials in database (encrypted in production)
-    let pool = state.db.tenant(&tenant.tenant_id).await?;
-
-    sqlx::query(
-        "INSERT INTO netsuite_connections (
-            tenant_id, account_id, client_id, client_secret,
-            sync_enabled, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, true, NOW(), NOW())
-        ON CONFLICT (tenant_id) DO UPDATE SET
-            account_id = $2,
-            client_id = $3,
-            client_secret = $4,
-            sync_enabled = true,
-            updated_at = NOW()",
-    )
-    .bind(tenant.tenant_id.as_uuid())
-    .bind(&request.account_id)
-    .bind(&request.client_id)
-    .bind(&request.client_secret) // TODO: encrypt in production
-    .execute(&*pool)
-    .await
-    .ok();
-
-    Ok(Json(NetSuiteConnectResponse {
-        status: "connected".to_string(),
-        account_id: request.account_id,
-    }))
+    Ok((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(netsuite_jwt_not_implemented_body()),
+    ))
 }
 
 /// Disconnect NetSuite
@@ -221,6 +205,7 @@ async fn netsuite_status(
             account_id: Some(account_id),
             last_sync_at: last_sync_at.map(|t| t.to_rfc3339()),
             sync_enabled,
+            reason: None,
         }
     } else {
         NetSuiteStatus {
@@ -228,6 +213,7 @@ async fn netsuite_status(
             account_id: None,
             last_sync_at: None,
             sync_enabled: false,
+            reason: Some("jwt_not_implemented".to_string()),
         }
     };
 
