@@ -49,6 +49,13 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   address_drift: 'Address drift detected',
   tax_id_reverify_failed: 'Tax ID re-verification failed',
   beneficial_owner_change: 'Beneficial owner changed',
+  w9_expiring: 'W-9 expiring soon',
+  w9_expired: 'W-9 expired',
+  w8_expiring: 'W-8 expiring soon',
+  w8_expired: 'W-8 expired',
+  coi_expiring: 'Certificate of insurance expiring',
+  coi_expired: 'Certificate of insurance expired',
+  threshold_1099_no_w9: '1099 threshold crossed without W-9 on file',
 };
 
 function formatTimestamp(iso: string): string {
@@ -84,6 +91,37 @@ function payloadPreview(alert: VendorRiskAlert): string {
       return names ? `Matched: ${names}` : `${matches.length} match(es)`;
     }
     return 'Sanctions screening flagged';
+  }
+  if (
+    alert.alert_type === 'w9_expiring' ||
+    alert.alert_type === 'w8_expiring' ||
+    alert.alert_type === 'coi_expiring'
+  ) {
+    const expiresOn = p.expires_on as string | undefined;
+    const daysUntil = p.days_until_expiry as number | undefined;
+    if (expiresOn && typeof daysUntil === 'number') {
+      return `Expires ${expiresOn} (${daysUntil} day${daysUntil === 1 ? '' : 's'} left)`;
+    }
+    return 'Expiring soon';
+  }
+  if (
+    alert.alert_type === 'w9_expired' ||
+    alert.alert_type === 'w8_expired' ||
+    alert.alert_type === 'coi_expired'
+  ) {
+    const expiresOn = p.expires_on as string | undefined;
+    const daysOverdue = p.days_overdue as number | undefined;
+    if (expiresOn && typeof daysOverdue === 'number') {
+      return `Expired ${expiresOn} (${daysOverdue} day${daysOverdue === 1 ? '' : 's'} overdue)`;
+    }
+    return 'Expired';
+  }
+  if (alert.alert_type === 'threshold_1099_no_w9') {
+    const ytd = p.ytd_paid_cents as number | undefined;
+    if (typeof ytd === 'number') {
+      return `YTD paid $${(ytd / 100).toFixed(2)} - W-9 not on file`;
+    }
+    return '$600 1099 threshold crossed without W-9';
   }
   return JSON.stringify(p).slice(0, 120);
 }
@@ -146,8 +184,10 @@ export default function VendorRiskDashboardPage() {
             Vendor Risk Monitor
           </h1>
           <p className="text-muted-foreground mt-0.5">
-            Continuous sanctions, banking-change, and beneficial-ownership alerts.
-            Open critical alerts block payment release until acknowledged.
+            Continuous sanctions, banking-change, beneficial-ownership, and
+            tax-compliance (W-9/W-8/COI/1099-threshold) alerts. Open critical
+            alerts block payment release until acknowledged; soft hits warn
+            without blocking.
           </p>
         </div>
         <div className="flex items-center gap-2">

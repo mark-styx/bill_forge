@@ -3597,7 +3597,14 @@ export type VendorRiskAlertType =
   | 'banking_change'
   | 'address_drift'
   | 'tax_id_reverify_failed'
-  | 'beneficial_owner_change';
+  | 'beneficial_owner_change'
+  | 'w9_expiring'
+  | 'w9_expired'
+  | 'w8_expiring'
+  | 'w8_expired'
+  | 'coi_expiring'
+  | 'coi_expired'
+  | 'threshold_1099_no_w9';
 
 export interface VendorRiskAlert {
   id: string;
