@@ -1,5 +1,6 @@
 //! Application state shared across handlers
 
+use crate::security::TokenCipher;
 use crate::teams_jwt::{MicrosoftJwksProvider, TeamsJwtValidator};
 use crate::Config;
 use anyhow::Result;
@@ -48,6 +49,9 @@ pub struct AppState {
     /// callback. When `TEAMS_ACTIONS_ENABLED!=true` this is a disabled stub
     /// (the route is not registered in that case).
     pub teams_jwt_validator: Arc<TeamsJwtValidator>,
+    /// AES-256-GCM cipher used to seal QBO/Xero OAuth tokens at rest.
+    /// See migration 154 and `security::token_cipher` (refs #432).
+    pub token_cipher: Arc<TokenCipher>,
     /// Background scorer combining duplicate + fraud + amount-spike signals
     /// per ingested invoice (refs #420). Spawned from the invoice ingest hook.
     #[cfg(feature = "analytics")]
@@ -149,6 +153,10 @@ impl AppState {
         // fast rather than at the first webhook call.
         let teams_jwt_validator = Arc::new(Self::build_teams_jwt_validator()?);
 
+        // OAuth token at-rest cipher. Required in production so a tenant DB
+        // dump never yields directly-usable QBO/Xero credentials.
+        let token_cipher = Arc::new(Self::build_token_cipher(&config.environment)?);
+
         Ok(Self {
             db: db.clone(),
             auth,
@@ -159,6 +167,7 @@ impl AppState {
             redis,
             invoice_events,
             teams_jwt_validator,
+            token_cipher,
             #[cfg(feature = "analytics")]
             invoice_risk_scorer: Arc::new(
                 crate::services::invoice_risk_scoring::InvoiceRiskScorer::new()
@@ -168,6 +177,32 @@ impl AppState {
                     ),
             ),
         })
+    }
+
+    fn build_token_cipher(environment: &crate::Environment) -> Result<TokenCipher> {
+        match TokenCipher::from_env() {
+            Ok(cipher) => Ok(cipher),
+            Err(crate::security::CipherError::KeyMissing) if !environment.is_production() => {
+                tracing::warn!(
+                    "BILLFORGE_TOKEN_ENC_KEY is not set; generating an ephemeral OAuth token \
+                     encryption key for non-production use. Tokens persisted now will be \
+                     unreadable after a restart. Set BILLFORGE_TOKEN_ENC_KEY to a stable \
+                     base64-encoded 32-byte value for any environment that retains data."
+                );
+                let mut key = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key);
+                let b64 = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    key,
+                );
+                TokenCipher::from_base64(&b64).map_err(|e| {
+                    anyhow::anyhow!("Failed to build ephemeral token cipher: {e}")
+                })
+            }
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to initialise OAuth token cipher: {e}"
+            )),
+        }
     }
 
     fn build_teams_jwt_validator() -> Result<TeamsJwtValidator> {

@@ -17,5 +17,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_tenant_external_id
 ALTER TABLE quickbooks_connections ADD COLUMN IF NOT EXISTS last_sync_status TEXT;
 ALTER TABLE quickbooks_connections ADD COLUMN IF NOT EXISTS last_sync_error TEXT;
 
--- TODO: Token encryption at rest. Currently plaintext TEXT columns.
--- Follow-up: integrate pgcrypto or a KMS--backed encryption helper.
+-- Token encryption at rest: resolved by migration 154 and
+-- billforge_core::security::TokenCipher (AES-256-GCM envelope keyed by
+-- BILLFORGE_TOKEN_ENC_KEY). Columns stay TEXT; values now hold the v1
+-- envelope written by the API and worker on every write. Refs #432.

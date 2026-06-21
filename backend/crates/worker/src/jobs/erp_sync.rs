@@ -138,8 +138,18 @@ async fn get_authenticated_xero_client(
     .await
     .context("Failed to load Xero connection")?;
 
-    let (xero_tenant_id, mut access_token, refresh_token_val, token_expires_at) =
+    let (xero_tenant_id, stored_access_token, stored_refresh_token, token_expires_at) =
         connection.context("Xero not connected or sync disabled")?;
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = config
+        .token_cipher
+        .open(&stored_access_token)
+        .context("Failed to decrypt Xero access token")?;
+    let refresh_token_val = config
+        .token_cipher
+        .open(&stored_refresh_token)
+        .context("Failed to decrypt Xero refresh token")?;
 
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
         let client_id = config
@@ -165,14 +175,16 @@ async fn get_authenticated_xero_client(
 
         let now = Utc::now();
         let new_expires = now + Duration::seconds(new_tokens.expires_in);
+        let sealed_access = config.token_cipher.seal(&new_tokens.access_token);
+        let sealed_refresh = config.token_cipher.seal(&new_tokens.refresh_token);
         sqlx::query(
             "UPDATE xero_connections \
              SET access_token = $2, refresh_token = $3, access_token_expires_at = $4, updated_at = NOW() \
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&new_tokens.access_token)
-        .bind(&new_tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(new_expires)
         .execute(pool)
         .await

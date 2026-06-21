@@ -283,7 +283,9 @@ async fn quickbooks_callback(
     let company_name =
         company_info.and_then(|info| info.get("CompanyName")?.as_str().map(|s| s.to_string()));
 
-    // Store tokens in database
+    // Store tokens in database (sealed via TokenCipher; refs #432)
+    let sealed_access_token = state.token_cipher.seal(&tokens.access_token);
+    let sealed_refresh_token = state.token_cipher.seal(&tokens.refresh_token);
     sqlx::query(
         "INSERT INTO quickbooks_connections (
             tenant_id, company_id, company_name, access_token, refresh_token,
@@ -303,8 +305,8 @@ async fn quickbooks_callback(
     .bind(tenant_id.as_uuid())
     .bind(&params.realm_id)
     .bind(&company_name)
-    .bind(&tokens.access_token)
-    .bind(&tokens.refresh_token)
+    .bind(&sealed_access_token)
+    .bind(&sealed_refresh_token)
     .bind(access_token_expires_at)
     .bind(refresh_token_expires_at)
     .bind(match qb_config.environment {
@@ -361,7 +363,7 @@ async fn quickbooks_disconnect(
                 billforge_core::Error::Internal(format!("Database error: {}", e))
             })?;
 
-    if let Some((refresh_token,)) = connection {
+    if let Some((stored_refresh_token,)) = connection {
         // Revoke token with QuickBooks
         if let Some(qb_config) = &state.config.quickbooks {
             let oauth = QuickBooksOAuth::new(QuickBooksOAuthConfig {
@@ -376,8 +378,13 @@ async fn quickbooks_disconnect(
                 },
             });
 
-            if let Err(e) = oauth.revoke_token(&refresh_token).await {
-                warn!(error = %e, "Failed to revoke QuickBooks token — it will expire naturally");
+            match state.token_cipher.open(&stored_refresh_token) {
+                Ok(refresh_token) => {
+                    if let Err(e) = oauth.revoke_token(&refresh_token).await {
+                        warn!(error = %e, "Failed to revoke QuickBooks token — it will expire naturally");
+                    }
+                }
+                Err(e) => warn!(error = %e, "Failed to decrypt stored refresh token for revoke"),
             }
         }
     }
@@ -1086,12 +1093,22 @@ async fn get_authenticated_qb_client(
         billforge_core::Error::Internal(format!("Database error: {}", e))
     })?;
 
-    let (company_id, mut access_token, refresh_token_val, token_expires_at) = connection
+    let (company_id, stored_access_token, stored_refresh_token, token_expires_at) = connection
         .ok_or_else(|| {
             billforge_core::Error::Validation(
                 "QuickBooks not connected or sync disabled".to_string(),
             )
         })?;
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
+        error!(error = %e, "Failed to decrypt stored QuickBooks access token");
+        billforge_core::Error::Internal("Failed to decrypt stored QuickBooks tokens".to_string())
+    })?;
+    let refresh_token_val = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
+        error!(error = %e, "Failed to decrypt stored QuickBooks refresh token");
+        billforge_core::Error::Internal("Failed to decrypt stored QuickBooks tokens".to_string())
+    })?;
 
     // Refresh if token is expired or will expire within 5 minutes
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
@@ -1108,8 +1125,10 @@ async fn get_authenticated_qb_client(
             ))
         })?;
 
-        // Persist refreshed tokens
+        // Persist refreshed tokens (re-sealed; refs #432)
         let now = Utc::now();
+        let sealed_access = state.token_cipher.seal(&new_tokens.access_token);
+        let sealed_refresh = state.token_cipher.seal(&new_tokens.refresh_token);
         sqlx::query(
             "UPDATE quickbooks_connections \
              SET access_token = $2, refresh_token = $3, \
@@ -1117,8 +1136,8 @@ async fn get_authenticated_qb_client(
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&new_tokens.access_token)
-        .bind(&new_tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(now + Duration::seconds(new_tokens.expires_in))
         .bind(now + Duration::seconds(new_tokens.x_refresh_token_expires_in))
         .execute(&*pool)

@@ -194,7 +194,9 @@ async fn qbo_callback(
     let access_expires = now + Duration::seconds(expires_in);
     let refresh_expires = now + Duration::seconds(x_refresh_token_expires_in);
 
-    // Upsert connection row.
+    // Upsert connection row (tokens sealed via TokenCipher; refs #432).
+    let sealed_access = state.token_cipher.seal(access_token);
+    let sealed_refresh = state.token_cipher.seal(refresh_token);
     sqlx::query(
         "INSERT INTO quickbooks_connections (
             tenant_id, company_id, access_token, refresh_token,
@@ -212,8 +214,8 @@ async fn qbo_callback(
     )
     .bind(tenant_id.as_uuid())
     .bind(&params.realm_id)
-    .bind(access_token)
-    .bind(refresh_token)
+    .bind(&sealed_access)
+    .bind(&sealed_refresh)
     .bind(access_expires)
     .bind(refresh_expires)
     .execute(&*pool)
@@ -272,13 +274,19 @@ async fn qbo_sync_vendors(
         billforge_core::Error::Internal(format!("Database error: {e}"))
     })?;
 
-    let (realm_id, mut access_token, token_expires_at) = conn.ok_or_else(|| {
+    let (realm_id, stored_access_token, token_expires_at) = conn.ok_or_else(|| {
         billforge_core::Error::Validation("QBO not connected or sync disabled".into())
+    })?;
+
+    // Decrypt sealed token (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
+        error!(error = %e, "Failed to decrypt stored QBO access token");
+        billforge_core::Error::Internal("Failed to decrypt stored QBO tokens".into())
     })?;
 
     // Refresh token if expired or near-expiry (5-minute buffer).
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
-        let refreshed = refresh_access_token(&tenant.tenant_id, &pool).await?;
+        let refreshed = refresh_access_token(&tenant.tenant_id, &pool, &state).await?;
         access_token = refreshed;
     }
 
@@ -422,6 +430,7 @@ async fn qbo_sync_vendors(
 async fn refresh_access_token(
     tenant_id: &billforge_core::TenantId,
     pool: &sqlx::PgPool,
+    state: &AppState,
 ) -> ApiResult<String> {
     let client_id = std::env::var("QBO_CLIENT_ID")
         .map_err(|_| billforge_core::Error::Validation("QBO_CLIENT_ID not configured".into()))?;
@@ -429,7 +438,7 @@ async fn refresh_access_token(
         billforge_core::Error::Validation("QBO_CLIENT_SECRET not configured".into())
     })?;
 
-    let (refresh_token_val,): (String,) =
+    let (stored_refresh_token,): (String,) =
         sqlx::query_as("SELECT refresh_token FROM quickbooks_connections WHERE tenant_id = $1")
             .bind(tenant_id.as_uuid())
             .fetch_one(pool)
@@ -438,6 +447,11 @@ async fn refresh_access_token(
                 error!(error = %e, "Failed to fetch refresh token");
                 billforge_core::Error::Internal(format!("Database error: {e}"))
             })?;
+
+    let refresh_token_val = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
+        error!(error = %e, "Failed to decrypt stored QBO refresh token");
+        billforge_core::Error::Internal("Failed to decrypt stored QBO tokens".into())
+    })?;
 
     let token_response: serde_json::Value = reqwest::Client::new()
         .post("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer")
@@ -471,6 +485,8 @@ async fn refresh_access_token(
         .unwrap_or(8726400);
 
     let now = Utc::now();
+    let sealed_access = state.token_cipher.seal(new_access);
+    let sealed_refresh = state.token_cipher.seal(new_refresh);
     sqlx::query(
         "UPDATE quickbooks_connections
          SET access_token = $2,
@@ -481,8 +497,8 @@ async fn refresh_access_token(
          WHERE tenant_id = $1",
     )
     .bind(tenant_id.as_uuid())
-    .bind(new_access)
-    .bind(new_refresh)
+    .bind(&sealed_access)
+    .bind(&sealed_refresh)
     .bind(now + Duration::seconds(expires_in))
     .bind(now + Duration::seconds(x_refresh_expires_in))
     .execute(pool)

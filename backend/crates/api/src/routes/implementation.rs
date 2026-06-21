@@ -1324,12 +1324,24 @@ pub(crate) async fn quickbooks_client(
         billforge_core::Error::Database(format!("Failed to read QuickBooks connection: {}", e))
     })?;
 
-    let (company_id, mut access_token, refresh_token, expires_at) =
+    let (company_id, stored_access_token, stored_refresh_token, expires_at) =
         connection.ok_or_else(|| {
             billforge_core::Error::Validation(
                 "QuickBooks not connected or sync disabled".to_string(),
             )
         })?;
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
+        billforge_core::Error::Internal(format!(
+            "Failed to decrypt stored QuickBooks access token: {e}"
+        ))
+    })?;
+    let refresh_token = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
+        billforge_core::Error::Internal(format!(
+            "Failed to decrypt stored QuickBooks refresh token: {e}"
+        ))
+    })?;
 
     let config = state.config.quickbooks.as_ref().ok_or_else(|| {
         billforge_core::Error::Validation("QuickBooks integration not configured".to_string())
@@ -1350,6 +1362,8 @@ pub(crate) async fn quickbooks_client(
             ))
         })?;
         let now = Utc::now();
+        let sealed_access = state.token_cipher.seal(&tokens.access_token);
+        let sealed_refresh = state.token_cipher.seal(&tokens.refresh_token);
         sqlx::query(
             "UPDATE quickbooks_connections
              SET access_token = $2, refresh_token = $3, access_token_expires_at = $4,
@@ -1357,8 +1371,8 @@ pub(crate) async fn quickbooks_client(
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&tokens.access_token)
-        .bind(&tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(now + Duration::seconds(tokens.expires_in))
         .bind(now + Duration::seconds(tokens.x_refresh_token_expires_in))
         .execute(pool)
@@ -1395,10 +1409,20 @@ async fn xero_client(
         billforge_core::Error::Database(format!("Failed to read Xero connection: {}", e))
     })?;
 
-    let (xero_tenant_id, mut access_token, refresh_token, expires_at) =
+    let (xero_tenant_id, stored_access_token, stored_refresh_token, expires_at) =
         connection.ok_or_else(|| {
             billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
         })?;
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
+        billforge_core::Error::Internal(format!("Failed to decrypt stored Xero access token: {e}"))
+    })?;
+    let refresh_token = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
+        billforge_core::Error::Internal(format!(
+            "Failed to decrypt stored Xero refresh token: {e}"
+        ))
+    })?;
 
     let config = state.config.xero.as_ref().ok_or_else(|| {
         billforge_core::Error::Validation("Xero integration not configured".to_string())
@@ -1419,6 +1443,8 @@ async fn xero_client(
             ))
         })?;
         let now = Utc::now();
+        let sealed_access = state.token_cipher.seal(&tokens.access_token);
+        let sealed_refresh = state.token_cipher.seal(&tokens.refresh_token);
         sqlx::query(
             "UPDATE xero_connections
              SET access_token = $2, refresh_token = $3, access_token_expires_at = $4,
@@ -1426,8 +1452,8 @@ async fn xero_client(
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&tokens.access_token)
-        .bind(&tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(now + Duration::seconds(tokens.expires_in))
         .execute(pool)
         .await

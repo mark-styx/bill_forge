@@ -34,7 +34,8 @@ pub async fn sync_vendors(tenant_id: &str, _payload: &Value, config: &WorkerConf
     .await
     .context("Failed to fetch QuickBooks connection")?;
 
-    let (company_id, mut access_token, mut refresh_token_val, token_expires_at) = match connection {
+    let (company_id, stored_access_token, stored_refresh_token, token_expires_at) = match connection
+    {
         Some(conn) => conn,
         None => {
             info!(
@@ -44,6 +45,16 @@ pub async fn sync_vendors(tenant_id: &str, _payload: &Value, config: &WorkerConf
             return Ok(());
         }
     };
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = config
+        .token_cipher
+        .open(&stored_access_token)
+        .context("Failed to decrypt QuickBooks access token")?;
+    let mut refresh_token_val = config
+        .token_cipher
+        .open(&stored_refresh_token)
+        .context("Failed to decrypt QuickBooks refresh token")?;
 
     // Create sync log entry immediately so failures are recorded
     let sync_id = Uuid::new_v4();
@@ -123,6 +134,8 @@ async fn run_vendor_sync(
         let new_tokens = oauth.refresh_token(refresh_token_val).await?;
 
         let now = Utc::now();
+        let sealed_access = config.token_cipher.seal(&new_tokens.access_token);
+        let sealed_refresh = config.token_cipher.seal(&new_tokens.refresh_token);
         sqlx::query(
             "UPDATE quickbooks_connections \
              SET access_token = $2, refresh_token = $3, \
@@ -130,8 +143,8 @@ async fn run_vendor_sync(
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&new_tokens.access_token)
-        .bind(&new_tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(now + Duration::seconds(new_tokens.expires_in))
         .bind(now + Duration::seconds(new_tokens.x_refresh_token_expires_in))
         .execute(pool)
@@ -149,6 +162,7 @@ async fn run_vendor_sync(
     let client_id_for_refresh = qb_client_id.to_string();
     let client_secret_for_refresh = qb_client_secret.to_string();
     let env_for_refresh = env;
+    let token_cipher_for_refresh = Arc::clone(&config.token_cipher);
     let client = QuickBooksClient::new(access_token.clone(), company_id, env)
         .with_token_refresher(move || {
             let refresh_token_state = Arc::clone(&refresh_token_state);
@@ -156,6 +170,7 @@ async fn run_vendor_sync(
             let tenant_id = tenant_for_refresh.clone();
             let client_id = client_id_for_refresh.clone();
             let client_secret = client_secret_for_refresh.clone();
+            let token_cipher = Arc::clone(&token_cipher_for_refresh);
 
             async move {
                 let current_refresh_token = {
@@ -171,6 +186,8 @@ async fn run_vendor_sync(
                 });
                 let new_tokens = oauth.refresh_token(&current_refresh_token).await?;
                 let now = Utc::now();
+                let sealed_access = token_cipher.seal(&new_tokens.access_token);
+                let sealed_refresh = token_cipher.seal(&new_tokens.refresh_token);
 
                 sqlx::query(
                     "UPDATE quickbooks_connections \
@@ -179,8 +196,8 @@ async fn run_vendor_sync(
                      WHERE tenant_id = $1",
                 )
                 .bind(tenant_id.as_uuid())
-                .bind(&new_tokens.access_token)
-                .bind(&new_tokens.refresh_token)
+                .bind(&sealed_access)
+                .bind(&sealed_refresh)
                 .bind(now + Duration::seconds(new_tokens.expires_in))
                 .bind(now + Duration::seconds(new_tokens.x_refresh_token_expires_in))
                 .execute(&pool)

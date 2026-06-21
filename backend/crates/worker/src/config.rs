@@ -1,6 +1,7 @@
 //! Worker configuration
 
 use anyhow::{Context, Result};
+use billforge_core::security::TokenCipher;
 use billforge_db::PgManager;
 use std::sync::Arc;
 
@@ -48,6 +49,8 @@ pub struct WorkerConfig {
     pub workday_client_id: Option<String>,
     /// Workday OAuth client secret
     pub workday_client_secret: Option<String>,
+    /// AES-256-GCM cipher for OAuth tokens stored at rest (refs #432).
+    pub token_cipher: Arc<TokenCipher>,
 }
 
 impl WorkerConfig {
@@ -108,6 +111,10 @@ impl WorkerConfig {
                 .unwrap_or_else(|_| "production".to_string()),
             workday_client_id: std::env::var("WORKDAY_CLIENT_ID").ok(),
             workday_client_secret: std::env::var("WORKDAY_CLIENT_SECRET").ok(),
+            token_cipher: Arc::new(
+                TokenCipher::from_env()
+                    .context("BILLFORGE_TOKEN_ENC_KEY must be set so the worker can decrypt OAuth tokens shared with the API")?,
+            ),
         })
     }
 }

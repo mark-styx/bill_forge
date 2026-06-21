@@ -261,7 +261,9 @@ async fn xero_callback(
     let now = Utc::now();
     let access_token_expires_at = now + Duration::seconds(tokens.expires_in);
 
-    // Store tokens in database
+    // Store tokens in database (sealed via TokenCipher; refs #432)
+    let sealed_access_token = state.token_cipher.seal(&tokens.access_token);
+    let sealed_refresh_token = state.token_cipher.seal(&tokens.refresh_token);
     sqlx::query(
         "INSERT INTO xero_connections (
             tenant_id, xero_tenant_id, organization_name, access_token, refresh_token,
@@ -280,8 +282,8 @@ async fn xero_callback(
     .bind(tenant_id.as_uuid())
     .bind(&xero_tenant.tenant_id)
     .bind(&xero_tenant.tenant_name)
-    .bind(&tokens.access_token)
-    .bind(&tokens.refresh_token)
+    .bind(&sealed_access_token)
+    .bind(&sealed_refresh_token)
     .bind(access_token_expires_at)
     .bind(match xero_config.environment {
         crate::config::XeroEnvironment::Sandbox => "sandbox",
@@ -331,7 +333,7 @@ async fn xero_disconnect(
             .ok()
             .flatten();
 
-    if let Some((refresh_token,)) = connection {
+    if let Some((stored_refresh_token,)) = connection {
         // Revoke token with Xero
         if let Some(xero_config) = &state.config.xero {
             let oauth = XeroOAuth::new(XeroOAuthConfig {
@@ -344,7 +346,11 @@ async fn xero_disconnect(
                 },
             });
 
-            oauth.revoke_token(&refresh_token).await.ok();
+            if let Ok(refresh_token) = state.token_cipher.open(&stored_refresh_token) {
+                oauth.revoke_token(&refresh_token).await.ok();
+            } else {
+                tracing::warn!("Failed to decrypt Xero refresh token for revoke");
+            }
         }
     }
 
@@ -711,10 +717,20 @@ async fn get_authenticated_xero_client(
         billforge_core::Error::Internal(format!("Database error: {}", e))
     })?;
 
-    let (xero_tenant_id, mut access_token, refresh_token_val, token_expires_at) = connection
+    let (xero_tenant_id, stored_access_token, stored_refresh_token, token_expires_at) = connection
         .ok_or_else(|| {
             billforge_core::Error::Validation("Xero not connected or sync disabled".to_string())
         })?;
+
+    // Decrypt sealed tokens (refs #432). Legacy plaintext rows pass through.
+    let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
+        tracing::error!(error = %e, "Failed to decrypt stored Xero access token");
+        billforge_core::Error::Internal("Failed to decrypt stored Xero tokens".to_string())
+    })?;
+    let refresh_token_val = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
+        tracing::error!(error = %e, "Failed to decrypt stored Xero refresh token");
+        billforge_core::Error::Internal("Failed to decrypt stored Xero tokens".to_string())
+    })?;
 
     // Refresh if token is expired or will expire within 5 minutes
     if token_expires_at <= Utc::now() + Duration::minutes(5) {
@@ -737,9 +753,11 @@ async fn get_authenticated_xero_client(
             billforge_core::Error::Validation("Xero token expired. Please reconnect.".to_string())
         })?;
 
-        // Persist refreshed tokens
+        // Persist refreshed tokens (re-sealed; refs #432)
         let now = Utc::now();
         let new_access_expires = now + Duration::seconds(new_tokens.expires_in);
+        let sealed_access = state.token_cipher.seal(&new_tokens.access_token);
+        let sealed_refresh = state.token_cipher.seal(&new_tokens.refresh_token);
         sqlx::query(
             "UPDATE xero_connections \
              SET access_token = $2, refresh_token = $3, \
@@ -747,8 +765,8 @@ async fn get_authenticated_xero_client(
              WHERE tenant_id = $1",
         )
         .bind(tenant_id.as_uuid())
-        .bind(&new_tokens.access_token)
-        .bind(&new_tokens.refresh_token)
+        .bind(&sealed_access)
+        .bind(&sealed_refresh)
         .bind(new_access_expires)
         .execute(&*pool)
         .await

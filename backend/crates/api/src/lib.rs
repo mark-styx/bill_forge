@@ -16,6 +16,7 @@ pub mod notifications;
 pub mod ofac_screening;
 pub mod openapi;
 pub mod routes;
+pub mod security;
 pub mod services;
 pub mod starter_packs;
 pub mod state;
