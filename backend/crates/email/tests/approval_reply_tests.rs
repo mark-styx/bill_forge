@@ -315,3 +315,107 @@ async fn replay_attempt_does_not_double_approve() {
 
     cleanup(&pool, tenant_id, invoice_id, approval_id).await;
 }
+
+#[tokio::test]
+#[ignore]
+async fn handle_approval_reply_rejects_spoofed_from_address() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    let user_id = Uuid::parse_str(FIXTURE_USER_ID).unwrap();
+
+    let (invoice_id, approval_id) = seed_pending_approval(&pool, tenant_id).await;
+    let token = mint_approve_token(&pool, tenant_id, user_id, invoice_id).await;
+
+    let msg = InboundEmailPayload {
+        from: "mallory@evil.com".to_string(),
+        to: "ap@meridian.billforge.com".to_string(),
+        subject: Some("Re: Approval Required".to_string()),
+        message_id: Some("msg-spoof".to_string()),
+        text_body: Some("APPROVE".to_string()),
+        html_body: None,
+        reply_to: Some(format!("approvals+{}@billforge.com", token)),
+        attachments: vec![],
+    };
+    let cmd = ReplyCommand::Approve;
+
+    let outcome = handle_approval_reply(&pool, &pool, Uuid::new_v4(), &msg, &token, &cmd)
+        .await
+        .expect("handle ok");
+
+    match outcome {
+        ApprovalReplyOutcome::Triaged { reason } => assert!(
+            reason.starts_with("approval_reply_failed: from_address_mismatch"),
+            "expected from_address_mismatch reason, got {}",
+            reason
+        ),
+        other => panic!("expected Triaged on spoofed From, got {:?}", other),
+    }
+
+    // approval_requests row must remain pending — no mutation should have run.
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read approval status");
+    assert_eq!(status, "pending");
+
+    // No email_reply audit row should have been written.
+    let audit_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM audit_log
+         WHERE tenant_id = $1 AND resource_id = $2
+           AND (changes->'metadata'->>'channel') = 'email_reply'",
+    )
+    .bind(tenant_id)
+    .bind(invoice_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("query audit log");
+    assert_eq!(audit_count.0, 0, "no email_reply audit row should be written on spoof");
+
+    cleanup(&pool, tenant_id, invoice_id, approval_id).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn handle_approval_reply_accepts_matching_from_address_case_insensitive() {
+    let pool = get_pool().await;
+    let tenant_id = Uuid::parse_str(SANDBOX_TENANT_ID).unwrap();
+    let user_id = Uuid::parse_str(FIXTURE_USER_ID).unwrap();
+
+    let (invoice_id, approval_id) = seed_pending_approval(&pool, tenant_id).await;
+    let token = mint_approve_token(&pool, tenant_id, user_id, invoice_id).await;
+
+    // Fixture user's email is lowercase `approval-reply-test@example.com`;
+    // From-header uses display name + mixed case to verify case-insensitive match.
+    let msg = InboundEmailPayload {
+        from: "\"A User\" <Approval-Reply-Test@EXAMPLE.COM>".to_string(),
+        to: "ap@meridian.billforge.com".to_string(),
+        subject: Some("Re: Approval Required".to_string()),
+        message_id: Some("msg-case".to_string()),
+        text_body: Some("APPROVE".to_string()),
+        html_body: None,
+        reply_to: Some(format!("approvals+{}@billforge.com", token)),
+        attachments: vec![],
+    };
+    let cmd = ReplyCommand::Approve;
+
+    let outcome = handle_approval_reply(&pool, &pool, Uuid::new_v4(), &msg, &token, &cmd)
+        .await
+        .expect("handle ok");
+
+    match outcome {
+        ApprovalReplyOutcome::Applied { action, .. } => assert_eq!(action, "approved"),
+        other => panic!("expected Applied with case-insensitive From, got {:?}", other),
+    }
+
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM approval_requests WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read approval status");
+    assert_eq!(status, "approved");
+
+    cleanup(&pool, tenant_id, invoice_id, approval_id).await;
+}

@@ -203,7 +203,7 @@ pub async fn handle_approval_reply(
     metadata_pool: &PgPool,
     tenant_pool: &PgPool,
     inbound_email_id: Uuid,
-    _msg: &InboundEmailPayload,
+    msg: &InboundEmailPayload,
     token: &str,
     cmd: &ReplyCommand,
 ) -> Result<ApprovalReplyOutcome, String> {
@@ -232,6 +232,55 @@ pub async fn handle_approval_reply(
         .map_err(|e| format!("invalid tenant id in token: {}", e))?;
     let invoice_id = token_data.resource_id;
     let user_uuid = token_data.user_id;
+
+    // Bind the inbound From address to the token's user. A signed action token
+    // recovered from a forwarded/leaked approval email must not be honored
+    // unless the reply came from the named approver's own mailbox.
+    let from_email = extract_email(&msg.from);
+    if from_email.is_empty() {
+        let reason = "approval_reply_failed: missing_from_header".to_string();
+        tracing::warn!(
+            inbound_email_id = %inbound_email_id,
+            token_user_id = %user_uuid,
+            "Approval reply rejected: inbound message has no From address"
+        );
+        return Ok(ApprovalReplyOutcome::Triaged { reason });
+    }
+
+    let expected_email: Option<String> =
+        sqlx::query_scalar("SELECT email FROM users WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_uuid)
+            .bind(user_uuid)
+            .fetch_optional(tenant_pool)
+            .await
+            .map_err(|e| format!("Failed to load token user email: {}", e))?;
+
+    let expected_email = match expected_email {
+        Some(email) => email,
+        None => {
+            let reason = "approval_reply_failed: token_user_not_found".to_string();
+            tracing::warn!(
+                inbound_email_id = %inbound_email_id,
+                token_user_id = %user_uuid,
+                "Approval reply rejected: token user not found in tenant"
+            );
+            return Ok(ApprovalReplyOutcome::Triaged { reason });
+        }
+    };
+
+    if !expected_email.eq_ignore_ascii_case(from_email) {
+        let reason = format!(
+            "approval_reply_failed: from_address_mismatch: token_user={} from={}",
+            user_uuid, from_email
+        );
+        tracing::warn!(
+            inbound_email_id = %inbound_email_id,
+            token_user_id = %user_uuid,
+            from = %from_email,
+            "Approval reply rejected: From address does not match token user"
+        );
+        return Ok(ApprovalReplyOutcome::Triaged { reason });
+    }
 
     let (action_str, new_status, reason_text, delegate_email) = match cmd {
         ReplyCommand::Approve => ("approved", "approved", None, None),
