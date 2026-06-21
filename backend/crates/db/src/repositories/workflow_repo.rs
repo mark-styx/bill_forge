@@ -33,6 +33,76 @@ impl WorkflowRepositoryImpl {
         Self { pool }
     }
 
+    /// Load the per-invoice workflow-template cursor (refs #429).
+    ///
+    /// Returns `(current_stage_order, last_captured_stage_order)` when a
+    /// `workflow_stage_progress` row exists for this (tenant, invoice,
+    /// template) triple, or `None` when the invoice has not entered the
+    /// template yet. `current_stage_order` is the highest stage already
+    /// advanced past (skipped / auto-advanced / captured); `last_captured`
+    /// is the stage that most recently returned a status.
+    pub async fn get_stage_progress(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: &InvoiceId,
+        template_id: &WorkflowTemplateId,
+    ) -> Result<Option<(i32, Option<i32>)>> {
+        let row: Option<(i32, Option<i32>)> = sqlx::query_as(
+            r#"SELECT current_stage_order, last_captured_stage_order
+               FROM workflow_stage_progress
+               WHERE tenant_id = $1 AND invoice_id = $2 AND template_id = $3"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(invoice_id.0)
+        .bind(template_id.0)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to load workflow stage progress: {}", e)))?;
+
+        Ok(row)
+    }
+
+    /// Upsert the per-invoice workflow-template cursor (refs #429).
+    ///
+    /// Tenant-scoped: the UNIQUE constraint on
+    /// (tenant_id, invoice_id, template_id) drives the ON CONFLICT branch
+    /// so re-entries of `apply_workflow_template` update the existing cursor
+    /// in place rather than inserting duplicates.
+    pub async fn upsert_stage_progress(
+        &self,
+        tenant_id: &TenantId,
+        invoice_id: &InvoiceId,
+        template_id: &WorkflowTemplateId,
+        current_stage_order: i32,
+        last_captured_stage_order: Option<i32>,
+        last_captured_stage_name: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO workflow_stage_progress
+                   (tenant_id, invoice_id, template_id,
+                    current_stage_order, last_captured_stage_order,
+                    last_captured_stage_name, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, NOW())
+               ON CONFLICT (tenant_id, invoice_id, template_id)
+               DO UPDATE SET
+                   current_stage_order = EXCLUDED.current_stage_order,
+                   last_captured_stage_order = EXCLUDED.last_captured_stage_order,
+                   last_captured_stage_name = EXCLUDED.last_captured_stage_name,
+                   updated_at = NOW()"#,
+        )
+        .bind(*tenant_id.as_uuid())
+        .bind(invoice_id.0)
+        .bind(template_id.0)
+        .bind(current_stage_order)
+        .bind(last_captured_stage_order)
+        .bind(last_captured_stage_name)
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| Error::Database(format!("Failed to upsert workflow stage progress: {}", e)))?;
+
+        Ok(())
+    }
+
     /// Best-effort fanout of an in-app notification to every approver named in
     /// `request.requested_from`. Mirrors the producer contract documented in the
     /// in_app_notifications migration (refs #375): title carries an invoice ref

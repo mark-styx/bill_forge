@@ -22,6 +22,78 @@ use std::sync::Arc;
 /// Minimum confidence threshold for ML auto-approval (95%)
 const ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD: f32 = 0.95;
 
+/// Load the per-invoice workflow-template cursor (refs #429). Tenant-scoped
+/// read; returns `(current_stage_order, last_captured_stage_order)` or `None`
+/// when no row exists yet. Cursor failures are best-effort: callers swallow
+/// errors and treat the invoice as if it has not entered the template, which
+/// preserves the original from-zero behavior on read failure.
+async fn load_stage_progress(
+    pool: &PgPool,
+    tenant_id: &TenantId,
+    invoice: &Invoice,
+    template: &WorkflowTemplate,
+) -> Option<(i32, Option<i32>)> {
+    match sqlx::query_as::<_, (i32, Option<i32>)>(
+        r#"SELECT current_stage_order, last_captured_stage_order
+           FROM workflow_stage_progress
+           WHERE tenant_id = $1 AND invoice_id = $2 AND template_id = $3"#,
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice.id.0)
+    .bind(template.id.0)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(
+                invoice_id = %invoice.id.as_uuid(),
+                template_id = %template.id,
+                error = %e,
+                "Failed to load workflow stage progress; falling back to from-zero iteration"
+            );
+            None
+        }
+    }
+}
+
+/// Upsert the per-invoice workflow-template cursor (refs #429). The
+/// UNIQUE (tenant_id, invoice_id, template_id) constraint drives ON CONFLICT
+/// so successive process_invoice calls update the same row rather than
+/// accumulating duplicates.
+async fn upsert_stage_progress(
+    pool: &PgPool,
+    tenant_id: &TenantId,
+    invoice: &Invoice,
+    template: &WorkflowTemplate,
+    current_stage_order: i32,
+    last_captured_stage_order: Option<i32>,
+    last_captured_stage_name: Option<&str>,
+) -> std::result::Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"INSERT INTO workflow_stage_progress
+               (tenant_id, invoice_id, template_id,
+                current_stage_order, last_captured_stage_order,
+                last_captured_stage_name, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT (tenant_id, invoice_id, template_id)
+           DO UPDATE SET
+               current_stage_order = EXCLUDED.current_stage_order,
+               last_captured_stage_order = EXCLUDED.last_captured_stage_order,
+               last_captured_stage_name = EXCLUDED.last_captured_stage_name,
+               updated_at = NOW()"#,
+    )
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice.id.0)
+    .bind(template.id.0)
+    .bind(current_stage_order)
+    .bind(last_captured_stage_order)
+    .bind(last_captured_stage_name)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
 /// Outcome of `WorkflowEngine::process_invoice`.
 ///
 /// `status` is the resolved processing status. `auto_approval_lane`, when
@@ -389,6 +461,13 @@ impl WorkflowEngine {
     /// the rule path uses (intelligent approval target + approval request for
     /// approval stages, derived processing status otherwise).
     ///
+    /// Per-invoice cursor (refs #429): when a `pool` is wired, the working
+    /// position is loaded from `workflow_stage_progress` so subsequent calls
+    /// resume past previously skipped / auto-advanced / captured stages
+    /// instead of re-evaluating their conditions from order 0. When the pool
+    /// is absent (test setups that wire stubs only) behavior falls back to
+    /// the original from-zero iteration.
+    ///
     /// Returns `Some(status)` when a stage captures the invoice, or `None` when
     /// every stage was skipped/auto-advanced so the caller falls through to
     /// rule-based processing.
@@ -401,7 +480,40 @@ impl WorkflowEngine {
         let mut stages = template.stages.clone();
         stages.sort_by_key(|s| s.order);
 
+        // Load the cursor when a pool is available; otherwise iterate from 0
+        // and skip persistence entirely (preserves test setups without a pool).
+        let cursor = match &self.pool {
+            Some(pool) => load_stage_progress(pool, tenant_id, invoice, template).await,
+            None => None,
+        };
+
+        // Determine the working start order. If the cursor's last_captured
+        // equals current_stage_order, the previously captured stage has not
+        // moved yet; resume on the next stage. Otherwise resume at the
+        // recorded current_stage_order (the cursor advance from a skip /
+        // auto-advance already points past the consumed stage).
+        let working_start: i32 = match cursor {
+            Some((current, Some(last_captured))) if last_captured == current => current + 1,
+            Some((current, _)) => current,
+            None => 0,
+        };
+
+        // No more stages to apply - the template has run to completion for
+        // this invoice. Returning None lets the caller fall through to rule
+        // processing (the previously captured stage already drove status).
+        if let Some(max_order) = stages.iter().map(|s| s.order).max() {
+            if working_start > max_order {
+                return Ok(None);
+            }
+        }
+
         for stage in &stages {
+            // Stages before the cursor were already advanced past on a prior
+            // call; do NOT re-evaluate their skip / auto-advance conditions.
+            if stage.order < working_start {
+                continue;
+            }
+
             // Skip conditions - if ALL match, skip this stage entirely.
             if !stage.skip_conditions.is_empty()
                 && billforge_core::workflow_evaluator::evaluate_conditions(
@@ -416,6 +528,8 @@ impl WorkflowEngine {
                     source = "template",
                     "Skipping workflow stage - skip conditions met"
                 );
+                self.persist_stage_advance(tenant_id, invoice, template, stage.order)
+                    .await;
                 continue;
             }
 
@@ -433,6 +547,8 @@ impl WorkflowEngine {
                     source = "template",
                     "Auto-advancing workflow stage - conditions met"
                 );
+                self.persist_stage_advance(tenant_id, invoice, template, stage.order)
+                    .await;
                 continue;
             }
 
@@ -457,10 +573,82 @@ impl WorkflowEngine {
                 "Workflow template stage captured invoice"
             );
 
+            self.persist_stage_capture(tenant_id, invoice, template, stage)
+                .await;
+
             return Ok(Some(status));
         }
 
         Ok(None)
+    }
+
+    /// Best-effort cursor write for a skipped / auto-advanced stage. Sets the
+    /// cursor to `stage_order + 1` so the next re-entry starts past this
+    /// stage without re-evaluating its conditions. last_captured stays NULL
+    /// because nothing captured the invoice here.
+    async fn persist_stage_advance(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        template: &WorkflowTemplate,
+        stage_order: i32,
+    ) {
+        let Some(pool) = self.pool.as_ref() else {
+            return;
+        };
+        if let Err(e) = upsert_stage_progress(
+            pool,
+            tenant_id,
+            invoice,
+            template,
+            stage_order + 1,
+            None,
+            None,
+        )
+        .await
+        {
+            tracing::warn!(
+                invoice_id = %invoice.id.as_uuid(),
+                template_id = %template.id,
+                stage_order,
+                error = %e,
+                "Failed to persist workflow stage advance; cursor may drift"
+            );
+        }
+    }
+
+    /// Best-effort cursor write for a stage that captured the invoice. Records
+    /// `current_stage_order = stage.order` and `last_captured_stage_order =
+    /// stage.order` so re-entry resumes at `stage.order + 1`.
+    async fn persist_stage_capture(
+        &self,
+        tenant_id: &TenantId,
+        invoice: &Invoice,
+        template: &WorkflowTemplate,
+        stage: &WorkflowTemplateStage,
+    ) {
+        let Some(pool) = self.pool.as_ref() else {
+            return;
+        };
+        if let Err(e) = upsert_stage_progress(
+            pool,
+            tenant_id,
+            invoice,
+            template,
+            stage.order,
+            Some(stage.order),
+            Some(&stage.name),
+        )
+        .await
+        {
+            tracing::warn!(
+                invoice_id = %invoice.id.as_uuid(),
+                template_id = %template.id,
+                stage = %stage.name,
+                error = %e,
+                "Failed to persist workflow stage capture; cursor may drift"
+            );
+        }
     }
 
     /// Create an approval request for a template-driven Approval stage.

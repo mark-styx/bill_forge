@@ -14,6 +14,9 @@ pub mod recurring_patterns;
 pub mod routing_suggestions;
 pub mod rules;
 
+#[cfg(test)]
+mod engine_workflow_template_tests;
+
 pub use categorization::{
     apply_line_correction, categorize_line_by_keywords, collect_gl_signals,
     detect_historical_splits, detect_line_splits, find_matching_prior,
