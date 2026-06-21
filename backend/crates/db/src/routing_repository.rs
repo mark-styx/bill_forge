@@ -36,6 +36,7 @@ impl RoutingRepository {
                 tenant_id, workload_weight, expertise_weight, availability_weight,
                 max_workload_score, min_expertise_score,
                 enable_auto_delegation, enable_pattern_learning, enable_calendar_sync,
+                COALESCE(auto_apply_high_confidence_patterns, false) AS auto_apply_high_confidence_patterns,
                 working_hours_start, working_hours_end, working_timezone, working_days
             FROM routing_configuration
             WHERE tenant_id = $1"#,
@@ -64,9 +65,10 @@ impl RoutingRepository {
                 id, tenant_id, workload_weight, expertise_weight, availability_weight,
                 max_workload_score, min_expertise_score,
                 enable_auto_delegation, enable_pattern_learning, enable_calendar_sync,
+                auto_apply_high_confidence_patterns,
                 working_hours_start, working_hours_end, working_timezone, working_days,
                 updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
             ON CONFLICT (tenant_id) DO UPDATE SET
                 workload_weight = EXCLUDED.workload_weight,
                 expertise_weight = EXCLUDED.expertise_weight,
@@ -76,6 +78,7 @@ impl RoutingRepository {
                 enable_auto_delegation = EXCLUDED.enable_auto_delegation,
                 enable_pattern_learning = EXCLUDED.enable_pattern_learning,
                 enable_calendar_sync = EXCLUDED.enable_calendar_sync,
+                auto_apply_high_confidence_patterns = EXCLUDED.auto_apply_high_confidence_patterns,
                 working_hours_start = EXCLUDED.working_hours_start,
                 working_hours_end = EXCLUDED.working_hours_end,
                 working_timezone = EXCLUDED.working_timezone,
@@ -92,6 +95,7 @@ impl RoutingRepository {
         .bind(config.enable_auto_delegation)
         .bind(config.enable_pattern_learning)
         .bind(config.enable_calendar_sync)
+        .bind(config.auto_apply_high_confidence_patterns)
         .bind(config.working_hours_start)
         .bind(config.working_hours_end)
         .bind(&config.working_timezone)
@@ -280,6 +284,7 @@ struct RoutingConfigRow {
     enable_auto_delegation: bool,
     enable_pattern_learning: bool,
     enable_calendar_sync: bool,
+    auto_apply_high_confidence_patterns: bool,
     working_hours_start: NaiveTime,
     working_hours_end: NaiveTime,
     working_timezone: String,
@@ -300,6 +305,7 @@ impl RoutingConfigRow {
             enable_auto_delegation: self.enable_auto_delegation,
             enable_pattern_learning: self.enable_pattern_learning,
             enable_calendar_sync: self.enable_calendar_sync,
+            auto_apply_high_confidence_patterns: self.auto_apply_high_confidence_patterns,
             working_hours_start: self.working_hours_start,
             working_hours_end: self.working_hours_end,
             working_timezone: self.working_timezone,

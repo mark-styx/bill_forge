@@ -9,17 +9,18 @@
 use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use billforge_core::{
     intelligent_routing::{
-        simulate_routing, IntelligentRoutingEngine, RoutingConfig, RoutingDecision,
-        SimulatedOutcome, SimulationInput, SimulationSummary,
+        simulate_routing, IntelligentRoutingEngine, LearnedRoutingHint, RoutingConfig,
+        RoutingDecision, SimulatedOutcome, SimulationInput, SimulationSummary,
     },
     workload_balancer::{WorkloadBalancer, WorkloadBalancerConfig, WorkloadDistributionStats},
+    UserId,
 };
 use billforge_db::routing_repository::{AvailabilityStatusInput, SetAvailabilityInput};
 use chrono::{DateTime, Utc};
@@ -29,7 +30,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
-    Router::new()
+    let mut router = Router::new()
         .route("/invoices/:invoice_id/route", post(route_invoice))
         .route("/workload", get(get_workload_stats))
         .route("/availability", post(set_availability))
@@ -37,7 +38,17 @@ pub fn routes() -> Router<AppState> {
             "/config",
             get(get_routing_config).put(update_routing_config),
         )
-        .route("/simulate", post(simulate_routing_handler))
+        .route("/simulate", post(simulate_routing_handler));
+
+    #[cfg(feature = "processing")]
+    {
+        router = router.route(
+            "/pattern-suggestions",
+            get(get_pattern_suggestions),
+        );
+    }
+
+    router
 }
 
 /// Request body for routing an invoice
@@ -113,9 +124,20 @@ async fn route_invoice(
     // Build a minimal invoice for routing
     let invoice = invoice_row.into_invoice(tenant_id);
 
-    // Run the routing engine
+    // Issue #440: when the tenant has opted in to high-confidence pattern
+    // auto-routing, build a `LearnedRoutingHint` from mined reroute patterns
+    // that match this invoice's (vendor|department, amount-bucket). The
+    // engine's `route_invoice_with_hint` enforces the >=90% confidence
+    // threshold and writes `pattern_learning` into the audit log via
+    // `RoutingDecision::strategy`.
+    let auto_apply = config.auto_apply_high_confidence_patterns;
     let engine = IntelligentRoutingEngine::new(config);
-    let decision = context.route(&engine, &invoice);
+    let hint = if auto_apply {
+        build_pattern_hint(&*tenant_pool, tenant_id, &invoice).await
+    } else {
+        None
+    };
+    let decision = context.route_with_hint(&engine, &invoice, hint.as_ref());
 
     // Log the routing decision
     if let Err(e) = routing_repo
@@ -126,6 +148,60 @@ async fn route_invoice(
     }
 
     Ok(Json(RouteInvoiceResponse { decision }))
+}
+
+/// Mine recent reroute patterns for `tenant_id` and pick the strongest one
+/// matching `invoice`'s routing dimensions. Returns a `LearnedRoutingHint`
+/// the routing engine can consider as an override (issue #440). Failures are
+/// swallowed and logged - hint extraction never blocks routing.
+#[cfg(feature = "processing")]
+async fn build_pattern_hint(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice: &billforge_core::domain::Invoice,
+) -> Option<LearnedRoutingHint> {
+    use billforge_invoice_processing::{mine_routing_patterns, pick_matching_suggestion};
+
+    let suggestions =
+        match mine_routing_patterns(pool, *tenant_id.as_uuid(), 90, 5, 70).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to mine routing patterns for hint: {}",
+                    e
+                );
+                return None;
+            }
+        };
+
+    let s = pick_matching_suggestion(
+        &suggestions,
+        invoice.vendor_id,
+        invoice.department.as_deref(),
+        invoice.total_amount.amount,
+    )?;
+
+    let reason = match (&s.pattern_key.department, s.pattern_key.vendor_name.as_deref()) {
+        (Some(d), _) => format!("{}/{}", d, s.pattern_key.amount_bucket.label()),
+        (None, Some(v)) => format!("{}/{}", v, s.pattern_key.amount_bucket.label()),
+        (None, None) => format!("pattern/{}", s.pattern_key.amount_bucket.label()),
+    };
+
+    Some(LearnedRoutingHint {
+        approver_id: UserId(s.dominant_approver_id),
+        confidence_pct: s.confidence_pct,
+        sample_size: s.sample_size,
+        reason,
+    })
+}
+
+#[cfg(not(feature = "processing"))]
+async fn build_pattern_hint(
+    _pool: &sqlx::PgPool,
+    _tenant_id: &billforge_core::TenantId,
+    _invoice: &billforge_core::domain::Invoice,
+) -> Option<LearnedRoutingHint> {
+    None
 }
 
 /// Workload stats response
@@ -702,3 +778,75 @@ impl InvoiceMinRow {
 
 // Need RoutingDataProvider in scope for the trait method
 use billforge_core::intelligent_routing::RoutingDataProvider;
+
+// ---------------------------------------------------------------------------
+// Smart approver auto-routing pattern suggestions (issue #440)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "processing")]
+#[derive(Debug, Deserialize)]
+struct PatternSuggestionsParams {
+    lookback_days: Option<i32>,
+    min_samples: Option<i32>,
+    min_confidence: Option<i32>,
+}
+
+#[cfg(feature = "processing")]
+#[derive(Debug, Serialize)]
+struct PatternSuggestionsResponse {
+    suggestions: Vec<billforge_invoice_processing::RoutingPatternSuggestion>,
+}
+
+/// Mine recent `approver_reroute` corrections and surface the (vendor or
+/// department, amount-bucket) patterns where one approver dominates. Admins
+/// see these as actionable "update the rule?" prompts on the assignment-rules
+/// page. Tenant-scoped via the request extractor and gated to admins.
+#[cfg(feature = "processing")]
+#[utoipa::path(
+    get,
+    path = "/api/v1/routing/pattern-suggestions",
+    tag = "Routing",
+    params(
+        ("lookback_days" = Option<i32>, Query, description = "Days to look back (default 90)"),
+        ("min_samples" = Option<i32>, Query, description = "Minimum reroutes per pattern (default 5)"),
+        ("min_confidence" = Option<i32>, Query, description = "Minimum dominant-approver share, 0-100 (default 70)")
+    ),
+    responses(
+        (status = 200, description = "Routing pattern suggestions"),
+        (status = 403, description = "Admin only")
+    )
+)]
+async fn get_pattern_suggestions(
+    State(state): State<AppState>,
+    InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
+    Query(params): Query<PatternSuggestionsParams>,
+) -> Result<Json<PatternSuggestionsResponse>, StatusCode> {
+    if !user.is_admin() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let tenant_id = &user.tenant_id;
+    let tenant_pool = state.db.tenant(tenant_id).await.map_err(|e| {
+        tracing::error!("Failed to get tenant pool: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let lookback_days = params.lookback_days.unwrap_or(90).clamp(1, 365);
+    let min_samples = params.min_samples.unwrap_or(5).max(1);
+    let min_confidence = params.min_confidence.unwrap_or(70).clamp(1, 100);
+
+    let suggestions = billforge_invoice_processing::mine_routing_patterns(
+        &*tenant_pool,
+        *tenant_id.as_uuid(),
+        lookback_days,
+        min_samples,
+        min_confidence,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to mine routing patterns: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(PatternSuggestionsResponse { suggestions }))
+}

@@ -39,6 +39,25 @@ impl RoutingContext {
             &self.expertise,
         )
     }
+
+    /// Convenience: delegate to `IntelligentRoutingEngine::route_invoice_with_hint`
+    /// using the data stored in this context. When `hint` is `None` this is
+    /// equivalent to [`Self::route`].
+    pub fn route_with_hint(
+        &self,
+        engine: &IntelligentRoutingEngine,
+        invoice: &Invoice,
+        hint: Option<&LearnedRoutingHint>,
+    ) -> RoutingDecision {
+        engine.route_invoice_with_hint(
+            invoice,
+            &self.eligible_approvers,
+            &self.workloads,
+            &self.availabilities,
+            &self.expertise,
+            hint,
+        )
+    }
 }
 
 /// Trait for fetching the routing data a tenant needs for intelligent approval routing.
@@ -81,6 +100,8 @@ pub enum RoutingStrategy {
     AvailabilityBased,
     /// Hybrid approach combining all factors
     Hybrid,
+    /// Override from a high-confidence learned routing pattern (issue #440).
+    PatternLearning,
     /// Fallback when no intelligent routing possible
     Fallback,
 }
@@ -208,6 +229,10 @@ pub struct RoutingConfig {
     pub enable_auto_delegation: bool,
     pub enable_pattern_learning: bool,
     pub enable_calendar_sync: bool,
+    /// Opt-in to apply high-confidence learned routing patterns over the
+    /// static rule output. See issue #440. Off by default.
+    #[serde(default)]
+    pub auto_apply_high_confidence_patterns: bool,
     pub working_hours_start: chrono::NaiveTime,
     pub working_hours_end: chrono::NaiveTime,
     pub working_timezone: String,
@@ -226,12 +251,25 @@ impl Default for RoutingConfig {
             enable_auto_delegation: true,
             enable_pattern_learning: true,
             enable_calendar_sync: false,
+            auto_apply_high_confidence_patterns: false,
             working_hours_start: chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
             working_hours_end: chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
             working_timezone: "UTC".to_string(),
             working_days: vec![1, 2, 3, 4, 5], // Mon-Fri
         }
     }
+}
+
+/// A high-confidence learned routing pattern the engine can prefer over
+/// the static rule output when the tenant has opted in. Carried as input
+/// alongside the routing context so the engine remains pure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearnedRoutingHint {
+    pub approver_id: UserId,
+    pub confidence_pct: i32,
+    pub sample_size: i32,
+    /// Human-readable explanation written to the audit log.
+    pub reason: String,
 }
 
 /// Intelligent routing engine
@@ -325,6 +363,64 @@ impl IntelligentRoutingEngine {
             factors: self.build_factors(invoice),
             delegated_from,
         }
+    }
+
+    /// Route an invoice while optionally preferring a high-confidence learned
+    /// routing pattern over the multi-factor score. Issue #440. The override
+    /// only fires when:
+    ///   * the tenant has set `auto_apply_high_confidence_patterns = true`
+    ///   * a `LearnedRoutingHint` is supplied with confidence >= 90
+    ///   * the hinted approver is in `eligible_approvers`
+    ///
+    /// When all three hold the returned decision carries
+    /// `strategy = RoutingStrategy::PatternLearning` and a `candidates` list
+    /// whose top entry encodes the confidence and reason so callers can write
+    /// the override into `routing_optimization_log`. Otherwise this is
+    /// behaviourally identical to `route_invoice`.
+    pub fn route_invoice_with_hint(
+        &self,
+        invoice: &Invoice,
+        eligible_approvers: &[UserId],
+        workloads: &HashMap<UserId, ApproverWorkload>,
+        availabilities: &[ApproverAvailability],
+        expertise: &[ApproverExpertise],
+        hint: Option<&LearnedRoutingHint>,
+    ) -> RoutingDecision {
+        if self.config.auto_apply_high_confidence_patterns {
+            if let Some(h) = hint {
+                if h.confidence_pct >= 90
+                    && eligible_approvers.iter().any(|u| u == &h.approver_id)
+                {
+                    let confidence = (h.confidence_pct as f64 / 100.0).clamp(0.0, 1.0);
+                    let pattern_candidate = CandidateScore {
+                        user_id: h.approver_id.clone(),
+                        score: confidence,
+                        workload_score: 0.0,
+                        expertise_score: confidence,
+                        availability_score: 1.0,
+                        reason: format!(
+                            "pattern_learning: {} (confidence {}%, n={})",
+                            h.reason, h.confidence_pct, h.sample_size
+                        ),
+                    };
+                    return RoutingDecision {
+                        approver_id: Some(h.approver_id.clone()),
+                        strategy: RoutingStrategy::PatternLearning,
+                        score: confidence,
+                        candidates: vec![pattern_candidate],
+                        factors: self.build_factors(invoice),
+                        delegated_from: None,
+                    };
+                }
+            }
+        }
+        self.route_invoice(
+            invoice,
+            eligible_approvers,
+            workloads,
+            availabilities,
+            expertise,
+        )
     }
 
     /// Score a candidate approver
@@ -817,6 +913,163 @@ mod tests {
     }
 
     #[test]
+    fn route_with_hint_prefers_learned_pattern_when_opted_in() {
+        let config = RoutingConfig {
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            auto_apply_high_confidence_patterns: true,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+        let invoice = create_test_invoice();
+        let static_pick = UserId(Uuid::new_v4());
+        let learned = UserId(Uuid::new_v4());
+
+        // Static-rule pick has the lower workload (would win without the hint)
+        let workloads = HashMap::from([
+            (
+                static_pick.clone(),
+                ApproverWorkload {
+                    user_id: static_pick.clone(),
+                    active_approvals: 0,
+                    pending_approvals: 0,
+                    completed_this_week: 0,
+                    avg_approval_time_hours: Some(12.0),
+                    workload_score: 5.0,
+                    last_assignment_at: None,
+                },
+            ),
+            (
+                learned.clone(),
+                ApproverWorkload {
+                    user_id: learned.clone(),
+                    active_approvals: 10,
+                    pending_approvals: 5,
+                    completed_this_week: 20,
+                    avg_approval_time_hours: Some(24.0),
+                    workload_score: 80.0,
+                    last_assignment_at: Some(Utc::now()),
+                },
+            ),
+        ]);
+
+        let hint = LearnedRoutingHint {
+            approver_id: learned.clone(),
+            confidence_pct: 92,
+            sample_size: 25,
+            reason: "facilities/$5k-$25k".to_string(),
+        };
+
+        let decision = engine.route_invoice_with_hint(
+            &invoice,
+            &[static_pick.clone(), learned.clone()],
+            &workloads,
+            &[],
+            &[],
+            Some(&hint),
+        );
+
+        assert_eq!(decision.approver_id.as_ref(), Some(&learned));
+        assert_eq!(decision.strategy, RoutingStrategy::PatternLearning);
+        assert!(decision.candidates[0].reason.contains("pattern_learning"));
+    }
+
+    #[test]
+    fn route_with_hint_below_confidence_threshold_falls_through() {
+        let config = RoutingConfig {
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            auto_apply_high_confidence_patterns: true,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+        let invoice = create_test_invoice();
+        let static_pick = UserId(Uuid::new_v4());
+        let learned = UserId(Uuid::new_v4());
+
+        let workloads = HashMap::from([(
+            static_pick.clone(),
+            ApproverWorkload {
+                user_id: static_pick.clone(),
+                active_approvals: 0,
+                pending_approvals: 0,
+                completed_this_week: 0,
+                avg_approval_time_hours: Some(12.0),
+                workload_score: 5.0,
+                last_assignment_at: None,
+            },
+        )]);
+
+        let hint = LearnedRoutingHint {
+            approver_id: learned,
+            confidence_pct: 80, // below 90% threshold
+            sample_size: 25,
+            reason: "facilities/$5k-$25k".to_string(),
+        };
+
+        let decision = engine.route_invoice_with_hint(
+            &invoice,
+            std::slice::from_ref(&static_pick),
+            &workloads,
+            &[],
+            &[],
+            Some(&hint),
+        );
+
+        assert_ne!(decision.strategy, RoutingStrategy::PatternLearning);
+        assert_eq!(decision.approver_id.as_ref(), Some(&static_pick));
+    }
+
+    #[test]
+    fn route_with_hint_ignored_when_flag_off() {
+        let config = RoutingConfig {
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            auto_apply_high_confidence_patterns: false,
+            ..Default::default()
+        };
+        let engine = IntelligentRoutingEngine::new(config);
+        let invoice = create_test_invoice();
+        let static_pick = UserId(Uuid::new_v4());
+        let learned = UserId(Uuid::new_v4());
+
+        let workloads = HashMap::from([(
+            static_pick.clone(),
+            ApproverWorkload {
+                user_id: static_pick.clone(),
+                active_approvals: 0,
+                pending_approvals: 0,
+                completed_this_week: 0,
+                avg_approval_time_hours: Some(12.0),
+                workload_score: 5.0,
+                last_assignment_at: None,
+            },
+        )]);
+
+        let hint = LearnedRoutingHint {
+            approver_id: learned,
+            confidence_pct: 99,
+            sample_size: 50,
+            reason: "facilities/$5k-$25k".to_string(),
+        };
+
+        let decision = engine.route_invoice_with_hint(
+            &invoice,
+            std::slice::from_ref(&static_pick),
+            &workloads,
+            &[],
+            &[],
+            Some(&hint),
+        );
+
+        assert_ne!(decision.strategy, RoutingStrategy::PatternLearning);
+        assert_eq!(decision.approver_id.as_ref(), Some(&static_pick));
+    }
+
+    #[test]
     fn test_route_invoice_least_loaded() {
         let config = RoutingConfig {
             workload_weight: 0.8,
@@ -1170,6 +1423,64 @@ mod tests {
 
         assert!(decision.approver_id.is_some());
         assert_eq!(decision.approver_id.unwrap(), approver);
+    }
+
+    #[test]
+    fn test_routing_context_route_with_hint_emits_pattern_learning() {
+        let engine = IntelligentRoutingEngine::new(RoutingConfig {
+            workload_weight: 0.8,
+            expertise_weight: 0.1,
+            availability_weight: 0.1,
+            auto_apply_high_confidence_patterns: true,
+            ..Default::default()
+        });
+
+        let static_pick = UserId(Uuid::new_v4());
+        let learned = UserId(Uuid::new_v4());
+
+        let ctx = RoutingContext {
+            eligible_approvers: vec![static_pick.clone(), learned.clone()],
+            workloads: HashMap::from([
+                (
+                    static_pick.clone(),
+                    ApproverWorkload {
+                        user_id: static_pick.clone(),
+                        active_approvals: 0,
+                        pending_approvals: 0,
+                        completed_this_week: 0,
+                        avg_approval_time_hours: Some(8.0),
+                        workload_score: 5.0,
+                        last_assignment_at: None,
+                    },
+                ),
+                (
+                    learned.clone(),
+                    ApproverWorkload {
+                        user_id: learned.clone(),
+                        active_approvals: 10,
+                        pending_approvals: 5,
+                        completed_this_week: 20,
+                        avg_approval_time_hours: Some(24.0),
+                        workload_score: 80.0,
+                        last_assignment_at: None,
+                    },
+                ),
+            ]),
+            availabilities: vec![],
+            expertise: vec![],
+        };
+
+        let hint = LearnedRoutingHint {
+            approver_id: learned.clone(),
+            confidence_pct: 95,
+            sample_size: 30,
+            reason: "facilities/$5k-$25k".to_string(),
+        };
+
+        let invoice = create_test_invoice();
+        let decision = ctx.route_with_hint(&engine, &invoice, Some(&hint));
+        assert_eq!(decision.strategy, RoutingStrategy::PatternLearning);
+        assert_eq!(decision.approver_id.as_ref(), Some(&learned));
     }
 
     #[test]

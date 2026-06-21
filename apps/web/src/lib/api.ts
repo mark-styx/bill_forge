@@ -3775,6 +3775,52 @@ export const learningApi = {
     api.post<{ recorded: boolean }>('/api/v1/learning/corrections', input),
 };
 
+// ---------------------------------------------------------------------------
+// Smart approver auto-routing pattern suggestions (issue #440)
+// ---------------------------------------------------------------------------
+
+export type RoutingAmountBucket =
+  | 'under1k'
+  | 'range1k_to5k'
+  | 'range5k_to25k'
+  | 'over25k';
+
+export interface RoutingPatternKey {
+  vendor_id: string | null;
+  vendor_name: string | null;
+  department: string | null;
+  amount_bucket: RoutingAmountBucket;
+}
+
+export type RoutingSuggestedAction = 'update_rule' | 'create_rule';
+
+export interface RoutingPatternSuggestion {
+  tenant_id: string;
+  pattern_key: RoutingPatternKey;
+  dominant_approver_id: string;
+  dominant_approver_name: string | null;
+  sample_size: number;
+  confidence_pct: number;
+  current_rule_approver_id: string | null;
+  suggested_action: RoutingSuggestedAction;
+}
+
+export interface RoutingPatternSuggestionsResponse {
+  suggestions: RoutingPatternSuggestion[];
+}
+
+export const routingPatternsApi = {
+  getSuggestions: (params?: {
+    lookback_days?: number;
+    min_samples?: number;
+    min_confidence?: number;
+  }) =>
+    api.get<RoutingPatternSuggestionsResponse>(
+      '/api/v1/routing/pattern-suggestions',
+      params as Record<string, string | number | undefined> | undefined,
+    ),
+};
+
 export const autopilotApi = {
   getQueue: () => api.get<AutopilotQueueResponse>('/api/v1/autopilot/queue'),
 

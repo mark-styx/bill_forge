@@ -11,6 +11,7 @@ pub mod embedding_cache;
 pub mod engine;
 pub mod feedback_loop;
 pub mod recurring_patterns;
+pub mod routing_suggestions;
 pub mod rules;
 
 pub use categorization::{
@@ -34,4 +35,8 @@ pub use feedback_loop::{
 pub use recurring_patterns::{
     detect_or_update_pattern, evaluate_pattern_match, find_pattern, PatternMatchResult,
     RecurringPattern,
+};
+pub use routing_suggestions::{
+    mine_routing_patterns, pick_matching_suggestion, AmountBucket, RoutingPatternKey,
+    RoutingPatternSuggestion, SuggestedAction,
 };

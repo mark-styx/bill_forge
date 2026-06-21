@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { RoutingSuggestionsPanel } from '@/components/learning/RoutingSuggestionsPanel';
 
 export default function AssignmentRulesPage() {
   const queryClient = useQueryClient();
@@ -225,6 +226,9 @@ export default function AssignmentRulesPage() {
           </div>
         </div>
       </div>
+
+      {/* Learned routing pattern suggestions */}
+      <RoutingSuggestionsPanel />
 
       {/* Search & Filter */}
       <div className="card p-4">
