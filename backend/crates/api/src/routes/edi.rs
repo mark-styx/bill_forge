@@ -15,12 +15,13 @@
 //! - PUT  /partners/:id     — Update a trading partner
 //! - DELETE /partners/:id   — Remove a trading partner
 
+use crate::error::ApiResult;
 use crate::extractors::{AuthUser, TenantCtx};
 use crate::state::AppState;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, post, put},
     Router,
@@ -174,7 +175,7 @@ async fn webhook_inbound(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let signature = headers
         .get("x-webhook-signature")
         .and_then(|v| v.to_str().ok())
@@ -252,7 +253,7 @@ async fn webhook_inbound(
             // 1. Timestamp freshness
             if !validate_timestamp_freshness(payload.timestamp, 300) {
                 tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
-                return Err(axum::http::StatusCode::UNAUTHORIZED);
+                return Err(axum::http::StatusCode::UNAUTHORIZED.into());
             }
 
             // 2. Begin tx: nonce + edi_documents + invoice + match must commit
@@ -277,7 +278,7 @@ async fn webhook_inbound(
                 })?
             {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
-                return Err(axum::http::StatusCode::CONFLICT);
+                return Err(axum::http::StatusCode::CONFLICT.into());
             }
 
             // 4. Store EDI document record (status: processing)
@@ -566,7 +567,7 @@ async fn webhook_inbound(
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
                 tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
-                return Err(axum::http::StatusCode::UNAUTHORIZED);
+                return Err(axum::http::StatusCode::UNAUTHORIZED.into());
             }
 
             let mut tx = tenant_pool.begin().await.map_err(|e| {
@@ -586,7 +587,7 @@ async fn webhook_inbound(
                 })?
             {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
-                return Err(axum::http::StatusCode::CONFLICT);
+                return Err(axum::http::StatusCode::CONFLICT.into());
             }
 
             // Store EDI document
@@ -746,7 +747,7 @@ async fn webhook_inbound(
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
                 tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
-                return Err(axum::http::StatusCode::UNAUTHORIZED);
+                return Err(axum::http::StatusCode::UNAUTHORIZED.into());
             }
 
             let mut tx = tenant_pool.begin().await.map_err(|e| {
@@ -766,7 +767,7 @@ async fn webhook_inbound(
                 })?
             {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
-                return Err(axum::http::StatusCode::CONFLICT);
+                return Err(axum::http::StatusCode::CONFLICT.into());
             }
 
             // Store EDI document
@@ -990,7 +991,7 @@ async fn webhook_inbound(
             // --- Replay protection ---
             if !validate_timestamp_freshness(payload.timestamp, 300) {
                 tracing::warn!(timestamp = %payload.timestamp, "EDI webhook timestamp too old or in future");
-                return Err(axum::http::StatusCode::UNAUTHORIZED);
+                return Err(axum::http::StatusCode::UNAUTHORIZED.into());
             }
 
             let mut tx = tenant_pool.begin().await.map_err(|e| {
@@ -1010,7 +1011,7 @@ async fn webhook_inbound(
                 })?
             {
                 tracing::warn!(nonce = %nonce, "EDI webhook replay detected");
-                return Err(axum::http::StatusCode::CONFLICT);
+                return Err(axum::http::StatusCode::CONFLICT.into());
             }
 
             // Store the inbound 997 document
@@ -1076,7 +1077,7 @@ async fn edi_connect(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Json(req): Json<EdiConnectRequest>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1151,7 +1152,7 @@ async fn edi_disconnect(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1186,7 +1187,7 @@ async fn edi_status(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-) -> Result<Json<EdiStatusResponse>, axum::http::StatusCode> {
+) -> ApiResult<Json<EdiStatusResponse>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1295,7 +1296,7 @@ async fn list_documents(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<ListDocumentsQuery>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1353,7 +1354,7 @@ async fn get_document(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1409,7 +1410,7 @@ async fn send_remittance(
     TenantCtx(tenant): TenantCtx,
     Path(invoice_id): Path<Uuid>,
     Json(req): Json<SendRemittanceRequest>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let pool = state
         .db
@@ -1433,7 +1434,7 @@ async fn send_remittance(
 
     // Verify invoice is paid
     if invoice.processing_status != billforge_core::domain::ProcessingStatus::Paid {
-        return Err(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(axum::http::StatusCode::UNPROCESSABLE_ENTITY.into());
     }
 
     // Find the trading partner for this vendor
@@ -1551,7 +1552,7 @@ async fn list_outbound(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Query(query): Query<ListDocumentsQuery>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1630,7 +1631,7 @@ async fn get_ack_timeouts(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let tenant_uuid = *tenant.tenant_id.as_uuid();
     let pool = state
         .db
@@ -1657,7 +1658,7 @@ async fn list_partners(
     State(state): State<AppState>,
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1697,7 +1698,7 @@ async fn create_partner(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Json(req): Json<CreatePartnerRequest>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1738,7 +1739,7 @@ async fn update_partner(
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdatePartnerRequest>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)
@@ -1784,7 +1785,7 @@ async fn delete_partner(
     AuthUser(_user): AuthUser,
     TenantCtx(tenant): TenantCtx,
     Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let pool = state
         .db
         .tenant(&tenant.tenant_id)

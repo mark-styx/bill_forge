@@ -10,6 +10,7 @@
 //!   (they FK to `tenants(id)` which only exists there).
 //! - `invoice_captures`, `invoices`, and `vendors` live in the **tenant** DB.
 
+use crate::error::ApiResult;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -37,7 +38,7 @@ async fn handle_inbound_email(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<billforge_email::InboundEmailPayload>,
-) -> Result<(StatusCode, Json<InboundEmailResponse>), StatusCode> {
+) -> ApiResult<(StatusCode, Json<InboundEmailResponse>)> {
     // 1. Validate shared secret (fail-closed: reject if env var is missing or empty)
     let expected_secret = match std::env::var("INBOUND_EMAIL_WEBHOOK_SECRET") {
         Ok(s) if !s.is_empty() => s,
@@ -45,7 +46,7 @@ async fn handle_inbound_email(
             tracing::warn!(
                 "Inbound email webhook rejected: INBOUND_EMAIL_WEBHOOK_SECRET not configured"
             );
-            return Err(StatusCode::SERVICE_UNAVAILABLE);
+            return Err(StatusCode::SERVICE_UNAVAILABLE.into());
         }
     };
 
@@ -58,7 +59,7 @@ async fn handle_inbound_email(
             provided_secret = provided.len(),
             "Inbound email webhook rejected: invalid secret"
         );
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
 
     // 2. Resolve recipient → tenant via metadata DB

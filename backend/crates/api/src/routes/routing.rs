@@ -6,6 +6,7 @@
 //! - Setting approver availability
 //! - Updating routing configuration
 
+use crate::error::ApiResult;
 use crate::extractors::InvoiceProcessingAccess;
 use crate::state::AppState;
 use axum::{
@@ -72,7 +73,7 @@ async fn route_invoice(
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Path(invoice_id): Path<Uuid>,
     Json(body): Json<RouteInvoiceRequest>,
-) -> Result<Json<RouteInvoiceResponse>, StatusCode> {
+) -> ApiResult<Json<RouteInvoiceResponse>> {
     let tenant_id = &user.tenant_id;
 
     // Get the tenant DB pool
@@ -251,7 +252,7 @@ pub(crate) struct ApproverWorkloadSummary {
 async fn get_workload_stats(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
-) -> Result<Json<WorkloadResponse>, StatusCode> {
+) -> ApiResult<Json<WorkloadResponse>> {
     let tenant_id = &user.tenant_id;
 
     let tenant_pool = state.db.tenant(tenant_id).await.map_err(|e| {
@@ -303,10 +304,10 @@ async fn set_availability(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Json(body): Json<SetAvailabilityRequest>,
-) -> Result<StatusCode, StatusCode> {
+) -> ApiResult<StatusCode> {
     // Users can set their own availability; admins can set anyone's
     if body.user_id != user.user_id.0 && !user.is_admin() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(StatusCode::FORBIDDEN.into());
     }
 
     let tenant_id = &user.tenant_id;
@@ -361,7 +362,7 @@ struct RoutingConfigResponse {
 async fn get_routing_config(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
-) -> Result<Json<RoutingConfigResponse>, StatusCode> {
+) -> ApiResult<Json<RoutingConfigResponse>> {
     let tenant_id = &user.tenant_id;
 
     let tenant_pool = state.db.tenant(tenant_id).await.map_err(|e| {
@@ -418,9 +419,9 @@ async fn update_routing_config(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Json(body): Json<UpdateRoutingConfigRequest>,
-) -> Result<Json<RoutingConfigResponse>, StatusCode> {
+) -> ApiResult<Json<RoutingConfigResponse>> {
     if !user.is_admin() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(StatusCode::FORBIDDEN.into());
     }
 
     let tenant_id = &user.tenant_id;
@@ -612,7 +613,7 @@ async fn simulate_routing_handler(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Json(body): Json<SimulateRequest>,
-) -> Result<Json<SimulationSummaryResponse>, StatusCode> {
+) -> ApiResult<Json<SimulationSummaryResponse>> {
     let tenant_id = &user.tenant_id;
 
     // Cap sample size at 500, default 200.
@@ -820,9 +821,9 @@ async fn get_pattern_suggestions(
     State(state): State<AppState>,
     InvoiceProcessingAccess(user, _tenant): InvoiceProcessingAccess,
     Query(params): Query<PatternSuggestionsParams>,
-) -> Result<Json<PatternSuggestionsResponse>, StatusCode> {
+) -> ApiResult<Json<PatternSuggestionsResponse>> {
     if !user.is_admin() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(StatusCode::FORBIDDEN.into());
     }
 
     let tenant_id = &user.tenant_id;

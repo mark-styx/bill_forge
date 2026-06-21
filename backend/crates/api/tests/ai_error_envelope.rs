@@ -90,6 +90,26 @@ async fn test_not_found_error_returns_envelope_shape() {
     );
 }
 
+/// Integration routes may still produce simple HTTP status decisions internally,
+/// but the public handler result must convert those statuses through ApiError so
+/// clients receive the documented error envelope.
+#[tokio::test]
+async fn test_status_code_conversion_returns_envelope_shape() {
+    let (status, json) = error_to_json(ApiError::from(StatusCode::UNAUTHORIZED)).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let error_obj = json.get("error").expect("root has 'error' key");
+    assert_eq!(error_obj["code"], "UNAUTHENTICATED");
+    assert!(json["error"].is_object(), "error field must be an object");
+
+    let (status, json) = error_to_json(ApiError::from(StatusCode::SERVICE_UNAVAILABLE)).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let error_obj = json.get("error").expect("root has 'error' key");
+    assert_eq!(error_obj["code"], "SERVICE_UNAVAILABLE");
+    assert!(json["error"].is_object(), "error field must be an object");
+}
+
 /// Verify that errors from the ai-agent crate (anyhow) are converted to
 /// Error::Internal with a generic message and do not leak the anyhow Display.
 #[tokio::test]

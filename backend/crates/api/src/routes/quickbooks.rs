@@ -1195,7 +1195,7 @@ async fn quickbooks_webhook(
     axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, StatusCode> {
+) -> ApiResult<StatusCode> {
     let signature = headers
         .get("intuit-signature")
         .and_then(|v| v.to_str().ok())
@@ -1230,7 +1230,7 @@ async fn quickbooks_webhook(
 
     if !webhook::verify_webhook_signature(&body, signature, &secret) {
         tracing::warn!("QuickBooks webhook signature verification failed");
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
 
     // Parse envelope if possible; provider-native payloads may not match our format
@@ -1238,7 +1238,7 @@ async fn quickbooks_webhook(
         Ok(envelope) => {
             if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
                 tracing::warn!(timestamp = %envelope.timestamp, "QuickBooks webhook timestamp too old or in future");
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let nonce = envelope
                 .nonce
@@ -1259,7 +1259,7 @@ async fn quickbooks_webhook(
         })?
     {
         tracing::warn!(nonce = %nonce, "QuickBooks webhook replay detected");
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
 
     tracing::info!(
@@ -1276,7 +1276,7 @@ async fn quickbooks_webhook(
             tenant_id = %tenant_id_str,
             "QuickBooks webhook verified but change processing failed"
         );
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
     }
 
     Ok(StatusCode::OK)

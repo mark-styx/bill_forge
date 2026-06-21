@@ -619,7 +619,7 @@ async fn xero_webhook(
     axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, StatusCode> {
+) -> ApiResult<StatusCode> {
     let signature = headers
         .get("x-xero-signature")
         .and_then(|v| v.to_str().ok())
@@ -652,7 +652,7 @@ async fn xero_webhook(
 
     if !webhook::verify_webhook_signature(&body, signature, &secret) {
         tracing::warn!("Xero webhook signature verification failed");
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
 
     // Parse envelope if possible; Xero validation challenges and provider-native
@@ -662,7 +662,7 @@ async fn xero_webhook(
         Ok(envelope) => {
             if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
                 tracing::warn!(timestamp = %envelope.timestamp, "Xero webhook timestamp too old or in future");
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let nonce = envelope
                 .nonce
@@ -683,7 +683,7 @@ async fn xero_webhook(
         })?
     {
         tracing::warn!(nonce = %nonce, "Xero webhook replay detected");
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
 
     tracing::info!(
@@ -727,10 +727,13 @@ async fn get_authenticated_xero_client(
         tracing::error!(error = %e, "Failed to decrypt stored Xero access token");
         billforge_core::Error::Internal("Failed to decrypt stored Xero tokens".to_string())
     })?;
-    let refresh_token_val = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
-        tracing::error!(error = %e, "Failed to decrypt stored Xero refresh token");
-        billforge_core::Error::Internal("Failed to decrypt stored Xero tokens".to_string())
-    })?;
+    let refresh_token_val = state
+        .token_cipher
+        .open(&stored_refresh_token)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to decrypt stored Xero refresh token");
+            billforge_core::Error::Internal("Failed to decrypt stored Xero tokens".to_string())
+        })?;
 
     // Refresh if token is expired or will expire within 5 minutes
     if token_expires_at <= Utc::now() + Duration::minutes(5) {

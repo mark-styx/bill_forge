@@ -598,7 +598,7 @@ async fn salesforce_webhook(
     axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, StatusCode> {
+) -> ApiResult<StatusCode> {
     let signature = headers
         .get("x-salesforce-signature")
         .and_then(|v| v.to_str().ok())
@@ -632,14 +632,14 @@ async fn salesforce_webhook(
 
     if !webhook::verify_webhook_signature(&body, signature, &secret) {
         tracing::warn!("Salesforce webhook signature verification failed");
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
 
     let (event_type, nonce) = match serde_json::from_slice::<WebhookEnvelope>(&body) {
         Ok(envelope) => {
             if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
                 tracing::warn!(timestamp = %envelope.timestamp, "Salesforce webhook timestamp too old or in future");
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let nonce = envelope
                 .nonce
@@ -660,7 +660,7 @@ async fn salesforce_webhook(
         })?
     {
         tracing::warn!(nonce = %nonce, "Salesforce webhook replay detected");
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
 
     tracing::info!(

@@ -109,6 +109,9 @@ pub enum Error {
 
     #[error("Configuration error: {0}")]
     Configuration(String),
+
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl Error {
@@ -124,6 +127,7 @@ impl Error {
             Error::RateLimited { .. } => 429,
             Error::PaymentFrozen(_) => 403,
             Error::InvalidToken(_) => 401,
+            Error::ServiceUnavailable(_) => 503,
             _ => 500,
         }
     }
@@ -160,6 +164,7 @@ impl Error {
             Error::PaymentFrozen(_) => "PAYMENT_FROZEN",
             Error::Internal(_) => "INTERNAL_ERROR",
             Error::Configuration(_) => "CONFIGURATION_ERROR",
+            Error::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
         }
     }
 }

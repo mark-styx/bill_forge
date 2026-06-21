@@ -36,6 +36,29 @@ impl From<CoreError> for ApiError {
     }
 }
 
+impl From<StatusCode> for ApiError {
+    fn from(status: StatusCode) -> Self {
+        let err = match status {
+            StatusCode::BAD_REQUEST => CoreError::Validation("Bad request".to_string()),
+            StatusCode::UNAUTHORIZED => CoreError::Unauthenticated,
+            StatusCode::FORBIDDEN => CoreError::Forbidden("Access denied".to_string()),
+            StatusCode::NOT_FOUND => CoreError::NotFound {
+                resource_type: "resource".to_string(),
+                id: "unknown".to_string(),
+            },
+            StatusCode::CONFLICT => CoreError::Conflict("Request conflict".to_string()),
+            StatusCode::SERVICE_UNAVAILABLE => {
+                CoreError::ServiceUnavailable("Service unavailable".to_string())
+            }
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                CoreError::Internal("Internal server error".to_string())
+            }
+            _ => CoreError::Internal(format!("HTTP error {}", status.as_u16())),
+        };
+        Self(err)
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status =

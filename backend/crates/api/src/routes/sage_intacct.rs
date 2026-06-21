@@ -546,7 +546,7 @@ async fn sage_intacct_webhook(
     axum::extract::Path(tenant_id_str): axum::extract::Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, StatusCode> {
+) -> ApiResult<StatusCode> {
     let signature = headers
         .get("x-intacct-signature")
         .and_then(|v| v.to_str().ok())
@@ -580,14 +580,14 @@ async fn sage_intacct_webhook(
 
     if !webhook::verify_webhook_signature(&body, signature, &secret) {
         tracing::warn!("Sage Intacct webhook signature verification failed");
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
 
     let (event_type, nonce) = match serde_json::from_slice::<WebhookEnvelope>(&body) {
         Ok(envelope) => {
             if !webhook::validate_timestamp_freshness(envelope.timestamp, 300) {
                 tracing::warn!(timestamp = %envelope.timestamp, "Sage Intacct webhook timestamp too old or in future");
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let nonce = envelope
                 .nonce
@@ -608,7 +608,7 @@ async fn sage_intacct_webhook(
         })?
     {
         tracing::warn!(nonce = %nonce, "Sage Intacct webhook replay detected");
-        return Err(StatusCode::CONFLICT);
+        return Err(StatusCode::CONFLICT.into());
     }
 
     tracing::info!(
