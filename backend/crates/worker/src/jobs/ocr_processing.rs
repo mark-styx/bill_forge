@@ -752,10 +752,21 @@ pub async fn run_straight_through_processing(
     .with_tenant_settings_provider(Arc::new(billforge_db::TenantSettingsFromDb::new(Arc::new(
         config.pg_manager.metadata().clone(),
     ))));
-    let final_status = engine.process_invoice(tenant_id, &invoice).await?;
+    let outcome = engine.process_invoice(tenant_id, &invoice).await?;
+    let final_status = outcome.status;
 
-    repo.update_processing_status(tenant_id, invoice_id, final_status)
-        .await?;
+    // Route touchless auto-approval lanes (recurring-pattern / ML-confidence)
+    // through the state machine so `invoices.status` transitions and the
+    // canonical audit row are written, keeping status/processing_status in sync
+    // (issue #426). Mirrors the API caller in routes/invoices.rs.
+    let proceed =
+        sync_auto_approval_with_state_machine(&**pool, tenant_id, invoice_id.as_uuid(), &outcome)
+            .await?;
+
+    if proceed {
+        repo.update_processing_status(tenant_id, invoice_id, final_status)
+            .await?;
+    }
     route_to_processing_queue(pool, tenant_id, invoice_id, final_status).await;
 
     info!(
@@ -795,6 +806,151 @@ fn line_items_from_ocr(
             amount: item.amount.amount as f64 / 100.0,
         })
         .collect()
+}
+
+/// Transition an invoice's lifecycle status to `approved` for a worker-initiated
+/// touchless auto-approval.
+///
+/// Faithful twin of the canonical `api::state_machine::transition` writer (the
+/// single function that updates `invoices.status`) so worker-initiated auto-
+/// approvals produce the same transactional status update plus the canonical
+/// `invoice_audit_log` row that the API path writes. The only touchless auto-
+/// approval transition reachable from the worker OCR straight-through path is
+/// `received -> approved` (the `auto_approve` rule), so this validates that the
+/// current status is `received` and rejects anything the canonical state
+/// machine would also reject.
+///
+/// Implemented locally rather than depending on `billforge-api`, because that
+/// would drag the HTTP layer into the worker binary. If the canonical
+/// transition table changes, update both writers together.
+pub async fn transition_invoice_to_approved(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &Uuid,
+    actor_id: &Uuid,
+    event_type: &str,
+    metadata: serde_json::Value,
+) -> Result<(), billforge_core::Error> {
+    let mut tx = pool.begin().await.map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to begin transaction: {}", e))
+    })?;
+
+    // 1. Load current status with a row lock.
+    let current: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE")
+            .bind(invoice_id)
+            .bind(*tenant_id.as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| {
+                billforge_core::Error::Database(format!("Failed to query invoice: {}", e))
+            })?;
+
+    let current_status_str = current
+        .ok_or_else(|| billforge_core::Error::NotFound {
+            resource_type: "Invoice".to_string(),
+            id: invoice_id.to_string(),
+        })?
+        .0
+        .unwrap_or_else(|| "received".to_string());
+
+    // 2. Validate: the touchless `auto_approve` transition is only valid from
+    //    `received`, matching the canonical state machine table.
+    if current_status_str != "received" {
+        tx.rollback()
+            .await
+            .map_err(|e| billforge_core::Error::Database(format!("Failed to rollback: {}", e)))?;
+        return Err(billforge_core::Error::Validation(format!(
+            "Invalid transition from '{}' to 'approved'",
+            current_status_str
+        )));
+    }
+
+    // 3. Update the invoice lifecycle status.
+    sqlx::query(
+        "UPDATE invoices SET status = 'approved', updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(invoice_id)
+    .bind(*tenant_id.as_uuid())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to update invoice status: {}", e)))?;
+
+    // 4. Insert the canonical audit-log row.
+    sqlx::query(
+        r#"INSERT INTO invoice_audit_log
+               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .bind(actor_id)
+    .bind("received")
+    .bind("approved")
+    .bind(event_type)
+    .bind(&metadata)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| billforge_core::Error::Database(format!("Failed to insert audit log: {}", e)))?;
+
+    // 5. Commit.
+    tx.commit().await.map_err(|e| {
+        billforge_core::Error::Database(format!("Failed to commit transition: {}", e))
+    })?;
+
+    Ok(())
+}
+
+/// Bridge a `WorkflowEngine` auto-approval outcome to the state machine for
+/// worker-initiated touchless approvals.
+///
+/// Worker-side twin of `routes::invoices::sync_auto_approval_with_state_machine`
+/// in `billforge-api`. When the engine fires a touchless lane (recurring-pattern
+/// or ML-confidence auto-approval), the outcome carries the lane label and
+/// resolves to `ProcessingStatus::Approved`. This routes that approval through
+/// `transition_invoice_to_approved` so `invoices.status` moves to `approved`
+/// and the canonical audit-log row is written, instead of only updating the
+/// separate `invoices.processing_status` column (issue #426).
+///
+/// Returns `Ok(true)` when the caller should proceed to write
+/// `invoices.processing_status` (no auto-approval lane fired, or the
+/// transition succeeded). Returns `Ok(false)` when the state machine rejected
+/// the transition, so the caller must skip the `processing_status` update and
+/// any downstream side effects to keep the two columns from diverging.
+pub async fn sync_auto_approval_with_state_machine(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &Uuid,
+    outcome: &billforge_invoice_processing::ProcessInvoiceOutcome,
+) -> Result<bool, billforge_core::Error> {
+    let lane = match outcome.auto_approval_lane.as_ref() {
+        Some(lane) if outcome.status == ProcessingStatus::Approved => lane,
+        _ => return Ok(true),
+    };
+
+    match transition_invoice_to_approved(
+        pool,
+        tenant_id,
+        invoice_id,
+        &Uuid::nil(),
+        lane.event_type,
+        lane.metadata.clone(),
+    )
+    .await
+    {
+        Ok(()) => Ok(true),
+        Err(billforge_core::Error::Validation(msg)) => {
+            warn!(
+                invoice_id = %invoice_id,
+                lane = lane.event_type,
+                error = %msg,
+                "Auto-approval state machine rejected transition; skipping processing_status update to keep columns consistent"
+            );
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Apply contract match outcome side-effects: update processing status and notes.
