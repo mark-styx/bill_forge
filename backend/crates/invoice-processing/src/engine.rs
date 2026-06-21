@@ -22,6 +22,36 @@ use std::sync::Arc;
 /// Minimum confidence threshold for ML auto-approval (95%)
 const ML_AUTO_APPROVAL_CONFIDENCE_THRESHOLD: f32 = 0.95;
 
+/// Outcome of `WorkflowEngine::process_invoice`.
+///
+/// `status` is the resolved processing status. `auto_approval_lane`, when
+/// `Some`, signals that a touchless auto-approval path (recurring pattern or
+/// ML confidence) fired and the caller is responsible for transitioning
+/// `invoices.status` through the state machine so both columns stay in sync
+/// and a single canonical audit-log row is written.
+#[derive(Debug, Clone)]
+pub struct ProcessInvoiceOutcome {
+    pub status: ProcessingStatus,
+    pub auto_approval_lane: Option<AutoApprovalLane>,
+}
+
+impl ProcessInvoiceOutcome {
+    pub fn new(status: ProcessingStatus) -> Self {
+        Self {
+            status,
+            auto_approval_lane: None,
+        }
+    }
+}
+
+/// Identifies which auto-approval lane fired and carries the metadata the
+/// caller should attach to the audit-log row.
+#[derive(Debug, Clone)]
+pub struct AutoApprovalLane {
+    pub event_type: &'static str,
+    pub metadata: serde_json::Value,
+}
+
 /// Workflow engine for processing invoices
 #[allow(dead_code)]
 pub struct WorkflowEngine {
@@ -82,7 +112,7 @@ impl WorkflowEngine {
         &self,
         tenant_id: &TenantId,
         invoice: &Invoice,
-    ) -> Result<ProcessingStatus> {
+    ) -> Result<ProcessInvoiceOutcome> {
         // Resolve per-tenant settings (fallback to defaults)
         let settings = match &self.settings_provider {
             Some(provider) => provider.get(tenant_id).await.unwrap_or_default(),
@@ -100,7 +130,7 @@ impl WorkflowEngine {
                 .apply_workflow_template(tenant_id, invoice, &template)
                 .await?
             {
-                return Ok(status);
+                return Ok(ProcessInvoiceOutcome::new(status));
             }
         }
 
@@ -161,7 +191,11 @@ impl WorkflowEngine {
                         "Auto-approving invoice due to recurring pattern match"
                     );
 
-                    // Audit-log the pattern-based auto-approval.
+                    // Hand the audit-log row over to the caller so it can be
+                    // written by state_machine::transition alongside the
+                    // invoices.status update. Direct writes from here would
+                    // produce an audit row claiming a transition the state
+                    // machine never executed.
                     let expected_date = pattern
                         .last_invoice_date
                         .map(|d| d + chrono::Duration::days(pattern.cadence_days as i64));
@@ -169,19 +203,7 @@ impl WorkflowEngine {
                         (Some(inv), Some(exp)) => Some((inv - exp).num_days()),
                         _ => None,
                     };
-                    if let Err(e) = sqlx::query(
-                        r#"INSERT INTO invoice_audit_log
-                           (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
-                    )
-                    .bind(uuid::Uuid::new_v4())
-                    .bind(tenant_id.as_uuid())
-                    .bind(invoice.id.as_uuid())
-                    .bind(None::<uuid::Uuid>)
-                    .bind("received")
-                    .bind("approved")
-                    .bind("recurring_pattern_match")
-                    .bind(serde_json::json!({
+                    let metadata = serde_json::json!({
                         "pattern_id": pattern.id,
                         "vendor_id": vendor_id,
                         "trailing_median_cents": pattern.trailing_median_cents,
@@ -190,15 +212,16 @@ impl WorkflowEngine {
                         "date_delta_days": date_delta,
                         "amount_tolerance_pct": pattern.amount_tolerance_pct,
                         "window_tolerance_days": pattern.window_tolerance_days,
-                    }))
-                    .execute(&**pool)
-                    .await
-                    {
-                        tracing::warn!(error = %e, "Failed to write recurring-pattern auto-approval audit entry");
-                    }
+                    });
 
                     try_update_pattern!();
-                    return Ok(ProcessingStatus::Approved);
+                    return Ok(ProcessInvoiceOutcome {
+                        status: ProcessingStatus::Approved,
+                        auto_approval_lane: Some(AutoApprovalLane {
+                            event_type: "recurring_pattern_match",
+                            metadata,
+                        }),
+                    });
                 }
 
                 // Pattern exists but match failed or auto-approve disabled: audit the reason.
@@ -270,46 +293,23 @@ impl WorkflowEngine {
                         "Auto-approving invoice due to high OCR and ML categorization confidence"
                     );
 
-                    // Write dedicated audit entry to invoice_audit_log for touchless auto-approval
-                    if let Some(ref pool) = self.pool {
-                        let from_status = sqlx::query_scalar::<_, String>(
-                            "SELECT status FROM invoices WHERE id = $1 AND tenant_id = $2",
-                        )
-                        .bind(invoice.id.as_uuid())
-                        .bind(tenant_id.as_uuid())
-                        .fetch_optional(&**pool)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| "received".to_string());
-
-                        if let Err(e) = sqlx::query(
-                            r#"INSERT INTO invoice_audit_log
-                               (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata)
-                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
-                        )
-                        .bind(uuid::Uuid::new_v4())
-                        .bind(tenant_id.as_uuid())
-                        .bind(invoice.id.as_uuid())
-                        .bind(None::<uuid::Uuid>)
-                        .bind(&from_status)
-                        .bind("approved")
-                        .bind("touchless_auto_approval")
-                        .bind(serde_json::json!({
-                            "ocr_confidence": invoice.ocr_confidence,
-                            "categorization_confidence": invoice.categorization_confidence,
-                            "threshold_used": threshold,
-                            "lane": "learned_pattern",
-                        }))
-                        .execute(&**pool)
-                        .await
-                        {
-                            tracing::warn!(error = %e, "Failed to write touchless auto-approval audit entry to invoice_audit_log");
-                        }
-                    }
+                    // Hand the audit-log row over to the caller; see the
+                    // recurring-pattern lane above for the rationale.
+                    let metadata = serde_json::json!({
+                        "ocr_confidence": invoice.ocr_confidence,
+                        "categorization_confidence": invoice.categorization_confidence,
+                        "threshold_used": threshold,
+                        "lane": "learned_pattern",
+                    });
 
                     try_update_pattern!();
-                    return Ok(ProcessingStatus::Approved);
+                    return Ok(ProcessInvoiceOutcome {
+                        status: ProcessingStatus::Approved,
+                        auto_approval_lane: Some(AutoApprovalLane {
+                            event_type: "touchless_auto_approval",
+                            metadata,
+                        }),
+                    });
                 }
             }
         }
@@ -324,7 +324,7 @@ impl WorkflowEngine {
             if self.evaluate_conditions(invoice, &rule.conditions) {
                 // Auto-approve
                 try_update_pattern!();
-                return Ok(ProcessingStatus::Approved);
+                return Ok(ProcessInvoiceOutcome::new(ProcessingStatus::Approved));
             }
         }
 
@@ -334,7 +334,7 @@ impl WorkflowEngine {
             }
             if self.rule_has_action(rule, ActionType::AutoApprove) {
                 try_update_pattern!();
-                return Ok(ProcessingStatus::Approved);
+                return Ok(ProcessInvoiceOutcome::new(ProcessingStatus::Approved));
             }
             let approval_actions = self.approval_actions(rule);
             if !approval_actions.is_empty() {
@@ -342,7 +342,9 @@ impl WorkflowEngine {
                     self.create_approval_request_for_action(tenant_id, invoice, rule, action)
                         .await?;
                 }
-                return Ok(ProcessingStatus::PendingApproval);
+                return Ok(ProcessInvoiceOutcome::new(
+                    ProcessingStatus::PendingApproval,
+                ));
             }
             if self.rule_has_action(rule, ActionType::RouteToQueue) {
                 tracing::info!(
@@ -350,7 +352,7 @@ impl WorkflowEngine {
                     rule_id = %rule.id,
                     "Routing rule requested queue routing; invoice remains submitted for queue assignment"
                 );
-                return Ok(ProcessingStatus::Submitted);
+                return Ok(ProcessInvoiceOutcome::new(ProcessingStatus::Submitted));
             }
         }
 
@@ -368,12 +370,14 @@ impl WorkflowEngine {
                 self.create_approval_request(tenant_id, invoice, &rule)
                     .await?;
             }
-            return Ok(ProcessingStatus::PendingApproval);
+            return Ok(ProcessInvoiceOutcome::new(
+                ProcessingStatus::PendingApproval,
+            ));
         }
 
         // No approval needed
         try_update_pattern!();
-        Ok(ProcessingStatus::Approved)
+        Ok(ProcessInvoiceOutcome::new(ProcessingStatus::Approved))
     }
 
     /// Apply a workflow template's ordered stages to an invoice.
@@ -1278,15 +1282,19 @@ mod tests {
         );
         let invoice = template_test_invoice();
 
-        let status = engine
+        let outcome = engine
             .process_invoice(&invoice.tenant_id, &invoice)
             .await
             .expect("template processing should succeed");
 
         assert_eq!(
-            status,
+            outcome.status,
             ProcessingStatus::PendingApproval,
             "template Approval stage should route to pending approval"
+        );
+        assert!(
+            outcome.auto_approval_lane.is_none(),
+            "template stages should not surface an auto-approval lane"
         );
 
         let requests = approval_repo.requests();
@@ -1312,13 +1320,13 @@ mod tests {
         let (engine, _approval_repo) = build_test_engine(None, vec![auto_approval_rule()]);
         let invoice = template_test_invoice();
 
-        let status = engine
+        let outcome = engine
             .process_invoice(&invoice.tenant_id, &invoice)
             .await
             .expect("rule fall-through should succeed");
 
         assert_eq!(
-            status,
+            outcome.status,
             ProcessingStatus::Approved,
             "no template -> rule-based auto-approval preserved"
         );
@@ -1344,13 +1352,13 @@ mod tests {
         );
         let invoice = template_test_invoice();
 
-        let status = engine
+        let outcome = engine
             .process_invoice(&invoice.tenant_id, &invoice)
             .await
             .expect("skip-then-fall-through should succeed");
 
         assert_eq!(
-            status,
+            outcome.status,
             ProcessingStatus::Approved,
             "matching skip condition should skip the stage and fall through to rules"
         );

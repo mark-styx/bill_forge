@@ -382,7 +382,8 @@ async fn test_routing_engine_present_returns_approver() {
     let status = engine
         .process_invoice(&invoice.tenant_id, &invoice)
         .await
-        .unwrap();
+        .unwrap()
+        .status;
 
     assert_eq!(status, ProcessingStatus::PendingApproval);
 
@@ -409,7 +410,8 @@ async fn test_routing_engine_empty_context_falls_back_to_role() {
     let status = engine
         .process_invoice(&invoice.tenant_id, &invoice)
         .await
-        .unwrap();
+        .unwrap()
+        .status;
 
     assert_eq!(status, ProcessingStatus::PendingApproval);
 

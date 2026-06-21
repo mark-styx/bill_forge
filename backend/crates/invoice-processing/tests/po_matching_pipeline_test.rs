@@ -421,7 +421,8 @@ async fn test_full_match_under_threshold_auto_approves() {
     let status = engine
         .process_invoice(&invoice.tenant_id, &invoice)
         .await
-        .unwrap();
+        .unwrap()
+        .status;
 
     assert_eq!(status, ProcessingStatus::Approved);
 }
@@ -437,7 +438,8 @@ async fn test_over_billed_returns_pending_approval() {
     let status = engine
         .process_invoice(&invoice.tenant_id, &invoice)
         .await
-        .unwrap();
+        .unwrap()
+        .status;
 
     // PO matching is not yet wired into WorkflowEngine, so overbilling
     // detection is deferred and the engine auto-approves by default.
@@ -454,7 +456,8 @@ async fn test_missing_po_number_skips_match() {
     let status = engine
         .process_invoice(&invoice.tenant_id, &invoice)
         .await
-        .unwrap();
+        .unwrap()
+        .status;
 
     assert_eq!(status, ProcessingStatus::Approved);
 }

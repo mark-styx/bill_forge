@@ -93,6 +93,16 @@ const ALLOWED_TRANSITIONS: &[Transition] = &[
         to: InvoiceStatus::Approved,
         event_type: "approve",
     },
+    // Touchless auto-approval lanes (recurring-pattern match, ML-confidence).
+    // Lets the auto-approval paths in WorkflowEngine flow through the same
+    // state-machine writer used by interactive approvals, keeping
+    // invoices.status and invoices.processing_status in sync and producing a
+    // single canonical audit-log row per approval.
+    Transition {
+        from: InvoiceStatus::Received,
+        to: InvoiceStatus::Approved,
+        event_type: "auto_approve",
+    },
     Transition {
         from: InvoiceStatus::Approved,
         to: InvoiceStatus::Paid,
@@ -425,6 +435,12 @@ mod tests {
     fn test_valid_transition_pending_approval_to_approved() {
         let etype = find_transition(InvoiceStatus::PendingApproval, InvoiceStatus::Approved);
         assert_eq!(etype, Some("approve"));
+    }
+
+    #[test]
+    fn test_auto_approve_received_to_approved_allowed() {
+        let etype = find_transition(InvoiceStatus::Received, InvoiceStatus::Approved);
+        assert_eq!(etype, Some("auto_approve"));
     }
 
     #[test]

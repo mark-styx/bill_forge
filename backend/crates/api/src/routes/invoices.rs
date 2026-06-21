@@ -1468,6 +1468,55 @@ async fn route_sync_ocr_queue(
     }
 }
 
+/// Bridges a `WorkflowEngine` auto-approval outcome to the state machine.
+///
+/// When the engine fires a touchless lane (recurring-pattern or ML-confidence
+/// auto-approval), the outcome carries the lane label. This routes the
+/// approval through `state_machine::transition` so `invoices.status` moves to
+/// `approved` in the same code path interactive approvals use, and the audit
+/// log gets the single canonical row.
+///
+/// Returns `true` when the caller should proceed to write
+/// `invoices.processing_status` (no auto-approval lane, or transition
+/// succeeded). Returns `false` when the state machine rejected the transition,
+/// so the caller must skip the processing_status update and any downstream
+/// side effects to prevent the two columns from diverging.
+async fn sync_auto_approval_with_state_machine(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: &Uuid,
+    outcome: &billforge_invoice_processing::ProcessInvoiceOutcome,
+) -> Result<bool, billforge_core::Error> {
+    let lane = match outcome.auto_approval_lane.as_ref() {
+        Some(lane) if outcome.status == ProcessingStatus::Approved => lane,
+        _ => return Ok(true),
+    };
+
+    match crate::state_machine::transition(
+        pool,
+        tenant_id,
+        invoice_id,
+        &Uuid::nil(),
+        crate::state_machine::InvoiceStatus::Approved,
+        lane.event_type,
+        lane.metadata.clone(),
+    )
+    .await
+    {
+        Ok(()) => Ok(true),
+        Err(billforge_core::Error::Validation(msg)) => {
+            tracing::warn!(
+                invoice_id = %invoice_id,
+                lane = lane.event_type,
+                error = %msg,
+                "Auto-approval state machine rejected transition; skipping processing_status update to keep columns consistent"
+            );
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 async fn run_sync_straight_through_processing(
     repo: &billforge_db::repositories::InvoiceRepositoryImpl,
     pool: &std::sync::Arc<sqlx::PgPool>,
@@ -1589,13 +1638,20 @@ async fn run_sync_straight_through_processing(
     .with_tenant_settings_provider(std::sync::Arc::new(
         billforge_db::TenantSettingsFromDb::new(metadata_pool.clone()),
     ));
-    let final_status = engine.process_invoice(tenant_id, &invoice).await?;
+    let outcome = engine.process_invoice(tenant_id, &invoice).await?;
+    let final_status = outcome.status;
 
     // Emit capture-to-approval/final-status timing metric.
     emit_capture_timing_metrics(tenant_id, final_status, invoice.created_at);
 
-    repo.update_processing_status(tenant_id, invoice_id, final_status)
-        .await?;
+    let proceed =
+        sync_auto_approval_with_state_machine(&**pool, tenant_id, invoice_id.as_uuid(), &outcome)
+            .await?;
+
+    if proceed {
+        repo.update_processing_status(tenant_id, invoice_id, final_status)
+            .await?;
+    }
     route_sync_processing_queue(pool, tenant_id, invoice_id, final_status).await;
 
     // Emit meter event for successfully-processed invoices.
@@ -2000,17 +2056,28 @@ async fn submit_for_processing(
         state.db.metadata(),
     )));
 
-    let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+    let outcome = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+    let final_status = outcome.status;
 
     // Emit capture-to-approval/final-status timing metric.
     emit_capture_timing_metrics(&tenant.tenant_id, final_status, invoice.created_at);
 
     // Update invoice with final status from workflow
     let pool = state.db.tenant(&tenant.tenant_id).await?;
-    let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-    invoice_repo
-        .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
-        .await?;
+    let proceed = sync_auto_approval_with_state_machine(
+        &pool,
+        &tenant.tenant_id,
+        invoice_id.as_uuid(),
+        &outcome,
+    )
+    .await?;
+
+    if proceed {
+        let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+        invoice_repo
+            .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
+            .await?;
+    }
 
     emit_invoice_event(
         &state,
@@ -2873,16 +2940,28 @@ async fn resolve_ocr_exception(
                 billforge_db::TenantSettingsFromDb::new(state.db.metadata()),
             ));
 
-            let final_status = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+            let outcome = engine.process_invoice(&tenant.tenant_id, &invoice).await?;
+            let final_status = outcome.status;
 
             // Emit capture-to-approval/final-status timing metric.
             emit_capture_timing_metrics(&tenant.tenant_id, final_status, invoice.created_at);
 
             // Update processing status.
-            let invoice_repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
-            invoice_repo
-                .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
-                .await?;
+            let proceed = sync_auto_approval_with_state_machine(
+                &pool,
+                &tenant.tenant_id,
+                invoice_id.as_uuid(),
+                &outcome,
+            )
+            .await?;
+
+            if proceed {
+                let invoice_repo =
+                    billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
+                invoice_repo
+                    .update_processing_status(&tenant.tenant_id, &invoice_id, final_status)
+                    .await?;
+            }
 
             emit_invoice_event(
                 &state,

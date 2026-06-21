@@ -28,7 +28,7 @@ pub use continuous_learning::{
 };
 pub use contract_matching::{match_invoice_to_contract, ContractMatchInput, ContractMatchOutcome};
 pub use embedding_cache::{CacheStats, EmbeddingCache};
-pub use engine::WorkflowEngine;
+pub use engine::{AutoApprovalLane, ProcessInvoiceOutcome, WorkflowEngine};
 pub use feedback_loop::{
     AccuracyMetrics, CategorizationFeedback, CorrectionRule, FeedbackLearning, FeedbackType,
 };
