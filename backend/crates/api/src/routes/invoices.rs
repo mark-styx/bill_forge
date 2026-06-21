@@ -220,7 +220,7 @@ async fn list_invoices(
 ) -> ApiResult<Json<PaginatedResponse<Invoice>>> {
     let pagination = Pagination {
         page: query.page.unwrap_or(1),
-        per_page: query.per_page.unwrap_or(25),
+        per_page: query.per_page.unwrap_or(25).min(100),
     };
 
     let filters = InvoiceFilters {

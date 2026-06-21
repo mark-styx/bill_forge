@@ -120,7 +120,7 @@ async fn list_statements(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<StatementListResponse>> {
     let page = query.page.unwrap_or(1);
-    let per_page = query.per_page.unwrap_or(25);
+    let per_page = query.per_page.unwrap_or(25).min(100);
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = VendorStatementRepositoryImpl::new(pool);
