@@ -210,19 +210,34 @@ impl XeroClient {
             .context("Failed to parse Xero API response")
     }
 
-    /// Make a POST request to Xero API
-    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
+    /// Make a POST request to Xero API.
+    ///
+    /// When `idempotency_key` is `Some`, the value is sent as the `Idempotency-Key`
+    /// header on every retry attempt. Xero dedups within a 24h window per
+    /// (tenant, key), so retried POSTs after a lost response do not produce a
+    /// second resource.
+    async fn post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        resource: &str,
+        body: &B,
+        idempotency_key: Option<&str>,
+    ) -> Result<T> {
         let url = self.build_url(resource);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
         let response = self
             .execute_with_retry(|token, headers| {
-                self.http_client
+                let mut builder = self
+                    .http_client
                     .post(&url)
                     .bearer_auth(&token)
                     .headers(headers)
                     .body(reqwest::Body::from(body_bytes.clone()))
-                    .header(CONTENT_TYPE, "application/json")
+                    .header(CONTENT_TYPE, "application/json");
+                if let Some(key) = idempotency_key {
+                    builder = builder.header("Idempotency-Key", key);
+                }
+                builder
             })
             .await
             .map_err(anyhow::Error::from)?;
@@ -289,7 +304,7 @@ impl XeroClient {
             contacts: vec![contact.clone()],
         };
 
-        let response: XeroResponse<XeroContact> = self.post("Contacts", &request).await?;
+        let response: XeroResponse<XeroContact> = self.post("Contacts", &request, None).await?;
 
         response
             .Items
@@ -335,8 +350,20 @@ impl XeroClient {
             .ok_or_else(|| anyhow::anyhow!("Account not found"))
     }
 
-    /// Create an invoice (bill) in Xero
-    pub async fn create_invoice(&self, invoice: &XeroInvoice) -> Result<XeroInvoice> {
+    /// Create an invoice (bill) in Xero.
+    ///
+    /// `idempotency_key` is forwarded as the `Idempotency-Key` HTTP header. Xero
+    /// dedups creates within a 24h window per (tenant, key), so a successful
+    /// create followed by a lost response and a retry (either inside
+    /// `execute_with_retry` or at the outer caller) is deduped at Xero instead
+    /// of producing a second invoice. The caller is responsible for persisting
+    /// the key for the lifetime of the export attempt — typically by writing
+    /// it to the export row before invoking this method.
+    pub async fn create_invoice(
+        &self,
+        invoice: &XeroInvoice,
+        idempotency_key: &str,
+    ) -> Result<XeroInvoice> {
         #[derive(Serialize)]
         struct CreateInvoiceRequest {
             #[serde(rename = "Invoices")]
@@ -347,7 +374,9 @@ impl XeroClient {
             invoices: vec![invoice.clone()],
         };
 
-        let response: XeroResponse<XeroInvoice> = self.post("Invoices", &request).await?;
+        let response: XeroResponse<XeroInvoice> = self
+            .post("Invoices", &request, Some(idempotency_key))
+            .await?;
 
         response
             .Items
@@ -372,7 +401,7 @@ impl XeroClient {
         };
 
         let response: XeroResponse<XeroInvoice> = self
-            .post(&format!("Invoices/{}", invoice_id), &request)
+            .post(&format!("Invoices/{}", invoice_id), &request, None)
             .await?;
 
         response
@@ -414,6 +443,37 @@ impl XeroClient {
                     .get(url)
                     .bearer_auth(&token)
                     .headers(headers)
+            })
+            .await?;
+        response
+            .text()
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))
+    }
+
+    /// Execute a POST request to an arbitrary URL using the retry logic,
+    /// optionally attaching Xero's `Idempotency-Key` header. Exposed for
+    /// integration testing only.
+    #[doc(hidden)]
+    pub async fn execute_post_for_test(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        idempotency_key: Option<&str>,
+    ) -> std::result::Result<String, ClientError> {
+        let response = self
+            .execute_with_retry(|token, headers| {
+                let mut builder = self
+                    .http_client
+                    .post(url)
+                    .bearer_auth(&token)
+                    .headers(headers)
+                    .body(reqwest::Body::from(body.clone()))
+                    .header(CONTENT_TYPE, "application/json");
+                if let Some(key) = idempotency_key {
+                    builder = builder.header("Idempotency-Key", key);
+                }
+                builder
             })
             .await?;
         response

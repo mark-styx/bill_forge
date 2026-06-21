@@ -887,27 +887,51 @@ async fn export_invoice_to_quickbooks(
         MetaData: None,
     };
 
-    // Create bill in QuickBooks
-    let created_bill = client
-        .create_bill(&bill)
-        .await
-        .map_err(|e| billforge_core::Error::Validation(format!("QuickBooks API error: {}", e)))?;
-
-    // Store export record
+    // Reserve a stable `requestid` for this export BEFORE calling QBO so any
+    // retry (in-loop or by the caller) reuses the same token and QBO dedups
+    // the create on its side. ON CONFLICT returns the existing row's
+    // request_id, so a prior pending attempt reuses its token. QBO caps
+    // `requestid` at 50 chars; the 32-char simple UUID fits comfortably.
     let export_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO quickbooks_invoice_exports (id, tenant_id, invoice_id, quickbooks_bill_id, exported_at, export_status)
-         VALUES ($1, $2, $3, $4, NOW(), 'synced')
+    let request_id_row: (String,) = sqlx::query_as(
+        "INSERT INTO quickbooks_invoice_exports
+            (id, tenant_id, invoice_id, quickbooks_bill_id, request_id, exported_at, export_status)
+         VALUES ($1, $2, $3, NULL, $4, NOW(), 'pending')
          ON CONFLICT (tenant_id, invoice_id) DO UPDATE SET
-            quickbooks_bill_id = $4,
-            exported_at = NOW(),
-            export_status = 'synced',
-            sync_error = NULL"
+            request_id = COALESCE(quickbooks_invoice_exports.request_id, EXCLUDED.request_id)
+         RETURNING request_id",
     )
     .bind(export_id)
     .bind(tenant.tenant_id.as_uuid())
     .bind(invoice_id.as_uuid())
+    .bind(Uuid::new_v4().simple().to_string())
+    .fetch_one(&*pool)
+    .await
+    .map_err(|e| {
+        error!(error = %e, "Failed to reserve quickbooks export request_id");
+        billforge_core::Error::Internal(format!("Database error: {}", e))
+    })?;
+    let request_id = request_id_row.0;
+
+    // Create bill in QuickBooks. If the response is lost and we retry, the
+    // same `request_id` ensures QBO returns the originally-created bill.
+    let created_bill = client
+        .create_bill(&bill, &request_id)
+        .await
+        .map_err(|e| billforge_core::Error::Validation(format!("QuickBooks API error: {}", e)))?;
+
+    // Mark export as synced with the upstream bill id.
+    sqlx::query(
+        "UPDATE quickbooks_invoice_exports
+         SET quickbooks_bill_id = $1,
+             exported_at = NOW(),
+             export_status = 'synced',
+             sync_error = NULL
+         WHERE tenant_id = $2 AND invoice_id = $3",
+    )
     .bind(&created_bill.Id)
+    .bind(tenant.tenant_id.as_uuid())
+    .bind(invoice_id.as_uuid())
     .execute(&*pool)
     .await
     .map_err(|e| {

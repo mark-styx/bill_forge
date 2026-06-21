@@ -252,9 +252,25 @@ impl QuickBooksClient {
             .context("Failed to parse QuickBooks API response")
     }
 
-    /// Make a POST request to QuickBooks API
-    async fn post<T: DeserializeOwned, B: Serialize>(&self, resource: &str, body: &B) -> Result<T> {
-        let url = self.build_url(resource);
+    /// Make a POST request to QuickBooks API.
+    ///
+    /// When `request_id` is `Some`, the value is appended as the `requestid` query
+    /// parameter on every retry attempt so QBO dedups the create on its side. QBO's
+    /// `requestid` is capped at 50 characters.
+    async fn post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        resource: &str,
+        body: &B,
+        request_id: Option<&str>,
+    ) -> Result<T> {
+        let resource_with_id = match request_id {
+            Some(rid) => {
+                let sep = if resource.contains('?') { '&' } else { '?' };
+                format!("{}{}requestid={}", resource, sep, rid)
+            }
+            None => resource.to_string(),
+        };
+        let url = self.build_url(&resource_with_id);
         let body_bytes = serde_json::to_vec(body).context("Failed to serialize POST body")?;
 
         let response = self
@@ -407,8 +423,16 @@ impl QuickBooksClient {
             .unwrap_or_default())
     }
 
-    /// Create a bill (invoice) in QuickBooks
-    pub async fn create_bill(&self, bill: &QBBill) -> Result<QBBill> {
+    /// Create a bill (invoice) in QuickBooks.
+    ///
+    /// `request_id` is forwarded to QBO's native `requestid` query-parameter
+    /// idempotency mechanism so a successful create followed by a lost response
+    /// and a retry (either inside `execute_with_retry` or at the outer caller)
+    /// is deduped at QBO instead of producing a second bill. The caller is
+    /// responsible for persisting the same `request_id` for the lifetime of
+    /// the export attempt — typically by writing it to the export row before
+    /// invoking this method.
+    pub async fn create_bill(&self, bill: &QBBill, request_id: &str) -> Result<QBBill> {
         #[derive(Serialize)]
         struct CreateBillRequest {
             #[serde(rename = "Bill")]
@@ -417,7 +441,7 @@ impl QuickBooksClient {
 
         let request = CreateBillRequest { bill: bill.clone() };
 
-        self.post("bill", &request).await
+        self.post("bill", &request, Some(request_id)).await
     }
 
     /// Query bills
@@ -462,7 +486,9 @@ impl QuickBooksClient {
             bill: bill.clone(),
         };
 
-        let response: UpdateBillResponse = self.post("bill?operation=update", &request).await?;
+        let response: UpdateBillResponse = self
+            .post("bill?operation=update", &request, None)
+            .await?;
 
         Ok(response.Bill)
     }
@@ -477,7 +503,9 @@ impl QuickBooksClient {
             vendor: vendor.clone(),
         };
 
-        let response: UpdateVendorResponse = self.post("vendor?operation=update", &request).await?;
+        let response: UpdateVendorResponse = self
+            .post("vendor?operation=update", &request, None)
+            .await?;
 
         Ok(response.Vendor)
     }
@@ -500,6 +528,39 @@ impl QuickBooksClient {
                     .get(url)
                     .bearer_auth(&token)
                     .headers(headers)
+            })
+            .await?;
+        response
+            .text()
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))
+    }
+
+    /// Execute a POST request to an arbitrary URL using the retry logic,
+    /// optionally appending QBO's `requestid` idempotency query parameter.
+    /// Exposed for integration testing only.
+    #[doc(hidden)]
+    pub async fn execute_post_for_test(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+        request_id: Option<&str>,
+    ) -> std::result::Result<String, ClientError> {
+        let final_url = match request_id {
+            Some(rid) => {
+                let sep = if url.contains('?') { '&' } else { '?' };
+                format!("{}{}requestid={}", url, sep, rid)
+            }
+            None => url.to_string(),
+        };
+        let response = self
+            .execute_with_retry(|token, headers| {
+                self.http_client
+                    .post(&final_url)
+                    .bearer_auth(&token)
+                    .headers(headers)
+                    .body(reqwest::Body::from(body.clone()))
+                    .header(CONTENT_TYPE, "application/json")
             })
             .await?;
         response

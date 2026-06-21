@@ -720,5 +720,12 @@ pub async fn run_banking_verification_migrations(pool: &PgPool) -> Result<()> {
     )
     .await?;
 
+    apply_migration(
+        pool,
+        "150_erp_export_idempotency_keys.sql",
+        include_str!("../../../migrations/150_erp_export_idempotency_keys.sql"),
+    )
+    .await?;
+
     Ok(())
 }

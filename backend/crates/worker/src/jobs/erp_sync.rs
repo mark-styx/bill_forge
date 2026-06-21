@@ -532,26 +532,45 @@ async fn run_xero_invoice_export(
         UpdatedDateUTC: None,
     };
 
-    let created_invoice = client
-        .create_invoice(&invoice_struct)
-        .await
-        .context("Xero create_invoice failed")?;
-    let xero_invoice_id = created_invoice.InvoiceID.clone().unwrap_or_default();
-
+    // Reserve a stable `Idempotency-Key` for this export BEFORE calling Xero
+    // so any retry (in-loop or by the outer job runner) reuses the same key
+    // and Xero dedups the create on its side. ON CONFLICT returns the existing
+    // row's key, so a prior pending attempt reuses its token.
     let export_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO xero_invoice_exports (id, tenant_id, invoice_id, xero_invoice_id, exported_at, export_status) \
-         VALUES ($1, $2, $3, $4, NOW(), 'synced') \
+    let idempotency_row: (String,) = sqlx::query_as(
+        "INSERT INTO xero_invoice_exports \
+            (id, tenant_id, invoice_id, xero_invoice_id, idempotency_key, exported_at, export_status) \
+         VALUES ($1, $2, $3, NULL, $4, NOW(), 'pending') \
          ON CONFLICT (tenant_id, invoice_id) DO UPDATE SET \
-            xero_invoice_id = $4, \
-            exported_at = NOW(), \
-            export_status = 'synced', \
-            sync_error = NULL",
+            idempotency_key = COALESCE(xero_invoice_exports.idempotency_key, EXCLUDED.idempotency_key) \
+         RETURNING idempotency_key",
     )
     .bind(export_id)
     .bind(tenant_id.as_uuid())
     .bind(invoice_id.as_uuid())
+    .bind(Uuid::new_v4().simple().to_string())
+    .fetch_one(pool)
+    .await
+    .context("failed to reserve xero export idempotency_key")?;
+    let idempotency_key = idempotency_row.0;
+
+    let created_invoice = client
+        .create_invoice(&invoice_struct, &idempotency_key)
+        .await
+        .context("Xero create_invoice failed")?;
+    let xero_invoice_id = created_invoice.InvoiceID.clone().unwrap_or_default();
+
+    sqlx::query(
+        "UPDATE xero_invoice_exports \
+         SET xero_invoice_id = $1, \
+             exported_at = NOW(), \
+             export_status = 'synced', \
+             sync_error = NULL \
+         WHERE tenant_id = $2 AND invoice_id = $3",
+    )
     .bind(&xero_invoice_id)
+    .bind(tenant_id.as_uuid())
+    .bind(invoice_id.as_uuid())
     .execute(pool)
     .await
     .context("failed to write xero_invoice_exports")?;
