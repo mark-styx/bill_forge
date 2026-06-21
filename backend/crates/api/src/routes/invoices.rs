@@ -1,12 +1,16 @@
 //! Invoice routes (Invoice Capture module)
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult, ValidationError};
 use crate::extractors::{InvoiceCaptureAccess, InvoiceProcessingAccess};
 use crate::metrics;
 use crate::state::{AppState, InvoiceEvent};
+use crate::validation::Validator;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    response::sse::{Event, KeepAlive, Sse},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -280,6 +284,62 @@ async fn get_invoice(
     Ok(Json(invoice))
 }
 
+/// Boundary validation for `CreateInvoiceInput`. Rejects malformed payloads at
+/// the API edge with the structured `ValidationError` (HTTP 400) shape so the
+/// frontend receives per-field errors instead of opaque 500s from the DB layer.
+fn validate_create_invoice_input(input: &CreateInvoiceInput) -> Result<(), ValidationError> {
+    let mut v = Validator::new();
+
+    v.required_string("vendor_name", &input.vendor_name, 1, 200);
+    v.invoice_number("invoice_number", &input.invoice_number);
+    v.required_string("invoice_number", &input.invoice_number, 1, 100);
+    v.optional_string("po_number", input.po_number.as_deref(), 100);
+    v.optional_string("department", input.department.as_deref(), 100);
+    v.optional_string("gl_code", input.gl_code.as_deref(), 50);
+    v.optional_string("cost_center", input.cost_center.as_deref(), 100);
+    v.optional_string("notes", input.notes.as_deref(), 2000);
+    v.money_cents("total_amount", input.total_amount.amount);
+
+    if let Some(ref sub) = input.subtotal {
+        v.money_cents("subtotal", sub.amount);
+    }
+    if let Some(ref tax) = input.tax_amount {
+        v.money_cents("tax_amount", tax.amount);
+    }
+
+    if input.currency.is_empty()
+        || input.currency.len() != 3
+        || !input.currency.chars().all(|c| c.is_ascii_uppercase())
+    {
+        v.add_error("currency", "Currency must be a 3-letter ISO 4217 code");
+    }
+    v.one_of(
+        "currency",
+        &input.currency,
+        &[
+            "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "INR", "MXN",
+        ],
+    );
+
+    for (i, li) in input.line_items.iter().enumerate() {
+        if let Some(ref up) = li.unit_price {
+            v.money_cents(&format!("line_items[{}].unit_price", i), up.amount);
+        }
+        v.money_cents(&format!("line_items[{}].amount", i), li.amount.amount);
+    }
+
+    if input.tags.len() > 50 {
+        v.add_error("tags", "Too many tags (max 50)");
+    }
+    for (i, tag) in input.tags.iter().enumerate() {
+        if tag.len() > 50 {
+            v.add_error(&format!("tags[{}]", i), "Tag is too long (max 50)");
+        }
+    }
+
+    v.result()
+}
+
 #[utoipa::path(
     post,
     path = "/invoices",
@@ -299,7 +359,11 @@ async fn create_invoice(
     InvoiceCaptureAccess(user, tenant): InvoiceCaptureAccess,
     Query(query): Query<CreateInvoiceQuery>,
     Json(input): Json<CreateInvoiceInput>,
-) -> ApiResult<Json<CreateInvoiceResponse>> {
+) -> Result<Response, ApiError> {
+    if let Err(e) = validate_create_invoice_input(&input) {
+        return Ok(e.into_response());
+    }
+
     let pool = state.db.tenant(&tenant.tenant_id).await?;
     let repo = billforge_db::repositories::InvoiceRepositoryImpl::new(pool.clone());
     let invoice = repo
@@ -393,7 +457,8 @@ async fn create_invoice(
     Ok(Json(CreateInvoiceResponse {
         invoice,
         potential_duplicates,
-    }))
+    })
+    .into_response())
 }
 
 /// Load recent (90-day) invoices for the tenant and score the new invoice against each.
@@ -3476,5 +3541,98 @@ mod tests {
         let json = serde_json::to_value(&response).unwrap();
         assert!(json.get("invoice").is_some());
         assert!(json.get("potential_duplicates").is_some());
+    }
+}
+
+#[cfg(test)]
+mod create_invoice_validation_tests {
+    use super::*;
+    use billforge_core::types::Money;
+
+    fn baseline() -> CreateInvoiceInput {
+        CreateInvoiceInput {
+            document_id: Uuid::new_v4(),
+            vendor_id: None,
+            vendor_name: "Acme Corp".to_string(),
+            invoice_number: "INV-123".to_string(),
+            invoice_date: None,
+            due_date: None,
+            po_number: None,
+            subtotal: None,
+            tax_amount: None,
+            total_amount: Money::new(100, "USD"),
+            currency: "USD".to_string(),
+            line_items: vec![],
+            ocr_confidence: None,
+            department: None,
+            gl_code: None,
+            cost_center: None,
+            notes: None,
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn rejects_negative_total_amount() {
+        let mut input = baseline();
+        input.total_amount = Money::new(-1, "USD");
+        let err = validate_create_invoice_input(&input).expect_err("expected validation error");
+        assert!(err.field_errors.contains_key("total_amount"));
+    }
+
+    #[test]
+    fn rejects_empty_vendor_name() {
+        let mut input = baseline();
+        input.vendor_name = String::new();
+        let err = validate_create_invoice_input(&input).expect_err("expected validation error");
+        assert!(err.field_errors.contains_key("vendor_name"));
+    }
+
+    #[test]
+    fn rejects_empty_invoice_number() {
+        let mut input = baseline();
+        input.invoice_number = String::new();
+        let err = validate_create_invoice_input(&input).expect_err("expected validation error");
+        assert!(err.field_errors.contains_key("invoice_number"));
+    }
+
+    #[test]
+    fn rejects_oversized_vendor_name() {
+        let mut input = baseline();
+        input.vendor_name = "x".repeat(300);
+        let err = validate_create_invoice_input(&input).expect_err("expected validation error");
+        let msgs = err
+            .field_errors
+            .get("vendor_name")
+            .expect("vendor_name errors present");
+        assert!(
+            msgs.iter().any(|m| m.contains("too long")),
+            "expected 'too long' message, got: {:?}",
+            msgs
+        );
+    }
+
+    #[test]
+    fn rejects_bad_currency_code() {
+        for bad in &["usdx", "", "US"] {
+            let mut input = baseline();
+            input.currency = bad.to_string();
+            let err = validate_create_invoice_input(&input)
+                .expect_err("expected validation error for bad currency");
+            assert!(
+                err.field_errors.contains_key("currency"),
+                "expected currency error for '{}'",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_valid_minimum_input() {
+        let input = baseline();
+        assert!(
+            validate_create_invoice_input(&input).is_ok(),
+            "baseline input should validate"
+        );
     }
 }
