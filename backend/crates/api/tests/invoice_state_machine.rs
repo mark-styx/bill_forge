@@ -318,3 +318,84 @@ async fn transition_atomicity_on_constraint_violation(pool: sqlx::PgPool) {
     assert_eq!(read_status(&pool, invoice_id).await, "in_review");
     assert_eq!(count_audit_rows(&pool, &tenant_id, invoice_id).await, 1);
 }
+
+// ============================================================================
+// Test 5: GL posting stage - paid -> posted writes audit row, metadata intact
+// ============================================================================
+
+#[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
+async fn posted_state_paid_to_posted_writes_audit_row(pool: sqlx::PgPool) {
+    let pool = Arc::new(pool);
+    let tenant_id = TenantId::from_uuid(Uuid::new_v4());
+    let user_id = Uuid::new_v4();
+
+    setup_schema(&pool, &tenant_id).await;
+    insert_user(&pool, &tenant_id, user_id).await;
+    let invoice_id = insert_invoice(&pool, &tenant_id, user_id, "paid").await;
+
+    let metadata = serde_json::json!({"erp": "qbo", "journal_entry_id": "je_test"});
+
+    billforge_api::state_machine::transition(
+        &pool,
+        &tenant_id,
+        &invoice_id,
+        &user_id,
+        billforge_api::state_machine::InvoiceStatus::Posted,
+        "post_to_gl",
+        metadata.clone(),
+    )
+    .await
+    .expect("paid -> posted should succeed");
+
+    assert_eq!(read_status(&pool, invoice_id).await, "posted");
+    assert_eq!(count_audit_rows(&pool, &tenant_id, invoice_id).await, 1);
+
+    let audit = read_latest_audit(&pool, &tenant_id, invoice_id)
+        .await
+        .expect("audit row must exist");
+
+    let (actor, from_status, to_status, event_type, recorded_metadata) = audit;
+    assert_eq!(actor, Some(user_id));
+    assert_eq!(from_status, Some("paid".to_string()));
+    assert_eq!(to_status, "posted");
+    assert_eq!(event_type, "post_to_gl");
+    assert_eq!(recorded_metadata["erp"], "qbo");
+    assert_eq!(recorded_metadata["journal_entry_id"], "je_test");
+}
+
+// ============================================================================
+// Test 6: Posted is terminal - posted -> paid is rejected, no audit row
+// ============================================================================
+
+#[sqlx::test]
+#[ignore] // Requires DATABASE_URL - run with: cargo test --test invoice_state_machine -- --ignored
+async fn posted_is_terminal_rejects_back_transition(pool: sqlx::PgPool) {
+    let pool = Arc::new(pool);
+    let tenant_id = TenantId::from_uuid(Uuid::new_v4());
+    let user_id = Uuid::new_v4();
+
+    setup_schema(&pool, &tenant_id).await;
+    insert_user(&pool, &tenant_id, user_id).await;
+    let invoice_id = insert_invoice(&pool, &tenant_id, user_id, "posted").await;
+
+    let result = billforge_api::state_machine::transition(
+        &pool,
+        &tenant_id,
+        &invoice_id,
+        &user_id,
+        billforge_api::state_machine::InvoiceStatus::Paid,
+        "mark_paid",
+        serde_json::json!({}),
+    )
+    .await;
+
+    assert!(result.is_err(), "posted -> paid should be rejected");
+    match result {
+        Err(billforge_core::Error::Validation(_)) => {}
+        other => panic!("expected Validation error, got {:?}", other),
+    }
+
+    assert_eq!(read_status(&pool, invoice_id).await, "posted");
+    assert_eq!(count_audit_rows(&pool, &tenant_id, invoice_id).await, 0);
+}

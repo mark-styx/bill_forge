@@ -32,6 +32,7 @@ pub enum InvoiceStatus {
     Approved,
     Rejected,
     Paid,
+    Posted,
     Void,
 }
 
@@ -44,6 +45,7 @@ impl InvoiceStatus {
             Self::Approved => "approved",
             Self::Rejected => "rejected",
             Self::Paid => "paid",
+            Self::Posted => "posted",
             Self::Void => "void",
         }
     }
@@ -56,6 +58,7 @@ impl InvoiceStatus {
             "approved" => Some(Self::Approved),
             "rejected" => Some(Self::Rejected),
             "paid" => Some(Self::Paid),
+            "posted" => Some(Self::Posted),
             "void" => Some(Self::Void),
             _ => None,
         }
@@ -107,6 +110,13 @@ const ALLOWED_TRANSITIONS: &[Transition] = &[
         from: InvoiceStatus::Approved,
         to: InvoiceStatus::Paid,
         event_type: "mark_paid",
+    },
+    // GL posting stage. Posted is intentionally terminal: a posted invoice must
+    // be reversed via a separate journal entry, not by walking the SM backward.
+    Transition {
+        from: InvoiceStatus::Paid,
+        to: InvoiceStatus::Posted,
+        event_type: "post_to_gl",
     },
     // Rejection / void (from several states)
     Transition {
@@ -482,9 +492,22 @@ mod tests {
             InvoiceStatus::Approved,
             InvoiceStatus::Rejected,
             InvoiceStatus::Paid,
+            InvoiceStatus::Posted,
             InvoiceStatus::Void,
         ] {
             assert_eq!(InvoiceStatus::from_str_lossy(status.as_str()), Some(status));
         }
+    }
+
+    #[test]
+    fn test_valid_transition_paid_to_posted() {
+        let etype = find_transition(InvoiceStatus::Paid, InvoiceStatus::Posted);
+        assert_eq!(etype, Some("post_to_gl"));
+    }
+
+    #[test]
+    fn test_invalid_transition_posted_to_paid() {
+        let etype = find_transition(InvoiceStatus::Posted, InvoiceStatus::Paid);
+        assert!(etype.is_none());
     }
 }

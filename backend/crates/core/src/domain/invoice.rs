@@ -102,6 +102,8 @@ pub enum ProcessingStatus {
     ReadyForPayment,
     /// Payment has been issued
     Paid,
+    /// Posted to the general ledger (ERP journal entry confirmed)
+    Posted,
     /// Invoice was voided/cancelled
     Voided,
 }
@@ -117,6 +119,7 @@ impl ProcessingStatus {
             Self::OnHold => "on_hold",
             Self::ReadyForPayment => "ready_for_payment",
             Self::Paid => "paid",
+            Self::Posted => "posted",
             Self::Voided => "voided",
         }
     }
@@ -132,6 +135,7 @@ impl ProcessingStatus {
             "on_hold" => Some(Self::OnHold),
             "ready_for_payment" => Some(Self::ReadyForPayment),
             "paid" => Some(Self::Paid),
+            "posted" => Some(Self::Posted),
             "voided" => Some(Self::Voided),
             _ => None,
         }

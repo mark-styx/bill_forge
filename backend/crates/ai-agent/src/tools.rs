@@ -1220,7 +1220,9 @@ fn workflow_state_reason(
         ProcessingStatus::ReadyForPayment => {
             "The invoice is complete from workflow review and is ready for payment."
         }
-        ProcessingStatus::Paid => "The invoice workflow is complete and payment has been issued.",
+        ProcessingStatus::Paid | ProcessingStatus::Posted => {
+            "The invoice workflow is complete and payment has been issued."
+        }
         ProcessingStatus::Voided => "The invoice is voided and outside active workflow processing.",
         ProcessingStatus::PendingApproval | ProcessingStatus::Rejected => unreachable!(),
     }
