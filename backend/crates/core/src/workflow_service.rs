@@ -39,6 +39,7 @@ pub trait EmailService: Send + Sync {
 
 /// Email templates trait (abstracted to avoid circular dependency)
 pub trait EmailTemplates {
+    #[allow(clippy::too_many_arguments)]
     fn invoice_pending_approval_with_actions(
         invoice_number: &str,
         vendor_name: &str,
@@ -47,6 +48,8 @@ pub trait EmailTemplates {
         view_url: &str,
         approve_url: Option<&str>,
         reject_url: Option<&str>,
+        request_info_url: Option<&str>,
+        attachment_preview_url: Option<&str>,
     ) -> (String, String);
 }
 
@@ -278,6 +281,18 @@ impl<
                 )
                 .await?;
 
+            let request_info_token = self
+                .email_token_service
+                .generate_token(
+                    tenant_id,
+                    uid,
+                    EmailAction::RequestInfoInvoice,
+                    invoice.id.0,
+                    "invoice",
+                    serde_json::json!({ "approval_id": request.id }),
+                )
+                .await?;
+
             let approve_url = self.email_token_service.generate_action_url(
                 &self.app_url,
                 &approve_token,
@@ -290,6 +305,18 @@ impl<
                 "reject",
             );
 
+            let request_info_url = self.email_token_service.generate_action_url(
+                &self.app_url,
+                &request_info_token,
+                "request_info",
+            );
+
+            // Attachment preview falls back to the invoice detail page when a
+            // per-attachment signed-view route is not trivially reachable from
+            // this layer. Per-attachment signed preview URLs are tracked as a
+            // follow-up.
+            let attachment_preview_url = format!("{}/invoices/{}", self.app_url, invoice.id.0);
+
             let (mut html, text) = ET::invoice_pending_approval_with_actions(
                 invoice_number,
                 vendor_name,
@@ -298,6 +325,8 @@ impl<
                 &view_url,
                 Some(&approve_url),
                 Some(&reject_url),
+                Some(&request_info_url),
+                Some(&attachment_preview_url),
             );
 
             // Embed the approve token as a hidden HTML span so it survives
@@ -1009,6 +1038,8 @@ mod tests {
             _view_url: &str,
             _approve_url: Option<&str>,
             _reject_url: Option<&str>,
+            _request_info_url: Option<&str>,
+            _attachment_preview_url: Option<&str>,
         ) -> (String, String) {
             (String::new(), String::new())
         }

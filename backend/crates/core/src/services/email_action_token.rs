@@ -32,6 +32,7 @@ pub enum EmailAction {
     RejectInvoice,
     HoldInvoice,
     ViewInvoice,
+    RequestInfoInvoice,
 }
 
 /// Email action token service

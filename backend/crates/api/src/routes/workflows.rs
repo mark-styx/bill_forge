@@ -2668,6 +2668,8 @@ async fn resend_approval_email(
         &view_url,
         Some(&approve_url),
         Some(&reject_url),
+        None,
+        None,
     );
 
     // Embed the approve token as a hidden HTML span so it survives quoted

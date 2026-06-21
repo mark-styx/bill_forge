@@ -27,6 +27,10 @@ pub fn routes() -> Router<AppState> {
         .route("/approve", get(handle_approve).post(handle_approve_confirm))
         .route("/reject", get(handle_reject).post(handle_reject_confirm))
         .route("/hold", get(handle_hold).post(handle_hold_confirm))
+        .route(
+            "/request_info",
+            get(handle_request_info).post(handle_request_info_confirm),
+        )
         .route("/view", get(handle_view))
 }
 
@@ -41,6 +45,16 @@ pub struct ActionQuery {
 pub(crate) struct ActionForm {
     /// The email action token
     t: String,
+}
+
+/// Form body for POST confirm actions that carry a reason (e.g. request info)
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct ActionFormWithReason {
+    /// The email action token
+    t: String,
+    /// The reason / question posed back to the submitter
+    #[serde(default)]
+    reason: String,
 }
 
 /// Handle approve action from email - renders confirmation interstitial (GET)
@@ -113,6 +127,31 @@ async fn handle_hold_confirm(
     Form(form): Form<ActionForm>,
 ) -> ApiResult<impl IntoResponse> {
     handle_email_action(&state, &form.t, EmailAction::HoldInvoice).await
+}
+
+/// Handle request-info action from email - renders confirmation interstitial
+/// with a textarea for the approver's question (GET)
+#[utoipa::path(get, path = "/api/v1/actions/request_info", tag = "Email Actions",
+    params(("t" = String, Query, description = "Action token")),
+    responses((status = 200, description = "Renders confirmation page"), (status = 400, description = "Invalid token")))]
+async fn handle_request_info(
+    State(_state): State<AppState>,
+    Query(query): Query<ActionQuery>,
+) -> ApiResult<impl IntoResponse> {
+    Ok(Html(render_confirmation_page(
+        &query.t,
+        EmailAction::RequestInfoInvoice,
+    )))
+}
+
+/// POST confirm: request info from submitter (pauses approval, posts a question)
+#[utoipa::path(post, path = "/api/v1/actions/request_info", tag = "Email Actions",
+    responses((status = 200, description = "Request for info recorded"), (status = 400, description = "Invalid token")))]
+async fn handle_request_info_confirm(
+    State(state): State<AppState>,
+    Form(form): Form<ActionFormWithReason>,
+) -> ApiResult<impl IntoResponse> {
+    handle_request_info_action(&state, &form.t, &form.reason).await
 }
 
 /// Handle view action from email (redirects to invoice detail page)
@@ -452,12 +491,110 @@ async fn perform_hold(
     Ok(())
 }
 
+/// Parallel handler for request-info action. Unlike approve/reject/hold this
+/// path carries a `reason` body field, so it does not share the generic
+/// `ActionForm { t }` dispatcher.
+async fn handle_request_info_action(
+    state: &AppState,
+    token_str: &str,
+    reason: &str,
+) -> ApiResult<impl IntoResponse> {
+    let pool = state.db.metadata();
+    let token_service = EmailActionTokenService::new(
+        pool,
+        std::env::var("TOKEN_SECRET_KEY").unwrap_or_else(|_| "secret".to_string()),
+    );
+
+    let token_data = token_service.validate_token(token_str).await?;
+
+    if std::mem::discriminant(&token_data.action)
+        != std::mem::discriminant(&EmailAction::RequestInfoInvoice)
+    {
+        return Err(billforge_core::Error::Validation("Token action mismatch".to_string()).into());
+    }
+
+    let tenant_uuid = uuid::Uuid::parse_str(&token_data.tenant_id)
+        .map_err(|e| billforge_core::Error::Validation(format!("Invalid tenant ID: {}", e)))?;
+    let tenant_id = billforge_core::TenantId(tenant_uuid);
+    let tenant_pool = state.db.tenant(&tenant_id).await?;
+
+    perform_request_info(
+        &tenant_pool,
+        &tenant_id,
+        token_data.resource_id,
+        &UserId(token_data.user_id),
+        reason,
+    )
+    .await?;
+
+    token_service.mark_used(token_str).await?;
+
+    let audit_entry = AuditEntry::new(
+        tenant_id.clone(),
+        Some(UserId(token_data.user_id)),
+        AuditAction::Update,
+        ResourceType::Invoice,
+        token_data.resource_id.to_string(),
+        "Requested additional information from submitter via email action".to_string(),
+    )
+    .with_metadata(serde_json::json!({
+        "channel": "email",
+        "event_type": "info_requested",
+        "reason": reason,
+        "token_nonce": token_data.nonce.to_string(),
+    }));
+
+    super::workflows::log_audit_or_record_gap(&state.db.metadata(), audit_entry).await;
+
+    let html = generate_success_page(&EmailAction::RequestInfoInvoice, token_data.resource_id);
+    Ok(Html(html))
+}
+
+/// Perform request-info action.
+///
+/// Writes an `info_requested` row to invoice_audit_log and transitions the
+/// matching approval_requests row to `awaiting_info` so the approval clock
+/// pauses without resolving as approve/reject. The invoice's
+/// processing_status is intentionally left unchanged - the approval remains
+/// open until the submitter replies (via the existing inbound-email
+/// pipeline) or the approver issues a fresh approve/reject token.
+pub async fn perform_request_info(
+    pool: &sqlx::PgPool,
+    tenant_id: &billforge_core::TenantId,
+    invoice_id: uuid::Uuid,
+    user_id: &UserId,
+    reason: &str,
+) -> billforge_core::Result<()> {
+    sqlx::query(
+        "INSERT INTO invoice_audit_log \
+         (id, tenant_id, invoice_id, actor_id, from_status, to_status, event_type, metadata) \
+         VALUES ($1, $2, $3, $4, 'pending_approval', 'pending_info', 'info_requested', $5)",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(*tenant_id.as_uuid())
+    .bind(invoice_id)
+    .bind(*user_id.as_uuid())
+    .bind(serde_json::json!({
+        "reason": reason,
+        "channel": "email",
+        "requested_by": user_id.as_uuid().to_string(),
+    }))
+    .execute(pool)
+    .await
+    .map_err(|e| billforge_core::Error::Database(e.to_string()))?;
+
+    update_approval_request(pool, tenant_id, invoice_id, user_id, "awaiting_info").await?;
+
+    Ok(())
+}
+
 /// Generate a success HTML page
 fn generate_success_page(action: &EmailAction, invoice_id: uuid::Uuid) -> String {
     let action_text = match action {
         EmailAction::ApproveInvoice => "approved",
         EmailAction::RejectInvoice => "rejected",
         EmailAction::HoldInvoice => "placed on hold",
+        EmailAction::RequestInfoInvoice => "info requested",
         _ => "processed",
     };
 
@@ -465,7 +602,15 @@ fn generate_success_page(action: &EmailAction, invoice_id: uuid::Uuid) -> String
         EmailAction::ApproveInvoice => "#10b981",
         EmailAction::RejectInvoice => "#ef4444",
         EmailAction::HoldInvoice => "#f59e0b",
+        EmailAction::RequestInfoInvoice => "#f59e0b",
         _ => "#6b7280",
+    };
+
+    let description = match action {
+        EmailAction::RequestInfoInvoice => {
+            "Request for information sent to submitter. The approval will resume once the submitter replies.".to_string()
+        }
+        _ => format!("The invoice has been successfully {}.", action_text),
     };
 
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -537,7 +682,7 @@ fn generate_success_page(action: &EmailAction, invoice_id: uuid::Uuid) -> String
     <div class="container">
         <div class="icon">✓</div>
         <h1>Invoice {action_text}</h1>
-        <p>The invoice has been successfully {action_text}.</p>
+        <p>{description}</p>
         <a href="{app_url}/invoices/{invoice_id}" class="button">View Invoice</a>
         <div class="footer">
             <p>This action was performed via email.</p>
@@ -547,6 +692,7 @@ fn generate_success_page(action: &EmailAction, invoice_id: uuid::Uuid) -> String
 </html>"#,
         action_text = action_text,
         action_color = action_color,
+        description = description,
         app_url = app_url,
         invoice_id = invoice_id
     )
@@ -563,11 +709,12 @@ fn html_escape_attr(s: &str) -> String {
 /// Render a confirmation interstitial page with a POST form.
 /// The GET handler returns this page; the user must click the confirm button
 /// to submit a POST that performs the actual mutation.
-pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> String {
+pub fn render_confirmation_page(token: &str, action: EmailAction) -> String {
     let action_path = match action {
         EmailAction::ApproveInvoice => "approve",
         EmailAction::RejectInvoice => "reject",
         EmailAction::HoldInvoice => "hold",
+        EmailAction::RequestInfoInvoice => "request_info",
         _ => "approve",
     };
 
@@ -575,6 +722,7 @@ pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> Stri
         EmailAction::ApproveInvoice => "Approve",
         EmailAction::RejectInvoice => "Reject",
         EmailAction::HoldInvoice => "Place on Hold",
+        EmailAction::RequestInfoInvoice => "Request Info",
         _ => "Confirm",
     };
 
@@ -582,7 +730,22 @@ pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> Stri
         EmailAction::ApproveInvoice => "#10b981",
         EmailAction::RejectInvoice => "#ef4444",
         EmailAction::HoldInvoice => "#f59e0b",
+        EmailAction::RequestInfoInvoice => "#f59e0b",
         _ => "#6b7280",
+    };
+
+    let prompt_text = match action {
+        EmailAction::RequestInfoInvoice => {
+            "Type your question for the submitter, then click confirm.".to_string()
+        }
+        _ => format!("Click confirm to {} this invoice.", action_label.to_lowercase()),
+    };
+
+    let reason_field = match action {
+        EmailAction::RequestInfoInvoice => {
+            r#"<p style="text-align: left;"><label for="reason" style="display:block; margin-bottom:6px; color:#1f2937; font-weight:500;">Question for the submitter</label><textarea id="reason" name="reason" rows="4" required style="width:100%; box-sizing:border-box; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-family:inherit; font-size:14px;"></textarea></p>"#.to_string()
+        }
+        _ => String::new(),
     };
 
     let escaped_token = html_escape_attr(token);
@@ -656,9 +819,10 @@ pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> Stri
     <div class="container">
         <div class="icon">?</div>
         <h1>Confirm {action_label}</h1>
-        <p>Click confirm to {action_label_lower} this invoice.</p>
+        <p>{prompt_text}</p>
         <form method="post" action="/api/v1/actions/{action_path}">
             <input type="hidden" name="t" value="{escaped_token}" />
+            {reason_field}
             <button type="submit" class="button">Confirm {action_label}</button>
         </form>
         <div class="footer">
@@ -668,7 +832,8 @@ pub(crate) fn render_confirmation_page(token: &str, action: EmailAction) -> Stri
 </body>
 </html>"#,
         action_label = action_label,
-        action_label_lower = action_label.to_lowercase(),
+        prompt_text = prompt_text,
+        reason_field = reason_field,
         action_path = action_path,
         action_color = action_color,
         escaped_token = escaped_token,
@@ -740,6 +905,21 @@ mod tests {
     fn test_render_confirmation_page_hold() {
         let html = render_confirmation_page("sample-token", EmailAction::HoldInvoice);
         assert_confirmation_page(&html, "hold", "sample-token");
+    }
+
+    #[test]
+    fn test_render_confirmation_page_request_info_has_reason_textarea() {
+        let html = render_confirmation_page("sample-token", EmailAction::RequestInfoInvoice);
+        assert_confirmation_page(&html, "request_info", "sample-token");
+        assert!(
+            html.contains("name=\"reason\""),
+            "request_info confirmation page must contain a reason textarea: {}",
+            html
+        );
+        assert!(
+            html.contains("<textarea"),
+            "request_info confirmation page must contain a textarea element"
+        );
     }
 
     #[test]

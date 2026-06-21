@@ -120,10 +120,13 @@ impl EmailTemplates {
             approval_url,
             None,
             None,
+            None,
+            None,
         )
     }
 
     /// Invoice pending approval email with direct action buttons
+    #[allow(clippy::too_many_arguments)]
     pub fn invoice_pending_approval_with_actions(
         invoice_number: &str,
         vendor_name: &str,
@@ -132,19 +135,28 @@ impl EmailTemplates {
         approval_url: &str,
         approve_url: Option<&str>,
         reject_url: Option<&str>,
+        request_info_url: Option<&str>,
+        attachment_preview_url: Option<&str>,
     ) -> (String, String) {
         let action_buttons = if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
+            let request_info_button = match request_info_url {
+                Some(req) => format!(
+                    r#" <a href="{req}" class="button" style="background-color: #f59e0b; margin-left: 10px;">Request Info</a>"#,
+                ),
+                None => String::new(),
+            };
             format!(
                 r#"<p style="text-align: center;">
     <a href="{approve}" class="button" style="background-color: #10b981; margin-right: 10px;">Approve</a>
-    <a href="{reject}" class="button" style="background-color: #ef4444;">Reject</a>
+    <a href="{reject}" class="button" style="background-color: #ef4444;">Reject</a>{request_info_button}
 </p>
 <p style="text-align: center; margin-top: 10px;">
     <a href="{approval_url}" style="color: #2563eb; text-decoration: underline;">View Invoice Details</a>
 </p>"#,
                 approve = approve,
                 reject = reject,
-                approval_url = approval_url
+                approval_url = approval_url,
+                request_info_button = request_info_button,
             )
         } else {
             format!(
@@ -153,6 +165,24 @@ impl EmailTemplates {
 </p>"#,
                 approval_url = approval_url
             )
+        };
+
+        let attachment_preview = match attachment_preview_url {
+            Some(att) => format!(
+                r#"<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width: 100%; margin: 15px 0; background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;">
+    <tr>
+        <td style="padding: 12px 16px; vertical-align: middle; width: 48px; font-size: 28px;">&#128196;</td>
+        <td style="padding: 12px 16px; vertical-align: middle;">
+            <div style="font-weight: 500; color: #1f2937;">Attachment Preview</div>
+            <div style="margin-top: 4px;">
+                <a href="{att}" style="color: #2563eb; text-decoration: underline; font-size: 14px;">Open attachment</a>
+            </div>
+        </td>
+    </tr>
+</table>"#,
+                att = att,
+            ),
+            None => String::new(),
         };
 
         let html = Self::wrap_html(
@@ -176,6 +206,7 @@ impl EmailTemplates {
         <span class="info-label">Submitted By:</span>
         <span class="info-value">{submitted_by}</span>
     </div>
+    {attachment_preview}
 </div>
 {action_buttons}
 <p>You can also review this invoice by logging into BillForge.</p>
@@ -185,6 +216,22 @@ impl EmailTemplates {
             ),
             "Invoice Pending Approval",
         );
+
+        let quick_actions = if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
+            let mut s = format!(
+                "\nQuick Actions:\n- Approve: {}\n- Reject: {}\n",
+                approve, reject
+            );
+            if let Some(req) = request_info_url {
+                s.push_str(&format!("- Request Info: {}\n", req));
+            }
+            if let Some(att) = attachment_preview_url {
+                s.push_str(&format!("- Attachment: {}\n", att));
+            }
+            s
+        } else {
+            String::new()
+        };
 
         let text = format!(
             r#"Invoice Pending Your Approval
@@ -197,17 +244,9 @@ Amount: {amount}
 Submitted By: {submitted_by}
 
 Review the invoice at: {approval_url}
-{}
+{quick_actions}
 ---
-This email was sent by BillForge."#,
-            if let (Some(approve), Some(reject)) = (approve_url, reject_url) {
-                format!(
-                    "\nQuick Actions:\n- Approve: {}\n- Reject: {}\n",
-                    approve, reject
-                )
-            } else {
-                String::new()
-            }
+This email was sent by BillForge."#
         );
 
         (html, text)
@@ -565,5 +604,75 @@ impl<E: EmailService> EmailNotifier<E> {
         self.service
             .send(to, "Welcome to BillForge", &html, &text)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_approval_renders_request_info_and_attachment() {
+        let (html, text) = EmailTemplates::invoice_pending_approval_with_actions(
+            "INV-123",
+            "Acme Co",
+            "$100.00",
+            "submitter@example.com",
+            "https://app/invoices/abc",
+            Some("https://app/api/v1/actions/approve?t=APPROVE"),
+            Some("https://app/api/v1/actions/reject?t=REJECT"),
+            Some("https://app/api/v1/actions/request_info?t=REQINFO"),
+            Some("https://app/invoices/abc/attachments/att1"),
+        );
+
+        assert!(
+            html.contains("Request Info"),
+            "html should contain Request Info button text"
+        );
+        assert!(
+            html.contains("https://app/api/v1/actions/request_info?t=REQINFO"),
+            "html should contain request_info url"
+        );
+        assert!(
+            html.contains("#f59e0b"),
+            "request info button should use amber color"
+        );
+        assert!(
+            html.contains("Open attachment"),
+            "html should contain attachment preview link"
+        );
+        assert!(
+            html.contains("https://app/invoices/abc/attachments/att1"),
+            "html should contain attachment preview url"
+        );
+
+        assert!(
+            text.contains("Request Info: https://app/api/v1/actions/request_info?t=REQINFO"),
+            "text body should include request info link"
+        );
+        assert!(
+            text.contains("Attachment: https://app/invoices/abc/attachments/att1"),
+            "text body should include attachment link"
+        );
+    }
+
+    #[test]
+    fn pending_approval_without_optional_args_omits_request_info_and_attachment() {
+        let (html, text) = EmailTemplates::invoice_pending_approval_with_actions(
+            "INV-123",
+            "Acme Co",
+            "$100.00",
+            "submitter@example.com",
+            "https://app/invoices/abc",
+            Some("https://app/api/v1/actions/approve?t=APPROVE"),
+            Some("https://app/api/v1/actions/reject?t=REJECT"),
+            None,
+            None,
+        );
+
+        assert!(!html.contains("Request Info"));
+        assert!(!html.contains("Open attachment"));
+        assert!(!text.contains("Request Info:"));
+        assert!(!text.contains("Attachment:"));
     }
 }
