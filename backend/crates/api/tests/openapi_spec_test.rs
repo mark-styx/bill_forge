@@ -585,6 +585,68 @@ fn test_auth_paths_200_reference_login_response() {
     }
 }
 
+/// Verify the POST /invoices request body references the CreateInvoiceRequest schema,
+/// not a bare string, and that the component schema lists the required fields.
+#[cfg(all(
+    feature = "capture",
+    feature = "processing",
+    feature = "analytics",
+    feature = "billing"
+))]
+#[test]
+fn post_invoices_request_body_is_create_invoice_request() {
+    let spec = openapi_doc();
+    let spec_json = serde_json::to_string(&spec).expect("spec serializes");
+    let parsed: serde_json::Value = serde_json::from_str(&spec_json).expect("valid JSON");
+
+    let body_schema = &parsed["paths"]["/invoices"]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"];
+
+    let ref_str = body_schema["$ref"]
+        .as_str()
+        .expect("POST /invoices requestBody must reference a schema via $ref");
+    assert_eq!(
+        ref_str, "#/components/schemas/CreateInvoiceRequest",
+        "POST /invoices requestBody must point to CreateInvoiceRequest, got: {}",
+        ref_str
+    );
+
+    assert!(
+        body_schema.get("type").and_then(|t| t.as_str()) != Some("string"),
+        "POST /invoices requestBody schema must not be a bare string"
+    );
+
+    let component = &parsed["components"]["schemas"]["CreateInvoiceRequest"];
+    assert!(
+        component.is_object(),
+        "CreateInvoiceRequest must be registered in components.schemas"
+    );
+
+    let required: Vec<&str> = component["required"]
+        .as_array()
+        .expect("CreateInvoiceRequest schema must declare a required array")
+        .iter()
+        .map(|v| v.as_str().expect("required entries must be strings"))
+        .collect();
+
+    for field in &[
+        "document_id",
+        "vendor_name",
+        "invoice_number",
+        "total_amount",
+        "currency",
+        "line_items",
+        "tags",
+    ] {
+        assert!(
+            required.contains(field),
+            "CreateInvoiceRequest.required must contain '{}', got: {:?}",
+            field,
+            required
+        );
+    }
+}
+
 /// Regression test: PaginationInfo schema must use `total_items` (matching
 /// PaginationMeta.total_items on the wire), not the bare `total` that was
 /// there before. Prevents silent drift between OpenAPI spec and actual

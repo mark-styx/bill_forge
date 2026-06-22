@@ -246,6 +246,8 @@ pub struct ApiDoc;
         crate::routes::invoices::UploadResponse,
         crate::routes::invoices::BulkUploadResponse,
         crate::routes::invoices::BulkUploadItemResult,
+        CreateInvoiceRequest,
+        CreateInvoiceLineItem,
     ))
 )]
 struct InvoiceApiDoc;
@@ -715,6 +717,46 @@ pub struct InvoiceList {
     pub data: Vec<Invoice>,
     /// Pagination information
     pub pagination: PaginationInfo,
+}
+
+/// Request body for `POST /invoices` mirroring `billforge_core::domain::CreateInvoiceInput`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateInvoiceRequest {
+    /// Document ID (UUID) backing this invoice
+    #[schema(example = "11111111-1111-1111-1111-111111111111")]
+    pub document_id: String,
+    pub vendor_id: Option<String>,
+    #[schema(example = "Acme Corporation")]
+    pub vendor_name: String,
+    #[schema(example = "INV-2024-0001")]
+    pub invoice_number: String,
+    pub invoice_date: Option<String>,
+    pub due_date: Option<String>,
+    pub po_number: Option<String>,
+    pub subtotal: Option<MoneyInfo>,
+    pub tax_amount: Option<MoneyInfo>,
+    pub total_amount: MoneyInfo,
+    #[schema(example = "USD")]
+    pub currency: String,
+    pub line_items: Vec<CreateInvoiceLineItem>,
+    pub ocr_confidence: Option<f32>,
+    pub department: Option<String>,
+    pub gl_code: Option<String>,
+    pub cost_center: Option<String>,
+    pub notes: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// Line item on a create-invoice request mirroring `billforge_core::domain::CreateLineItemInput`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreateInvoiceLineItem {
+    pub description: String,
+    pub quantity: Option<f64>,
+    pub unit_price: Option<MoneyInfo>,
+    pub amount: MoneyInfo,
+    pub gl_code: Option<String>,
+    pub department: Option<String>,
+    pub project: Option<String>,
 }
 
 // ============================================================================

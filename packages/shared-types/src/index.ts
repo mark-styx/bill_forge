@@ -82,11 +82,7 @@ export interface Invoice {
   updated_at: string;
 }
 
-export interface CreateInvoiceInput {
-  vendor_name: string;
-  invoice_number: string;
-  total_amount: Money;
-}
+export type CreateInvoiceInput = GeneratedComponents['schemas']['CreateInvoiceRequest'];
 
 // ---------------------------------------------------------------------------
 // Contracts (non-PO recurring spend matching)

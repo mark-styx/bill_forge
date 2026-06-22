@@ -371,6 +371,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/predictive/anomaly_rules/recalibrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recalibrate per-tenant anomaly/duplicate thresholds based on the
+         *     acknowledged-false-positive rate observed over the last 30 days. Returns a
+         *     summary of the new effective thresholds and which detectors moved.
+         */
+        post: operations["recalibrate_anomaly_rules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/predictive/forecasts": {
         parameters: {
             query?: never;
@@ -1273,6 +1294,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/implementation/backtest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_readiness_backtest"];
+        put?: never;
+        post: operations["run_readiness_backtest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/implementation/checklist": {
         parameters: {
             query?: never;
@@ -1599,7 +1636,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Connect to NetSuite (save credentials & test connection) */
+        /**
+         * Connect to NetSuite (intentionally unsupported until JWT signing ships).
+         * @description Returns HTTP 501 with a stable `netsuite_jwt_not_implemented` error code.
+         *     No network call is attempted and no row is written to `netsuite_connections`.
+         */
         post: operations["netsuite_connect"];
         delete?: never;
         options?: never;
@@ -2393,7 +2434,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Export invoice to Sage Intacct as AP bill */
+        /** Export invoice to Sage Intacct as AP bill (asynchronous) */
         post: operations["export_invoice_to_sage"];
         delete?: never;
         options?: never;
@@ -2445,7 +2486,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync GL accounts from Sage Intacct */
+        /** Sync GL accounts from Sage Intacct (asynchronous) */
         post: operations["sync_accounts"];
         delete?: never;
         options?: never;
@@ -2462,7 +2503,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync vendors from Sage Intacct */
+        /** Sync vendors from Sage Intacct (asynchronous) */
         post: operations["sync_vendors"];
         delete?: never;
         options?: never;
@@ -2581,7 +2622,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync Salesforce Accounts as BillForge vendors */
+        /** Sync Salesforce Accounts as BillForge vendors (asynchronous) */
         post: operations["sync_accounts"];
         delete?: never;
         options?: never;
@@ -2598,7 +2639,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync vendor contacts from Salesforce */
+        /** Sync vendor contacts from Salesforce (asynchronous) */
         post: operations["sync_contacts"];
         delete?: never;
         options?: never;
@@ -3622,7 +3663,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Export invoice to Xero */
+        /** Export invoice to Xero (asynchronous) */
         post: operations["export_invoice_to_xero"];
         delete?: never;
         options?: never;
@@ -3674,7 +3715,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync accounts from Xero */
+        /** Sync accounts from Xero (asynchronous) */
         post: operations["sync_accounts"];
         delete?: never;
         options?: never;
@@ -3691,7 +3732,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sync contacts from Xero */
+        /**
+         * Sync contacts from Xero (asynchronous)
+         * @description The sync is performed by the background worker. The response returns 202
+         *     Accepted with the enqueued job id; clients should poll xero_sync_log for
+         *     status. This replaces the previous inline pagination loop that violated
+         *     the sub-200ms API SLO and offered no retry on transient Xero failures.
+         */
         post: operations["sync_contacts"];
         delete?: never;
         options?: never;
@@ -3821,6 +3868,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["upload_invoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invoices/upload/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /invoices/upload/bulk` - multi-file invoice upload for high-volume
+         *     tenants (#371).
+         * @description Accepts multiple `file` multipart fields in a single HTTP request, enforces
+         *     a per-request file-count cap (`BULK_MAX_FILES`), processes uploads with
+         *     bounded concurrency (`BULK_MAX_CONCURRENCY`), and returns a per-file result
+         *     array. Reuses the same `upload_invoice_file` core path as the single-file
+         *     `upload_invoice` handler so storage, OCR enqueue/sync, audit logging, and
+         *     duplicate detection all run identically per file. Every per-file task runs
+         *     under the same authenticated `AuthUser`/tenant context, preserving strict
+         *     tenant isolation.
+         *
+         *     Per-file size and processing failures are recorded as error entries rather
+         *     than aborting the whole batch; the request only fails up-front when zero
+         *     files are sent or the file count exceeds the cap.
+         */
+        post: operations["bulk_upload_invoices"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4037,6 +4116,22 @@ export interface components {
             /** @description Scheduled process date (YYYY-MM-DD) */
             process_date: string;
         };
+        /** @description Per-file outcome in a bulk upload response. */
+        BulkUploadItemResult: {
+            document_id?: string | null;
+            error?: string | null;
+            filename: string;
+            invoice_id?: string | null;
+            /** @description "ok" on success, "error" on per-file failure. */
+            status: string;
+        };
+        /** @description Aggregated response for `POST /invoices/upload/bulk` (#371). */
+        BulkUploadResponse: {
+            failed: number;
+            results: components["schemas"]["BulkUploadItemResult"][];
+            succeeded: number;
+            total: number;
+        };
         CaptureChannelsConfig: {
             email_forwarding: components["schemas"]["EmailForwardingConfig"];
             erp_sync_enabled?: boolean;
@@ -4084,6 +4179,46 @@ export interface components {
             module_entitlements: components["schemas"]["ModuleEntitlement"][];
             notification_approvals: components["schemas"]["NotificationApprovalsConfig"];
             privacy_mode: components["schemas"]["PrivacyModeConfig"];
+        };
+        /** @description Line item on a create-invoice request mirroring `billforge_core::domain::CreateLineItemInput`. */
+        CreateInvoiceLineItem: {
+            amount: components["schemas"]["MoneyInfo"];
+            department?: string | null;
+            description: string;
+            gl_code?: string | null;
+            project?: string | null;
+            /** Format: double */
+            quantity?: number | null;
+            unit_price?: null | components["schemas"]["MoneyInfo"];
+        };
+        /** @description Request body for `POST /invoices` mirroring `billforge_core::domain::CreateInvoiceInput`. */
+        CreateInvoiceRequest: {
+            cost_center?: string | null;
+            /** @example USD */
+            currency: string;
+            department?: string | null;
+            /**
+             * @description Document ID (UUID) backing this invoice
+             * @example 11111111-1111-1111-1111-111111111111
+             */
+            document_id: string;
+            due_date?: string | null;
+            gl_code?: string | null;
+            invoice_date?: string | null;
+            /** @example INV-2024-0001 */
+            invoice_number: string;
+            line_items: components["schemas"]["CreateInvoiceLineItem"][];
+            notes?: string | null;
+            /** Format: float */
+            ocr_confidence?: number | null;
+            po_number?: string | null;
+            subtotal?: null | components["schemas"]["MoneyInfo"];
+            tags: string[];
+            tax_amount?: null | components["schemas"]["MoneyInfo"];
+            total_amount: components["schemas"]["MoneyInfo"];
+            vendor_id?: string | null;
+            /** @example Acme Corporation */
+            vendor_name: string;
         };
         CreatePeriodRequest: {
             cutoff_date: string;
@@ -4200,6 +4335,7 @@ export interface components {
             sample_invoice_routed?: boolean;
         };
         GoLivePhase: {
+            backtest_scorecard?: null | components["schemas"]["ReadinessScorecard"];
             checks: components["schemas"]["GoLiveChecks"];
             status: components["schemas"]["PhaseStatus"];
         };
@@ -4423,12 +4559,14 @@ export interface components {
             /** @description OAuth 2.0 client secret */
             client_secret: string;
         };
-        /** @description Response body for a successful NetSuite connect. */
-        NetSuiteConnectResponse: {
-            /** @description NetSuite account id that was registered. */
-            account_id: string;
-            /** @description Always "connected". */
-            status: string;
+        /** @description Response body returned by `/connect` while NetSuite JWT signing is pending. */
+        NetSuiteConnectUnsupportedResponse: {
+            /** @description Pointer for support / engineering on what is missing. */
+            docs_hint: string;
+            /** @description Stable machine-readable error code. Always `"netsuite_jwt_not_implemented"`. */
+            error: string;
+            /** @description Human-readable explanation of why the connect path is disabled. */
+            message: string;
         };
         /** @description Response body for NetSuite disconnect. */
         NetSuiteDisconnectResponse: {
@@ -4443,6 +4581,12 @@ export interface components {
             connected: boolean;
             /** @description Last sync timestamp */
             last_sync_at?: string | null;
+            /**
+             * @description Machine-readable reason the integration is unavailable, when applicable.
+             *     Returns `"jwt_not_implemented"` for entitled tenants while JWT
+             *     `client_assertion` signing is pending.
+             */
+            reason?: string | null;
             /** @description Sync enabled */
             sync_enabled: boolean;
         };
@@ -4640,6 +4784,49 @@ export interface components {
             score?: number | null;
             totals: components["schemas"]["ReadinessTotals"];
         };
+        /**
+         * @description Go-live readiness scorecard produced by backtesting configured workflow
+         *     and categorization rules against the ERP-synced historical bill set.
+         *
+         *     `readiness_score` is a weighted average of the three coverage signals
+         *     (0.4 * auto_route + 0.4 * auto_approve + 0.2 * vendor_map). A score of
+         *     >= 0.75 marks the tenant ready for cutover.
+         */
+        ReadinessScorecard: {
+            /**
+             * Format: float
+             * @description Fraction of sample bills an auto-approval rule (or routing rule with
+             *     an AutoApprove action) would have eligible.
+             */
+            auto_approve_coverage: number;
+            /**
+             * Format: float
+             * @description Fraction of sample bills a workflow routing rule matched.
+             */
+            auto_route_coverage: number;
+            /** @description Whether `readiness_score` clears the 0.75 go-live threshold. */
+            passes_threshold: boolean;
+            /**
+             * Format: float
+             * @description Weighted readiness score in [0.0, 1.0].
+             */
+            readiness_score: number;
+            /**
+             * Format: date-time
+             * @description When the backtest was last run. `None` until the first run.
+             */
+            run_at?: string | null;
+            /**
+             * Format: int32
+             * @description Number of historical bills the scorecard was computed over.
+             */
+            sample_size: number;
+            /**
+             * Format: float
+             * @description Fraction of sample bills whose vendor was mapped in the ERP sync.
+             */
+            vendor_map_coverage: number;
+        };
         ReadinessTotals: {
             /** Format: int64 */
             accruals_drafted: number;
@@ -4747,52 +4934,10 @@ export interface components {
             /** @description Force full sync (vs incremental) */
             full_sync: boolean;
         };
-        /** @description Sync accounts response */
-        SyncAccountsResponse: {
-            /**
-             * Format: int64
-             * @description Number of accounts imported
-             */
-            imported: number;
-            /**
-             * Format: int64
-             * @description Number of accounts skipped
-             */
-            skipped: number;
-            /**
-             * Format: int64
-             * @description Number of accounts updated
-             */
-            updated: number;
-        };
         /** @description Sync contacts from Xero */
         SyncContactsRequest: {
             /** @description Force full sync (vs incremental) */
             full_sync: boolean;
-        };
-        /** @description Sync contacts response */
-        SyncContactsResponse: {
-            /**
-             * Format: int64
-             * @description Number of contacts that failed to sync due to database errors
-             * @example 0
-             */
-            failed: number;
-            /**
-             * Format: int64
-             * @description Number of contacts imported
-             */
-            imported: number;
-            /**
-             * Format: int64
-             * @description Number of contacts skipped
-             */
-            skipped: number;
-            /**
-             * Format: int64
-             * @description Number of contacts updated
-             */
-            updated: number;
         };
         /** @description Sync request */
         SyncRequest: {
@@ -5824,6 +5969,24 @@ export interface operations {
         };
         responses: {
             /** @description Anomaly acknowledged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recalibrate_anomaly_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thresholds recalibrated */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7616,6 +7779,46 @@ export interface operations {
             };
         };
     };
+    get_readiness_backtest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cached readiness backtest scorecard */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessScorecard"];
+                };
+            };
+        };
+    };
+    run_readiness_backtest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Readiness backtest executed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessScorecard"];
+                };
+            };
+        };
+    };
     update_checklist: {
         parameters: {
             query?: never;
@@ -8063,22 +8266,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description NetSuite connected */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NetSuiteConnectResponse"];
-                };
-            };
-            /** @description Invalid credentials or auth not yet implemented */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
             /** @description Unauthorized */
             401: {
                 headers: {
@@ -8086,12 +8273,21 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description NetSuite add-on not entitled */
+            402: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description NetSuite JWT signing not yet implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetSuiteConnectUnsupportedResponse"];
+                };
             };
         };
     };
@@ -9426,14 +9622,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Invoice exported */
-            200: {
+            /** @description Export enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ExportInvoiceResponse"];
-                };
+                content?: never;
             };
             /** @description Unauthorized */
             401: {
@@ -9442,15 +9636,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invoice not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9571,8 +9758,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Accounts synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9585,8 +9772,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9607,14 +9794,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Vendors synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["SyncResponse"];
-                };
+                content?: never;
             };
             /** @description Unauthorized */
             401: {
@@ -9623,8 +9808,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9905,14 +10090,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accounts synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["SyncAccountsResponse"];
-                };
+                content?: never;
             };
             /** @description Unauthorized */
             401: {
@@ -9921,8 +10104,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9939,8 +10122,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Contacts synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9953,8 +10136,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12229,14 +12412,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Invoice exported */
-            200: {
+            /** @description Export enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ExportInvoiceResponse"];
-                };
+                content?: never;
             };
             /** @description Unauthorized */
             401: {
@@ -12245,15 +12426,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invoice not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12374,8 +12548,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Accounts synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12388,8 +12562,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12410,14 +12584,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Contacts synced */
-            200: {
+            /** @description Sync enqueued */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["SyncContactsResponse"];
-                };
+                content?: never;
             };
             /** @description Unauthorized */
             401: {
@@ -12426,8 +12598,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal server error */
-            500: {
+            /** @description Background queue unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12681,7 +12853,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "text/plain": string;
+                "application/json": components["schemas"]["CreateInvoiceRequest"];
             };
         };
         responses: {
@@ -12727,6 +12899,40 @@ export interface operations {
                 };
             };
             /** @description Invalid upload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    bulk_upload_invoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bulk invoice upload results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUploadResponse"];
+                };
+            };
+            /** @description Invalid upload: zero files or count exceeds cap */
             400: {
                 headers: {
                     [name: string]: unknown;

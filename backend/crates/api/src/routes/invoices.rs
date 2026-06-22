@@ -344,7 +344,7 @@ fn validate_create_invoice_input(input: &CreateInvoiceInput) -> Result<(), Valid
     post,
     path = "/invoices",
     tag = "Invoices",
-    request_body = String,
+    request_body = crate::openapi::CreateInvoiceRequest,
     params(
         ("force" = Option<bool>, Query, description = "Skip duplicate detection and force create")
     ),
