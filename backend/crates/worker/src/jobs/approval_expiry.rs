@@ -9,6 +9,17 @@ use crate::config::WorkerConfig;
 use anyhow::Result;
 use tracing::{error, info, warn};
 
+#[derive(Debug, sqlx::FromRow)]
+struct ExpiredApprovalRequest {
+    id: uuid::Uuid,
+    invoice_id: uuid::Uuid,
+    rule_id: Option<uuid::Uuid>,
+    requested_from: serde_json::Value,
+    sla_hours: i32,
+    invoice_status: Option<String>,
+    invoice_processing_status: String,
+}
+
 /// Run approval expiry checks and send reminders for a tenant.
 pub async fn process_approval_expiry(tenant_id_str: &str, config: &WorkerConfig) -> Result<()> {
     info!("Processing approval expiry for tenant: {}", tenant_id_str);
@@ -56,66 +67,242 @@ pub async fn process_approval_expiry(tenant_id_str: &str, config: &WorkerConfig)
 
 /// Mark approval requests as expired when they have passed their `expires_at` deadline.
 async fn expire_stale_requests(pool: &sqlx::PgPool, tenant_id: &str) -> Result<u64> {
-    let result = sqlx::query(
-        r#"
-        UPDATE approval_requests
-        SET status = 'expired', updated_at = NOW()
-        WHERE tenant_id = $1
-          AND status = 'pending'
-          AND expires_at IS NOT NULL
-          AND expires_at < NOW()
-        "#,
-    )
-    .bind(tenant_id)
-    .execute(pool)
-    .await?;
+    let tenant_uuid = uuid::Uuid::parse_str(tenant_id)
+        .map_err(|e| anyhow::anyhow!("Invalid tenant ID for approval expiry: {}", e))?;
 
-    let count = result.rows_affected();
-
-    // For each expired request, check if the invoice's approval status should be resolved.
-    // Expired requests are treated like rejections for aggregation purposes.
-    if count > 0 {
-        // Get distinct invoice IDs from the just-expired requests
-        let invoice_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+    let expired_requests: Vec<ExpiredApprovalRequest> =
+        sqlx::query_as::<_, ExpiredApprovalRequest>(
             r#"
-            SELECT DISTINCT invoice_id
-            FROM approval_requests
-            WHERE tenant_id = $1
-              AND status = 'expired'
-              AND updated_at > NOW() - INTERVAL '1 minute'
-            "#,
+        UPDATE approval_requests ar
+        SET
+            status = 'expired',
+            escalated_at = COALESCE(ar.escalated_at, NOW()),
+            updated_at = NOW()
+        FROM invoices i
+        WHERE ar.tenant_id = $1
+          AND ar.invoice_id = i.id
+          AND i.tenant_id = ar.tenant_id
+          AND ar.status = 'pending'
+          AND ar.expires_at IS NOT NULL
+          AND ar.expires_at < NOW()
+        RETURNING
+            ar.id,
+            ar.invoice_id,
+            ar.rule_id,
+            ar.requested_from,
+            ar.sla_hours,
+            i.status AS invoice_status,
+            i.processing_status AS invoice_processing_status
+        "#,
         )
-        .bind(tenant_id)
+        .bind(tenant_uuid)
         .fetch_all(pool)
         .await?;
 
-        for invoice_id in invoice_ids {
-            // Log the expiry for audit
-            if let Err(e) = sqlx::query(
-                r#"
-                INSERT INTO workflow_audit_log (
-                    id, tenant_id, entity_type, entity_id, action,
-                    actor_type, metadata, created_at
-                ) VALUES (
-                    gen_random_uuid(), $1, 'ApprovalRequest', $2, 'expired',
-                    'system', '{"reason": "approval_request_expired"}'::jsonb, NOW()
-                )
-                "#,
+    let count = expired_requests.len() as u64;
+
+    for request in expired_requests {
+        if let Some(delegate_id) =
+            active_delegate_for_request(pool, tenant_uuid, &request.requested_from).await?
+        {
+            create_delegated_approval(pool, tenant_uuid, &request, delegate_id).await?;
+            audit_approval_expiry(
+                pool,
+                tenant_uuid,
+                &request,
+                "delegated_after_expiry",
+                serde_json::json!({
+                    "reason": "approval_request_expired",
+                    "delegate_id": delegate_id,
+                    "invoice_id": request.invoice_id,
+                }),
             )
-            .bind(tenant_id)
-            .bind(invoice_id)
-            .execute(pool)
-            .await
-            {
-                error!(
-                    "Failed to log approval expiry audit for invoice {}: {}",
-                    invoice_id, e
-                );
-            }
+            .await;
+        } else {
+            let invoice_resolved = reject_invoice_after_expiry(pool, tenant_uuid, &request).await?;
+            audit_approval_expiry(
+                pool,
+                tenant_uuid,
+                &request,
+                if invoice_resolved {
+                    "expired_rejected_invoice"
+                } else {
+                    "expired_no_invoice_transition"
+                },
+                serde_json::json!({
+                    "reason": "approval_request_expired",
+                    "invoice_id": request.invoice_id,
+                    "invoice_resolved": invoice_resolved,
+                }),
+            )
+            .await;
         }
     }
 
     Ok(count)
+}
+
+fn requested_user_id(requested_from: &serde_json::Value) -> Option<uuid::Uuid> {
+    requested_from
+        .get("User")
+        .and_then(|value| value.as_str())
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+}
+
+async fn active_delegate_for_request(
+    pool: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    requested_from: &serde_json::Value,
+) -> Result<Option<uuid::Uuid>> {
+    let Some(delegator_id) = requested_user_id(requested_from) else {
+        return Ok(None);
+    };
+
+    let delegate_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        r#"
+        SELECT delegate_id
+        FROM approval_delegations
+        WHERE tenant_id = $1
+          AND delegator_id = $2
+          AND is_active = TRUE
+          AND start_date <= NOW()
+          AND end_date >= NOW()
+        ORDER BY end_date ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(delegator_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(delegate_id)
+}
+
+async fn create_delegated_approval(
+    pool: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    expired: &ExpiredApprovalRequest,
+    delegate_id: uuid::Uuid,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO approval_requests (
+            id, tenant_id, invoice_id, rule_id, requested_from, status,
+            expires_at, sla_hours, sla_started_at, created_at, updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, 'pending',
+            NOW() + ($6::int * INTERVAL '1 hour'), $6, NOW(), NOW(), NOW()
+        )
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(expired.invoice_id)
+    .bind(expired.rule_id)
+    .bind(serde_json::json!({ "User": delegate_id.to_string() }))
+    .bind(expired.sla_hours.max(1))
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn reject_invoice_after_expiry(
+    pool: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    expired: &ExpiredApprovalRequest,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE invoices
+        SET
+            processing_status = 'rejected',
+            status = 'rejected',
+            updated_at = NOW()
+        WHERE tenant_id = $1
+          AND id = $2
+          AND (
+              processing_status = 'pending_approval'
+              OR status = 'pending_approval'
+          )
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(expired.invoice_id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO invoice_audit_log (
+            id, tenant_id, invoice_id, actor_id, from_status, to_status,
+            event_type, metadata, created_at
+        ) VALUES (
+            gen_random_uuid(), $1, $2, NULL, $3, 'rejected',
+            'approval_expired', $4, NOW()
+        )
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(expired.invoice_id)
+    .bind(
+        expired
+            .invoice_status
+            .as_deref()
+            .unwrap_or(expired.invoice_processing_status.as_str()),
+    )
+    .bind(serde_json::json!({
+        "approval_request_id": expired.id,
+        "previous_processing_status": expired.invoice_processing_status,
+        "reason": "approval_request_expired",
+    }))
+    .execute(pool)
+    .await
+    {
+        error!(
+            "Failed to write invoice audit row for expired approval {}: {}",
+            expired.id, e
+        );
+    }
+
+    Ok(true)
+}
+
+async fn audit_approval_expiry(
+    pool: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    expired: &ExpiredApprovalRequest,
+    action: &str,
+    metadata: serde_json::Value,
+) {
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO workflow_audit_log (
+            id, tenant_id, entity_type, entity_id, action,
+            actor_type, metadata, created_at
+        ) VALUES (
+            gen_random_uuid(), $1, 'ApprovalRequest', $2, $3,
+            'system', $4, NOW()
+        )
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(expired.id)
+    .bind(action)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    {
+        error!(
+            "Failed to log approval expiry audit for request {}: {}",
+            expired.id, e
+        );
+    }
 }
 
 /// Queue reminder emails for approval requests expiring within 24 hours
@@ -436,4 +623,29 @@ async fn mark_sla_alert_sent(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requested_user_id;
+
+    #[test]
+    fn requested_user_id_parses_user_target() {
+        let user_id = uuid::Uuid::new_v4();
+        let requested_from = serde_json::json!({ "User": user_id.to_string() });
+
+        assert_eq!(requested_user_id(&requested_from), Some(user_id));
+    }
+
+    #[test]
+    fn requested_user_id_ignores_non_user_or_invalid_targets() {
+        assert_eq!(
+            requested_user_id(&serde_json::json!({ "Role": "manager" })),
+            None
+        );
+        assert_eq!(
+            requested_user_id(&serde_json::json!({ "User": "not-a-uuid" })),
+            None
+        );
+    }
 }
