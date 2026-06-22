@@ -440,6 +440,25 @@ fn test_plain_comment_still_logged_when_not_question() {
     );
 }
 
+/// Teams approve/reject must not only move the invoice status; it also has to
+/// resolve the pending approval request and rerun approval aggregation, matching
+/// the Slack path.
+#[test]
+fn test_teams_approve_reject_resolves_approval_request() {
+    let source = include_str!("../src/routes/chat_approvals.rs");
+    let teams_start = source.find("async fn teams_actions(").unwrap();
+    let teams_section = &source[teams_start..];
+
+    assert!(
+        teams_section.matches("resolve_approval(").count() >= 2,
+        "teams_actions must call resolve_approval for both approve and reject actions"
+    );
+    assert!(
+        teams_section.contains("\"approved\"") && teams_section.contains("\"rejected\""),
+        "teams_actions must resolve approval_requests with approved/rejected statuses"
+    );
+}
+
 /// Verify that AI errors produce an apology reply, not a 500 to Slack.
 #[test]
 fn test_ai_errors_produce_apology_not_500() {

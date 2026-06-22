@@ -1108,6 +1108,15 @@ async fn teams_actions(
                 serde_json::json!({ "channel": "teams" }),
             )
             .await?;
+            resolve_approval(
+                &tenant_pool,
+                Some(&state.db.metadata()),
+                &TenantId(tenant_id),
+                invoice_id,
+                &UserId(actor_id),
+                "approved",
+            )
+            .await?;
         }
         "reject" => {
             transition_invoice(
@@ -1118,6 +1127,15 @@ async fn teams_actions(
                 crate::state_machine::InvoiceStatus::Rejected,
                 "reject_via_teams",
                 serde_json::json!({ "channel": "teams" }),
+            )
+            .await?;
+            resolve_approval(
+                &tenant_pool,
+                Some(&state.db.metadata()),
+                &TenantId(tenant_id),
+                invoice_id,
+                &UserId(actor_id),
+                "rejected",
             )
             .await?;
         }
