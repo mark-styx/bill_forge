@@ -384,7 +384,8 @@ impl MLCategorizer {
         line_items: &[super::categorization::LineItemInput],
     ) -> Result<super::categorization::PerLineInvoiceCategorization> {
         use super::categorization::{
-            LineCategorization, LineSplitSuggestion, PerLineInvoiceCategorization, SuggestionSource,
+            line_review_state, LineCategorization, LineSplitSuggestion,
+            PerLineInvoiceCategorization, SuggestionSource,
         };
 
         let mut lines = Vec::with_capacity(line_items.len());
@@ -408,6 +409,9 @@ impl MLCategorizer {
             }
 
             if gl_groups.is_empty() {
+                let splits = vec![];
+                let (auto_fill, review_required, review_reason) =
+                    line_review_state("0000-General", 0.40, &splits);
                 lines.push(LineCategorization {
                     line_item_id: format!("line-{}", idx),
                     line_index: idx,
@@ -417,7 +421,10 @@ impl MLCategorizer {
                     confidence: 0.40,
                     rationale: "No similar embeddings found".to_string(),
                     source: SuggestionSource::Default,
-                    splits: vec![],
+                    splits,
+                    auto_fill,
+                    review_required,
+                    review_reason,
                 });
                 continue;
             }
@@ -473,6 +480,9 @@ impl MLCategorizer {
                 .ok()
                 .and_then(|v| v.into_iter().next());
 
+            let (auto_fill, review_required, review_reason) =
+                line_review_state(&best.0, confidence, &splits);
+
             lines.push(LineCategorization {
                 line_item_id: format!("line-{}", idx),
                 line_index: idx,
@@ -483,6 +493,9 @@ impl MLCategorizer {
                 rationale: format!("Semantic match (similarity: {:.2})", best.1),
                 source: SuggestionSource::LineItemAnalysis,
                 splits,
+                auto_fill,
+                review_required,
+                review_reason,
             });
         }
 

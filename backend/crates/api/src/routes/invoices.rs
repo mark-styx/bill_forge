@@ -538,9 +538,8 @@ async fn detect_duplicates_for_invoice(
     // the acknowledgement-driven learning loop). Falls back to detector
     // defaults when no rule row exists or the lookup fails.
     let detector = {
-        let repo = billforge_analytics::predictive_repository::PredictiveRepository::new(
-            (**pool).clone(),
-        );
+        let repo =
+            billforge_analytics::predictive_repository::PredictiveRepository::new((**pool).clone());
         let cfg = match repo.load_anomaly_rule(*tenant_id.as_uuid()).await {
             Ok(Some(c)) => c,
             _ => billforge_analytics::predictive_repository::AnomalyRuleConfig::defaults(
@@ -723,7 +722,7 @@ async fn update_invoice(
                     "department": invoice.department,
                     "cost_center": invoice.cost_center,
                 });
-                if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(
+                let ingest_result = billforge_invoice_processing::ContinuousLearningEngine::new(
                     *tenant.tenant_id.as_uuid(),
                     (*pool).clone(),
                 )
@@ -735,13 +734,16 @@ async fn update_invoice(
                     Some(*invoice.id.as_uuid()),
                     "invoice",
                 )
-                .await
-                {
+                .await;
+
+                if let Err(e) = ingest_result {
                     tracing::warn!(
                         error = %e,
                         invoice_id = %invoice.id,
                         "Failed to ingest GL recode into learning stream"
                     );
+                } else {
+                    schedule_categorization_retrain((*pool).clone(), *tenant.tenant_id.as_uuid());
                 }
             }
         }
@@ -2428,6 +2430,22 @@ async fn suggest_categories(
     Ok(Json(categorization))
 }
 
+fn schedule_categorization_retrain(pool: sqlx::PgPool, tenant_id: Uuid) {
+    tokio::spawn(async move {
+        let tenant_id_str = tenant_id.to_string();
+        if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(tenant_id, pool)
+            .apply_weekly_learning(&tenant_id_str)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                tenant_id = %tenant_id,
+                "Background categorization retrain failed"
+            );
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Merge / Reject duplicate endpoints
 // ---------------------------------------------------------------------------
@@ -3338,9 +3356,10 @@ async fn post_vendor_message(
 
     let body_trim = body.body.trim();
     if body_trim.is_empty() {
-        return Err(
-            billforge_core::Error::Validation("Message body must not be empty".to_string()).into(),
-        );
+        return Err(billforge_core::Error::Validation(
+            "Message body must not be empty".to_string(),
+        )
+        .into());
     }
     if body_trim.len() > MAX_VENDOR_MESSAGE_LEN {
         return Err(billforge_core::Error::Validation(format!(

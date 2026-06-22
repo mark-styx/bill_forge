@@ -204,10 +204,7 @@ async fn submit_categorization_override(
 ) -> ApiResult<Json<OverrideResponse>> {
     let trimmed = body.corrected_gl_code.trim();
     if trimmed.is_empty() {
-        return Err(Error::Validation(
-            "corrected_gl_code must not be empty".to_string(),
-        )
-        .into());
+        return Err(Error::Validation("corrected_gl_code must not be empty".to_string()).into());
     }
 
     let pool = state.db.tenant(&tenant.tenant_id).await?;
@@ -232,12 +229,12 @@ async fn submit_categorization_override(
 
     let original = serde_json::json!({
         "decision_kind": "categorization",
-        "current_gl_code": invoice.gl_code,
+        "gl_code": invoice.gl_code,
         "vendor_name": invoice.vendor_name,
         "confidence": invoice.categorization_confidence,
     });
     let corrected = serde_json::json!({
-        "corrected_gl_code": trimmed,
+        "gl_code": trimmed,
         "reason": body.reason,
     });
 
@@ -250,6 +247,8 @@ async fn submit_categorization_override(
         corrected,
     )
     .await?;
+
+    schedule_categorization_retrain((*pool).clone(), *tenant.tenant_id.as_uuid());
 
     tracing::info!(
         actor = %user.user_id,
@@ -266,6 +265,26 @@ async fn submit_categorization_override(
         correction_type: "gl_recode".to_string(),
     }))
 }
+
+#[cfg(feature = "processing")]
+fn schedule_categorization_retrain(pool: PgPool, tenant_id: Uuid) {
+    tokio::spawn(async move {
+        let tenant_id_str = tenant_id.to_string();
+        if let Err(e) = billforge_invoice_processing::ContinuousLearningEngine::new(tenant_id, pool)
+            .apply_weekly_learning(&tenant_id_str)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                tenant_id = %tenant_id,
+                "Background categorization retrain failed"
+            );
+        }
+    });
+}
+
+#[cfg(not(feature = "processing"))]
+fn schedule_categorization_retrain(_pool: PgPool, _tenant_id: Uuid) {}
 
 #[cfg(feature = "processing")]
 async fn ingest_override_into_learning(
@@ -335,7 +354,10 @@ fn keyword_outcome(text: &str) -> (String, Option<&'static str>) {
         || lower.contains("cloud")
         || lower.contains("aws")
     {
-        return ("6000-Software & Subscriptions".to_string(), Some("software"));
+        return (
+            "6000-Software & Subscriptions".to_string(),
+            Some("software"),
+        );
     }
     if lower.contains("marketing") || lower.contains("advertising") || lower.contains("ads") {
         return ("7000-Marketing".to_string(), Some("marketing"));
@@ -351,10 +373,7 @@ fn keyword_outcome(text: &str) -> (String, Option<&'static str>) {
     }
     if lower.contains("consulting") || lower.contains("professional") || lower.contains("services")
     {
-        return (
-            "9000-Professional Services".to_string(),
-            Some("consulting"),
-        );
+        return ("9000-Professional Services".to_string(), Some("consulting"));
     }
     ("0000-General".to_string(), None)
 }
@@ -419,8 +438,11 @@ fn build_explanation(
     }
 
     if let Some(family) = keyword_family {
-        let aligns =
-            invoice.gl_code.as_deref().map(|g| g == keyword_outcome_code).unwrap_or(true);
+        let aligns = invoice
+            .gl_code
+            .as_deref()
+            .map(|g| g == keyword_outcome_code)
+            .unwrap_or(true);
         raw.push(Signal {
             name: "keyword_match".to_string(),
             weight: 0.75,
@@ -542,10 +564,7 @@ fn build_explanation(
     let rationale_text = if let Some(family) = keyword_family {
         format!("Keyword '{}' + vendor history", family)
     } else if !vendor_prior.is_empty() {
-        format!(
-            "Vendor history ({} prior invoices)",
-            vendor_prior.len()
-        )
+        format!("Vendor history ({} prior invoices)", vendor_prior.len())
     } else {
         "Default fallback (no strong signal)".to_string()
     };
@@ -653,12 +672,21 @@ mod tests {
         let priors = vec![prior("Acme Software", "6000-Software & Subscriptions")];
         let resp = build_explanation(&invoice, &priors);
         let total: f32 = resp.top_signals.iter().map(|s| s.weight).sum();
-        assert!((total - 1.0).abs() < 1e-4, "signals must sum to 1.0, got {}", total);
+        assert!(
+            (total - 1.0).abs() < 1e-4,
+            "signals must sum to 1.0, got {}",
+            total
+        );
     }
 
     #[test]
     fn empty_priors_still_produces_counterfactual() {
-        let invoice = invoice_row("Solo Vendor", "Office chairs", Some("5000-Office Supplies & Equipment"), None);
+        let invoice = invoice_row(
+            "Solo Vendor",
+            "Office chairs",
+            Some("5000-Office Supplies & Equipment"),
+            None,
+        );
         let resp = build_explanation(&invoice, &[]);
         // Even without priors, the counterfactual is present (with the
         // "no alternative" sentinel) so the response shape is stable.

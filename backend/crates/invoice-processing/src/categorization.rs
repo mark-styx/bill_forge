@@ -12,6 +12,9 @@ use uuid::Uuid;
 
 use crate::feedback_loop::{CorrectionRule, FeedbackLearning};
 
+/// Minimum per-line confidence for unattended GL coding.
+pub const GL_LINE_AUTO_FILL_CONFIDENCE_THRESHOLD: f64 = 0.80;
+
 /// Category suggestion with confidence score
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CategorySuggestion {
@@ -455,6 +458,9 @@ impl CategorizationEngine {
             // 3. Detect splits
             let splits = detect_line_splits(&item.description, item.amount, vendor_history);
 
+            let (auto_fill, review_required, review_reason) =
+                line_review_state(&final_gl, final_conf, &splits);
+
             lines.push(LineCategorization {
                 line_item_id,
                 line_index: idx,
@@ -465,6 +471,9 @@ impl CategorizationEngine {
                 rationale,
                 source: final_source,
                 splits,
+                auto_fill,
+                review_required,
+                review_reason,
             });
         }
 
@@ -570,6 +579,9 @@ pub struct LineCategorization {
     pub rationale: String,
     pub source: SuggestionSource,
     pub splits: Vec<LineSplitSuggestion>,
+    pub auto_fill: bool,
+    pub review_required: bool,
+    pub review_reason: Option<String>,
 }
 
 /// Complete per-line categorization result for an entire invoice.
@@ -901,6 +913,38 @@ pub fn detect_historical_splits(codings: &[PriorLineCoding]) -> Vec<HistoricalSp
         .collect()
 }
 
+pub fn line_review_state(
+    gl_code: &str,
+    confidence: f64,
+    splits: &[LineSplitSuggestion],
+) -> (bool, bool, Option<String>) {
+    if !splits.is_empty() {
+        return (
+            false,
+            true,
+            Some("split_suggestion_requires_review".to_string()),
+        );
+    }
+
+    if gl_code == "0000-General" {
+        return (
+            false,
+            true,
+            Some("fallback_gl_code_requires_review".to_string()),
+        );
+    }
+
+    if confidence >= GL_LINE_AUTO_FILL_CONFIDENCE_THRESHOLD {
+        return (true, false, None);
+    }
+
+    (
+        false,
+        true,
+        Some("confidence_below_auto_fill_threshold".to_string()),
+    )
+}
+
 /// Persist per-line categorization results into `invoice_line_categorizations`.
 ///
 /// One row per `LineCategorization`. The `splits` column stores the
@@ -924,8 +968,12 @@ pub async fn persist_line_categorizations(
             INSERT INTO invoice_line_categorizations (
                 tenant_id, invoice_id, line_item_id, line_index,
                 suggested_gl_code, suggested_department, suggested_cost_center,
-                confidence, rationale, source, splits
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                confidence, rationale, source, splits,
+                auto_fill, review_required, review_reason, applied_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                $12, $13, $14, CASE WHEN $12 THEN NOW() ELSE NULL END
+            )
             "#,
         )
         .bind(tenant_id)
@@ -939,6 +987,9 @@ pub async fn persist_line_categorizations(
         .bind(&line.rationale)
         .bind(source_str)
         .bind(&splits_json)
+        .bind(line.auto_fill)
+        .bind(line.review_required)
+        .bind(&line.review_reason)
         .execute(pool)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to persist line categorization: {}", e))?;
@@ -1051,5 +1102,42 @@ mod tests {
         // Department suggestion must NOT be rewritten by a GlCode rule
         assert_eq!(result.value, "Engineering");
         assert!((result.confidence - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_line_review_state_auto_fills_high_confidence_specific_gl() {
+        let (auto_fill, review_required, reason) =
+            line_review_state("6000-Software & Subscriptions", 0.91, &[]);
+
+        assert!(auto_fill);
+        assert!(!review_required);
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn test_line_review_state_requires_review_for_low_confidence_or_splits() {
+        let (auto_fill, review_required, reason) =
+            line_review_state("9000-Professional Services", 0.74, &[]);
+        assert!(!auto_fill);
+        assert!(review_required);
+        assert_eq!(
+            reason.as_deref(),
+            Some("confidence_below_auto_fill_threshold")
+        );
+
+        let splits = vec![LineSplitSuggestion {
+            gl_code: "6000-Software & Subscriptions".to_string(),
+            department: Some("Engineering".to_string()),
+            cost_center: None,
+            amount: 50.0,
+            percentage: 0.5,
+            confidence: 0.70,
+            rationale: "test split".to_string(),
+        }];
+        let (auto_fill, review_required, reason) =
+            line_review_state("6000-Software & Subscriptions", 0.91, &splits);
+        assert!(!auto_fill);
+        assert!(review_required);
+        assert_eq!(reason.as_deref(), Some("split_suggestion_requires_review"));
     }
 }
