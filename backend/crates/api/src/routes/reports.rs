@@ -914,6 +914,7 @@ pub struct ForecastDay {
     pub high_band: i64,
     pub vendor_breakdown: Vec<ForecastBreakdownEntry>,
     pub gl_breakdown: Vec<ForecastBreakdownEntry>,
+    pub cost_center_breakdown: Vec<ForecastBreakdownEntry>,
     pub funding_required: bool,
 }
 
@@ -970,6 +971,11 @@ pub struct SimulateRequest {
     pub horizon_weeks: Option<i32>,
     pub as_of_date: Option<chrono::NaiveDate>,
     pub min_daily_funding_threshold: Option<i64>,
+    pub vendor_id: Option<Uuid>,
+    pub vendor_name: Option<String>,
+    pub cost_center: Option<String>,
+    pub due_date_from: Option<chrono::NaiveDate>,
+    pub due_date_to: Option<chrono::NaiveDate>,
     pub scenario: ScenarioInputs,
 }
 
@@ -978,11 +984,73 @@ struct ForecastQuery {
     horizon_weeks: Option<i32>,
     as_of_date: Option<chrono::NaiveDate>,
     min_daily_funding_threshold: Option<i64>,
+    vendor_id: Option<Uuid>,
+    vendor_name: Option<String>,
+    cost_center: Option<String>,
+    due_date_from: Option<chrono::NaiveDate>,
+    due_date_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ForecastFilters {
+    vendor_id: Option<Uuid>,
+    vendor_name: Option<String>,
+    cost_center: Option<String>,
+    due_date_from: Option<chrono::NaiveDate>,
+    due_date_to: Option<chrono::NaiveDate>,
+}
+
+impl ForecastFilters {
+    fn from_query(params: &ForecastQuery) -> Self {
+        Self {
+            vendor_id: params.vendor_id,
+            vendor_name: normalized_filter(params.vendor_name.as_deref()),
+            cost_center: normalized_filter(params.cost_center.as_deref()),
+            due_date_from: params.due_date_from,
+            due_date_to: params.due_date_to,
+        }
+    }
+
+    fn from_simulation(body: &SimulateRequest) -> Self {
+        Self {
+            vendor_id: body.vendor_id,
+            vendor_name: normalized_filter(body.vendor_name.as_deref()),
+            cost_center: normalized_filter(body.cost_center.as_deref()),
+            due_date_from: body.due_date_from,
+            due_date_to: body.due_date_to,
+        }
+    }
+
+    fn from_export(body: &CashFlowExportRequest) -> Self {
+        Self {
+            vendor_id: body.vendor_id,
+            vendor_name: normalized_filter(body.vendor_name.as_deref()),
+            cost_center: normalized_filter(body.cost_center.as_deref()),
+            due_date_from: body.due_date_from,
+            due_date_to: body.due_date_to,
+        }
+    }
+
+    fn allows_recurring_projection(&self) -> bool {
+        self.cost_center.is_none()
+    }
+
+    fn includes_projection_date(&self, date: chrono::NaiveDate) -> bool {
+        self.due_date_from.map_or(true, |from| date >= from)
+            && self.due_date_to.map_or(true, |to| date <= to)
+    }
+}
+
+fn normalized_filter(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug)]
 struct InvoiceForecastRow {
-    invoice_id: Uuid,
+    vendor_id: Option<Uuid>,
     vendor_name: String,
     amount_cents: i64,
     processing_status: String,
@@ -992,6 +1060,7 @@ struct InvoiceForecastRow {
     discount_captured_at: Option<chrono::DateTime<chrono::Utc>>,
     discount_missed_at: Option<chrono::DateTime<chrono::Utc>>,
     gl_code: Option<String>,
+    cost_center: Option<String>,
 }
 
 /// Return the confidence factor for a given approval status.
@@ -1023,6 +1092,7 @@ async fn ap_cash_flow_forecast(
         horizon_weeks,
         as_of_date,
         params.min_daily_funding_threshold,
+        ForecastFilters::from_query(&params),
         None,
     )
     .await?;
@@ -1037,13 +1107,13 @@ async fn compute_ap_forecast(
     horizon_weeks: i32,
     as_of_date: chrono::NaiveDate,
     min_daily_funding_threshold: Option<i64>,
+    filters: ForecastFilters,
     scenario: Option<&ScenarioInputs>,
 ) -> ApiResult<ApCashFlowForecast> {
     let horizon_end = as_of_date + chrono::Duration::weeks(horizon_weeks as i64);
 
     // Fetch active invoices with their EPD data and GL codes
     let rows = sqlx::query_as::<_, (
-        Uuid,
         String,
         i64,
         String,
@@ -1053,10 +1123,11 @@ async fn compute_ap_forecast(
         Option<chrono::DateTime<chrono::Utc>>,
         Option<chrono::DateTime<chrono::Utc>>,
         Option<String>,
+        Option<Uuid>,
+        Option<String>,
     )>(
         r#"
         SELECT
-            i.id,
             i.vendor_name,
             i.total_amount_cents,
             i.processing_status,
@@ -1065,7 +1136,9 @@ async fn compute_ap_forecast(
             CAST(i.discount_percent AS DOUBLE PRECISION),
             i.discount_captured_at,
             i.discount_missed_at,
-            cs.suggested_gl_code
+            cs.suggested_gl_code,
+            i.vendor_id,
+            i.cost_center
         FROM invoices i
         LEFT JOIN LATERAL (
             SELECT suggested_gl_code
@@ -1078,11 +1151,21 @@ async fn compute_ap_forecast(
         WHERE i.tenant_id = $1
           AND i.processing_status IN ('submitted', 'pending_approval', 'approved', 'ready_for_payment')
           AND i.due_date IS NOT NULL
+          AND ($2::uuid IS NULL OR i.vendor_id = $2)
+          AND ($3::text IS NULL OR i.vendor_name ILIKE '%' || $3 || '%')
+          AND ($4::text IS NULL OR i.cost_center = $4)
+          AND ($5::date IS NULL OR i.due_date >= $5)
+          AND ($6::date IS NULL OR i.due_date <= $6)
         ORDER BY i.due_date ASC
         LIMIT 1000
         "#,
     )
     .bind(tenant_id)
+    .bind(filters.vendor_id)
+    .bind(&filters.vendor_name)
+    .bind(&filters.cost_center)
+    .bind(filters.due_date_from)
+    .bind(filters.due_date_to)
     .fetch_all(pool)
     .await
     .map_err(|e| billforge_core::Error::Database(format!("Failed to query forecast data: {}", e)))?;
@@ -1093,16 +1176,17 @@ async fn compute_ap_forecast(
     let invoice_rows: Vec<InvoiceForecastRow> = rows
         .into_iter()
         .map(|row| InvoiceForecastRow {
-            invoice_id: row.0,
-            vendor_name: row.1,
-            amount_cents: row.2,
-            processing_status: row.3,
-            due_date: row.4,
-            discount_deadline: row.5,
-            discount_percent: row.6,
-            discount_captured_at: row.7,
-            discount_missed_at: row.8,
-            gl_code: row.9,
+            vendor_name: row.0,
+            amount_cents: row.1,
+            processing_status: row.2,
+            due_date: row.3,
+            discount_deadline: row.4,
+            discount_percent: row.5,
+            discount_captured_at: row.6,
+            discount_missed_at: row.7,
+            gl_code: row.8,
+            vendor_id: row.9,
+            cost_center: row.10,
         })
         .collect();
 
@@ -1221,6 +1305,8 @@ async fn compute_ap_forecast(
         vec![std::collections::HashMap::new(); num_days];
     let mut daily_gl: Vec<std::collections::HashMap<String, i64>> =
         vec![std::collections::HashMap::new(); num_days];
+    let mut daily_cost_centers: Vec<std::collections::HashMap<String, i64>> =
+        vec![std::collections::HashMap::new(); num_days];
 
     for (date, amount, low_f, high_f, _inv) in &invoice_contributions {
         let offset = (*date - as_of_date).num_days() as usize;
@@ -1245,6 +1331,15 @@ async fn compute_ap_forecast(
                     .entry("Uncategorized".to_string())
                     .or_insert(0) += amount;
             }
+            if let Some(ref cost_center) = inv.cost_center {
+                *daily_cost_centers[offset]
+                    .entry(cost_center.clone())
+                    .or_insert(0) += amount;
+            } else {
+                *daily_cost_centers[offset]
+                    .entry("Unassigned".to_string())
+                    .or_insert(0) += amount;
+            }
         }
     }
 
@@ -1253,68 +1348,48 @@ async fn compute_ap_forecast(
     // last seen invoice; we skip any occurrence that overlaps an already-scheduled
     // invoice for the same vendor inside the pattern's window tolerance to avoid
     // double-counting.
-    let recurring_rows = sqlx::query_as::<_, (
-        Uuid,
-        String,
-        i32,
-        i64,
-        Option<chrono::NaiveDate>,
-        i32,
-    )>(
-        r#"
-        SELECT
-            rp.vendor_id,
-            COALESCE(v.name, 'Recurring vendor') AS vendor_name,
-            rp.cadence_days,
-            rp.trailing_median_cents,
-            rp.last_invoice_date,
-            rp.window_tolerance_days
-        FROM recurring_patterns rp
-        LEFT JOIN vendors v ON v.id = rp.vendor_id
-        WHERE rp.tenant_id = $1
-          AND rp.cadence_days > 0
-          AND rp.trailing_median_cents > 0
-        "#,
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| {
-        billforge_core::Error::Database(format!(
-            "Failed to query recurring patterns for forecast: {}",
-            e
-        ))
-    })?;
+    let recurring_rows = if filters.allows_recurring_projection() {
+        sqlx::query_as::<_, (Uuid, String, i32, i64, Option<chrono::NaiveDate>, i32)>(
+            r#"
+            SELECT
+                rp.vendor_id,
+                COALESCE(v.name, 'Recurring vendor') AS vendor_name,
+                rp.cadence_days,
+                rp.trailing_median_cents,
+                rp.last_invoice_date,
+                rp.window_tolerance_days
+            FROM recurring_patterns rp
+            LEFT JOIN vendors v ON v.id = rp.vendor_id
+            WHERE rp.tenant_id = $1
+              AND rp.cadence_days > 0
+              AND rp.trailing_median_cents > 0
+              AND ($2::uuid IS NULL OR rp.vendor_id = $2)
+              AND ($3::text IS NULL OR v.name ILIKE '%' || $3 || '%')
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(filters.vendor_id)
+        .bind(&filters.vendor_name)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            billforge_core::Error::Database(format!(
+                "Failed to query recurring patterns for forecast: {}",
+                e
+            ))
+        })?
+    } else {
+        Vec::new()
+    };
 
     // Map vendor_id -> due dates of invoices already scheduled in the horizon,
     // used below to skip recurring projections that overlap a real invoice.
     let invoice_vendor_dates: std::collections::HashMap<Uuid, Vec<chrono::NaiveDate>> = {
         let mut map: std::collections::HashMap<Uuid, Vec<chrono::NaiveDate>> =
             std::collections::HashMap::new();
-        let invoice_ids: Vec<Uuid> = invoice_rows
-            .iter()
-            .filter(|inv| inv.due_date.is_some())
-            .map(|inv| inv.invoice_id)
-            .collect();
-        if !invoice_ids.is_empty() {
-            let rows: Vec<(Uuid, Uuid)> =
-                sqlx::query_as(r#"SELECT id, vendor_id FROM invoices WHERE id = ANY($1)"#)
-                    .bind(&invoice_ids)
-                    .fetch_all(pool)
-                    .await
-                    .map_err(|e| {
-                        billforge_core::Error::Database(format!(
-                            "Failed to resolve invoice vendor_id for forecast: {}",
-                            e
-                        ))
-                    })?;
-            let id_to_vendor: std::collections::HashMap<Uuid, Uuid> = rows.into_iter().collect();
-            for inv in &invoice_rows {
-                if let (Some(d), Some(vid)) =
-                    (inv.due_date, id_to_vendor.get(&inv.invoice_id))
-                {
-                    map.entry(*vid).or_default().push(d);
-                }
+        for inv in &invoice_rows {
+            if let (Some(d), Some(vid)) = (inv.due_date, inv.vendor_id) {
+                map.entry(vid).or_default().push(d);
             }
         }
         map
@@ -1349,15 +1424,25 @@ async fn compute_ap_forecast(
                 })
                 .unwrap_or(false);
             if !overlap {
+                if !filters.includes_projection_date(next_date) {
+                    next_date = next_date + cadence;
+                    emitted += 1;
+                    continue;
+                }
                 let offset = (next_date - as_of_date).num_days() as usize;
                 if offset < num_days {
                     let amount = *median_cents;
                     daily_expected[offset] += amount;
                     daily_low[offset] += (amount as f64 * recurring_low_f) as i64;
                     daily_high[offset] += (amount as f64 * recurring_high_f) as i64;
-                    *daily_vendors[offset].entry(vendor_name.clone()).or_insert(0) += amount;
+                    *daily_vendors[offset]
+                        .entry(vendor_name.clone())
+                        .or_insert(0) += amount;
                     *daily_gl[offset]
                         .entry("Uncategorized".to_string())
+                        .or_insert(0) += amount;
+                    *daily_cost_centers[offset]
+                        .entry("Projected recurring".to_string())
                         .or_insert(0) += amount;
                 }
             }
@@ -1402,6 +1487,14 @@ async fn compute_ap_forecast(
                 })
                 .collect();
             gl_breakdown.sort_by(|a, b| b.amount_cents.cmp(&a.amount_cents));
+            let mut cost_center_breakdown: Vec<ForecastBreakdownEntry> = daily_cost_centers[i]
+                .iter()
+                .map(|(k, &v)| ForecastBreakdownEntry {
+                    name: k.clone(),
+                    amount_cents: v,
+                })
+                .collect();
+            cost_center_breakdown.sort_by(|a, b| b.amount_cents.cmp(&a.amount_cents));
             ForecastDay {
                 date,
                 expected_amount: expected,
@@ -1409,6 +1502,7 @@ async fn compute_ap_forecast(
                 high_band: daily_high[i],
                 vendor_breakdown,
                 gl_breakdown,
+                cost_center_breakdown,
                 funding_required: funding_threshold > 0 && expected > funding_threshold,
             }
         })
@@ -1496,6 +1590,7 @@ async fn ap_cash_flow_forecast_simulate(
         horizon_weeks,
         as_of_date,
         body.min_daily_funding_threshold,
+        ForecastFilters::from_simulation(&body),
         None,
     )
     .await?;
@@ -1507,6 +1602,7 @@ async fn ap_cash_flow_forecast_simulate(
         horizon_weeks,
         as_of_date,
         body.min_daily_funding_threshold,
+        ForecastFilters::from_simulation(&body),
         Some(&body.scenario),
     )
     .await?;
@@ -1611,6 +1707,7 @@ async fn ap_cash_flow_forecast_solve(
         horizon_weeks,
         as_of_date,
         None,
+        ForecastFilters::default(),
         None,
     )
     .await?;
@@ -1698,10 +1795,8 @@ async fn ap_cash_flow_forecast_solve(
                 }
                 _ => {}
             }
-            let epd_eligible = r.7.is_none()
-                && r.8.is_none()
-                && r.5.is_some()
-                && r.6.map_or(false, |p| p > 0.0);
+            let epd_eligible =
+                r.7.is_none() && r.8.is_none() && r.5.is_some() && r.6.map_or(false, |p| p > 0.0);
             if epd_eligible {
                 if let (Some(dd), Some(pct)) = (r.5, r.6) {
                     if dd >= today && dd <= effective_date {
@@ -1772,7 +1867,8 @@ async fn ap_cash_flow_forecast_solve(
             freed_cash += c.effective_amount;
         } else if allow_epd_capture
             && c.epd_eligible
-            && c.discount_deadline.map_or(false, |dd| dd <= body.target_date)
+            && c.discount_deadline
+                .map_or(false, |dd| dd <= body.target_date)
             && c.discount_percent.map_or(false, |p| p > 0.0)
         {
             // EPD capture: discount savings count as freed cash before the target.
@@ -1799,14 +1895,18 @@ async fn ap_cash_flow_forecast_solve(
 
     // Rebuild projected daily series by applying the chosen shifts to the baseline.
     let mut projected: Vec<ForecastDay> = baseline.daily.clone();
-    let mut by_date: std::collections::HashMap<chrono::NaiveDate, usize> = std::collections::HashMap::new();
+    let mut by_date: std::collections::HashMap<chrono::NaiveDate, usize> =
+        std::collections::HashMap::new();
     for (i, d) in projected.iter().enumerate() {
         by_date.insert(d.date, i);
     }
     for action in &actions {
         if action.action_kind == "delay" {
             // Find original effective pay date by matching invoice via the candidate list.
-            if let Some(c) = candidates.iter().find(|c| c.invoice_id == action.invoice_id) {
+            if let Some(c) = candidates
+                .iter()
+                .find(|c| c.invoice_id == action.invoice_id)
+            {
                 if let Some(&idx) = by_date.get(&c.effective_pay_date) {
                     let d = &mut projected[idx];
                     d.expected_amount = (d.expected_amount - action.amount_cents).max(0);
@@ -1822,7 +1922,10 @@ async fn ap_cash_flow_forecast_solve(
             }
         } else if action.action_kind == "accelerate_epd" {
             // Discount reduces outflow on the original effective pay date.
-            if let Some(c) = candidates.iter().find(|c| c.invoice_id == action.invoice_id) {
+            if let Some(c) = candidates
+                .iter()
+                .find(|c| c.invoice_id == action.invoice_id)
+            {
                 if let Some(&idx) = by_date.get(&c.effective_pay_date) {
                     let d = &mut projected[idx];
                     d.expected_amount = (d.expected_amount - action.amount_cents).max(0);
@@ -1878,6 +1981,11 @@ pub struct CashFlowExportRequest {
     pub horizon_weeks: Option<i32>,
     pub as_of_date: Option<chrono::NaiveDate>,
     pub min_daily_funding_threshold: Option<i64>,
+    pub vendor_id: Option<Uuid>,
+    pub vendor_name: Option<String>,
+    pub cost_center: Option<String>,
+    pub due_date_from: Option<chrono::NaiveDate>,
+    pub due_date_to: Option<chrono::NaiveDate>,
     /// Slack channel ID (for `format=slack`) or list of email recipients (for
     /// `format=email`).
     pub recipients: Option<Vec<String>>,
@@ -1896,7 +2004,7 @@ pub struct CashFlowExportResponse {
 fn build_forecast_csv(forecast: &ApCashFlowForecast) -> String {
     let mut out = String::new();
     out.push_str(
-        "week_start,week_end,expected_amount_cents,low_band_cents,high_band_cents,funding_required_days,vendor_breakdown_json,gl_breakdown_json\n",
+        "week_start,week_end,expected_amount_cents,low_band_cents,high_band_cents,funding_required_days,vendor_breakdown_json,gl_breakdown_json,cost_center_breakdown_json\n",
     );
 
     // Aggregate vendor / GL totals per week by summing the daily breakdowns
@@ -1905,6 +2013,8 @@ fn build_forecast_csv(forecast: &ApCashFlowForecast) -> String {
         let mut vendor_totals: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
         let mut gl_totals: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut cost_center_totals: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
         let mut funding_days = 0i64;
         for day in &forecast.daily {
@@ -1918,12 +2028,18 @@ fn build_forecast_csv(forecast: &ApCashFlowForecast) -> String {
                 for g in &day.gl_breakdown {
                     *gl_totals.entry(g.name.clone()).or_insert(0) += g.amount_cents;
                 }
+                for c in &day.cost_center_breakdown {
+                    *cost_center_totals.entry(c.name.clone()).or_insert(0) += c.amount_cents;
+                }
             }
         }
-        let vendor_json = serde_json::to_string(&vendor_totals).unwrap_or_else(|_| "{}".to_string());
+        let vendor_json =
+            serde_json::to_string(&vendor_totals).unwrap_or_else(|_| "{}".to_string());
         let gl_json = serde_json::to_string(&gl_totals).unwrap_or_else(|_| "{}".to_string());
+        let cost_center_json =
+            serde_json::to_string(&cost_center_totals).unwrap_or_else(|_| "{}".to_string());
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{}\n",
             week.week_start,
             week.week_end,
             week.expected_amount,
@@ -1932,6 +2048,7 @@ fn build_forecast_csv(forecast: &ApCashFlowForecast) -> String {
             funding_days,
             csv_field(&vendor_json),
             csv_field(&gl_json),
+            csv_field(&cost_center_json),
         ));
     }
     out
@@ -2052,6 +2169,7 @@ async fn export_cash_flow_forecast(
         horizon_weeks,
         as_of_date,
         body.min_daily_funding_threshold,
+        ForecastFilters::from_export(&body),
         body.scenario.as_ref(),
     )
     .await?;
@@ -2122,8 +2240,7 @@ async fn export_cash_flow_forecast(
                 forecast.as_of_date
             );
             let total: i64 = forecast.weekly.iter().map(|w| w.expected_amount).sum();
-            let funding_days =
-                forecast.daily.iter().filter(|d| d.funding_required).count();
+            let funding_days = forecast.daily.iter().filter(|d| d.funding_required).count();
             let html = format!(
                 "<p>BillForge cash flow forecast as of <strong>{}</strong>.</p>\
                  <p>Horizon: {} weeks · Total expected outflow: ${:.0} · Funding-alert days: {}</p>\
@@ -2148,11 +2265,9 @@ async fn export_cash_flow_forecast(
             for recipient in &recipients {
                 match email_service.send(recipient, &subject, &html, &text).await {
                     Ok(_) => delivered_any = true,
-                    Err(e) => tracing::warn!(
-                        "Cash-flow email export to {} failed: {}",
-                        recipient,
-                        e
-                    ),
+                    Err(e) => {
+                        tracing::warn!("Cash-flow email export to {} failed: {}", recipient, e)
+                    }
                 }
             }
             let resp = Json(CashFlowExportResponse {
@@ -2182,6 +2297,13 @@ async fn export_cash_flow_forecast(
         "recipients": recipients,
         "horizon_weeks": horizon_weeks,
         "as_of_date": as_of_date,
+        "filters": {
+            "vendor_id": body.vendor_id,
+            "vendor_name": body.vendor_name,
+            "cost_center": body.cost_center,
+            "due_date_from": body.due_date_from,
+            "due_date_to": body.due_date_to,
+        },
         "delivered": delivered,
         "bytes": bytes,
     }));
@@ -2197,6 +2319,81 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod cash_flow_forecast_tests {
+    use super::*;
+
+    #[test]
+    fn forecast_filters_trim_empty_values_and_apply_projection_dates() {
+        let params = ForecastQuery {
+            horizon_weeks: None,
+            as_of_date: None,
+            min_daily_funding_threshold: None,
+            vendor_id: None,
+            vendor_name: Some("  Acme  ".to_string()),
+            cost_center: Some("   ".to_string()),
+            due_date_from: Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            due_date_to: Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 31).unwrap()),
+        };
+
+        let filters = ForecastFilters::from_query(&params);
+
+        assert_eq!(filters.vendor_name.as_deref(), Some("Acme"));
+        assert_eq!(filters.cost_center, None);
+        assert!(
+            filters.includes_projection_date(chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap())
+        );
+        assert!(
+            !filters.includes_projection_date(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn forecast_csv_includes_cost_center_breakdown() {
+        let week_start = chrono::NaiveDate::from_ymd_opt(2026, 7, 6).unwrap();
+        let forecast = ApCashFlowForecast {
+            as_of_date: week_start,
+            horizon_weeks: 1,
+            daily: vec![ForecastDay {
+                date: week_start,
+                expected_amount: 125_00,
+                low_band: 100_00,
+                high_band: 150_00,
+                vendor_breakdown: vec![ForecastBreakdownEntry {
+                    name: "Acme".to_string(),
+                    amount_cents: 125_00,
+                }],
+                gl_breakdown: vec![ForecastBreakdownEntry {
+                    name: "6000-Software".to_string(),
+                    amount_cents: 125_00,
+                }],
+                cost_center_breakdown: vec![ForecastBreakdownEntry {
+                    name: "ENG".to_string(),
+                    amount_cents: 125_00,
+                }],
+                funding_required: true,
+            }],
+            weekly: vec![ForecastWeek {
+                week_start,
+                week_end: week_start + chrono::Duration::days(6),
+                expected_amount: 125_00,
+                low_band: 100_00,
+                high_band: 150_00,
+            }],
+            monthly: Vec::new(),
+        };
+
+        let csv = build_forecast_csv(&forecast);
+
+        assert!(csv
+            .lines()
+            .next()
+            .unwrap()
+            .contains("cost_center_breakdown_json"));
+        assert!(csv.contains("ENG"));
+    }
 }
 
 #[utoipa::path(get, path = "/api/v1/reports/digests", tag = "Reports", responses((status = 200, description = "Report digests")))]
