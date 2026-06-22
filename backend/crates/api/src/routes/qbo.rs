@@ -1,8 +1,8 @@
 //! Lightweight QBO (QuickBooks Online) integration endpoints.
 //!
 //! Provides a self-contained OAuth 2.0 connect flow and one-way vendor
-//! pull (QBO -> BillForge) that operates independently from the
-//! feature-gated `quickbooks` module in `billforge-quickbooks`.
+//! pull (QBO -> BillForge) while reusing the shared QuickBooks client for
+//! resilient provider calls.
 //!
 //! Handlers:
 //! - `GET  /api/qbo/connect`        - build OAuth authorize URL
@@ -13,11 +13,12 @@ use crate::error::ApiResult;
 use crate::extractors::TenantCtx;
 use crate::state::AppState;
 use axum::{
+    Router,
     extract::{Query, State},
     response::{IntoResponse, Json},
     routing::{get, post},
-    Router,
 };
+use billforge_quickbooks::{QuickBooksClient, QuickBooksEnvironment};
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use tracing::{error, info, warn};
@@ -259,10 +260,8 @@ async fn qbo_sync_vendors(
     // The check is per-vendor during the upsert loop below (see inline comment).
 
     // Load connection.
-
-    // Load connection.
-    let conn: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT company_id, access_token, access_token_expires_at
+    let conn: Option<(String, String, chrono::DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT company_id, access_token, access_token_expires_at, environment
          FROM quickbooks_connections
          WHERE tenant_id = $1 AND sync_enabled = true",
     )
@@ -274,9 +273,11 @@ async fn qbo_sync_vendors(
         billforge_core::Error::Internal(format!("Database error: {e}"))
     })?;
 
-    let (realm_id, stored_access_token, token_expires_at) = conn.ok_or_else(|| {
+    let (realm_id, stored_access_token, token_expires_at, environment) = conn.ok_or_else(|| {
         billforge_core::Error::Validation("QBO not connected or sync disabled".into())
     })?;
+
+    let qb_environment = parse_qbo_environment(&environment)?;
 
     // Decrypt sealed token (refs #432). Legacy plaintext rows pass through.
     let mut access_token = state.token_cipher.open(&stored_access_token).map_err(|e| {
@@ -290,42 +291,33 @@ async fn qbo_sync_vendors(
         access_token = refreshed;
     }
 
-    // Query QBO vendors.
-    let query_url = format!(
-        "https://sandbox-quickbooks.api.intuit.com/v3/company/{realm_id}/query?query=SELECT%20*%20FROM%20Vendor"
-    );
+    // Query QBO vendors through the shared QuickBooks client so this route uses
+    // the same retry, 429/5xx backoff, and reactive 401 refresh behavior as the
+    // rest of the QuickBooks integration surface.
+    let tenant_id_for_refresh = tenant.tenant_id.clone();
+    let pool_for_refresh = pool.clone();
+    let state_for_refresh = state.clone();
+    let qbo_client = QuickBooksClient::new(access_token, realm_id, qb_environment)
+        .with_token_refresher(move || {
+            let tenant_id = tenant_id_for_refresh.clone();
+            let pool = pool_for_refresh.clone();
+            let state = state_for_refresh.clone();
+            async move {
+                refresh_access_token(&tenant_id, &pool, &state)
+                    .await
+                    .map_err(|e| anyhow::Error::new(e.0))
+            }
+        });
 
-    let qbo_response: serde_json::Value = reqwest::Client::new()
-        .get(&query_url)
-        .bearer_auth(&access_token)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| {
-            error!(error = %e, "QBO vendor query request failed");
-            billforge_core::Error::Internal(format!("QBO request failed: {e}"))
-        })?
-        .json()
-        .await
-        .map_err(|e| {
-            error!(error = %e, "QBO vendor query response parse failed");
-            billforge_core::Error::Internal(format!("QBO response parse failed: {e}"))
-        })?;
-
-    let vendors = qbo_response
-        .get("QueryResponse")
-        .and_then(|qr| qr.get("Vendor"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let vendors = qbo_client.query_vendors(1, 1000).await.map_err(|e| {
+        error!(error = %e, "QBO vendor query failed");
+        billforge_core::Error::Internal(format!("QBO request failed: {e}"))
+    })?;
 
     let mut synced: u64 = 0;
 
     for vendor in &vendors {
-        let qb_id = match vendor.get("Id").and_then(|id| id.as_str()) {
-            Some(id) => id,
-            None => continue,
-        };
+        let qb_id = vendor.Id.as_str();
         let external_id = format!("qbo:{qb_id}");
 
         // BEC fraud prevention: skip upsert if existing vendor has pending banking verification.
@@ -345,26 +337,19 @@ async fn qbo_sync_vendors(
             continue;
         }
 
-        let display_name = vendor
-            .get("DisplayName")
-            .and_then(|n| n.as_str())
-            .unwrap_or("Unknown");
+        let display_name = vendor.DisplayName.as_str();
         let email = vendor
-            .get("PrimaryEmailAddr")
-            .and_then(|e| e.get("Address"))
-            .and_then(|a| a.as_str())
+            .PrimaryEmailAddr
+            .as_ref()
+            .map(|e| e.Address.as_str())
             .unwrap_or("");
         let phone = vendor
-            .get("PrimaryPhone")
-            .and_then(|p| p.get("FreeFormNumber"))
-            .and_then(|n| n.as_str())
+            .PrimaryPhone
+            .as_ref()
+            .map(|p| p.FreeFormNumber.as_str())
             .unwrap_or("");
-        let active = vendor
-            .get("Active")
-            .and_then(|a| a.as_bool())
-            .unwrap_or(true);
-        let status = if active { "active" } else { "inactive" };
-        let vendor_type = if vendor.get("CompanyName").is_some() {
+        let status = if vendor.Active { "active" } else { "inactive" };
+        let vendor_type = if vendor.CompanyName.is_some() {
             "business"
         } else {
             "contractor"
@@ -425,6 +410,17 @@ async fn qbo_sync_vendors(
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn parse_qbo_environment(environment: &str) -> ApiResult<QuickBooksEnvironment> {
+    match environment {
+        "production" => Ok(QuickBooksEnvironment::Production),
+        "sandbox" => Ok(QuickBooksEnvironment::Sandbox),
+        other => Err(billforge_core::Error::Validation(format!(
+            "Unsupported QBO environment: {other}"
+        ))
+        .into()),
+    }
+}
+
 /// Refresh the access token for a tenant using the stored refresh token.
 /// Persists the new tokens and returns the new access token.
 async fn refresh_access_token(
@@ -448,10 +444,13 @@ async fn refresh_access_token(
                 billforge_core::Error::Internal(format!("Database error: {e}"))
             })?;
 
-    let refresh_token_val = state.token_cipher.open(&stored_refresh_token).map_err(|e| {
-        error!(error = %e, "Failed to decrypt stored QBO refresh token");
-        billforge_core::Error::Internal("Failed to decrypt stored QBO tokens".into())
-    })?;
+    let refresh_token_val = state
+        .token_cipher
+        .open(&stored_refresh_token)
+        .map_err(|e| {
+            error!(error = %e, "Failed to decrypt stored QBO refresh token");
+            billforge_core::Error::Internal("Failed to decrypt stored QBO tokens".into())
+        })?;
 
     let token_response: serde_json::Value = reqwest::Client::new()
         .post("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer")

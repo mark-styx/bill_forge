@@ -78,6 +78,7 @@ pub mod public_api;
 pub mod public_signup;
 #[cfg(feature = "edi")]
 pub mod purchase_orders;
+#[cfg(feature = "quickbooks")]
 pub mod qbo;
 #[cfg(feature = "quickbooks")]
 pub mod quickbooks;
@@ -397,8 +398,6 @@ fn api_routes(state: AppState) -> Router<AppState> {
                 .layer(middleware::from_fn(rate_limit_auth))
                 .layer(Extension(RateLimiterState::new(30, 60))),
         )
-        // Lightweight QBO integration (OAuth + vendor pull)
-        .nest("/qbo", qbo::routes())
         // Month-end close periods
         .nest("/close-periods", close_periods::routes())
         // Early-payment discount optimizer
@@ -411,6 +410,9 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/policies", policies::routes())
         // Exception-Only Autopilot Cockpit (gated on InvoiceCapture module via extractors)
         .nest("/autopilot", autopilot::routes());
+    // Lightweight QBO integration (OAuth + vendor pull)
+    #[cfg(feature = "quickbooks")]
+    let router = router.nest("/qbo", qbo::routes());
     // Continuous learning panel + correction ingestion (#404).
     #[cfg(feature = "processing")]
     let router = router.nest("/learning", learning::routes());
