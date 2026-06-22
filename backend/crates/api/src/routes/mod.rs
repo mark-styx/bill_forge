@@ -69,6 +69,8 @@ pub mod learning;
 pub mod mobile;
 #[cfg(feature = "netsuite")]
 pub mod netsuite;
+#[cfg(feature = "reporting")]
+pub(crate) mod nl_query;
 pub mod notifications;
 pub mod policies;
 #[cfg(feature = "analytics")]
@@ -280,7 +282,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
         );
         // Reporting module
         #[cfg(feature = "reporting")]
-        let router = router.nest("/reports", reports::routes());
+        let router = router.nest("/reports", reports::routes().merge(nl_query::routes()));
         // Document storage (+ Q&A when the AI agent pillar is enabled)
         #[cfg(feature = "ai-agent")]
         let router = router.nest(

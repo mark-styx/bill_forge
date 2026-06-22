@@ -41,6 +41,7 @@ pub async fn run_tenant_migrations(pool: &PgPool, _tenant_id: &TenantId) -> Resu
     run_theme_migrations(pool).await?;
     run_implementation_migrations(pool).await?;
     run_banking_verification_migrations(pool).await?;
+    run_nl_query_console_migrations(pool).await?;
 
     Ok(())
 }
@@ -242,6 +243,17 @@ pub async fn run_workflow_migrations(pool: &PgPool) -> Result<()> {
         pool,
         "145_audit_log_nullable_user_id.sql",
         include_str!("../../../migrations/145_audit_log_nullable_user_id.sql"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn run_nl_query_console_migrations(pool: &PgPool) -> Result<()> {
+    apply_migration(
+        pool,
+        "156_nl_query_console.sql",
+        include_str!("../../../migrations/156_nl_query_console.sql"),
     )
     .await?;
 
